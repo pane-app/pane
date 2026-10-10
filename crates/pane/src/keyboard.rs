@@ -35,27 +35,55 @@
 //! rebound.
 
 use gpui::{App, KeyBinding, Keystroke};
+use gpui_elements::editable_text::actions::DEFAULT_INPUT_CONTEXT;
 use pane_core::hotkeys::Shortcut;
 use pane_core::{Binding, Keyboard, KeyboardAction, NavigationBindings};
 
 use crate::app::KEY_CONTEXT;
+use crate::features::actions_panel;
 use crate::features::root_search;
 use crate::ui::keycap::{Key, KeySequence};
 use crate::{
-    Back, Confirm, DismissLauncher, OpenActions, OpenSettings, ReturnToRoot, SelectNext,
-    SelectPrevious,
+    Back, Confirm, DismissLauncher, FocusNext, FocusPrevious, OpenActions, OpenSettings,
+    ReturnToRoot, SelectNext, SelectNextFive, SelectNextSection, SelectPrevious,
+    SelectPreviousFive, SelectPreviousSection,
 };
 
 /// Registers the navigation actions under their effective bindings in
 /// [`Keyboard`], in the contexts above. Call after the shared text
 /// editing keys, so the search field's selection keys take precedence
 /// over the field's own.
+///
+/// The navigation bindings' Left and Right (Alt+B and Alt+F, Alt+H and
+/// Alt+L) are the focus traversal Tab already is: they move between the
+/// query and the argument fields (#258).
+///
+/// Back a level is the one action of the set with no keymap binding: a
+/// focused field's own Backspace deletes text, and the keymap would
+/// either swallow the key ahead of that or fire beside it. The window
+/// follows the binding itself, ahead of the fields where the field has
+/// nothing left to delete (see [`LauncherWindow::backspace_back_keys`]),
+/// so the field's own key keeps its priority by construction.
 pub(crate) fn bind_keys(cx: &mut App, keyboard: &Keyboard, navigation: NavigationBindings) {
     let field = root_search::field_context();
+    let panel = format!("{} > {}", actions_panel::CONTEXT, DEFAULT_INPUT_CONTEXT);
     let mut bindings = Vec::new();
     // The extra selection keys the Keyboard page's navigation bindings
     // choose, first, so the set's own bindings registered after them win.
+    // Wherever Up and Down move a list — the Actions panel's list is one
+    // — the pair moves it too (#258), bound in the panel's own field to
+    // its own selection action.
     if let Some((previous, next)) = navigation.bindings() {
+        bindings.push(KeyBinding::new(
+            previous,
+            actions_panel::PreviousAction,
+            Some(panel.as_str()),
+        ));
+        bindings.push(KeyBinding::new(
+            next,
+            actions_panel::NextAction,
+            Some(panel.as_str()),
+        ));
         for (id, action) in [
             (previous, KeyboardAction::PreviousResult),
             (next, KeyboardAction::NextResult),
@@ -63,6 +91,12 @@ pub(crate) fn bind_keys(cx: &mut App, keyboard: &Keyboard, navigation: Navigatio
             bindings.push(launcher_binding(id, action));
             bindings.push(field_binding(id, action, &field));
         }
+    }
+    // Left and Right between the query and the argument fields: the
+    // focus traversal, on the pair's keys.
+    if let Some((left, right)) = navigation.left_right() {
+        bindings.push(KeyBinding::new(left, FocusPrevious, Some(KEY_CONTEXT)));
+        bindings.push(KeyBinding::new(right, FocusNext, Some(KEY_CONTEXT)));
     }
     for action in KeyboardAction::ALL {
         let id = keyboard.binding(action).id();
@@ -73,15 +107,33 @@ pub(crate) fn bind_keys(cx: &mut App, keyboard: &Keyboard, navigation: Navigatio
         if Keystroke::parse(&id).is_err() {
             continue;
         }
+        // Back a level is followed by the window itself, not the keymap
+        // (see the module docs).
+        if action == KeyboardAction::BackspaceBack {
+            continue;
+        }
         bindings.push(launcher_binding(&id, action));
-        // The selection keys also move the selection while the query
+        // The keys that move the selection also move it while the query
         // field has focus, above the field's own caret keys — the fixed
-        // Up and Down's arrangement, kept for whatever keys replace them.
+        // Up and Down's arrangement, kept for whatever keys replace
+        // them — and above the caret keys macOS binds to Command and the
+        // arrows (Command+Down is the caret to the text's end there).
+        // The selection and section keys also take the Actions panel's
+        // own field, so its list answers them there as it answers Up and
+        // Down.
         if matches!(
             action,
-            KeyboardAction::PreviousResult | KeyboardAction::NextResult
+            KeyboardAction::PreviousResult
+                | KeyboardAction::NextResult
+                | KeyboardAction::FiveRowsUp
+                | KeyboardAction::FiveRowsDown
+                | KeyboardAction::PreviousSection
+                | KeyboardAction::NextSection
         ) {
             bindings.push(field_binding(&id, action, &field));
+            if action != KeyboardAction::PreviousResult && action != KeyboardAction::NextResult {
+                bindings.push(field_binding(&id, action, &panel));
+            }
         }
     }
     cx.bind_keys(bindings);
@@ -92,8 +144,19 @@ fn launcher_binding(id: &str, action: KeyboardAction) -> KeyBinding {
     match action {
         KeyboardAction::PreviousResult => KeyBinding::new(id, SelectPrevious, Some(KEY_CONTEXT)),
         KeyboardAction::NextResult => KeyBinding::new(id, SelectNext, Some(KEY_CONTEXT)),
+        KeyboardAction::FiveRowsUp => KeyBinding::new(id, SelectPreviousFive, Some(KEY_CONTEXT)),
+        KeyboardAction::FiveRowsDown => KeyBinding::new(id, SelectNextFive, Some(KEY_CONTEXT)),
+        KeyboardAction::PreviousSection => {
+            KeyBinding::new(id, SelectPreviousSection, Some(KEY_CONTEXT))
+        }
+        KeyboardAction::NextSection => {
+            KeyBinding::new(id, SelectNextSection, Some(KEY_CONTEXT))
+        }
         KeyboardAction::InvokeSelectedAction => KeyBinding::new(id, Confirm, Some(KEY_CONTEXT)),
         KeyboardAction::Back => KeyBinding::new(id, Back, Some(KEY_CONTEXT)),
+        KeyboardAction::BackspaceBack => {
+            unreachable!("Back a level is followed by the window, not the keymap")
+        }
         KeyboardAction::ReturnToRoot => KeyBinding::new(id, ReturnToRoot, Some(KEY_CONTEXT)),
         KeyboardAction::DismissLauncher => KeyBinding::new(id, DismissLauncher, Some(KEY_CONTEXT)),
         KeyboardAction::OpenSettings => KeyBinding::new(id, OpenSettings, Some(KEY_CONTEXT)),
@@ -106,6 +169,12 @@ fn field_binding(id: &str, action: KeyboardAction, context: &str) -> KeyBinding 
     match action {
         KeyboardAction::PreviousResult => KeyBinding::new(id, SelectPrevious, Some(context)),
         KeyboardAction::NextResult => KeyBinding::new(id, SelectNext, Some(context)),
+        KeyboardAction::FiveRowsUp => KeyBinding::new(id, SelectPreviousFive, Some(context)),
+        KeyboardAction::FiveRowsDown => KeyBinding::new(id, SelectNextFive, Some(context)),
+        KeyboardAction::PreviousSection => {
+            KeyBinding::new(id, SelectPreviousSection, Some(context))
+        }
+        KeyboardAction::NextSection => KeyBinding::new(id, SelectNextSection, Some(context)),
         _ => unreachable!("only the selection keys bind in the field's context"),
     }
 }

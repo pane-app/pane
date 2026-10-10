@@ -498,11 +498,20 @@ impl Settings {
         &self,
         navigation: pane_core::NavigationBindings,
     ) -> Option<String> {
-        let (previous, next) = navigation.bindings()?;
+        let pairs = [
+            navigation.bindings(),
+            // The choice's Left and Right (#258), between the query and
+            // the argument fields.
+            navigation.left_right(),
+        ];
         KeyboardAction::ALL.into_iter().find_map(|action| {
             let bound = self.chosen.keyboard.binding(action);
             let id = bound.id();
-            (id == previous || id == next).then(|| format!("{bound} is {}", action.title()))
+            pairs
+                .into_iter()
+                .flatten()
+                .find(|(left, right)| id == *left || id == *right)
+                .map(|_| format!("{bound} is {}", action.title()))
         })
     }
 

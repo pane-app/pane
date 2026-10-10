@@ -350,6 +350,12 @@ impl LauncherWindow {
         let visuals = crate::settings::launcher_visuals(cx);
         let theme = visuals.theme;
         let selected = view.selected.filter(|index| *index < view.rows.len());
+        // A section jump landed on a row: the section's label scrolls
+        // into view with it (#258), as the launcher's own list reveals
+        // the jump's landing.
+        let jumped = self
+            .take_jump_reveal()
+            .filter(|row| Some(*row) == selected);
         // The selected file's detail, read again when another is selected.
         let details = selected.and_then(|index| {
             let id = &view.rows[index].id;
@@ -413,12 +419,14 @@ impl LauncherWindow {
             // Other rows: their next page is asked for anew.
             state.asked_more = 0;
         }
-        if (changed || state.revealed != selected)
+        if (changed || state.revealed != selected || jumped.is_some())
             && let Some(selected) = selected
         {
-            state
-                .list
-                .reveal(virtual_list::child_of_row(false, &frame.sections, selected));
+            let child = virtual_list::child_of_row(false, &frame.sections, selected);
+            state.list.reveal(child);
+            if jumped.is_some() && child > 0 {
+                state.list.reveal(child - 1);
+            }
         }
         state.revealed = selected;
         // The list as the window's announcer follows it (#132): opening
@@ -713,9 +721,15 @@ impl LauncherWindow {
             .on_action(cx.listener(Self::select_next))
             .on_action(cx.listener(Self::select_previous))
             // Page Down and Up move by the rows of Search Files' list in
-            // view (`LauncherWindow::paged_list`).
+            // view (`LauncherWindow::paged_list`); Alt+Up and Alt+Down by
+            // five rows, and Ctrl+Up and Ctrl+Down cross the view's
+            // sections, as they do the launcher's own list (#258).
             .on_action(cx.listener(Self::select_next_page))
             .on_action(cx.listener(Self::select_previous_page))
+            .on_action(cx.listener(Self::select_next_five))
+            .on_action(cx.listener(Self::select_previous_five))
+            .on_action(cx.listener(Self::select_next_section))
+            .on_action(cx.listener(Self::select_previous_section))
             .on_action(cx.listener(Self::confirm))
             .on_action(cx.listener(Self::files_back))
             .on_action(cx.listener(Self::return_to_root))
@@ -728,6 +742,9 @@ impl LauncherWindow {
             // search.
             .capture_key_down(cx.listener(Self::toast_action_keys))
             .capture_key_down(cx.listener(Self::item_action_keys))
+            // The Back-a-level key backs out of the view's empty search
+            // (#258), beneath the field's own Backspace.
+            .capture_key_down(cx.listener(Self::backspace_back_keys))
             .on_action(cx.listener(Self::focus_next))
             .on_action(cx.listener(Self::focus_previous))
             .size_full()

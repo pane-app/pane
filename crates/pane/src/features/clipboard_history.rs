@@ -410,6 +410,15 @@ impl LauncherWindow {
         self.clipboard.as_ref().map(|history| history.query.clone())
     }
 
+    /// Whether the split view's own search field has the focus: it is
+    /// not one of the Back-a-level key's fields — the view keeps its own
+    /// Escape chain, and the field deletes its text (#258).
+    pub(crate) fn clipboard_query_focused(&self, window: &Window, cx: &App) -> bool {
+        self.clipboard
+            .as_ref()
+            .is_some_and(|history| history.query.focus_handle(cx).is_focused(window))
+    }
+
     /// Test support: the type the split view's dropdown keeps.
     #[doc(hidden)]
     pub fn clipboard_filter(&self) -> Option<ClipboardFilter> {

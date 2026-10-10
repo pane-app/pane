@@ -26,7 +26,7 @@ use std::rc::Rc;
 use gpui::{AnyElement, Context, Div, IntoElement, Window, div, prelude::*};
 use pane_core::{LauncherView, Row, Screen};
 
-use super::LauncherWindow;
+use super::{LauncherWindow, ScrollAfter};
 use crate::features::root_search;
 use crate::ui::result_layouts::NoticeCopy;
 use crate::ui::shell::{self, SectionLabel};
@@ -125,12 +125,32 @@ impl ResultList {
         }
     }
 
-    /// The element, placed after the list, that scrolls to show row `row`
-    /// again once this frame laid the list out (see
-    /// [`VirtualList::reveal_after_layout`]), as [`ResultList::reveal_row`].
-    pub(super) fn reveal_row_after_layout(&self, row: usize) -> Option<impl IntoElement> {
-        let child = self.child_of_row(row)?;
-        Some(self.list.reveal_after_layout(child, row == 0))
+    /// Scrolls the least that shows the label of the section whose first
+    /// row is `row`, and that row: the jump that lands on the row keeps
+    /// the section's head in view with it (#258).
+    pub(super) fn reveal_section(&self, row: usize) {
+        if let Some(child) = self.child_of_row(row) {
+            self.list.reveal_section(child, row == 0);
+        }
+    }
+
+    /// The element, placed after the list, that scrolls to what `after`
+    /// names again once this frame laid the list out (see
+    /// [`VirtualList::reveal_after_layout`]): the row a selection moved
+    /// to, or the label of the section a jump crossed (#258).
+    pub(super) fn reveal_after(&self, after: ScrollAfter) -> Option<AnyElement> {
+        match after {
+            ScrollAfter::Row(row) => self.child_of_row(row).map(|child| {
+                self.list
+                    .reveal_after_layout(child, row == 0)
+                    .into_any_element()
+            }),
+            ScrollAfter::Section(row) => self.child_of_row(row).map(|child| {
+                self.list
+                    .reveal_section_after_layout(child, row == 0)
+                    .into_any_element()
+            }),
+        }
     }
 
     /// The list's child that shows row `row` of the frame laid out.

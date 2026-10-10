@@ -114,11 +114,25 @@ pub enum KeyboardAction {
     PreviousResult,
     /// Moves the selection to the next result.
     NextResult,
+    /// Moves the selection five rows up (#258).
+    FiveRowsUp,
+    /// Moves the selection five rows down (#258).
+    FiveRowsDown,
+    /// Moves the selection to the first row of the previous section,
+    /// its own first row first (#258).
+    PreviousSection,
+    /// Moves the selection to the first row of the next section, or the
+    /// last row when there is none (#258).
+    NextSection,
     /// Opens the selected result — the footer's primary action.
     InvokeSelectedAction,
     /// Leaves the open screen, one level at a time, clearing a search's
     /// text on the way.
     Back,
+    /// Leaves the open screen one level, without clearing a search's
+    /// text — the Backspace on an empty field (#258): a field with text
+    /// in it keeps the key, deleting it.
+    BackspaceBack,
     /// Returns to root search from wherever the launcher is.
     ReturnToRoot,
     /// Hides the launcher, keeping Pane running in the background.
@@ -131,12 +145,17 @@ pub enum KeyboardAction {
 
 impl KeyboardAction {
     /// The bounded set, in the order the Keyboard page lists it.
-    pub const ALL: [KeyboardAction; 8] = [
+    pub const ALL: [KeyboardAction; 13] = [
         KeyboardAction::PreviousResult,
         KeyboardAction::NextResult,
+        KeyboardAction::FiveRowsUp,
+        KeyboardAction::FiveRowsDown,
+        KeyboardAction::PreviousSection,
+        KeyboardAction::NextSection,
         KeyboardAction::InvokeSelectedAction,
         KeyboardAction::OpenActions,
         KeyboardAction::Back,
+        KeyboardAction::BackspaceBack,
         KeyboardAction::ReturnToRoot,
         KeyboardAction::DismissLauncher,
         KeyboardAction::OpenSettings,
@@ -147,8 +166,13 @@ impl KeyboardAction {
         match self {
             KeyboardAction::PreviousResult => "previous-result",
             KeyboardAction::NextResult => "next-result",
+            KeyboardAction::FiveRowsUp => "five-rows-up",
+            KeyboardAction::FiveRowsDown => "five-rows-down",
+            KeyboardAction::PreviousSection => "previous-section",
+            KeyboardAction::NextSection => "next-section",
             KeyboardAction::InvokeSelectedAction => "invoke-selected-action",
             KeyboardAction::Back => "back",
+            KeyboardAction::BackspaceBack => "back-a-level",
             KeyboardAction::ReturnToRoot => "return-to-root",
             KeyboardAction::DismissLauncher => "dismiss-launcher",
             KeyboardAction::OpenSettings => "open-settings",
@@ -169,8 +193,13 @@ impl KeyboardAction {
         match self {
             KeyboardAction::PreviousResult => "Previous result",
             KeyboardAction::NextResult => "Next result",
+            KeyboardAction::FiveRowsUp => "Five rows up",
+            KeyboardAction::FiveRowsDown => "Five rows down",
+            KeyboardAction::PreviousSection => "Previous section",
+            KeyboardAction::NextSection => "Next section",
             KeyboardAction::InvokeSelectedAction => "Invoke selected action",
             KeyboardAction::Back => "Back",
+            KeyboardAction::BackspaceBack => "Back a level",
             KeyboardAction::ReturnToRoot => "Return to root",
             KeyboardAction::DismissLauncher => "Dismiss launcher",
             KeyboardAction::OpenSettings => "Open Settings",
@@ -185,8 +214,13 @@ impl KeyboardAction {
         match self {
             KeyboardAction::PreviousResult => "moves to the previous result",
             KeyboardAction::NextResult => "moves to the next result",
+            KeyboardAction::FiveRowsUp => "moves the selection five rows up",
+            KeyboardAction::FiveRowsDown => "moves the selection five rows down",
+            KeyboardAction::PreviousSection => "moves to the previous section's first row",
+            KeyboardAction::NextSection => "moves to the next section's first row",
             KeyboardAction::InvokeSelectedAction => "invokes the selected action",
             KeyboardAction::Back => "goes back",
+            KeyboardAction::BackspaceBack => "goes back a level, without clearing the text",
             KeyboardAction::ReturnToRoot => "returns to root",
             KeyboardAction::DismissLauncher => "dismisses the launcher",
             KeyboardAction::OpenSettings => "opens Settings",
@@ -203,8 +237,20 @@ impl KeyboardAction {
         match (self, macos) {
             (KeyboardAction::PreviousResult, _) => &["up"],
             (KeyboardAction::NextResult, _) => &["down"],
+            // Option is Alt on every grammar: Alt+Up and Alt+Down are the
+            // same binding on every system, and no field binds them.
+            (KeyboardAction::FiveRowsUp, _) => &["alt-up"],
+            (KeyboardAction::FiveRowsDown, _) => &["alt-down"],
+            (KeyboardAction::PreviousSection, true) => &["cmd-up"],
+            (KeyboardAction::PreviousSection, false) => &["ctrl-up"],
+            (KeyboardAction::NextSection, true) => &["cmd-down"],
+            (KeyboardAction::NextSection, false) => &["ctrl-down"],
             (KeyboardAction::InvokeSelectedAction, _) => &["enter"],
             (KeyboardAction::Back, _) => &["escape"],
+            // The window keeps a field's own Backspace — deleting text —
+            // above this action (see [`Keyboard::check`]), so it may take
+            // the plain key where every other action may not.
+            (KeyboardAction::BackspaceBack, _) => &["backspace"],
             (KeyboardAction::ReturnToRoot, true) => &["cmd-escape"],
             (KeyboardAction::ReturnToRoot, false) => &["shift-escape"],
             (KeyboardAction::DismissLauncher, true) => &["cmd-w"],
@@ -337,6 +383,11 @@ impl Binding {
     /// Whether this binding is exactly `key` with no modifier but Shift.
     fn plain_or_shift(&self, key: &str) -> bool {
         self.modifiers.only_shift() && self.key == key
+    }
+
+    /// Whether this binding is `key` with no modifier at all.
+    fn plain(&self, key: &str) -> bool {
+        self.modifiers == Modifiers::default() && self.key == key
     }
 
     /// Whether this binding is protected for a focused field — the
@@ -573,12 +624,21 @@ impl Keyboard {
     /// collision of a set is caught here as the set is built (each field
     /// is compared with all the map holds), so no two actions of a valid
     /// set ever share a binding.
+    ///
+    /// One exemption: Back a level may take the plain Backspace. The
+    /// window follows it only where a field's own Backspace has nothing
+    /// left to do — an empty field — so the binding cannot swallow text
+    /// editing, which is what the protection is for; every other action
+    /// (and every other form of the key, Shift included) stays refused.
     fn check(&self, action: KeyboardAction, binding: &Binding) -> Result<(), String> {
         if let Some(protected) = binding.protected() {
-            return Err(format!(
-                "{binding} is protected: it {protected} in a field, so it cannot {}",
-                KeyboardAction::does(action)
-            ));
+            let exempt = action == KeyboardAction::BackspaceBack && binding.plain("backspace");
+            if !exempt {
+                return Err(format!(
+                    "{binding} is protected: it {protected} in a field, so it cannot {}",
+                    KeyboardAction::does(action)
+                ));
+            }
         }
         if let Some(other) = self
             .bindings
@@ -845,6 +905,35 @@ mod tests {
                 "ctrl-k"
             }
         );
+        // #258: Alt+Up and Alt+Down move the selection five rows (Option
+        // on macOS is Alt), Ctrl+Up and Ctrl+Down cross the sections
+        // (Command on macOS), and the plain Backspace backs out of an
+        // empty field.
+        assert_eq!(defaults.binding(KeyboardAction::FiveRowsUp).id(), "alt-up");
+        assert_eq!(
+            defaults.binding(KeyboardAction::FiveRowsDown).id(),
+            "alt-down"
+        );
+        assert_eq!(
+            defaults.binding(KeyboardAction::PreviousSection).id(),
+            if cfg!(target_os = "macos") {
+                "cmd-up"
+            } else {
+                "ctrl-up"
+            }
+        );
+        assert_eq!(
+            defaults.binding(KeyboardAction::NextSection).id(),
+            if cfg!(target_os = "macos") {
+                "cmd-down"
+            } else {
+                "ctrl-down"
+            }
+        );
+        assert_eq!(
+            defaults.binding(KeyboardAction::BackspaceBack).id(),
+            "backspace"
+        );
         // Every default is a valid, distinct set, and it round trips.
         let recorded = defaults.recorded();
         assert_eq!(
@@ -958,6 +1047,14 @@ mod tests {
             "alt-5",
             "cmd-tab",
             "ctrl-j",
+            "alt-up",
+            "alt-down",
+            "ctrl-up",
+            "ctrl-down",
+            "alt-b",
+            "alt-f",
+            "alt-h",
+            "alt-l",
         ] {
             assert!(
                 binding(id).protected().is_none(),
@@ -1007,6 +1104,30 @@ mod tests {
     }
 
     #[test]
+    fn only_back_a_level_may_take_the_plain_backspace() {
+        let mut keyboard = Keyboard::default_for_this_system();
+        // The default loads and round trips: the exemption covers exactly
+        // the plain key, no modifier at all.
+        keyboard
+            .checked_set(KeyboardAction::BackspaceBack, binding("backspace"))
+            .unwrap();
+        assert_eq!(
+            Keyboard::parse(&keyboard.recorded()).unwrap(),
+            keyboard
+        );
+        // Every other action is refused the plain Backspace, and so is
+        // Back a level itself for Shift+Backspace, which a field's own
+        // Backspace does not cover.
+        for (action, id) in [
+            (KeyboardAction::NextResult, "backspace"),
+            (KeyboardAction::BackspaceBack, "shift-backspace"),
+        ] {
+            let refused = keyboard.checked_set(action, binding(id)).unwrap_err();
+            assert!(refused.contains("deletes"), "{refused}");
+        }
+    }
+
+    #[test]
     fn platform_editing_combinations_are_named() {
         let what = |id: &str| text_editing_action(&binding(id)).map(str::to_owned);
         if cfg!(target_os = "macos") {
@@ -1023,12 +1144,16 @@ mod tests {
             assert_eq!(what("ctrl-z").as_deref(), Some("undoes"));
             assert_eq!(what("alt-a"), None, "Alt+A is free elsewhere");
         }
-        // The defaults never collide with the editing combinations.
+        // The defaults never collide with the editing combinations —
+        // except Back a level's plain Backspace, the one binding the
+        // exemption covers, which no field's own key loses to.
         let defaults = Keyboard::default_for_this_system();
         for action in KeyboardAction::ALL {
             let binding = defaults.binding(action);
+            let plain_backspace =
+                action == KeyboardAction::BackspaceBack && binding.plain("backspace");
             assert!(
-                binding.protected().is_none(),
+                binding.protected().is_none() || plain_backspace,
                 "{binding} is protected for a field"
             );
         }
@@ -1068,6 +1193,13 @@ mod tests {
             "ctrl-shift-enter",
             "ctrl-1",
             "ctrl-0",
+            // #258's defaults are Pane's own, the plain Backspace
+            // included, so no extension action shortcut takes them.
+            "backspace",
+            "alt-up",
+            "alt-down",
+            "ctrl-up",
+            "ctrl-down",
         ] {
             assert!(keys.taken(&binding(fixed)).is_some(), "{fixed}");
         }

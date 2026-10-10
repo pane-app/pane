@@ -20,7 +20,8 @@ use std::path::Path;
 use gpui::{
     App, ClipboardItem, Context, Div, EntityInputHandler, FocusHandle, Focusable, Hsla,
     KeyDownEvent, MouseMoveEvent, ObjectFit, PathPromptOptions, Pixels, Point, Role,
-    ScrollWheelEvent, SharedString, Size, Stateful, Window, div, img, prelude::*, px, relative,
+    ScrollWheelEvent, SharedString, Size, Stateful, Subscription, Window, div, img, prelude::*,
+    px, relative,
 };
 use pane_core::changes::Changes;
 use pane_core::feedback::WindowRequest;
@@ -55,7 +56,8 @@ use crate::ui::theme::{TERTIARY_STRENGTH, Theme, pressed};
 use crate::ui::virtual_list;
 use crate::{
     Back, Confirm, DismissLauncher, FocusNext, FocusPrevious, OpenSettings, ReturnToRoot,
-    SelectNext, SelectNextPage, SelectPrevious, SelectPreviousPage,
+    SelectNext, SelectNextFive, SelectNextPage, SelectNextSection, SelectPrevious,
+    SelectPreviousFive, SelectPreviousPage, SelectPreviousSection,
 };
 
 pub(crate) use frame_motion::FrameMotion;
@@ -136,7 +138,17 @@ pub struct LauncherWindow {
     scrolled_for: Option<ScrolledFor>,
     /// The row this frame scrolls to again once the list, changed in it,
     /// has been laid out (see [`LauncherWindow::keep_selected_visible`]).
-    reveal_after_layout: Option<usize>,
+    reveal_after_layout: Option<ScrollAfter>,
+    /// The row whose section's label the next frame's reveal scrolls into
+    /// view: a section jump landed on it (#258). Taken by the next
+    /// [`LauncherWindow::keep_selected_visible`], which reveals the
+    /// section instead of the row alone.
+    jump_reveal: Option<usize>,
+    /// Routes the Back-a-level key past a focused field's own Backspace
+    /// when a back would act, so the window's key handler — which tells a
+    /// press from a repeat — sees it (#258); dropped, and so stopped, with
+    /// the window.
+    _backspace_gate: Subscription,
     /// Draws the window again now and then while its rows show a date,
     /// keeping it current (#139; see
     /// [`LauncherWindow::keep_dates_current`]).
@@ -166,6 +178,18 @@ struct ScrolledFor {
     selected: Option<usize>,
     window: Size<Pixels>,
     list: Size<Pixels>,
+}
+
+/// What the next frame scrolls the result list to again once it has been
+/// laid out (see [`LauncherWindow::keep_selected_visible`]): the row the
+/// selection moved to, or — for a section jump, whose landing keeps the
+/// section's head in view — the label of the section it crossed (#258).
+#[derive(Clone, Copy, PartialEq)]
+enum ScrollAfter {
+    /// The row this frame revealed, as the selection's follow-up.
+    Row(usize),
+    /// The section whose first row this frame revealed, label first.
+    Section(usize),
 }
 
 impl LauncherWindow {
@@ -201,6 +225,35 @@ impl LauncherWindow {
             async {}
         })
         .detach();
+        // The Back-a-level key is the one binding of the Keyboard page's
+        // set the keymap never holds: a focused field's own Backspace
+        // (deleting text) owns the key wherever there is text to delete,
+        // and the window has to see the raw event to tell a press from a
+        // repeat. This gate runs before every key's bindings — only in
+        // this window — and stops the key's dispatch exactly when a back
+        // would act on an empty field, so it reaches the window's capture
+        // handler with the event rather than the field's delete, which
+        // has nothing left to do (#258).
+        let gate_window = window.window_handle();
+        let gated = cx.weak_entity();
+        let backspace_gate = cx.intercept_keystrokes(move |event, window, cx| {
+            if window.window_handle() != gate_window {
+                return;
+            }
+            let Ok(pressed) = crate::keyboard::binding_of(&event.keystroke) else {
+                return;
+            };
+            let back = crate::settings::keyboard_of(cx)
+                .binding(pane_core::KeyboardAction::BackspaceBack)
+                .clone();
+            if pressed != back {
+                return;
+            }
+            let acts = gated.update(cx, |this, cx| this.backspace_back_ready(window, cx));
+            if acts.unwrap_or(false) {
+                cx.stop_propagation();
+            }
+        });
         let mut this = LauncherWindow {
             launcher,
             focus_handle,
@@ -211,6 +264,8 @@ impl LauncherWindow {
             pointer_selection_frozen: false,
             scrolled_for: None,
             reveal_after_layout: None,
+            jump_reveal: None,
+            _backspace_gate: backspace_gate,
             dates: None,
             custom_view: None,
             menu_button,
@@ -502,6 +557,179 @@ impl LauncherWindow {
         cx.notify();
     }
 
+    /// Alt+Down (#258): the selection moves five rows at a time, stopping
+    /// at the last row, kept in view as the arrows' is.
+    pub(crate) fn select_next_five(
+        &mut self,
+        _: &SelectNextFive,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.launcher.move_selection(FIVE_ROWS);
+        self.announcer.user_moved();
+        cx.notify();
+    }
+
+    /// Alt+Up (#258): the selection moves five rows back, stopping at the
+    /// first row.
+    pub(crate) fn select_previous_five(
+        &mut self,
+        _: &SelectPreviousFive,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.launcher.move_selection(-FIVE_ROWS);
+        self.announcer.user_moved();
+        cx.notify();
+    }
+
+    /// Ctrl+Down (Command on macOS, #258): the selection moves to the
+    /// first row of the next section, or the last row when there is no
+    /// next section, the section's label scrolling into view with it.
+    /// In the vertical pinned layout the pinned rows count as the first
+    /// section — a jump down from them lands on the first row of the
+    /// first row section — and the horizontal strip is never entered.
+    /// The jump stops at the ends; it never wraps.
+    pub(crate) fn select_next_section(
+        &mut self,
+        _: &SelectNextSection,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        // A focused pin is in the pins' section: down leaves them for the
+        // first row, taking the focus back to the search field.
+        if self.focused_slot(window).is_some() {
+            self.select_first_row(window, cx);
+            return;
+        }
+        let (view, listing) = self.launcher.presented_list();
+        let rows = view.rows.len();
+        if rows == 0 {
+            return;
+        }
+        // The first row of the first section past the selection; the last
+        // row when no section follows. A list with no sections of its
+        // own is one section, whose next is the last row.
+        let firsts = section_firsts(&listing, rows);
+        let row = match view.selected {
+            Some(selected) => firsts
+                .iter()
+                .copied()
+                .find(|first| *first > selected)
+                .unwrap_or(rows - 1),
+            // Nothing selected (root search's fallbacks): the first row,
+            // as Down does.
+            None => 0,
+        };
+        self.select_row(row, cx);
+    }
+
+    /// Ctrl+Up (Command on macOS, #258): the selection moves to the first
+    /// row of the previous section, its own section's first row first —
+    /// from inside a section, the jump lands on that section's head
+    /// before the one above it. In the vertical pinned layout the pinned
+    /// rows count as the first section, so the jump up from the first row
+    /// section reaches the first pin; the horizontal strip is not
+    /// entered. The jump stops at the ends; it never wraps.
+    pub(crate) fn select_previous_section(
+        &mut self,
+        _: &SelectPreviousSection,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        // A focused pin is in the pins' section: up stays in it, on its
+        // own first row — the first pin.
+        if let Some(slot) = self.focused_slot(window) {
+            if slot > 0 {
+                self.focus_slot(0, window, cx);
+                self.announcer.user_moved();
+                self.results.reveal_row(0);
+                cx.notify();
+            }
+            return;
+        }
+        let (view, listing) = self.launcher.presented_list();
+        let rows = view.rows.len();
+        if rows == 0 {
+            return;
+        }
+        let firsts = section_firsts(&listing, rows);
+        // Nothing selected: the jump lands on the last row, as Up does.
+        let Some(selected) = view.selected else {
+            self.select_row(rows - 1, cx);
+            return;
+        };
+        // The section the selection is in: the last one whose first row
+        // is not past it.
+        let section = firsts.iter().rposition(|first| *first <= selected);
+        let own_first = section.map(|at| firsts[at]);
+        if own_first.is_some_and(|first| first < selected) {
+            // Not at its own first row: its own head comes first.
+            self.select_row(own_first.unwrap(), cx);
+            return;
+        }
+        // At its section's first row: the section above it, or the pins.
+        match section.and_then(|at| at.checked_sub(1)) {
+            Some(above) => self.select_row(firsts[above], cx),
+            // No section above: the pins count as the first section —
+            // only in the vertical layout, and only while there is a pin.
+            None => self.select_first_pin(window, cx),
+        }
+    }
+
+    /// Selects `row`, announcing the move; the frame that follows keeps
+    /// its section's label in view as the list follows the selection
+    /// (#258, see [`LauncherWindow::keep_selected_visible`]).
+    fn select_row(&mut self, row: usize, cx: &mut Context<Self>) {
+        self.launcher.select(row);
+        self.announcer.user_moved();
+        self.jump_reveal = Some(row);
+        cx.notify();
+    }
+
+    /// Takes the row a section jump landed on, if one is pending (#258):
+    /// Search Files' split view reveals the section's label with the row
+    /// as the result list does, reading the jump before its own reveal —
+    /// the two never draw the same frame.
+    pub(crate) fn take_jump_reveal(&mut self) -> Option<usize> {
+        self.jump_reveal.take()
+    }
+
+    /// Selects the first row of the first row section, taking the focus
+    /// back to the search field, as a jump down from the pins does
+    /// (#258).
+    fn select_first_row(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.query.focus(window, cx);
+        self.select_row(0, cx);
+    }
+
+    /// Focuses the first pin, as a jump up from the rows into the pins'
+    /// section does (#258); nothing when the strip is what shows (it is
+    /// never entered) or no pin is pinned.
+    fn select_first_pin(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.pins_as_first_section(cx) > 0 {
+            self.focus_slot(0, window, cx);
+            self.announcer.user_moved();
+            self.results.reveal_row(0);
+            cx.notify();
+        }
+    }
+
+    /// How many pins the pinned home lays out as rows — the first section
+    /// a section jump can enter (#258) — in the vertical layout, over a
+    /// blank query; zero in the horizontal layout, whose strip the jump
+    /// never enters.
+    fn pins_as_first_section(&self, cx: &App) -> usize {
+        let settings = crate::settings::shared(cx).read(cx);
+        let vertical = settings.pinned_layout() == pane_core::PinnedLayout::Vertical;
+        drop(settings);
+        if vertical && quick_slots::home_shown(&self.launcher.view()) {
+            self.launcher.quick_slots().len()
+        } else {
+            0
+        }
+    }
+
     /// The list Page Down and Up move the launcher's selection through:
     /// Search Files' while it shows, else the results'.
     fn paged_list(&self) -> &virtual_list::VirtualList {
@@ -651,6 +879,111 @@ impl LauncherWindow {
         self.motion.land_at_once();
         self.sync_screen(window, cx);
         cx.notify();
+    }
+
+    /// A key pressed in the launcher, before the focused control sees it:
+    /// the Back-a-level binding — the plain Backspace by default — goes
+    /// back one level without clearing a search's text (#258), but only
+    /// where the key is one to take: on an empty command search, on a
+    /// screen with no text field in focus (a command's own list, package
+    /// previews, confirmations, details) or, with an overlay open, on the
+    /// overlay's own level. Root search never backs out on it (an empty
+    /// query has nothing to leave and a query is the field's to delete),
+    /// the hotkey screen records it, a form's fields edit with it, and
+    /// an overlay's or a search field's own text keeps the key — see
+    /// [`LauncherWindow::backspace_back_ready`]. A repeat of a held key
+    /// is not a press, so it backs out of nothing: the Backspace that
+    /// empties a field leaves it empty.
+    ///
+    /// The key reaches this handler past a focused field's own Backspace
+    /// (which deletes text) only when the field is empty and a back
+    /// would act — the window's keystroke gate stops the key's dispatch
+    /// then (#258; see the field in [`LauncherWindow::new`]). Everywhere
+    /// else the field's own key consumes it first, as it should.
+    pub(crate) fn backspace_back_keys(
+        &mut self,
+        event: &KeyDownEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Ok(pressed) = crate::keyboard::binding_of(&event.keystroke) else {
+            return;
+        };
+        let back = crate::settings::keyboard_of(cx)
+            .binding(pane_core::KeyboardAction::BackspaceBack)
+            .clone();
+        if pressed != back || !self.backspace_back_ready(window, cx) {
+            return;
+        }
+        cx.stop_propagation();
+        if event.is_held {
+            return;
+        }
+        self.back_one_level(window, cx);
+    }
+
+    /// Whether the Back-a-level key would act now: the launcher is on a
+    /// screen the key leaves, and the focused field, if there is one, is
+    /// a search field that is empty — a field with text in it keeps its
+    /// own Backspace, deleting the text (#258).
+    fn backspace_back_ready(&self, window: &Window, cx: &App) -> bool {
+        // Root search is never one of the key's screens: an empty query
+        // has nothing to back out of, and one with text is the field's.
+        // The hotkey screen records every key pressed on it, and a form's
+        // fields — an argument's among them — edit their own text.
+        if matches!(
+            self.launcher.screen(),
+            Screen::Root { .. } | Screen::Hotkey { .. } | Screen::Form(_)
+        ) {
+            return false;
+        }
+        // An open footer menu is a level of its own, with no field in
+        // focus: the key closes it.
+        if self.menu.is_some() {
+            return true;
+        }
+        // The Actions panel's filter is a search field: with text in it
+        // the field keeps the key; empty, the key steps the panel back
+        // one level.
+        if let Some(panel) = self.actions.as_ref() {
+            return panel.query(cx).trim().is_empty();
+        }
+        // The window's own query field — a command search's, or Search
+        // Files' over its split view, which keeps the field: empty, the
+        // key backs out of the command.
+        if self.query_field().focus_handle(cx).is_focused(window) {
+            return self.query_field().read(cx).as_str().is_empty();
+        }
+        // The Clipboard History view's own search field is not one of the
+        // key's screens: the view keeps its own Escape chain, and its
+        // field deletes its text.
+        if self.clipboard_query_focused(window, cx) {
+            return false;
+        }
+        // No text field in focus: the command's own list, a package
+        // preview, a confirmation, the details screens, a custom view.
+        true
+    }
+
+    /// The Back-a-level key's act (#258): the Back action's order,
+    /// without its text clearing — an open footer menu closes, an open
+    /// Actions panel steps back one level, and only then is the screen
+    /// left. It never hides the launcher: root search is not one of the
+    /// key's screens, and a search it leaves is empty by the time it
+    /// leaves it.
+    fn back_one_level(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.close_open_menu(window, cx) {
+            return;
+        }
+        if self.actions.is_some() {
+            self.actions_back(&actions_panel::StepBack, window, cx);
+            return;
+        }
+        if self.launcher.back() {
+            self.motion.land_at_once();
+            self.sync_screen(window, cx);
+            cx.notify();
+        }
     }
 
     /// Returns to root search from wherever the launcher is — the state a
@@ -1203,8 +1536,22 @@ impl LauncherWindow {
             // As laid out in the last frame.
             list: self.results.list.viewport().size,
         };
+        // A section jump landed on a row: the section's label scrolls
+        // into view with it (#258), wherever the selection lands — a row
+        // it already held included, which the row's own follow-up below
+        // does not scroll for.
+        let jumped = self
+            .jump_reveal
+            .take()
+            .filter(|row| Some(*row) == view.selected);
         let last = self.scrolled_for.as_ref();
         self.reveal_after_layout = None;
+        if let Some(row) = jumped {
+            self.results.reveal_section(row);
+            self.reveal_after_layout = Some(ScrollAfter::Section(row));
+            self.scrolled_for = Some(shown);
+            return;
+        }
         if last == Some(&shown) && !rows_changed {
             return;
         }
@@ -1227,7 +1574,7 @@ impl LauncherWindow {
             });
         if let Some(selected) = view.selected {
             self.results.reveal_row(selected);
-            self.reveal_after_layout = relaid.then_some(selected);
+            self.reveal_after_layout = relaid.then_some(ScrollAfter::Row(selected));
         }
         self.scrolled_for = Some(shown);
     }
@@ -1994,7 +2341,7 @@ impl Render for LauncherWindow {
             )
             .children(
                 self.reveal_after_layout
-                    .and_then(|row| self.results.reveal_row_after_layout(row)),
+                    .and_then(|after| self.results.reveal_after(after)),
             );
         // The launcher decides what an item opens; its screen says which.
         // Root search has no title — the reference's launcher has none —
@@ -2126,6 +2473,13 @@ impl Render for LauncherWindow {
             // said last (#141).
             .capture_key_down(cx.listener(Self::toast_action_keys))
             .capture_key_down(cx.listener(Self::item_action_keys))
+            // The Back-a-level key, beneath every focused control but
+            // above the fields' own empty Backspace (#258).
+            .capture_key_down(cx.listener(Self::backspace_back_keys))
+            .on_action(cx.listener(Self::select_next_five))
+            .on_action(cx.listener(Self::select_previous_five))
+            .on_action(cx.listener(Self::select_next_section))
+            .on_action(cx.listener(Self::select_previous_section))
             .on_action(cx.listener(Self::focus_next))
             .on_action(cx.listener(Self::focus_previous))
             .on_modifiers_changed(cx.listener(Self::modifiers_changed))
@@ -2306,6 +2660,9 @@ impl Render for LauncherWindow {
 /// scrolls (ADR 0028).
 const HERO_SCROLL: f32 = 1.25;
 
+/// How many rows Alt+Up and Alt+Down move the selection by (#258).
+const FIVE_ROWS: isize = 5;
+
 /// The share of the panel's height the list scrolls by the time the
 /// background image has dissolved.
 const HERO_DISSOLVE: f32 = 0.5;
@@ -2414,6 +2771,23 @@ fn window_size(size: Size<Pixels>) -> WindowSize {
 /// them.
 fn section_labels(listing: &ListPresentation) -> Vec<shell::SectionLabel> {
     listing.sections.iter().map(section_label).collect()
+}
+
+/// The first row of every section a list draws, in order, a section jump's
+/// stops (#258): the sections that begin past the last row are not drawn,
+/// and a list that draws no labels — a command's list — is one section
+/// of its own, from its first row.
+fn section_firsts(listing: &ListPresentation, rows: usize) -> Vec<usize> {
+    let mut firsts: Vec<usize> = listing
+        .sections
+        .iter()
+        .filter(|section| section.first < rows)
+        .map(|section| section.first)
+        .collect();
+    if !firsts.contains(&0) {
+        firsts.insert(0, 0);
+    }
+    firsts
 }
 
 /// A launcher section as the shared list labels it: the adapter between
