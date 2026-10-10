@@ -295,15 +295,21 @@ async fn wizer_init(
     // the stubber finds them defined and leaves them alone.
     let terminal_input = ResourceType::host::<wasmtime_wasi::p3::cli::TerminalInput>();
     let terminal_output = ResourceType::host::<wasmtime_wasi::p3::cli::TerminalOutput>();
-    linker
-        .instance("wasi:cli/terminal-stdin")?
-        .resource("terminal-input", terminal_input, |_, _| Ok(()))?;
-    linker
-        .instance("wasi:cli/terminal-stdout")?
-        .resource("terminal-output", terminal_output, |_, _| Ok(()))?;
-    linker
-        .instance("wasi:cli/terminal-stderr")?
-        .resource("terminal-output", terminal_output, |_, _| Ok(()))?;
+    linker.instance("wasi:cli/terminal-stdin@0.3.0")?.resource(
+        "terminal-input",
+        terminal_input,
+        |_, _| Ok(()),
+    )?;
+    linker.instance("wasi:cli/terminal-stdout@0.3.0")?.resource(
+        "terminal-output",
+        terminal_output,
+        |_, _| Ok(()),
+    )?;
+    linker.instance("wasi:cli/terminal-stderr@0.3.0")?.resource(
+        "terminal-output",
+        terminal_output,
+        |_, _| Ok(()),
+    )?;
     register_module_loader(&mut linker, resolver.clone())?;
     linker.define_unknown_imports_as_traps(&comp)?;
 
