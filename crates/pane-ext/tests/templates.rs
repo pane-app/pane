@@ -213,7 +213,7 @@ fn installed(folder: &Path) -> Launcher {
     let data = tempfile::tempdir().unwrap();
     let extensions = data.keep().join("extensions");
     let launcher = Launcher::with_packages(Ok(Runtime::start().unwrap()), vec![], extensions);
-    block_on(launcher.install_package(folder)).unwrap();
+    block_on(launcher.install_package(folder));
     launcher.back();
     launcher
 }
