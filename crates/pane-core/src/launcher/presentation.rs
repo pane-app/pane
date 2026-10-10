@@ -393,6 +393,8 @@ pub(super) fn kind(entry: &Entry) -> Option<RowKind> {
         Entry::InstallFromFolder
         | Entry::AskNpm
         | Entry::AskGit
+        | Entry::CreateExtension
+        | Entry::ImportExtension
         | Entry::Acquire(_)
         | Entry::InstallUpdate
         | Entry::CheckUpdate

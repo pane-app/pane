@@ -383,6 +383,8 @@ pub(in crate::launcher) fn selected_action(state: &State) -> SelectedAction {
         (_, Some(Entry::InstallFromFolder)) => acting("Install from folder"),
         (_, Some(Entry::AskNpm)) => acting("Install from npm"),
         (_, Some(Entry::AskGit)) => acting("Install from Git"),
+        (_, Some(Entry::CreateExtension)) => acting("Create Extension"),
+        (_, Some(Entry::ImportExtension)) => acting("Import Extension"),
         (_, Some(Entry::Acquire(_))) => acting("Set up extension"),
         (_, Some(Entry::InstallUpdate)) => acting("Install update"),
         (_, Some(Entry::CheckUpdate)) => acting("Check for update"),

@@ -19,6 +19,8 @@ mod rows;
 use feedback::shown;
 use rows::{select_title, titles};
 
+const CREATE_ROW: &str = "Create Extension…";
+const IMPORT_ROW: &str = "Import Extension…";
 const INSTALL_ROW: &str = "Install extension from folder…";
 const NPM_ROW: &str = "Install extension from npm…";
 const GIT_ROW: &str = "Install extension from Git…";
@@ -162,6 +164,8 @@ fn a_disabled_package_leaves_root_search_and_stays_disabled_after_a_restart(fixt
             INSTALL_ROW,
             NPM_ROW,
             GIT_ROW,
+            CREATE_ROW,
+            IMPORT_ROW,
             MANAGE_ROW,
             SETTINGS_ROW
         ]
@@ -195,7 +199,7 @@ fn a_disabled_package_leaves_root_search_and_stays_disabled_after_a_restart(fixt
     launcher.back();
     assert_eq!(
         titles(&launcher),
-        [INSTALL_ROW, NPM_ROW, GIT_ROW, MANAGE_ROW, SETTINGS_ROW]
+        [INSTALL_ROW, NPM_ROW, GIT_ROW, CREATE_ROW, IMPORT_ROW, MANAGE_ROW, SETTINGS_ROW]
     );
 
     // A restart without a runtime: listing runs no guest and keeps the choice.
@@ -203,7 +207,7 @@ fn a_disabled_package_leaves_root_search_and_stays_disabled_after_a_restart(fixt
     let restarted = Launcher::with_packages(unavailable, vec![], dirs.packages_dir());
     assert_eq!(
         titles(&restarted),
-        [INSTALL_ROW, NPM_ROW, GIT_ROW, MANAGE_ROW, SETTINGS_ROW]
+        [INSTALL_ROW, NPM_ROW, GIT_ROW, CREATE_ROW, IMPORT_ROW, MANAGE_ROW, SETTINGS_ROW]
     );
     assert_eq!(enabled(&restarted), [(identity.clone(), false)]);
     manage(&restarted);
@@ -242,6 +246,8 @@ fn re_enabling_after_a_restart_restores_the_saved_settings(fixture: &Fixture) {
             INSTALL_ROW,
             NPM_ROW,
             GIT_ROW,
+            CREATE_ROW,
+            IMPORT_ROW,
             MANAGE_ROW,
             SETTINGS_ROW
         ]
@@ -322,7 +328,7 @@ fn copies_with_the_same_title_are_enabled_and_keep_settings_by_identity(fixture:
     let restarted = dirs.launcher();
     assert_eq!(
         titles(&restarted),
-        [INSTALL_ROW, NPM_ROW, GIT_ROW, MANAGE_ROW, SETTINGS_ROW]
+        [INSTALL_ROW, NPM_ROW, GIT_ROW, CREATE_ROW, IMPORT_ROW, MANAGE_ROW, SETTINGS_ROW]
     );
     // Enabling one copy leaves the other disabled.
     toggle(&restarted, 1);
@@ -361,7 +367,7 @@ fn disabling_through_the_api_closes_the_package_command_and_updating_keeps_it_di
     );
     assert_eq!(
         titles(&launcher),
-        [INSTALL_ROW, NPM_ROW, GIT_ROW, MANAGE_ROW, SETTINGS_ROW]
+        [INSTALL_ROW, NPM_ROW, GIT_ROW, CREATE_ROW, IMPORT_ROW, MANAGE_ROW, SETTINGS_ROW]
     );
 
     // An update replaces the code, not the user's choice.
@@ -378,7 +384,7 @@ fn disabling_through_the_api_closes_the_package_command_and_updating_keeps_it_di
     assert_eq!(enabled(&launcher), [(identity.clone(), false)]);
     assert_eq!(
         titles(&launcher),
-        [INSTALL_ROW, NPM_ROW, GIT_ROW, MANAGE_ROW, SETTINGS_ROW]
+        [INSTALL_ROW, NPM_ROW, GIT_ROW, CREATE_ROW, IMPORT_ROW, MANAGE_ROW, SETTINGS_ROW]
     );
     assert_eq!(enabled(&dirs.launcher()), [(identity, false)]);
 }

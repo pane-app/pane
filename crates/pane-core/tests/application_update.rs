@@ -576,6 +576,8 @@ fn an_unreachable_source_is_explained_and_the_row_tries_again() {
             "Install extension from folder…",
             "Install extension from npm…",
             "Install extension from Git…",
+            "Create Extension…",
+            "Import Extension…",
             "Check for a Pane update",
             // Pane's own row, listed after every command.
             "Settings…"

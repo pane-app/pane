@@ -28,6 +28,7 @@ mod clipboard_view;
 mod command_search;
 mod confirmations;
 mod credentials;
+mod create;
 mod dependencies;
 mod develop;
 mod develop_builds;

@@ -255,6 +255,14 @@ impl Developing {
         }
     }
 
+    /// The builder local packages are built with on save, and Create
+    /// Extension's package once (see `create`); `None` until
+    /// `with_development` runs, so a launcher without it explains that
+    /// this Pane does not build extensions.
+    pub(super) fn builder(&self) -> Option<Arc<dyn Builder>> {
+        self.config().builder.clone()
+    }
+
     /// The sender that tells the window the launcher changed in the
     /// background, for the progress a download reports as it goes.
     /// Read through the shared configuration, so a channel wired after the
@@ -891,7 +899,7 @@ fn logs_row(id: String, identity: &PackageIdentity, title: &str) -> (Row, Entry)
 
 /// The name of the development folder of the package with `identity`: a
 /// hash of its identity, so that it is short and a valid file name.
-fn slot(identity: &PackageIdentity) -> String {
+pub(in crate::launcher) fn slot(identity: &PackageIdentity) -> String {
     // FNV-1a, which is stable across Rust versions, unlike `DefaultHasher`.
     let hash = identity
         .key()

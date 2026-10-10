@@ -239,7 +239,7 @@ writes a fresh extension package, from the templates the ADR settles —
 `list`, `detail`, `form` and `no-view`, in TypeScript and in Rust — kept
 in the repository as the files `pane-core` embeds
 ([`crates/pane-core/templates`](../crates/pane-core/templates)), so the
-CLI and the app's coming Create Extension command write the same package.
+CLI and the app's Create Extension command write the same package.
 `npm create @pane-app` runs it too, through the
 [`@pane-app/create`](../packages/create) package, so an author starts with
 Node.js and npm alone:
@@ -271,6 +271,48 @@ commands are, as one component serves every command of a package), a
 source file, and the entry file's dispatch arm, added at a marker the
 templates write, so the package still builds and the command runs without
 the author touching anything.
+
+## Starting in the app: Create Extension and Import Extension
+
+**Create Extension…** ([#222](https://github.com/pane-app/pane/issues/222),
+[ADR 0047](adr/0047-extensions-are-built-from-the-app-first-with-pane-ext-beside-it.md))
+is the root-search row an author starts from in the app, beside the
+install rows. It asks for the parent folder (the system's folder picker),
+then a form: the extension's name, its language (TypeScript or Rust) and
+its template (list, detail, form or no-view). Submitting it:
+
+1. writes `<parent>/<package name>` from the same templates `pane-ext new`
+   writes (an existing non-empty folder is refused: an author's files are
+   never overwritten);
+2. for TypeScript, runs `npm install` in the folder when npm is found —
+   it writes the lockfile the build's `npm ci` runs from and the
+   `node_modules` the package's own scripts use — and a failure stops
+   nothing: the build that follows explains what is missing, as it does
+   when npm install was skipped;
+3. builds the package once with the same builder development mode uses,
+   copying the built components into the folder, as `pane-ext dev`'s
+   first run of a new folder does;
+4. shows Pane's ordinary install preview, which the author confirms with
+   **Install**, and then develops the package: each save in the folder
+   builds and reloads it, as below. The status line says each step —
+   "Installing …'s dependencies", "Building …" — while it runs.
+
+Building still needs the author's tools, whatever wrote the folder: Node
+and npm for TypeScript, or rustup with the `wasm32-wasip2` target for
+Rust. A missing one is named, with where to get it (Node.js from
+<https://nodejs.org>; rustup from <https://rustup.rs> and `rustup target
+add wasm32-wasip2`); a build failure is the build's own first error with
+the folder and the whole output's log, and the folder is kept for
+importing once it builds.
+
+**Import Extension…** asks for the folder of a package that already
+exists and shows the same install preview of it — a folder without
+`pane.json`, or a source-only package whose components are not built, is
+explained by Pane's own messages, since the picker cannot look for them —
+and develops it once installed, as Manage extensions' local install with
+development does. Leaving either flow's preview without installing drops
+what it would have developed: not installing the package is the author's
+answer.
 
 ## From the terminal: `pane-ext dev`
 
@@ -396,6 +438,18 @@ These are implementation choices of #12/#13, not user decisions:
   [`templates`](../crates/pane-ext/tests/templates.rs) builds and
   installs every template in both languages through the build and
   launcher above (#221).
+- [`crates/pane-core/tests/create.rs`](../crates/pane-core/tests/create.rs)
+  drives Create Extension and Import Extension through the launcher with
+  a stand-in build that stages the guest the scaffolded manifest names
+  (#222): the authoring rows and what they ask the window for; the form's
+  fields and a name that names no package marked on its field; the folder
+  written (in both languages) and built once, its component copied in;
+  the preview that follows and the package developed once installed, in
+  both flows and for an installed folder again; a folder that is not
+  empty refused, a build failure shown with the folder and its log, a
+  Pane without a builder naming that it cannot build, a folder that is
+  no package explained by the preview, and leaving the preview dropping
+  what would have been developed.
 - [`crates/pane-core/tests/develop.rs`](../crates/pane-core/tests/develop.rs)
   drives development through the launcher with the system's file watcher
   and a stand-in build that stages a real guest, waiting on what the
@@ -452,6 +506,12 @@ These are implementation choices of #12/#13, not user decisions:
 - [`crates/pane/tests/develop.rs`](../crates/pane/tests/develop.rs): the
   window redraws by itself when a background build fails and when the fix
   is reloaded, and renders the diagnostics.
+- [`crates/pane/tests/create.rs`](../crates/pane/tests/create.rs): Create
+  Extension and Import Extension in the window with real key events
+  (#222): the rows, the form filled with the keyboard (a choice picked
+  with its own keys), the created package built and previewed, installed
+  and developed, and the imported folder developed; a name that names no
+  package marked on its field.
 - [`crates/pane-core/tests/local_channel.rs`](../crates/pane-core/tests/local_channel.rs)
   speaks the local channel as `pane-ext` does, against a launcher listening
   on an endpoint of its own, with guests staged as builds: a folder not

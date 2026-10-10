@@ -24,6 +24,8 @@ mod rows;
 use guests::guest;
 use rows::titles;
 
+const CREATE_ROW: &str = "Create Extension…";
+const IMPORT_ROW: &str = "Import Extension…";
 const INSTALL_ROW: &str = "Install extension from folder…";
 const NPM_ROW: &str = "Install extension from npm…";
 const GIT_ROW: &str = "Install extension from Git…";
@@ -395,7 +397,7 @@ fn an_installed_command_is_found_by_its_title_or_its_package_title() {
     // manager by its subtitle ("Configure, update and remove extensions in
     // Settings", #168).
     block_on(launcher.set_query("install"));
-    assert_eq!(titles(&launcher), [INSTALL_ROW, NPM_ROW, GIT_ROW]);
+    assert_eq!(titles(&launcher), [INSTALL_ROW, NPM_ROW, GIT_ROW, CREATE_ROW, IMPORT_ROW]);
     block_on(launcher.set_query("configure"));
     assert_eq!(titles(&launcher), [MANAGE_ROW]);
 }

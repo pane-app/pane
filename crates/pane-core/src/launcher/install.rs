@@ -607,13 +607,19 @@ impl Launcher {
             state.release(identity);
         }
         let current = state.screen_epoch == epoch;
-        match result {
+        let developed = match result {
             Ok(outcome) => {
                 let message = outcome_message(&mode, &outcome);
                 for dependency in outcome.dependencies {
                     self.put_installed(&mut state, dependency);
                 }
                 let package = outcome.package;
+                // What Create Extension or Import Extension asked for: the
+                // package they previewed is developed once it is installed
+                // (see `create`).
+                let develop_after = state
+                    .develop_after
+                    .take_if(|identity| *identity == package.identity);
                 let first = package.commands().first().map(|c| c.component.clone());
                 let replaced_is_open = self.put_installed(&mut state, package);
                 if current || replaced_is_open {
@@ -622,6 +628,7 @@ impl Launcher {
                 } else {
                     self.refresh(&mut state);
                 }
+                develop_after
             }
             Err(Stopped::Changed(changed_plan)) => {
                 let (package, plan) = *changed_plan;
@@ -630,12 +637,26 @@ impl Launcher {
                     self.show_preview(&mut state, &request, Ok((package, plan)));
                     state.view.status = Status::Error(changed(&title));
                 }
+                None
             }
             Err(Stopped::Failed(failure)) => {
                 let message = self.install_left_behind(&mut state, &failure);
                 if current {
                     state.view.status = Status::Error(message);
                 }
+                None
+            }
+        };
+        drop(state);
+        // The package Create Extension or Import Extension previewed is
+        // developed as its own row would develop it: its folder is watched
+        // from now on, each save building and reloading it.
+        if let Some(identity) = developed {
+            let mut state = self.lock();
+            let start = self.begin_developing(&mut state, &identity);
+            drop(state);
+            if let Some(start) = start {
+                self.finish_developing(identity, start).await;
             }
         }
     }
