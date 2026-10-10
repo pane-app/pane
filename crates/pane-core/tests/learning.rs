@@ -10,7 +10,12 @@
 //! restart, an unreadable record reported and never replaced, an
 //! application keeping its ranking across an update into a new version
 //! folder, and the blank query listing the pins, then commands and
-//! applications by frecency under "Commands". The commands come from
+//! applications by frecency under "Commands". The controls over what
+//! was learned (#200): Reset Ranking clearing one result only, the
+//! reset-all clearing everything, and the "Learn from what I choose"
+//! switch stopping any use being recorded and ranking weighing what was
+//! learned — kept until it is reset, so turning it on again uses it.
+//! The commands come from
 //! packages of the no-view sample, so invoking one keeps root search on
 //! screen; the applications from a fake [`Applications`], through the
 //! real applications guest.
@@ -555,6 +560,173 @@ fn a_hotkey_a_computed_answer_a_fallback_and_panes_own_rows_record_nothing() {
         !pane.record().exists(),
         "none of those uses is recorded: {:?}",
         pane.record()
+    );
+}
+
+/// The Actions panel's "Reset Ranking" (#200): the entry of the result it
+/// runs for goes — its frecency and its queries — while another result's
+/// learning stands.
+#[test]
+fn reset_ranking_clears_one_result_only() {
+    let pane = Pane::new();
+    pythons(&pane);
+    pane.install(&pane.package("echo", &[("c", "Echo")]));
+    let launcher = &pane.launcher;
+    choose(launcher, "pyt", "#b");
+    choose(launcher, "echo", "#c");
+
+    // The reset runs on the row the Actions panel holds: the selected one,
+    // which the query lists first now that it was chosen.
+    block_on(launcher.set_query("pyt"));
+    let target = ids_titled(launcher, "Python")
+        .into_iter()
+        .find(|id| id.ends_with("#b"))
+        .expect("the chosen Python is listed");
+    let (ran, recorded) = launcher.reset_ranking(&target);
+    assert!(ran, "the reset ran");
+    block_on(recorded);
+    assert_eq!(
+        launcher.view().status,
+        Status::Result("Ranking reset for Python".into())
+    );
+    // The entry went; the other result's learning stands.
+    let text = fs::read_to_string(pane.record()).unwrap();
+    assert!(!text.contains("#b"), "the reset result's entry went: {text}");
+    assert!(text.contains("#c"), "the other result stands: {text}");
+
+    // The reset result ranks as never used, for the query and for the
+    // blank query's frecency order alike.
+    block_on(launcher.set_query("pyt"));
+    assert!(
+        at(launcher, "Python", 0, "#a"),
+        "nothing is learned of the reset result: {:?}",
+        ids_titled(launcher, "Python")
+    );
+    block_on(launcher.set_query(""));
+    assert!(
+        at(launcher, "Python", 0, "#a"),
+        "its frecency is gone too: {:?}",
+        ids_titled(launcher, "Python")
+    );
+    // The other result's ranking stands: its frecency still orders the
+    // blank query.
+    block_on(launcher.set_query(""));
+    assert_eq!(
+        titles(launcher).first().map(String::as_str),
+        Some("Echo"),
+        "the other result's frecency stands: {:?}",
+        titles(launcher)
+    );
+
+    // A reset that finds nothing learned for the result still says it did.
+    block_on(launcher.set_query("pyt"));
+    let index = launcher
+        .view()
+        .rows
+        .iter()
+        .position(|row| row.id == target)
+        .expect("the reset result is listed");
+    launcher.select(index);
+    let (ran, recorded) = launcher.reset_ranking(&target);
+    assert!(ran);
+    block_on(recorded);
+    assert_eq!(
+        launcher.view().status,
+        Status::Result("Ranking reset for Python".into())
+    );
+}
+
+/// The Launcher page's "Reset ranking…" (#200): everything that was
+/// learned goes, and a restart over the same folder ranks nothing.
+#[test]
+fn resetting_everything_clears_all_that_was_learned() {
+    let pane = Pane::new();
+    pythons(&pane);
+    pane.install(&pane.package("echo", &[("c", "Echo")]));
+    let launcher = &pane.launcher;
+    choose(launcher, "pyt", "#b");
+    choose(launcher, "echo", "#c");
+
+    let (ran, recorded) = launcher.reset_all_learned();
+    assert!(ran, "there was something to reset");
+    block_on(recorded).unwrap();
+    let text = fs::read_to_string(pane.record()).unwrap();
+    assert!(!text.contains("#b") && !text.contains("#c"), "nothing is left: {text}");
+
+    // The rows rank as never used, and a restart reads the same nothing.
+    block_on(launcher.set_query("pyt"));
+    assert!(
+        at(launcher, "Python", 0, "#a"),
+        "nothing weighs in ranking: {:?}",
+        ids_titled(launcher, "Python")
+    );
+    let pane = pane.restart();
+    let launcher = &pane.launcher;
+    block_on(launcher.set_query(""));
+    assert!(
+        at(launcher, "Python", 0, "#a"),
+        "the reset was written: {:?}",
+        ids_titled(launcher, "Python")
+    );
+}
+
+/// The Launcher page's "Learn from what I choose" switch (#200): turned
+/// off, nothing is recorded and ranking acts as if nothing was learned —
+/// what was learned is kept until it is reset, so turning it on again
+/// uses it.
+#[test]
+fn the_learn_switch_stops_recording_and_ranking_ignores_what_was_learned() {
+    let pane = Pane::new();
+    pythons(&pane);
+    let launcher = &pane.launcher;
+    choose(launcher, "pyt", "#b");
+    let record = fs::read_to_string(pane.record()).unwrap();
+    assert!(record.contains("#b"), "the use was recorded: {record}");
+
+    launcher.set_learning(false);
+    // The blank query's frecency order and the query's learned order both
+    // ignore what was learned while the switch is off.
+    block_on(launcher.set_query(""));
+    assert!(
+        at(launcher, "Python", 0, "#a"),
+        "the blank query ignores the frecency: {:?}",
+        ids_titled(launcher, "Python")
+    );
+    block_on(launcher.set_query("pyt"));
+    assert!(
+        at(launcher, "Python", 0, "#a"),
+        "the query ignores the learned queries: {:?}",
+        ids_titled(launcher, "Python")
+    );
+    // Nothing is recorded while it is off: the record stands as it was.
+    choose(launcher, "pyt", "#b");
+    assert_eq!(
+        fs::read_to_string(pane.record()).unwrap(),
+        record,
+        "no use was recorded"
+    );
+
+    // Turning it on again uses what was kept.
+    launcher.set_learning(true);
+    block_on(launcher.set_query("pyt"));
+    assert!(
+        at(launcher, "Python", 0, "#b"),
+        "what was kept weighs again: {:?}",
+        ids_titled(launcher, "Python")
+    );
+    // A reset with the switch off still clears what was kept.
+    launcher.set_learning(false);
+    let (ran, recorded) = launcher.reset_all_learned();
+    assert!(ran);
+    block_on(recorded).unwrap();
+    let text = fs::read_to_string(pane.record()).unwrap();
+    assert!(!text.contains("#b"), "the kept entry went: {text}");
+    launcher.set_learning(true);
+    block_on(launcher.set_query("pyt"));
+    assert!(
+        at(launcher, "Python", 0, "#a"),
+        "what was kept is gone: {:?}",
+        ids_titled(launcher, "Python")
     );
 }
 

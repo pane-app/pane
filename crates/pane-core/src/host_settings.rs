@@ -311,6 +311,12 @@ pub struct HostSettings {
     /// How strict root search's matching is; the launcher applies it on
     /// the next keystroke.
     pub search_sensitivity: SearchSensitivity,
+    /// Whether root search learns from what the user chooses — the
+    /// Launcher page's "Learn from what I choose" switch. Turned off,
+    /// nothing is recorded and ranking acts as if nothing was learned;
+    /// what was learned is kept until it is reset. The same switch also
+    /// stops search history (#206).
+    pub learning: bool,
     /// What the launcher's back key does.
     pub escape: EscapeBehavior,
     /// Whether Escape closes the Settings window.
@@ -341,6 +347,7 @@ impl Default for HostSettings {
             compact_pinned: false,
             pinned_layout: PinnedLayout::default(),
             search_sensitivity: SearchSensitivity::default(),
+            learning: true,
             escape: EscapeBehavior::default(),
             escape_closes_settings: true,
             navigation: NavigationBindings::default(),
@@ -424,6 +431,7 @@ impl HostSettings {
             compact_pinned: recorded.compact_pinned,
             pinned_layout: recorded.pinned_layout,
             search_sensitivity: recorded.search_sensitivity,
+            learning: recorded.learning,
             escape: recorded.escape_behavior,
             escape_closes_settings: recorded.escape_closes_settings,
             navigation: recorded.navigation_bindings,
@@ -452,6 +460,7 @@ impl HostSettings {
             compact_pinned: self.compact_pinned,
             pinned_layout: self.pinned_layout,
             search_sensitivity: self.search_sensitivity,
+            learning: self.learning,
             escape_behavior: self.escape,
             escape_closes_settings: self.escape_closes_settings,
             navigation_bindings: self.navigation,
@@ -521,6 +530,10 @@ struct Recorded {
     /// default a fresh installation starts from.
     #[serde(default)]
     search_sensitivity: SearchSensitivity,
+    /// Whether root search learns from what the user chooses; missing
+    /// means it does, the default.
+    #[serde(default = "learning_by_default")]
+    learning: bool,
     /// The back key's behavior; missing means back, then hide.
     #[serde(default)]
     escape_behavior: EscapeBehavior,
@@ -542,6 +555,11 @@ struct Recorded {
 /// The record's default for the tray visibility (and Escape closing
 /// Settings): on.
 fn shown_by_default() -> bool {
+    true
+}
+
+/// The record's default for learning from what the user chooses: on.
+fn learning_by_default() -> bool {
     true
 }
 
@@ -606,6 +624,7 @@ mod tests {
             compact_pinned: true,
             pinned_layout: super::PinnedLayout::Vertical,
             search_sensitivity: super::SearchSensitivity::Medium,
+            learning: false,
             escape: super::EscapeBehavior::Hide,
             escape_closes_settings: false,
             navigation: super::NavigationBindings::Emacs,
@@ -623,6 +642,7 @@ mod tests {
             "\"compactPinned\": true",
             "\"pinnedLayout\": \"vertical\"",
             "\"searchSensitivity\": \"medium\"",
+            "\"learning\": false",
             "\"escapeBehavior\": \"hide\"",
             "\"escapeClosesSettings\": false",
             "\"navigationBindings\": \"emacs\"",
@@ -856,6 +876,18 @@ mod tests {
         );
         // A value that is not one of the three fails the whole record.
         let problem = reading(r#"{ "version": 1, "searchSensitivity": "loose" }"#);
+        assert!(problem.is_err(), "{problem:?}");
+    }
+
+    #[test]
+    fn learning_from_choices_defaults_to_on_and_is_written_and_read() {
+        // Missing: on, the default a fresh installation starts from.
+        assert!(HostSettings::default().learning);
+        assert!(reading(r#"{ "version": 1 }"#).unwrap().learning);
+        // Recorded as the record's camelCase field, and read back.
+        assert!(!reading(r#"{ "version": 1, "learning": false }"#).unwrap().learning);
+        // A value that is not a boolean fails the whole record.
+        let problem = reading(r#"{ "version": 1, "learning": "off" }"#);
         assert!(problem.is_err(), "{problem:?}");
     }
 

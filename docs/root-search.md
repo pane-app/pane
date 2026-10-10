@@ -21,7 +21,10 @@ Root search also
 (ADR 0030, #199): a result the user invokes earns frecency and keeps the
 queries it was chosen with, ranking above how well titles match, and the
 blank query lists the pins, then the commands and applications by
-frecency.
+frecency — and the user controls what it learned
+([#200](https://github.com/pane-app/pane/issues/200)): resetting one
+result from the Actions panel, resetting everything or turning learning
+off in Settings.
 [#28](https://github.com/pane-app/pane/issues/28) adds
 [quicklinks](quicklinks.md), which open a saved link, file, folder or
 application; #149 made them indexed results ranked with commands. [#31](https://github.com/pane-app/pane/issues/31) adds
@@ -256,9 +259,20 @@ decayed to 1 and that was last opened more than 17 days ago is dropped,
 since it ranks nothing. What Pane learns stays on this computer and is
 never sent anywhere.
 
-The user's controls over what is learned — a per-result "Reset Ranking"
-in the Actions panel, a reset-all and an on switch in Settings — are
-[#200](https://github.com/pane-app/pane/issues/200)'s.
+The user's controls over what is learned (#200). The **Actions panel**
+offers **Reset Ranking** (no default key) for every root result that can
+be learned — one a quick slot can hold: it clears that result's frecency
+and its learned queries, keeps every other result's, and says "Ranking
+reset for <title>" in the status line. The **Launcher page** offers
+**"Reset ranking…"** for everything, which asks for its confirmation
+first — the first press arms the row and the second runs it, with Cancel
+standing it down — and a **"Learn from what I choose"** switch, recorded
+in the settings record as `learning`, on by default. Turned off, Pane
+records no use and ranking acts as if none had been recorded — what was
+learned is kept until it is reset, so turning the switch on again uses
+it. The same switch also stops search history once that exists (#206).
+Both controls re-rank the list on screen at once, and nothing is offered
+while the learned record cannot be read: it is never replaced.
 
 ## Host behavior
 
@@ -283,8 +297,10 @@ state and maps input to those calls.
 result, from the core's `Launcher::result_actions`: its primary action
 (the footer's, with the same dispatch), then, under "Pane", "Pin" for a
 command or an indexed result, or "Unpin" once it is pinned (see [the
-pinned home](#the-pinned-home)) and, for an installed command, "Assign
-Hotkey…"/"Change Hotkey…" and "Add Alias…"/"Change Alias…", which open the
+pinned home](#the-pinned-home)) and "Reset Ranking" for a result root
+search can learn from ([above](#learning-from-what-the-user-chooses),
+#200), and, for an installed command, "Assign Hotkey…"/"Change Hotkey…"
+and "Add Alias…"/"Change Alias…", which open the
 same hotkey screen and alias form the extension list does and return to this
 search when they end. Nothing without a working operation is listed: no new
 window, file manager, quit or hide (#100). Its search field holds focus: typing filters
@@ -1066,10 +1082,21 @@ folder; an unreadable record reported on the status line and never
 replaced; an application keeping its ranking across an update into a new
 version folder; and the blank query listing the pins, then the commands
 and applications by frecency under "Commands", with no Suggestions
-section. In the window
+section; and the controls over it (#200): Reset Ranking clearing one
+result only, the reset-all clearing everything, and the "Learn from what
+I choose" switch stopping any use being recorded while ranking ignores
+what was kept — kept until it is reset, so turning it on again uses it.
+In the window
 ([`crates/pane/tests/window.rs`](../crates/pane/tests/window.rs)), with
 real keys: choosing the second of two equal results a few times puts it
-first for that query.
+first for that query, and the Actions panel's Reset Ranking clearing
+that result with its toast. The Launcher page's learning controls are
+driven through the real Settings window in
+[`crates/pane/tests/launcher_settings.rs`](../crates/pane/tests/launcher_settings.rs):
+"Reset ranking…" asking for its confirmation and clearing everything,
+and the switch found through the Settings search, turned off recording
+nothing while the order ignores what was learned, turned on again using
+what was kept.
 
 For root providers
 ([`crates/pane-core/tests/root_providers.rs`](../crates/pane-core/tests/root_providers.rs)),

@@ -184,6 +184,11 @@ impl LauncherWindow {
         // in effect, and the platform's appearance notification feeds the
         // system's appearance back into them (see `crate::settings`).
         crate::settings::bind_window_appearance(&crate::settings::ensure(cx), window, cx);
+        // Root search's learning follows the Launcher page's switch from
+        // the start: the blank query's list was ranked when the launcher
+        // was made, before any keystroke pushed the switch, so it ranks
+        // again at once here while the switch is off (#200).
+        launcher.set_learning(crate::settings::learning_of(cx));
         // The launcher this window runs owns the global-shortcut
         // registration: the recorded Open Pane hotkey is applied to the
         // system here, at startup, and the settings keep this launcher for

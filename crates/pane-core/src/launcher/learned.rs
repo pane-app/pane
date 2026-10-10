@@ -28,13 +28,23 @@
 //! has decayed to 1 and that was last opened more than 17 days ago is
 //! dropped: it ranks nothing. Recording a use does not re-sort the list
 //! on screen; the next search ranks with it.
+//!
+//! The user's controls over what is learned (#200): the Actions panel's
+//! "Reset Ranking" clears one result's frecency and queries (the whole
+//! entry, by its identity), the Launcher page's "Reset ranking…" clears
+//! every result's, and the page's "Learn from what I choose" switch
+//! stops any use being recorded and ranking weighing what was learned
+//! — turned off, ranking acts as if nothing was learned, and what was
+//! learned is kept until it is reset, so turning it on again uses it.
 
 use std::collections::{BTreeMap, HashMap};
+use std::future::Future;
 
 use serde_json::{Map, Value};
 
+use super::actions::{ResultAction, ResultActionItem};
 use super::choices::{Choices, Record};
-use super::{Entry, Launcher, Screen, State};
+use super::{Entry, Launcher, Screen, State, Status, off_thread};
 use crate::packages::PackageIdentity;
 use crate::search::Learned;
 
@@ -196,6 +206,33 @@ impl LearnedChoices {
             })
             .collect()
     }
+
+    /// Forgets what was learned about the result `id` — its frecency and
+    /// its queries, the whole entry; whether anything went.
+    fn forget_one(&mut self, id: &str) -> bool {
+        self.uses.remove(id).is_some()
+    }
+
+    /// Forgets everything that was learned; whether anything went.
+    fn forget_all(&mut self) -> bool {
+        if self.uses.is_empty() {
+            return false;
+        }
+        self.uses.clear();
+        true
+    }
+}
+
+/// The Actions panel's "Reset Ranking" entry for root search's selected
+/// row, a result root search can learn about (see `use_of`): it clears
+/// what was learned for it — its frecency and its queries. It cannot run
+/// while the record cannot be read.
+pub(super) fn reset_item(state: &State) -> ResultActionItem {
+    ResultActionItem {
+        action: ResultAction::ResetRanking,
+        label: "Reset Ranking".into(),
+        available: state.learned.unreadable().is_none(),
+    }
 }
 
 /// The use root search records of activating `entry` on the selected row:
@@ -281,6 +318,11 @@ impl Launcher {
     /// reported when Pane started.
     pub(super) fn record_use(&self, id: &str, query: Option<&str>) {
         let mut state = self.lock();
+        // "Learn from what I choose" turned off: no use is recorded, and
+        // what was learned is kept until it is reset.
+        if !state.learning {
+            return;
+        }
         let now = state.clock.now();
         let recorded = record(&mut state, id, query, now);
         if !recorded {
@@ -292,6 +334,7 @@ impl Launcher {
         state.statics += 1;
         let id = id.to_owned();
         let saves = state.learned_saves.clone();
+        saves.begin();
         let ended = saves.clone();
         let launcher = self.clone();
         let saving = std::thread::Builder::new()
@@ -323,6 +366,116 @@ impl Launcher {
     pub fn wait_for_learned_recorded(&self, limit: std::time::Duration) -> bool {
         let saves = self.lock().learned_saves.clone();
         saves.settled(limit)
+    }
+
+    /// Resets what root search learned about `target` — the Actions
+    /// panel's "Reset Ranking" (#200), for a root result that can be
+    /// learned and is still the selected row: its frecency and its
+    /// learned queries are cleared, and the status line says "Ranking
+    /// reset for <title>". Whether the reset ran, and the future that
+    /// records it, off the window's thread, one write at a time — a write
+    /// that fails puts the entry back (see [`Launcher::save`]) and says
+    /// why. A record that cannot be read is never replaced; the panel's
+    /// entry stays unavailable while it is, and the status line says why.
+    /// The list on screen ranks again at once: the reset is a change the
+    /// user made, not a use recorded, which never re-sorts it.
+    pub fn reset_ranking(&self, target: &str) -> (bool, impl Future<Output = ()> + Send + 'static) {
+        let mut guard = self.lock();
+        let state = &mut *guard;
+        // The panel's target must still be the selected row, one root
+        // search learns about: `result_action_ready` checked the same
+        // before the panel ran it.
+        let title = super::quick_slots::pin_of_selected(state)
+            .filter(|pin| pin.key() == target)
+            .and_then(|_| {
+                state
+                    .view
+                    .selected
+                    .and_then(|index| state.view.rows.get(index))
+                    .map(|row| row.title.clone())
+            });
+        // The write the reset left to make: the entry's return to the
+        // record, which the future records.
+        let mut pending = None;
+        let mut ran = false;
+        if let Some(title) = title {
+            ran = true;
+            if let Some(problem) = state.learned.unreadable() {
+                state.view.status = Status::Error(unreadable_report(problem));
+            } else {
+                state.view.status = Status::Result(format!("Ranking reset for {title}"));
+                if state.learned.chosen.forget_one(target) {
+                    pending = Some((state.screen_epoch, target.to_owned()));
+                    super::reranked(state);
+                    self.changed();
+                }
+            }
+        }
+        let launcher = self.clone();
+        let recording = async move {
+            let Some((epoch, target)) = pending else {
+                return;
+            };
+            let writer = launcher.clone();
+            let written = off_thread(move || writer.save::<LearnedChoices>(Some(&target))).await;
+            if let Err(problem) = written {
+                let mut state = launcher.lock();
+                // The write put the entry back (see `Launcher::save`):
+                // ranking sees it again at once.
+                super::reranked(&mut state);
+                launcher.changed();
+                if state.screen_epoch == epoch {
+                    state.view.status =
+                        Status::Error(format!("Could not reset the ranking: {problem}"));
+                }
+            }
+        };
+        (ran, recording)
+    }
+
+    /// Resets everything root search learned — the Launcher page's
+    /// "Reset ranking…" (#200): every result's frecency and learned
+    /// queries are cleared. Whether anything was learned to reset, and
+    /// the future that records it, off the window's thread, one write at
+    /// a time — `Err` when the record cannot be written or read, with
+    /// everything put back as the record last held it. A record that
+    /// cannot be read is never replaced. The list on screen ranks again
+    /// at once: the reset is a change the user made, not a use recorded,
+    /// which never re-sorts it.
+    pub fn reset_all_learned(
+        &self,
+    ) -> (bool, impl Future<Output = Result<(), String>> + Send + 'static) {
+        let mut guard = self.lock();
+        let state = &mut *guard;
+        // Nothing runs while the record cannot be read: it is never
+        // replaced (see `choices`), and the page's entry says so.
+        let refused = state.learned.unreadable().map(str::to_owned);
+        let reset = refused.is_none().then(|| state.learned.chosen.forget_all()).flatten();
+        if reset.is_some() {
+            super::reranked(state);
+            self.changed();
+        }
+        let launcher = self.clone();
+        let recording = async move {
+            if let Some(problem) = refused {
+                return Err(problem);
+            }
+            if reset.is_none() {
+                return Ok(());
+            }
+            let writer = launcher.clone();
+            let written = off_thread(move || writer.save::<LearnedChoices>(None)).await;
+            if written.is_err() {
+                // Everything goes back to what the record last held (see
+                // `Record::revert`): ranking sees it again at once.
+                let mut state = launcher.lock();
+                state.learned.revert();
+                super::reranked(&mut state);
+                launcher.changed();
+            }
+            written
+        };
+        (reset.is_some(), recording)
     }
 
     /// Forgets what root search learned about the uninstalled package

@@ -26,8 +26,9 @@
 //!
 //! What it lists is the core's ([`pane_core::Launcher::result_actions`]):
 //! the result's primary action — the footer's, the same dispatch — then
-//! pinning it (or unpinning it, once it is pinned), then, for an installed
-//! command, its hotkey and alias configuration. Nothing is listed without
+//! pinning it (or unpinning it, once it is pinned) and resetting what
+//! root search learned for it (#200), then, for an installed command, its
+//! hotkey and alias configuration. Nothing is listed without
 //! a working operation behind it (#100). Pinning adds the result after the
 //! last pin. A quick slot has a panel of its own — opened by a secondary
 //! click on it, or the Open actions binding while it has focus — invoking,
@@ -153,6 +154,7 @@ impl SlotKeys {
             | ResultAction::Alias
             | ResultAction::ConfigureCommand
             | ResultAction::ConfigureExtension
+            | ResultAction::ResetRanking
             | ResultAction::DismissNotice => None,
         }
     }
@@ -1137,6 +1139,14 @@ impl LauncherWindow {
                 self.launcher.dismiss_crash_notice();
                 self.show_until_done(std::future::ready(()), window, cx);
             }
+            // What root search learned for the panel's target is cleared
+            // (#200): the toast says it was, and the list on screen ranks
+            // again at once.
+            ResultAction::ResetRanking => {
+                self.close_actions(window, cx);
+                let (_, recorded) = self.launcher.reset_ranking(&target);
+                self.show_until_done(recorded, window, cx);
+            }
         }
     }
 
@@ -1476,6 +1486,7 @@ fn action_glyph(action: ResultAction, primary: Glyph) -> Glyph {
         | ResultAction::MovePinDown => Glyph::ActionPin,
         ResultAction::ConfigureCommand | ResultAction::ConfigureExtension => Glyph::Sliders,
         ResultAction::DismissNotice => Glyph::Delete,
+        ResultAction::ResetRanking => Glyph::Reset,
     }
 }
 

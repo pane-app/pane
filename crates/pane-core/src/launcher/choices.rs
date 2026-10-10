@@ -161,6 +161,19 @@ impl<C: Choices> Record<C> {
         self.forgotten.insert(key.clone());
         self.chosen.retain(&|command| split(command).0 != key)
     }
+
+    /// Puts the choices back to what the record last held: a change whose
+    /// write failed, with no one entry to undo it by (resetting all that
+    /// root search learned does), never loses what was recorded — the
+    /// next write holds what the record holds, not what failed to.
+    pub(super) fn revert(&mut self) {
+        let recorded = self
+            .recorded
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone();
+        self.chosen = recorded;
+    }
 }
 
 impl Launcher {

@@ -894,6 +894,12 @@ struct State {
     /// Launcher page's choice: High until one is pushed, applied on the
     /// next keystroke (see [`Launcher::set_search_sensitivity`]).
     sensitivity: SearchSensitivity,
+    /// Whether root search learns from what the user chooses, as the
+    /// window holds the Launcher page's switch: on until one is pushed
+    /// (see [`Launcher::set_learning`]). Turned off, nothing is recorded
+    /// and ranking acts as if nothing was learned — what was learned is
+    /// kept until it is reset.
+    learning: bool,
     /// The open command's unbound shortcuts as last noted, so a developed
     /// package's report is made again only when they change.
     reported_unbound: Vec<UnboundShortcut>,
@@ -1613,6 +1619,7 @@ impl Launcher {
             update_controls,
             pane_keys: PaneKeys::default(),
             sensitivity: SearchSensitivity::default(),
+            learning: true,
             reported_unbound: Vec::new(),
             open_command: None,
             feedback: feedback::Feedback::default(),
@@ -2230,6 +2237,27 @@ impl Launcher {
             // them with the choice now in force.
             state.statics += 1;
         }
+    }
+
+    /// Tells the launcher whether root search learns from what the user
+    /// chooses now: the Launcher page's "Learn from what I choose"
+    /// switch as the window holds it, pushed as the query field changes
+    /// and as the window is made, so the blank query's list follows it
+    /// too. Turned off, nothing is recorded and ranking acts as if
+    /// nothing was learned — what was learned is kept until it is reset,
+    /// so turning it on again uses it — and the rows the current query
+    /// already made rank again at once, unlike the sensitivity's choice,
+    /// which the next keystroke applies. Until one is pushed, the default
+    /// (on) applies.
+    pub fn set_learning(&self, on: bool) {
+        let mut state = self.lock();
+        if state.learning == on {
+            return;
+        }
+        state.learning = on;
+        // The rows the current query already made were ranked from what
+        // was learned while it was on (#202): they rank again now.
+        reranked(&mut state);
     }
 
     /// The enabled commands that supply root results ahead of the query and
@@ -5341,7 +5369,12 @@ fn rank_statics(state: &State, query: &str) -> Ranked {
     // What root search learned about them, as ranking sees it now
     // (#199): each recorded result's decayed frecency and counting
     // queries, by its row id — a command's or an indexed result's own.
-    let learned = state.learned.chosen.ranked(state.clock.now());
+    // While "Learn from what I choose" is off (#200), ranking acts as if
+    // nothing was learned: what was learned is kept until it is reset.
+    let learned = state
+        .learning
+        .then(|| state.learned.chosen.ranked(state.clock.now()))
+        .unwrap_or_default();
     let keys = |&(result, kind, provider)| candidate(result, kind, provider, &learned);
     let parsed = Query::new(query);
     let named = |index: &usize| parsed.is_alias_of(&candidates[*index].0.keys);
@@ -5446,6 +5479,25 @@ fn relist_root(state: &mut State, query: &str) {
         .or_else(|| aliases::first_choice(&entries));
     state.view.rows = rows;
     state.entries = entries;
+}
+
+/// Ranks the rows the current Root query already made again, at once: a
+/// change the user made to what ranking weighs — the learning switch, a
+/// reset of what was learned (see `learned`, #200) — re-lists them,
+/// unlike a use recorded, which never re-sorts the list on screen (#199,
+/// see [`State::statics`]). While the query's list is held (#201), its
+/// publication ranks them with everything else: the rows shown stay the
+/// previous query's.
+fn reranked(state: &mut State) {
+    state.statics += 1;
+    // While the query's list is held (#201), its publication ranks them
+    // with everything else: the rows shown stay the previous query's.
+    if state.holding.is_some() {
+        return;
+    }
+    if let Screen::Root { query } = state.view.screen.clone() {
+        relist_root(state, &query);
+    }
 }
 
 /// The rows for `command`'s `answer` to `query`: its results, or one

@@ -644,6 +644,7 @@ fn change(
             | ResultAction::ConfigureCommand
             | ResultAction::ConfigureExtension
             | ResultAction::DismissNotice
+            | ResultAction::ResetRanking
     );
     if !quick_slot_action || !matches!(state.view.screen, Screen::Root { .. }) {
         return refused;
@@ -697,7 +698,8 @@ fn change(
         | ResultAction::Alias
         | ResultAction::ConfigureCommand
         | ResultAction::ConfigureExtension
-        | ResultAction::DismissNotice => refused,
+        | ResultAction::DismissNotice
+        | ResultAction::ResetRanking => refused,
     }
 }
 

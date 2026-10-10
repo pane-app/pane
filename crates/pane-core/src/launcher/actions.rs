@@ -4,11 +4,12 @@
 //! The list holds only what Pane can do for that row now: its primary
 //! action (the footer's, the same definition and dispatch), then, for a
 //! result a quick slot can hold, pinning it (see `quick_slots`: a slot's
-//! own entries remove and move it), then, for an installed command, the
-//! hotkey and alias configuration the extension list already offers, and
-//! "Configure Command…" and "Configure Extension…" when the command or its
-//! package declares preferences (the window opens the extension's card in
-//! Settings for them; see `setup`).
+//! own entries remove and move it) and resetting what root search
+//! learned for it (see `learned`, #200), then, for an installed command,
+//! the hotkey and alias configuration the extension list already offers,
+//! and "Configure Command…" and "Configure Extension…" when the command
+//! or its package declares preferences (the window opens the extension's
+//! card in Settings for them; see `setup`).
 //! Nothing is listed that has no working operation behind it (#100): no
 //! quit, new window or hide. The same items describe a quick slot's own
 //! entries (see `quick_slots`).
@@ -18,6 +19,7 @@
 //! where the same flows opened from the extension list return there.
 
 use super::aliases::Via;
+use super::learned;
 use super::{
     Entry, Launcher, LauncherView, Mode, Screen, SelectedAction, State, Status, quick_slots,
     shortcuts,
@@ -52,6 +54,9 @@ pub enum ResultAction {
     /// Takes away the notice that Pane quit unexpectedly last time
     /// ([`Launcher::dismiss_crash_notice`]).
     DismissNotice,
+    /// Clears what root search learned about the result — its frecency
+    /// and its learned queries (see `learned`, #200).
+    ResetRanking,
 }
 
 /// The Actions panel's entry that dismisses the notice that Pane quit
@@ -73,6 +78,7 @@ impl ResultAction {
             ResultAction::ConfigureCommand => "configure-command",
             ResultAction::ConfigureExtension => "configure-extension",
             ResultAction::DismissNotice => "dismiss-notice",
+            ResultAction::ResetRanking => "reset-ranking",
         }
     }
 
@@ -90,6 +96,7 @@ impl ResultAction {
             | ResultAction::Alias
             | ResultAction::ConfigureCommand
             | ResultAction::ConfigureExtension
+            | ResultAction::ResetRanking
             | ResultAction::DismissNotice => None,
         }
     }
@@ -108,7 +115,8 @@ impl ResultAction {
                 | ResultAction::Unpin
                 | ResultAction::MovePinUp
                 | ResultAction::MovePinDown
-                | ResultAction::DismissNotice,
+                | ResultAction::DismissNotice
+                | ResultAction::ResetRanking,
                 _,
             ) => None,
             (ResultAction::Hotkey, false) => Some("Assign Hotkey…"),
@@ -188,8 +196,10 @@ impl Launcher {
     /// the flow returns to this search when it ends. Whether it opened:
     /// nothing changes otherwise. Only [`ResultAction::Hotkey`] and
     /// [`ResultAction::Alias`] open a flow: [`ResultAction::Invoke`] is the
-    /// window's primary action, and the quick slot entries change the
-    /// slots ([`Launcher::change_quick_slots`]).
+    /// window's primary action, the quick slot entries change the slots
+    /// ([`Launcher::change_quick_slots`]), and [`ResultAction::ResetRanking`]
+    /// clears what root search learned for the row
+    /// ([`Launcher::reset_ranking`]).
     pub fn open_result_action(&self, target: &str, action: ResultAction) -> bool {
         let mut state = self.lock();
         let flow = matches!(action, ResultAction::Hotkey | ResultAction::Alias);
@@ -244,9 +254,11 @@ fn result_actions(launcher: &Launcher, state: &State) -> Option<ResultActions> {
         available: primary.available,
     }];
     // A result a quick slot can hold: pinning it (its slot's own panel
-    // removes and moves it).
+    // removes and moves it), and resetting what root search learned for
+    // it — the two identity-held choices the panel offers for it (#200).
     if quick_slots::pin_of_selected(state).is_some() {
         items.push(quick_slots::pin_item(state));
+        items.push(learned::reset_item(state));
     }
     // The notice that Pane quit unexpectedly last time can be dismissed
     // (see `crash_notice`).

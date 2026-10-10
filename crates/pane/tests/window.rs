@@ -1858,6 +1858,74 @@ fn choosing_the_second_of_two_equal_results_a_few_times_puts_it_first(cx: &mut T
     );
 }
 
+/// The Actions panel's "Reset Ranking" (#200): it clears what was learned
+/// for the panel's target — the toast says so — while what was learned for
+/// another result stands.
+#[gpui::test]
+fn reset_ranking_from_the_actions_panel_clears_that_result(cx: &mut TestAppContext) {
+    let data = tempfile::tempdir().unwrap();
+    let runtime = Runtime::start().unwrap();
+    runtime.set_applications(std::sync::Arc::new(TwoPythons));
+    let folder =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/guests/packages/applications");
+    let launcher = Launcher::with_packages(Ok(runtime), vec![], data.path().join("extensions"));
+    cx.executor().allow_parking();
+    cx.foreground_executor()
+        .block_on(launcher.install_package(&folder));
+    launcher.back();
+    let (window, cx) = open_launcher(cx, launcher);
+
+    // The second Python is chosen three times: it ranks first for that
+    // query, and its use is written.
+    cx.simulate_input("python");
+    wait_for_rows(&window, cx, &["Python", "Python"]);
+    for _ in 0..3 {
+        cx.simulate_keystrokes("down enter");
+        let view = settle(&window, cx);
+        assert_eq!(view.status, Status::Result("Opened Python".into()));
+    }
+    assert!(
+        cx.read_entity(&window, |window, _| window
+            .launcher()
+            .wait_for_learned_recorded(Duration::from_secs(30))),
+        "the uses were recorded"
+    );
+
+    // The panel offers the reset, and Enter on it runs it once: the toast
+    // says the ranking was reset, and the panel closes.
+    cx.simulate_keystrokes(OPEN_ACTIONS);
+    settle(&window, cx);
+    assert!(
+        cx.debug_bounds("action-Reset Ranking").is_some(),
+        "the reset is offered"
+    );
+    cx.simulate_input("reset");
+    settle(&window, cx);
+    cx.simulate_keystrokes("enter");
+    let view = settle(&window, cx);
+    assert!(!actions_open(&window, cx));
+    assert_eq!(
+        view.status,
+        Status::Result("Ranking reset for Python".into())
+    );
+    assert!(cx.debug_bounds("toast-success").is_some(), "the toast is rendered");
+
+    // The entry went, and the provider's order is back for the query.
+    let record = data.path().join("extensions/learned.json");
+    let text = std::fs::read_to_string(&record).unwrap();
+    assert!(!text.contains("python-Python312"), "the entry went: {text}");
+    cx.simulate_keystrokes("escape");
+    settle(&window, cx);
+    cx.simulate_input("python");
+    wait_for_rows(&window, cx, &["Python", "Python"]);
+    let view = settle(&window, cx);
+    assert!(
+        view.rows[0].id.ends_with("python-Python311"),
+        "the provider's order is back: {:?}",
+        view.rows
+    );
+}
+
 /// A pinned application sharing its name with another says what tells it
 /// apart: as its tile's tooltip, and with its name to assistive
 /// technology.
