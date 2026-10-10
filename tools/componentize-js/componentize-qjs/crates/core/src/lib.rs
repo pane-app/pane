@@ -301,16 +301,12 @@ async fn wizer_init(
         terminal_input,
         |_, _| Ok(()),
     )?;
-    linker.instance("wasi:cli/terminal-stdout@0.3.0")?.resource(
-        "terminal-output",
-        terminal_output,
-        |_, _| Ok(()),
-    )?;
-    linker.instance("wasi:cli/terminal-stderr@0.3.0")?.resource(
-        "terminal-output",
-        terminal_output,
-        |_, _| Ok(()),
-    )?;
+    linker
+        .instance("wasi:cli/terminal-stdout@0.3.0")?
+        .resource("terminal-output", terminal_output, |_, _| Ok(()))?;
+    linker
+        .instance("wasi:cli/terminal-stderr@0.3.0")?
+        .resource("terminal-output", terminal_output, |_, _| Ok(()))?;
     linker.instance("wasi:filesystem/preopens@0.3.0")?.resource(
         "descriptor",
         ResourceType::host::<wasmtime_wasi::filesystem::Descriptor>(),
