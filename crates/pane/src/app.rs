@@ -1629,9 +1629,11 @@ impl LauncherWindow {
         // rows also select under the moving pointer; a command's rows keep
         // their click-runs semantics.
         .when(root, |row| {
-            row.on_mouse_move(cx.listener(move |this, event: &MouseMoveEvent, window, cx| {
-                this.pointer_moved_over(index, event.position, window, cx);
-            }))
+            row.on_mouse_move(
+                cx.listener(move |this, event: &MouseMoveEvent, window, cx| {
+                    this.pointer_moved_over(index, event.position, window, cx);
+                }),
+            )
         })
         .debug_selector(|| format!("row-{}", row.title))
         // The selected row is not reported as focused: the focus stays in
@@ -1692,9 +1694,11 @@ impl LauncherWindow {
             let press = pressed(visuals.theme.results.card_fill);
             move |card| card.bg(press)
         })
-        .on_mouse_move(cx.listener(move |this, event: &MouseMoveEvent, window, cx| {
-            this.pointer_moved_over(index, event.position, window, cx);
-        }))
+        .on_mouse_move(
+            cx.listener(move |this, event: &MouseMoveEvent, window, cx| {
+                this.pointer_moved_over(index, event.position, window, cx);
+            }),
+        )
         .debug_selector(|| format!("row-{}", row.title))
         .role(Role::ListBoxOption)
         .aria_label(root_search::layouts::answer_label(answer))

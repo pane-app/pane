@@ -475,9 +475,7 @@ impl Launcher {
         let command = command.to_owned();
         let saved = off_thread(move || launcher.save::<ArgumentChoices>(Some(&command))).await;
         if let Err(problem) = saved {
-            crate::diagnostic!(
-                "Pane could not remember a command's dropdown choices: {problem}"
-            );
+            crate::diagnostic!("Pane could not remember a command's dropdown choices: {problem}");
         }
     }
 

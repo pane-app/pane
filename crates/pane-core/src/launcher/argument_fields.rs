@@ -252,7 +252,7 @@ pub(super) fn fields_of(state: &State) -> Option<ArgumentFields> {
             let error = (argument.required
                 && arguments::blank(value)
                 && typed.marked(&command, &argument.name))
-                .then(|| argument_form::MISSING.to_owned());
+            .then(|| argument_form::MISSING.to_owned());
             FormField {
                 id: argument.name.clone(),
                 label: argument.label().to_owned(),

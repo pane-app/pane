@@ -324,28 +324,24 @@ pub(crate) fn search_header(
                 )),
         )
         .child(
-            div()
-                .key_context(QUERY_FIELD)
-                .flex_1()
-                .min_w(px(0.))
-                .child(
-                    text_input("query")
-                        .state(input.downgrade())
-                        .placeholder(placeholder)
-                        .placeholder_color(theme.text_placeholder)
-                        .caret_color(theme.accent_text)
-                        .selection_color(theme.row_selected)
-                        .marked_color(theme.accent_text)
-                        .text_size(typography.search_size)
-                        .text_color(theme.text_query)
-                        .font_family(typography.family.clone())
-                        .font_features(typography.features.clone())
-                        .pl(geometry.search_text_inset)
-                        .w_full()
-                        .min_w(px(0.))
-                        .whitespace_nowrap()
-                        .overflow_x_scroll(),
-                ),
+            div().key_context(QUERY_FIELD).flex_1().min_w(px(0.)).child(
+                text_input("query")
+                    .state(input.downgrade())
+                    .placeholder(placeholder)
+                    .placeholder_color(theme.text_placeholder)
+                    .caret_color(theme.accent_text)
+                    .selection_color(theme.row_selected)
+                    .marked_color(theme.accent_text)
+                    .text_size(typography.search_size)
+                    .text_color(theme.text_query)
+                    .font_family(typography.family.clone())
+                    .font_features(typography.features.clone())
+                    .pl(geometry.search_text_inset)
+                    .w_full()
+                    .min_w(px(0.))
+                    .whitespace_nowrap()
+                    .overflow_x_scroll(),
+            ),
         )
         .when_some(arguments, |row, arguments| row.child(arguments));
     match theme.frost {

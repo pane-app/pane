@@ -285,9 +285,7 @@ fn greet_fields(tone: &str) -> Vec<FormField> {
     ]
 }
 
-fn root_searchs_fields_refuse_a_blank_required_argument_and_run_with_the_values(
-    fixture: &Fixture,
-) {
+fn root_searchs_fields_refuse_a_blank_required_argument_and_run_with_the_values(fixture: &Fixture) {
     let pane = Pane::new();
     pane.install(fixture);
     let launcher = &pane.launcher;
@@ -481,9 +479,7 @@ fn another_command_launch_asks_for_missing_arguments_and_a_background_one_is_ref
     assert_eq!(pane.form("Greet").fields, greet_fields("formal"));
 }
 
-fn an_alias_and_a_space_fill_the_first_argument_and_a_fallback_the_query(
-    fixture: &Fixture,
-) {
+fn an_alias_and_a_space_fill_the_first_argument_and_a_fallback_the_query(fixture: &Fixture) {
     let pane = Pane::new();
     let folder = pane.install(fixture);
     let launcher = &pane.launcher;
@@ -509,12 +505,7 @@ fn an_alias_and_a_space_fill_the_first_argument_and_a_fallback_the_query(
         shown(launcher),
         Status::Result("Greet run 1 from alias: name=Ada; fallback text: none".into())
     );
-    assert_eq!(
-        launcher.view().screen,
-        Screen::Root {
-            query: "gr".into()
-        }
-    );
+    assert_eq!(launcher.view().screen, Screen::Root { query: "gr".into() });
 
     // A command that takes a query and declares no arguments keeps the row
     // that sends the text after its alias: Relay, listed first.
@@ -576,9 +567,7 @@ fn a_command_whose_arguments_cannot_take_the_query_is_not_offered_as_a_fallback(
     });
 }
 
-fn the_last_dropdown_is_remembered_and_dropped_once_the_choice_is_gone(
-    fixture: &Fixture,
-) {
+fn the_last_dropdown_is_remembered_and_dropped_once_the_choice_is_gone(fixture: &Fixture) {
     let pane = Pane::new();
     let folder = pane.install(fixture);
     let launcher = &pane.launcher;
@@ -603,7 +592,10 @@ fn the_last_dropdown_is_remembered_and_dropped_once_the_choice_is_gone(
     // After a restart the tone is offered again, and no secret is held.
     let pane = pane.restart();
     pane.search("greet");
-    assert_eq!(pane.launcher.argument_fields().unwrap().fields[2].value, "formal");
+    assert_eq!(
+        pane.launcher.argument_fields().unwrap().fields[2].value,
+        "formal"
+    );
     assert_no_record_holds(pane.data.path(), SECRET);
 
     // The command updated with "formal" no longer among its options: the

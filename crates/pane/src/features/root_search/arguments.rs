@@ -227,16 +227,12 @@ impl ArgumentControls {
                     let trigger = cx.focus_handle().tab_stop(true);
                     let list = cx.focus_handle();
                     let name = field.id.clone();
-                    subscriptions.push(cx.on_blur(
-                        &trigger,
-                        window,
-                        move |this, _, cx| {
-                            // The field was left: a required one left blank
-                            // is marked from now on (#205).
-                            this.launcher.argument_left(&name);
-                            cx.notify();
-                        },
-                    ));
+                    subscriptions.push(cx.on_blur(&trigger, window, move |this, _, cx| {
+                        // The field was left: a required one left blank
+                        // is marked from now on (#205).
+                        this.launcher.argument_left(&name);
+                        cx.notify();
+                    }));
                     controls.push(Control::Choice { trigger, list });
                 }
                 // An argument is text, a password or a dropdown; a path is
@@ -314,12 +310,11 @@ impl LauncherWindow {
     /// fields do, the query taking back the focus a field had.
     pub(crate) fn sync_arguments(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let fields = self.launcher.argument_fields();
-        let same = self
-            .arguments
-            .as_ref()
-            .is_some_and(|controls| fields.as_ref().is_some_and(|fields| {
-                controls.shape == shape_of(fields)
-            }));
+        let same = self.arguments.as_ref().is_some_and(|controls| {
+            fields
+                .as_ref()
+                .is_some_and(|fields| controls.shape == shape_of(fields))
+        });
         let had_focus = self.argument_had_focus(window, cx);
         match (&fields, same) {
             // The fields stand: the values shown are the launcher's.
@@ -392,12 +387,14 @@ impl LauncherWindow {
     /// The argument field that has the keyboard, by its place among the
     /// fields (#205); `None` when the query or anything else has it.
     pub(crate) fn focused_argument(&self, window: &Window, cx: &App) -> Option<usize> {
-        self.arguments.as_ref()?.fields.iter().position(|control| {
-            match control {
+        self.arguments
+            .as_ref()?
+            .fields
+            .iter()
+            .position(|control| match control {
                 Control::Text { input, .. } => input.focus_handle(cx).is_focused(window),
                 Control::Choice { trigger, .. } => trigger.is_focused(window),
-            }
-        })
+            })
     }
 
     /// The name of the argument field that has the keyboard and is
@@ -499,12 +496,7 @@ impl LauncherWindow {
     /// Opens the choices of the dropdown at field `index` (#205),
     /// highlighting its chosen option, else the empty choice the list
     /// leads with.
-    fn open_argument_choices(
-        &mut self,
-        index: usize,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    fn open_argument_choices(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
         let Some(field) = self
             .shown_fields()
             .and_then(|fields| fields.fields.into_iter().nth(index))
@@ -572,12 +564,7 @@ impl LauncherWindow {
     /// Picks the choice at `position` of the open dropdown's list (#205):
     /// the empty choice the list leads with leaves the argument without a
     /// value.
-    fn choose_argument_at(
-        &mut self,
-        position: usize,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    fn choose_argument_at(&mut self, position: usize, window: &mut Window, cx: &mut Context<Self>) {
         let Some(open) = self.arguments.as_ref().and_then(|controls| controls.open) else {
             return;
         };
@@ -676,8 +663,7 @@ impl LauncherWindow {
                 }
             }
         } else {
-            let at_end =
-                self.query_field().read(cx).as_str().chars().count() == self.query_caret;
+            let at_end = self.query_field().read(cx).as_str().chars().count() == self.query_caret;
             if at_end && fields.is_some() {
                 self.focus_argument(0, window, cx);
             } else {
@@ -706,19 +692,15 @@ impl LauncherWindow {
                 }
             }
         } else {
-            self.query_field().update(cx, |input, cx| input.move_to(0, cx));
+            self.query_field()
+                .update(cx, |input, cx| input.move_to(0, cx));
             self.query_caret = 0;
         }
     }
 
     /// End in the query field or an argument field (#205): the caret goes
     /// to the field's end — counted, as Home's is.
-    pub(crate) fn field_end(
-        &mut self,
-        _: &FieldEnd,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    pub(crate) fn field_end(&mut self, _: &FieldEnd, window: &mut Window, cx: &mut Context<Self>) {
         if let Some((index, input)) = self.focused_argument_text(window, cx) {
             let end = input.read(cx).as_str().chars().count();
             input.update(cx, |input, cx| input.move_to(end, cx));
@@ -729,7 +711,8 @@ impl LauncherWindow {
             }
         } else {
             let end = self.query_field().read(cx).as_str().chars().count();
-            self.query_field().update(cx, |input, cx| input.move_to(end, cx));
+            self.query_field()
+                .update(cx, |input, cx| input.move_to(end, cx));
             self.query_caret = end;
         }
     }
@@ -764,12 +747,12 @@ fn argument_state(field: &FormField) -> SharedString {
 /// placeholder, else its name — its label.
 fn placeholder_of(field: &FormField) -> SharedString {
     let placeholder = match &field.kind {
-        FieldKind::Text { placeholder } | FieldKind::Password { placeholder } => {
-            placeholder.clone()
-        }
+        FieldKind::Text { placeholder } | FieldKind::Password { placeholder } => placeholder,
         _ => None,
     };
-    placeholder.unwrap_or_else(|| SharedString::from(field.label.as_str()))
+    placeholder
+        .map(SharedString::from)
+        .unwrap_or_else(|| SharedString::from(field.label.as_str()))
 }
 
 /// The optional argument's marker: "optional" in the muted small text the
@@ -790,11 +773,7 @@ fn field_width(shown: &str, optional: bool, theme: &Theme) -> gpui::Pixels {
     let controls = &theme.geometry.controls;
     let chars = shown.chars().count().max(1);
     px(7. * chars as f32 + 12. + 2. * f32::from(controls.well_padding_x))
-        + if optional {
-            px(46.)
-        } else {
-            px(0.)
-        }
+        + if optional { px(46.) } else { px(0.) }
 }
 
 impl LauncherWindow {
@@ -824,9 +803,9 @@ impl LauncherWindow {
             .iter()
             .enumerate()
             .map(|(index, field)| match controls.fields.get(index) {
-                Some(Control::Text { input, .. }) => {
-                    self.argument_text(index, field, input, &theme, cx).into_any_element()
-                }
+                Some(Control::Text { input, .. }) => self
+                    .argument_text(index, field, input, &theme, cx)
+                    .into_any_element(),
                 Some(Control::Choice { trigger, list }) => self
                     .argument_choice(index, field, trigger, list, &theme, &material, cx)
                     .into_any_element(),
@@ -1004,14 +983,12 @@ impl LauncherWindow {
                 theme.nav_icon,
                 gpui::radians(std::f32::consts::FRAC_PI_2),
             ))
-            .when(!field.required, |well| {
-                well.child(optional_marker(theme))
-            })
-            .on_action(cx.listener(
-                move |this, _: &OpenArgumentChoices, window, cx| {
+            .when(!field.required, |well| well.child(optional_marker(theme)))
+            .on_action(
+                cx.listener(move |this, _: &OpenArgumentChoices, window, cx| {
                     this.open_argument_choices(index, window, cx);
-                },
-            ))
+                }),
+            )
             .on_click(cx.listener(move |this, _, window, cx| {
                 this.open_argument_choices(index, window, cx);
             }));
@@ -1028,18 +1005,9 @@ impl LauncherWindow {
             .child(trigger_well)
             .when(open, |block| {
                 block.child(
-                    div()
-                        .flex_none()
-                        .h(px(0.))
-                        .w_full()
-                        .child(self.argument_choices_popup(
-                            field,
-                            choices,
-                            list,
-                            theme,
-                            material,
-                            cx,
-                        )),
+                    div().flex_none().h(px(0.)).w_full().child(
+                        self.argument_choices_popup(field, choices, list, theme, material, cx),
+                    ),
                 )
             })
     }

@@ -120,8 +120,8 @@ fn with_calculator(
     PathBuf,
 ) {
     let (sources, data) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
-    let calculator = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../target/guests/packages/calculator");
+    let calculator =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/guests/packages/calculator");
     assert!(
         calculator.exists(),
         "{} is missing; run `cargo xtask guests`",
@@ -200,9 +200,13 @@ fn enter_with_a_blank_required_argument_marks_it_and_runs_nothing(cx: &mut TestA
     // Each field is a labelled editable node inside the search combo box's
     // group, named by its placeholder, with its required or optional state
     // as its description.
-    for (field, state) in [("Name", "Required"), ("Secret", "Optional"), ("Tone", "Optional")] {
-        let (_, description) = node_of(cx, field)
-            .unwrap_or_else(|| panic!("the {field} field is named for the tree"));
+    for (field, state) in [
+        ("Name", "Required"),
+        ("Secret", "Optional"),
+        ("Tone", "Optional"),
+    ] {
+        let (_, description) =
+            node_of(cx, field).unwrap_or_else(|| panic!("the {field} field is named for the tree"));
         assert_eq!(description, state, "the {field} field's state");
     }
     assert_eq!(focused_label(cx).as_deref(), Some("Search"));
@@ -372,9 +376,7 @@ fn tab_shift_tab_and_the_arrows_move_between_the_fields_and_the_query(cx: &mut T
 }
 
 #[gpui::test]
-fn an_alias_and_a_space_fill_the_first_argument_through_the_held_keys(
-    cx: &mut TestAppContext,
-) {
+fn an_alias_and_a_space_fill_the_first_argument_through_the_held_keys(cx: &mut TestAppContext) {
     let (window, cx, _data, _folder) = with_calculator(cx);
 
     // "gr" is Greet's alias: the space typed after it waits for the
