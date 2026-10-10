@@ -11,7 +11,6 @@
 //! toolchain, so a rebuild is asked for whenever what a component contains
 //! changed; the tests compare behaviour, not bytes.
 
-use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
 use pane_build::{BuildJob, BuildOutcome, Componentizer};
@@ -446,6 +445,7 @@ fn sha256(bytes: &[u8]) -> String {
 
 /// A digest as lowercase hex.
 fn hex(bytes: &[u8]) -> String {
+    use std::fmt::Write;
     let mut out = String::with_capacity(bytes.len() * 2);
     for byte in bytes {
         let _ = write!(out, "{byte:02x}");
