@@ -195,6 +195,7 @@ impl ArgumentControls {
                     if !field.value.is_empty() {
                         input.update(cx, |input, cx| input.emplace(&field.value, cx));
                     }
+                    let left = field.id.clone();
                     let name = field.id.clone();
                     subscriptions.push(cx.on_blur(
                         &input.focus_handle(cx),
@@ -202,7 +203,7 @@ impl ArgumentControls {
                         move |this, _, cx| {
                             // The field was left: a required one left blank
                             // is marked from now on (#205).
-                            this.launcher.argument_left(&name);
+                            this.launcher.argument_left(&left);
                             cx.notify();
                         },
                     ));
@@ -747,7 +748,9 @@ fn argument_state(field: &FormField) -> SharedString {
 /// placeholder, else its name — its label.
 fn placeholder_of(field: &FormField) -> SharedString {
     let placeholder = match &field.kind {
-        FieldKind::Text { placeholder } | FieldKind::Password { placeholder } => placeholder,
+        FieldKind::Text { placeholder } | FieldKind::Password { placeholder } => {
+            placeholder.clone()
+        }
         _ => None,
     };
     placeholder
