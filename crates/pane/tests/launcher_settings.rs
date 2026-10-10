@@ -2584,7 +2584,11 @@ fn over_history_data<'a>(
     let extensions = data.join("extensions");
     fs::create_dir_all(&extensions).unwrap();
     let record = extensions.join("search-history.json");
-    fs::write(&record, r#"{ "version": 1, "queries": [ { "query": "pyt" } ] }"#).unwrap();
+    fs::write(
+        &record,
+        r#"{ "version": 1, "queries": [ { "query": "pyt" } ] }"#,
+    )
+    .unwrap();
     let launcher =
         Launcher::with_packages(Ok(Runtime::start().unwrap()), vec![], extensions.clone())
             .with_hotkeys(Arc::new(FakeSystem::default()));
@@ -2612,7 +2616,9 @@ fn reset_search_history_in_settings_asks_first_and_clears_the_queries(cx: &mut T
     let view = settle(&window, cx);
     assert_eq!(
         view.screen,
-        Screen::Root { query: "pyt".into() },
+        Screen::Root {
+            query: "pyt".into()
+        },
         "the recorded query is recalled"
     );
 
@@ -2623,7 +2629,8 @@ fn reset_search_history_in_settings_asks_first_and_clears_the_queries(cx: &mut T
     sc.simulate_input("search history");
     sc.run_until_parked();
     assert!(
-        sc.debug_bounds("settings-search-result-Reset search history").is_some(),
+        sc.debug_bounds("settings-search-result-Reset search history")
+            .is_some(),
         "the row is found through the Settings search"
     );
     sc.simulate_keystrokes("enter");
@@ -2670,6 +2677,11 @@ fn reset_search_history_in_settings_asks_first_and_clears_the_queries(cx: &mut T
     // The query the walk restored still stands: the reset clears the
     // history, not the search on screen.
     let view = settle(&window, cx);
-    assert_eq!(view.screen, Screen::Root { query: "pyt".into() });
+    assert_eq!(
+        view.screen,
+        Screen::Root {
+            query: "pyt".into()
+        }
+    );
     let _ = settings;
 }

@@ -133,7 +133,7 @@ fn up_restores_the_previous_query_with_its_argument_values(cx: &mut TestAppConte
     cx.simulate_keystrokes("enter");
     let view = settle_bare(&window, cx);
     assert!(
-        matches!(view.status, pane_core::Status::Result(message)
+        matches!(&view.status, pane_core::Status::Result(message)
             if message.contains("name=Ada")),
         "{:?}",
         view.status
@@ -186,7 +186,8 @@ fn repeated_up_walks_back_and_typing_ends_the_walk(cx: &mut TestAppContext) {
     cx.simulate_keystrokes("up");
     settle(&window, cx);
     assert_eq!(
-        query_text(&window, cx), "stampx",
+        query_text(&window, cx),
+        "stampx",
         "a typed query is not the history's"
     );
 }
@@ -224,7 +225,8 @@ fn up_with_another_row_selected_moves_the_selection_not_the_history(cx: &mut Tes
     let view = settle(&window, cx);
     assert_eq!(view.selected, Some(0), "Up moved the selection back");
     assert_eq!(
-        query_text(&window, cx), "t",
+        query_text(&window, cx),
+        "t",
         "the history did not take the key"
     );
     // The walk is over: another Up moves nothing, and the query stands.
