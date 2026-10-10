@@ -217,11 +217,11 @@ fn command(
         None => Kind::List,
     };
     let title = match &arguments.title {
-        Some(title) => Some(title.as_str()),
+        Some(title) => Some(title.clone()),
         None if interactive => Some(ask("Command title", "Note", input)),
         None => None,
     };
-    let new = NewCommand::parse(arguments.id.as_deref(), title)?;
+    let new = NewCommand::parse(arguments.id.as_deref(), title.as_deref())?;
     templates::add_command(&folder, &new, kind)?;
     let mut next = format!(
         "pane-ext: added the command `{}` (the {} template) to {}\npane-ext: next:\n",
