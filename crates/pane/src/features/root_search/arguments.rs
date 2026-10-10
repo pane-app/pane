@@ -821,6 +821,10 @@ impl LauncherWindow {
                 .items_center()
                 .gap(theme.geometry.search_gap)
                 .flex_none()
+                // Up and Down in an argument field do nothing: the binding
+                // takes them from the element's own keys, and the handler
+                // holds them there.
+                .on_action(cx.listener(|_, _: &NothingInField, _, _| {}))
                 .children(shown)
                 .into_any_element(),
         )
