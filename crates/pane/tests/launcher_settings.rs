@@ -13,7 +13,7 @@
 
 use std::cell::RefCell;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -27,7 +27,10 @@ use pane::placement::Placement;
 use pane::{LauncherWindow, SettingsWindow};
 use pane_core::hotkeys::{HotkeyError, Hotkeys, Shortcut};
 use pane_core::placement::{Display, DisplayId, DisplayLayout, Point, Rect, Size};
-use pane_core::{Launcher, PackageIdentity, Runtime, Screen};
+use pane_core::{
+    CommandMatches, CommandRegistration, CommandWhen, Launcher, PackageIdentity, Runtime, Screen,
+    Status,
+};
 use tempfile::TempDir;
 
 #[path = "support/settle.rs"]
@@ -36,7 +39,7 @@ mod settle;
 #[path = "support/paint.rs"]
 mod paint;
 
-use settle::settle;
+use settle::{settle, settle_shown};
 
 #[path = "support/a11y.rs"]
 mod a11y;
@@ -50,7 +53,7 @@ mod wait;
 use a11y::a11y;
 use packages::package;
 use setup::{init_settings, settings_shortcut};
-use wait::{frame, settle_frames, until_record_holds};
+use wait::{frame, settle_frames, until, until_record_holds};
 
 /// The fake system for global hotkeys, as the Open Pane tests' one: what
 /// Pane registered, and no shortcut another application has.
@@ -1103,7 +1106,10 @@ fn the_delayed_reopening_and_the_vertical_layout_are_applied_by_a_fresh_applicat
     placement.layout(None, None);
     let (_window, cx) = open(cx, Some(data.path()), &placement);
 
-    // Both choices, taken through the page's own controls.
+    // Both choices, taken through the page's own controls. The page
+    // grew with the specification's rows (#200, #206), so the pinned
+    // layout's row sits below the page's fold: the settings search jumps
+    // to it and reveals it, as it does for any row.
     let (_settings, mut settings_cx) = open_launcher_page(cx);
     choose_reopening(
         &mut settings_cx,
@@ -1111,6 +1117,12 @@ fn the_delayed_reopening_and_the_vertical_layout_are_applied_by_a_fresh_applicat
         "launcher-reopening-After90Seconds",
         "\"reopening\": \"after-90-seconds\"",
     );
+    settings_cx.simulate_keystrokes(find_shortcut());
+    settings_cx.simulate_input("pinned");
+    settings_cx.run_until_parked();
+    settings_cx.simulate_keystrokes("enter");
+    settings_cx.run_until_parked();
+    settle_frames(&mut settings_cx);
     click(&mut settings_cx, "launcher-pinned-Vertical");
     settings_cx.run_until_parked();
     until_record_holds(
@@ -1204,6 +1216,342 @@ fn the_page_registers_its_settings_in_the_settings_search(cx: &mut TestAppContex
         "the sections are back"
     );
     let _ = window;
+}
+
+/// The Launcher page's Search sensitivity control (#193): found through
+/// the Settings search, chosen through the page's own select, recorded in
+/// the settings record — and applied by the launcher on the next
+/// keystroke, so the same query finds more results once the choice is
+/// taken.
+#[gpui::test]
+fn the_search_sensitivity_control_changes_the_results_live(cx: &mut TestAppContext) {
+    let data = tempfile::tempdir().unwrap();
+    let placement = Rc::new(FakePlacement::default());
+    placement.layout(Some(Point { x: 100., y: 100. }), None);
+    cx.update(|cx| pane::placement::init(placement.clone() as Rc<dyn Placement>, cx));
+    init_settings(Some(data.path()), cx);
+    let component =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/guests/sample_rust.wasm");
+    assert!(
+        component.exists(),
+        "{} is missing; run `cargo xtask guests`",
+        component.display()
+    );
+    let commands = vec![CommandRegistration {
+        id: "undownloadable".into(),
+        title: "Undownloadable files".into(),
+        subtitle: None,
+        component,
+        takes_query: false,
+        search: false,
+        keywords: Vec::new(),
+        when: CommandWhen::Always,
+        matches: CommandMatches::Title,
+    }];
+    let launcher =
+        Launcher::new(Runtime::start(), commands).with_hotkeys(Arc::new(FakeSystem::default()));
+    cx.executor().allow_parking();
+    cx.update(pane::bind_keys);
+    let (window, cx) = cx.add_window_view(|window, cx| LauncherWindow::new(launcher, window, cx));
+
+    // The default is High: "download" sits mid-word in "Undownloadable
+    // files", and High wants a match that starts the text or a word.
+    cx.simulate_input("download");
+    let view = settle(&window, cx);
+    assert!(view.rows.is_empty(), "High, the default");
+
+    // The control is found through the Settings search, and its Medium
+    // choice taken through the page's own select.
+    cx.simulate_keystrokes(settings_shortcut());
+    cx.run_until_parked();
+    let settings = cx
+        .cx
+        .update(|cx| {
+            cx.windows()
+                .into_iter()
+                .filter_map(|window| window.downcast::<SettingsWindow>())
+                .next()
+        })
+        .expect("Settings opened");
+    let mut settings_cx = VisualTestContext::from_window(AnyWindowHandle::from(settings), &cx.cx);
+    settings_cx.simulate_keystrokes(find_shortcut());
+    settings_cx.simulate_input("sensitivity");
+    settings_cx.run_until_parked();
+    assert!(
+        settings_cx
+            .debug_bounds("settings-search-result-Medium")
+            .is_some(),
+        "the sensitivity's choices are found"
+    );
+    let tree = a11y(&mut settings_cx);
+    assert!(
+        tree.contains("Launcher \u{b7} Search sensitivity"),
+        "the result names the page and the group, {tree}"
+    );
+    settings_cx.simulate_keystrokes("enter");
+    settings_cx.run_until_parked();
+    settle_frames(&mut settings_cx);
+    click(&mut settings_cx, "launcher-sensitivity");
+    settings_cx.run_until_parked();
+    click(&mut settings_cx, "launcher-sensitivity-Medium");
+    settings_cx.run_until_parked();
+    until_record_holds(
+        &mut settings_cx,
+        data.path(),
+        "\"searchSensitivity\": \"medium\"",
+    );
+
+    // The choice applies on the next keystroke: the list the query has
+    // already made stays as it is, and the query made again holds the
+    // command.
+    let view = cx.read_entity(&window, |window, _| window.launcher().view());
+    assert!(
+        view.rows.is_empty(),
+        "the list stays until the query changes"
+    );
+    cx.simulate_keystrokes("escape");
+    let view = settle(&window, cx);
+    assert_eq!(view.query(), Some(""));
+    cx.simulate_input("download");
+    let view = settle(&window, cx);
+    assert_eq!(
+        view.rows
+            .iter()
+            .map(|row| row.title.as_str())
+            .collect::<Vec<_>>(),
+        ["Undownloadable files"],
+        "Medium holds the mid-word match"
+    );
+}
+
+/// A package folder whose two same-titled commands are the no-view
+/// sample's component: invoking one keeps root search on screen, so a
+/// choice is one keystroke.
+fn pythons(folder: &Path) -> PathBuf {
+    let component =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/guests/sample_no_view.wasm");
+    assert!(
+        component.exists(),
+        "{} is missing; run `cargo xtask guests`",
+        component.display()
+    );
+    fs::create_dir_all(folder).unwrap();
+    let manifest = r#"{
+        "manifestVersion": 1,
+        "title": "Pythons",
+        "version": "0.1.0",
+        "apiVersion": "0.1",
+        "commands": [
+            { "id": "a", "title": "Python", "component": "component.wasm", "mode": "no-view" },
+            { "id": "b", "title": "Python", "component": "component.wasm", "mode": "no-view" }
+        ]
+    }"#;
+    fs::write(folder.join("pane.json"), manifest).unwrap();
+    fs::copy(&component, folder.join("component.wasm")).unwrap();
+    folder.to_path_buf()
+}
+
+/// A launcher window over `data`, whose extensions folder holds a record
+/// of one learned use — the second of the two same-titled commands
+/// `pythons` installs, chosen with "pyt" — so what that record says can
+/// be reset and turned off. Where the learned record is.
+fn over_learned_data<'a>(
+    cx: &'a mut TestAppContext,
+    data: &Path,
+) -> (
+    gpui::Entity<LauncherWindow>,
+    &'a mut VisualTestContext,
+    PathBuf,
+) {
+    let folder = pythons(&data.join("sources").join("pythons"));
+    let key = PackageIdentity::local(&folder).unwrap().key();
+    let extensions = data.join("extensions");
+    fs::create_dir_all(&extensions).unwrap();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64;
+    let record = extensions.join("learned.json");
+    // Built with `serde_json`, so the key's path is escaped as JSON needs
+    // it (a Windows path holds backslashes, which a hand-written record
+    // would leave invalid and the launcher would refuse to read).
+    let uses = [(
+        format!("{key}#b"),
+        serde_json::json!({
+            "score": 3.0,
+            "lastOpened": now,
+            "queries": ["pyt"],
+        }),
+    )]
+    .into_iter()
+    .collect::<serde_json::Map<String, serde_json::Value>>();
+    fs::write(
+        &record,
+        serde_json::json!({ "version": 1, "uses": uses }).to_string(),
+    )
+    .unwrap();
+    let launcher =
+        Launcher::with_packages(Ok(Runtime::start().unwrap()), vec![], extensions.clone())
+            .with_hotkeys(Arc::new(FakeSystem::default()));
+    cx.executor().allow_parking();
+    cx.foreground_executor()
+        .block_on(launcher.install_package(&folder));
+    launcher.back();
+    cx.update(pane::bind_keys);
+    let (window, cx) = cx.add_window_view(|window, cx| LauncherWindow::new(launcher, window, cx));
+    (window, cx, record)
+}
+
+/// The Launcher page's "Reset ranking…" (#200): it asks for the
+/// confirmation such a loss needs — the first press arms the row, and
+/// Cancel stands it down — and the confirmed reset clears what every
+/// result learned, the record and the ranking both.
+#[gpui::test]
+fn reset_ranking_in_settings_asks_first_and_clears_everything(cx: &mut TestAppContext) {
+    let data = tempfile::tempdir().unwrap();
+    let placement = Rc::new(FakePlacement::default());
+    placement.layout(Some(Point { x: 100., y: 100. }), Some(DisplayId(1)));
+    cx.update(|cx| pane::placement::init(placement.clone() as Rc<dyn Placement>, cx));
+    init_settings(Some(data.path()), cx);
+    let (window, cx, record) = over_learned_data(cx, data.path());
+
+    // What was learned ranks the chosen Python first for the query.
+    cx.simulate_input("pyt");
+    let view = settle(&window, cx);
+    assert!(
+        view.rows[0].id.ends_with("#b"),
+        "the learned Python ranks first: {:?}",
+        view.rows
+    );
+
+    // Settings › Launcher: the reset asks first.
+    let (settings, mut sc) = open_launcher_page(cx);
+    assert!(
+        sc.debug_bounds("launcher-reset-ranking-field").is_some(),
+        "the row is drawn"
+    );
+    click(&mut sc, "launcher-reset-ranking");
+    sc.run_until_parked();
+    assert!(
+        sc.debug_bounds("launcher-reset-ranking-reset").is_some(),
+        "the reset asks for its confirmation"
+    );
+    assert!(sc.debug_bounds("launcher-reset-ranking-cancel").is_some());
+    // Cancel stands it down: nothing was reset.
+    click(&mut sc, "launcher-reset-ranking-cancel");
+    sc.run_until_parked();
+    assert!(
+        sc.debug_bounds("launcher-reset-ranking-reset").is_none(),
+        "the row stood down"
+    );
+    assert!(
+        fs::read_to_string(&record).unwrap().contains("#b"),
+        "nothing went"
+    );
+
+    // The confirmed reset clears the record.
+    click(&mut sc, "launcher-reset-ranking");
+    sc.run_until_parked();
+    click(&mut sc, "launcher-reset-ranking-reset");
+    sc.run_until_parked();
+    until(&mut sc, |_| {
+        fs::read_to_string(&record)
+            .ok()
+            .filter(|text| !text.contains("#b"))
+    });
+
+    // The same query now ranks the unlearned order.
+    cx.simulate_keystrokes("escape");
+    settle(&window, cx);
+    cx.simulate_input("pyt");
+    let view = settle(&window, cx);
+    assert!(
+        view.rows[0].id.ends_with("#a"),
+        "nothing weighs in ranking: {:?}",
+        view.rows
+    );
+    let _ = settings;
+}
+
+/// The Launcher page's "Learn from what I choose" switch (#200): found
+/// through the Settings search, turned off it stops anything being
+/// recorded and ranking weighing what was learned — what was learned is
+/// kept, so turning it on again uses it.
+#[gpui::test]
+fn the_learn_switch_is_found_through_the_settings_search(cx: &mut TestAppContext) {
+    let data = tempfile::tempdir().unwrap();
+    let placement = Rc::new(FakePlacement::default());
+    placement.layout(Some(Point { x: 100., y: 100. }), Some(DisplayId(1)));
+    cx.update(|cx| pane::placement::init(placement.clone() as Rc<dyn Placement>, cx));
+    init_settings(Some(data.path()), cx);
+    let (window, cx, record) = over_learned_data(cx, data.path());
+
+    // The switch is found through the Settings search, and Enter jumps to
+    // the page and reveals its row.
+    let (settings, mut sc) = open_launcher_page(cx);
+    sc.simulate_keystrokes(find_shortcut());
+    sc.simulate_input("learn");
+    sc.run_until_parked();
+    assert!(
+        sc.debug_bounds("settings-search-result-Learn from what I choose")
+            .is_some(),
+        "the switch is found"
+    );
+    let tree = a11y(&mut sc);
+    assert!(
+        tree.contains("Launcher \u{b7} Learn from what I choose"),
+        "the result names the page and the group, {tree}"
+    );
+    sc.simulate_keystrokes("enter");
+    sc.run_until_parked();
+    settle_frames(&mut sc);
+    assert!(
+        sc.debug_bounds("launcher-learn-row").is_some(),
+        "the row is revealed"
+    );
+    assert!(
+        switch_on(&mut sc, "Learn from what I choose"),
+        "on by default"
+    );
+
+    // Turned off: the order ignores what was learned, and a choice
+    // records nothing — the record stands as it was.
+    click(&mut sc, "launcher-learn-row");
+    until_record_holds(&mut sc, data.path(), "\"learning\": false");
+    assert!(!switch_on(&mut sc, "Learn from what I choose"));
+    let before = fs::read_to_string(&record).unwrap();
+    cx.simulate_input("pyt");
+    let view = settle(&window, cx);
+    assert!(
+        view.rows[0].id.ends_with("#a"),
+        "the order ignores what was learned: {:?}",
+        view.rows
+    );
+    cx.simulate_keystrokes("down enter");
+    // The no-view sample's answer for the pythons' own command ids is an
+    // error toast (the component knows its manifest's commands, not the
+    // fixture's); either way the status line is no longer idle, and the
+    // record stands as it was: nothing was recorded.
+    assert_ne!(settle_shown(&window, cx), Status::Idle, "the choice ran");
+    assert_eq!(
+        fs::read_to_string(&record).unwrap(),
+        before,
+        "no use was recorded"
+    );
+
+    // Turned on again: what was kept weighs again.
+    let mut sc = VisualTestContext::from_window(AnyWindowHandle::from(settings), &cx.cx);
+    click(&mut sc, "launcher-learn-row");
+    until_record_holds(&mut sc, data.path(), "\"learning\": true");
+    cx.simulate_keystrokes("escape");
+    settle(&window, cx);
+    cx.simulate_input("pyt");
+    let view = settle(&window, cx);
+    assert!(
+        view.rows[0].id.ends_with("#b"),
+        "what was kept weighs again: {:?}",
+        view.rows
+    );
 }
 
 /// Whether the accessibility tree of the window `cx` drives has the switch
@@ -2252,4 +2600,120 @@ fn find_shortcut() -> &'static str {
     } else {
         "ctrl-f"
     }
+}
+
+/// A launcher window over `data`, whose extensions folder holds a search
+/// history of one query, "pyt", so what that record says can be reset
+/// and recalled. Where the search history's record is.
+fn over_history_data<'a>(
+    cx: &'a mut TestAppContext,
+    data: &Path,
+) -> (
+    gpui::Entity<LauncherWindow>,
+    &'a mut VisualTestContext,
+    PathBuf,
+) {
+    let extensions = data.join("extensions");
+    fs::create_dir_all(&extensions).unwrap();
+    let record = extensions.join("search-history.json");
+    fs::write(
+        &record,
+        r#"{ "version": 1, "queries": [ { "query": "pyt" } ] }"#,
+    )
+    .unwrap();
+    let launcher =
+        Launcher::with_packages(Ok(Runtime::start().unwrap()), vec![], extensions.clone())
+            .with_hotkeys(Arc::new(FakeSystem::default()));
+    cx.executor().allow_parking();
+    cx.update(pane::bind_keys);
+    let (window, cx) = cx.add_window_view(|window, cx| LauncherWindow::new(launcher, window, cx));
+    (window, cx, record)
+}
+
+/// The Launcher page's "Reset search history" (#206): found through the
+/// Settings search, it asks for the confirmation such a loss needs — the
+/// first press arms the row, and Cancel stands it down — and the
+/// confirmed reset clears the recent queries, so Up recalls nothing.
+#[gpui::test]
+fn reset_search_history_in_settings_asks_first_and_clears_the_queries(cx: &mut TestAppContext) {
+    let data = tempfile::tempdir().unwrap();
+    let placement = Rc::new(FakePlacement::default());
+    placement.layout(Some(Point { x: 100., y: 100. }), Some(DisplayId(1)));
+    cx.update(|cx| pane::placement::init(placement.clone() as Rc<dyn Placement>, cx));
+    init_settings(Some(data.path()), cx);
+    let (window, cx, record) = over_history_data(cx, data.path());
+
+    // Up on the empty query recalls the recorded one.
+    cx.simulate_keystrokes("up");
+    let view = settle(&window, cx);
+    assert_eq!(
+        view.screen,
+        Screen::Root {
+            query: "pyt".into()
+        },
+        "the recorded query is recalled"
+    );
+
+    // Settings › Launcher: the row is found through the Settings search,
+    // and the reset asks first.
+    let (settings, mut sc) = open_launcher_page(cx);
+    sc.simulate_keystrokes(find_shortcut());
+    sc.simulate_input("search history");
+    sc.run_until_parked();
+    assert!(
+        sc.debug_bounds("settings-search-result-Reset search history")
+            .is_some(),
+        "the row is found through the Settings search"
+    );
+    sc.simulate_keystrokes("enter");
+    sc.run_until_parked();
+    settle_frames(&mut sc);
+    assert!(
+        sc.debug_bounds("launcher-reset-history-field").is_some(),
+        "the row is revealed"
+    );
+    click(&mut sc, "launcher-reset-history");
+    sc.run_until_parked();
+    assert!(
+        sc.debug_bounds("launcher-reset-history-reset").is_some(),
+        "the reset asks for its confirmation"
+    );
+    assert!(sc.debug_bounds("launcher-reset-history-cancel").is_some());
+    // Cancel stands it down: nothing was reset.
+    click(&mut sc, "launcher-reset-history-cancel");
+    sc.run_until_parked();
+    assert!(
+        sc.debug_bounds("launcher-reset-history-reset").is_none(),
+        "the row stood down"
+    );
+    assert!(
+        fs::read_to_string(&record).unwrap().contains("pyt"),
+        "nothing went"
+    );
+
+    // The confirmed reset clears the record: nothing is left to recall.
+    click(&mut sc, "launcher-reset-history");
+    sc.run_until_parked();
+    click(&mut sc, "launcher-reset-history-reset");
+    sc.run_until_parked();
+    until(&mut sc, |_| {
+        fs::read_to_string(&record)
+            .ok()
+            .filter(|text| !text.contains("pyt"))
+    });
+    assert_eq!(
+        cx.read_entity(&window, |window, _| window.launcher().recent_query(0)),
+        None,
+        "nothing is recalled"
+    );
+    // The query the walk restored still stands: the reset clears the
+    // history, not the search on screen.
+    let view = settle(&window, cx);
+    assert_eq!(
+        view.screen,
+        Screen::Root {
+            query: "pyt".into()
+        }
+    );
+    let _ = settings;
 }

@@ -9,7 +9,8 @@ use std::path::{Path, PathBuf};
 
 use futures::executor::block_on;
 use pane_core::{
-    CallError, CommandRegistration, Launcher, PackageIdentity, Runtime, Screen, Status, Unavailable,
+    CallError, CommandRegistration, Launcher, PackageIdentity, Runtime, Screen, SearchSensitivity,
+    Status, Unavailable,
 };
 use tempfile::TempDir;
 
@@ -33,14 +34,29 @@ const MANAGE_ROW: &str = "Manage Extensions";
 
 /// A command built into the launcher, backed by the Rust sample.
 fn command(title: &str, subtitle: Option<&str>) -> CommandRegistration {
+    command_titled(&title.to_lowercase().replace(' ', "-"), title, subtitle)
+}
+
+/// A command built into the launcher with an id of its own, for rows that
+/// would otherwise share one.
+fn command_titled(id: &str, title: &str, subtitle: Option<&str>) -> CommandRegistration {
     CommandRegistration {
-        id: title.to_lowercase().replace(' ', "-"),
+        id: id.into(),
         title: title.into(),
         subtitle: subtitle.map(Into::into),
         component: guest("sample_rust"),
         takes_query: false,
         search: false,
+        keywords: Vec::new(),
+        when: pane_core::CommandWhen::Always,
+        matches: pane_core::CommandMatches::Title,
     }
+}
+
+/// A launcher holding `commands`, on a data folder of its own so the
+/// records the tests give them stick.
+fn with_commands(dirs: &Dirs, commands: Vec<CommandRegistration>) -> Launcher {
+    Launcher::with_packages(Ok(dirs.runtime()), commands, dirs.packages_dir())
 }
 
 /// A launcher whose runtime never started: searching runs no guest.
@@ -66,21 +82,23 @@ fn downloads() -> Launcher {
 }
 
 #[test]
-fn root_search_opens_with_an_empty_query_listing_every_command_in_order() {
+fn root_search_opens_with_an_empty_query_listing_every_result_in_the_no_query_order() {
     let launcher = downloads();
     let view = launcher.view();
     assert_eq!(view.query(), Some(""));
+    // Nothing is learned yet, so the blank query's order is the no-query
+    // order without its frecency: having an alias, then kind, provider,
+    // then the title (#199). Pane's own rows rank with the commands.
     assert_eq!(
         titles(&launcher),
         [
             "Clear cache",
-            "Undownloadable files",
-            "Recent downloads",
-            "Downloader",
             "Download",
+            "Downloader",
+            "Recent downloads",
             "Settings",
-            // Pane's own row, listed after every command.
-            "Settings…"
+            "Settings…",
+            "Undownloadable files"
         ]
     );
     assert_eq!(view.selected, Some(0));
@@ -89,19 +107,24 @@ fn root_search_opens_with_an_empty_query_listing_every_command_in_order() {
 #[test]
 fn a_query_keeps_the_matching_commands_best_match_first() {
     let launcher = downloads();
+    // The ladder holds the whole order at Low; High (the default) drops
+    // the mid-word containment (see
+    // `search_sensitivity_decides_how_good_a_score_must_be`).
+    launcher.set_search_sensitivity(SearchSensitivity::Low);
     block_on(launcher.set_query("download"));
 
     assert_eq!(launcher.view().query(), Some("download"));
-    // The whole title, then a title that starts with the query, then a word
-    // of the title, then anywhere in the title, then the subtitle.
+    // The query is the whole title (step 2), then the better scores (step
+    // 8): a title that starts with the query, a word of it, a subtitle
+    // that starts a word, and last a mid-word containment.
     assert_eq!(
         titles(&launcher),
         [
             "Download",
             "Downloader",
             "Recent downloads",
-            "Undownloadable files",
-            "Clear cache"
+            "Clear cache",
+            "Undownloadable files"
         ]
     );
     assert_eq!(selected_title(&launcher).as_deref(), Some("Download"));
@@ -125,8 +148,8 @@ fn spaces_inside_and_around_a_title_do_not_lower_its_rank() {
         command("Clear  cache  files", None),
     ]);
     block_on(launcher.set_query("clear cache"));
-    // The whole title, then titles that start with the query, then a title
-    // with words starting with the query's.
+    // The query is the whole title (step 2), then titles that start with
+    // it (steps 8 and 10), then one whose words start the query's.
     assert_eq!(
         titles(&launcher),
         [
@@ -152,6 +175,108 @@ fn composed_and_decomposed_accents_match_each_other() {
     assert_eq!(titles(&launcher), ["Résumé"]);
 }
 
+/// Fuzzy matching without accents (#193): the query's letters place in a
+/// result's title, subtitle or package title as a subsequence, and
+/// transliteration folds away the accents and diacritics in between.
+#[test]
+fn an_abbreviation_finds_the_command_by_its_word_starts() {
+    let launcher = without_runtime(vec![
+        command("Visual Studio Code", None),
+        command("Clear History", None),
+        command("Clipboard History", None),
+    ]);
+    block_on(launcher.set_query("vsc"));
+    assert_eq!(titles(&launcher), ["Visual Studio Code"]);
+    // A match the scorer found alone: the tighter placements (steps 8
+    // and 10) first, and titles collate what they cannot tell apart.
+    block_on(launcher.set_query("clhis"));
+    assert_eq!(
+        titles(&launcher),
+        ["Clear History", "Clipboard History"],
+        "Clear History's letters sit closer than Clipboard's"
+    );
+}
+
+#[test]
+#[allow(clippy::single_range_in_vec_init)]
+fn accents_and_diacritics_never_stand_between_the_query_and_the_result() {
+    let launcher = without_runtime(vec![
+        command("Café", None),
+        command("Tiếng Việt", None),
+        command("Đường", Some("A street in Hà Nội")),
+        command("Straße", None),
+    ]);
+    // Both ways: without the accents, and with them on the other side.
+    block_on(launcher.set_query("cafe"));
+    assert_eq!(titles(&launcher), ["Café"]);
+    block_on(launcher.set_query("tieng viet"));
+    assert_eq!(titles(&launcher), ["Tiếng Việt"]);
+    // The highlight maps back to the title as written: "duong" is all of
+    // "Đường".
+    block_on(launcher.set_query("duong"));
+    assert_eq!(titles(&launcher), ["Đường"]);
+    let ranges = launcher.presentation().rows[0].matched.clone();
+    assert_eq!(ranges, [0.."Đường".len()]);
+    assert_eq!(&"Đường"[ranges[0].clone()], "Đường");
+    block_on(launcher.set_query("strasse"));
+    assert_eq!(titles(&launcher), ["Straße"]);
+}
+
+#[test]
+fn search_sensitivity_decides_how_good_a_score_must_be() {
+    let launcher = without_runtime(vec![command("Undownloadable files", None)]);
+    // "download" sits mid-word: exactly 2n, which High — the default —
+    // rejects, and Medium and Low hold.
+    block_on(launcher.set_query("download"));
+    assert!(titles(&launcher).is_empty(), "High, the default");
+    launcher.set_search_sensitivity(SearchSensitivity::Medium);
+    // The same query re-searched changes nothing, so the retry carries a
+    // space the matcher folds away.
+    block_on(launcher.set_query("download "));
+    assert_eq!(titles(&launcher), ["Undownloadable files"]);
+    // The choice applies on the next keystroke: the list the current
+    // query has already made stays as it is.
+    launcher.set_search_sensitivity(SearchSensitivity::High);
+    assert_eq!(
+        titles(&launcher),
+        ["Undownloadable files"],
+        "the list stays until the query changes"
+    );
+    block_on(launcher.set_query("download"));
+    assert!(
+        titles(&launcher).is_empty(),
+        "the next keystroke applies it"
+    );
+}
+
+/// The title characters of the best placement, as the presentation hands
+/// them to the window: contiguous letters one run, scattered ones one run
+/// each, and nothing for a title the query did not match.
+#[test]
+fn root_search_highlights_the_title_characters_of_the_best_placement() {
+    let launcher = without_runtime(vec![
+        command("Clipboard History", None),
+        command("Clear cache", Some("Delete downloaded files")),
+    ]);
+    let matched = |launcher: &Launcher, title: &str| {
+        launcher
+            .presentation()
+            .rows
+            .iter()
+            .zip(launcher.view().rows)
+            .find(|(_, row)| row.title == title)
+            .map(|(shown, _)| shown.matched.clone())
+            .unwrap_or_default()
+    };
+    block_on(launcher.set_query("clhis"));
+    assert_eq!(titles(&launcher), ["Clipboard History"]);
+    assert_eq!(matched(&launcher, "Clipboard History"), [0..2, 10..13]);
+    // A row found by its subtitle alone highlights nothing in its title.
+    block_on(launcher.set_query("del files"));
+    assert_eq!(titles(&launcher), ["Clear cache"]);
+    assert!(matched(&launcher, "Clear cache").is_empty());
+}
+
 #[test]
 fn searching_the_same_query_again_keeps_the_selection() {
     let launcher = downloads();
@@ -162,32 +287,175 @@ fn searching_the_same_query_again_keeps_the_selection() {
 }
 
 #[test]
-fn every_word_of_the_query_must_match() {
+fn every_letter_of_the_query_must_place_in_order() {
     let launcher = downloads();
     block_on(launcher.set_query("rec down"));
     assert_eq!(titles(&launcher), ["Recent downloads"]);
+    block_on(launcher.set_query("dnolw"));
+    // "downloads" holds every letter but not in this order.
+    assert!(titles(&launcher).is_empty(), "{:?}", titles(&launcher));
+    // A word of the query may sit in the title and the rest in the
+    // subtitle: "files" is only in Clear cache's, "delete" only in it.
+    block_on(launcher.set_query("delete files"));
+    assert_eq!(titles(&launcher), ["Clear cache"]);
+    // The query's own separator helps: placed on a separator, it lifts the
+    // score, so "down files" holds the mid-word match too at High — below
+    // the subtitle that starts a word with it.
     block_on(launcher.set_query("down files"));
-    // "files" is a word of one title and only in the other's subtitle.
-    assert_eq!(titles(&launcher), ["Undownloadable files", "Clear cache"]);
+    assert_eq!(titles(&launcher), ["Clear cache", "Undownloadable files"]);
 }
 
 #[test]
-fn equally_good_matches_keep_root_search_order() {
+fn matches_the_comparator_cannot_tell_apart_keep_root_search_order() {
     let launcher = without_runtime(vec![
-        command("Rust sample", None),
-        command("JavaScript sample", None),
-        command("TypeScript sample", None),
+        command_titled("first", "Sample", Some("One row of a title two rows share")),
+        command_titled(
+            "second",
+            "Sample",
+            Some("One row of a title two rows share"),
+        ),
+        command_titled("third", "Sample", Some("One row of a title two rows share")),
     ]);
+    // Three rows no step can tell apart: the exact title ties (step 2),
+    // the scores tie, the kind and the provider tie, and the titles
+    // collate equal — so root search's own order stands.
     block_on(launcher.set_query("sample"));
     assert_eq!(
-        titles(&launcher),
-        ["Rust sample", "JavaScript sample", "TypeScript sample"]
+        rows(&launcher),
+        [
+            "Sample · One row of a title two rows share",
+            "Sample · One row of a title two rows share",
+            "Sample · One row of a title two rows share"
+        ]
     );
-    block_on(launcher.set_query("script"));
+}
+
+/// The rows on screen as "title · subtitle", to read ties by.
+fn rows(launcher: &Launcher) -> Vec<String> {
+    launcher
+        .view()
+        .rows
+        .into_iter()
+        .map(|row| match row.subtitle {
+            Some(subtitle) => format!("{} · {}", row.title, subtitle),
+            None => row.title,
+        })
+        .collect()
+}
+
+/// A query that is the result's alias ranks it above a result whose title
+/// it exactly is, whatever their scores (step 1 before step 2).
+#[test]
+fn the_query_being_the_alias_ranks_above_an_exact_title() {
+    let dirs = Dirs::new();
+    let launcher = with_commands(&dirs, vec![command("Alpha", None), command("Beta", None)]);
+    block_on(
+        launcher
+            .set_alias("beta", "alpha")
+            .expect("the alias is taken"),
+    );
+
+    block_on(launcher.set_query("alpha"));
+    assert_eq!(titles(&launcher), ["Beta", "Alpha"]);
+}
+
+/// A query longer than three characters that is exactly a title ranks it
+/// above a result the alias of which starts with the query (step 2 before
+/// step 5), both scoring alike.
+#[test]
+fn an_exact_title_ranks_above_a_result_the_alias_of_which_starts_with_the_query() {
+    let dirs = Dirs::new();
+    let launcher = with_commands(
+        &dirs,
+        vec![
+            command("Alpha", None),
+            command_titled("best", "Alpha Best", None),
+        ],
+    );
+    block_on(
+        launcher
+            .set_alias("best", "alphabet")
+            .expect("the alias is taken"),
+    );
+
+    block_on(launcher.set_query("alpha"));
+    assert_eq!(titles(&launcher), ["Alpha", "Alpha Best"]);
+}
+
+/// A query that is exactly the subtitle ranks a result above one whose
+/// title scores as well without being it (step 4 before step 10).
+#[test]
+fn the_query_being_the_subtitle_ranks_above_a_title_score() {
+    let launcher = without_runtime(vec![
+        command_titled("first", "First Note", Some("alpha")),
+        command("Alphabet", None),
+    ]);
+    block_on(launcher.set_query("alpha"));
+    assert_eq!(titles(&launcher), ["First Note", "Alphabet"]);
+}
+
+/// A query the alias of a result starts with matches it even when no text
+/// of it holds the query's letters, and ranks it above a title match
+/// (step 5 before step 8).
+#[test]
+fn the_alias_starting_with_the_query_matches_and_ranks_above_the_scores() {
+    let dirs = Dirs::new();
+    let launcher = with_commands(
+        &dirs,
+        vec![command("Zed Row", None), command("Quiet Owl", None)],
+    );
+    block_on(
+        launcher
+            .set_alias("quiet-owl", "zedx")
+            .expect("the alias is taken"),
+    );
+
+    block_on(launcher.set_query("zed"));
     assert_eq!(
         titles(&launcher),
-        ["JavaScript sample", "TypeScript sample"]
+        ["Quiet Owl", "Zed Row"],
+        "Quiet Owl matches through its alias alone"
     );
+}
+
+/// The best of the title, alternate-title and subtitle scores ranks a
+/// result above one whose texts hold the query less well (step 8).
+#[test]
+fn the_best_score_ranks_the_better_placement_first() {
+    let launcher = without_runtime(vec![
+        command_titled("first", "First", Some("Notebook")),
+        command_titled("second", "Second", Some("Another note")),
+    ]);
+    block_on(launcher.set_query("note"));
+    // Both match through their subtitles alone; the tighter placement
+    // ("Notebook", one word from the start) ranks above the scattered one.
+    assert_eq!(titles(&launcher), ["First", "Second"]);
+}
+
+/// The title's own score breaks a tie the best score left (step 10).
+#[test]
+fn the_title_score_breaks_a_tie_of_the_best_scores() {
+    let launcher = without_runtime(vec![
+        command_titled("first", "Notebook", Some("Zz")),
+        command_titled("second", "Second", Some("Notebook")),
+    ]);
+    block_on(launcher.set_query("note"));
+    // Both hold the query equally well once title and subtitle count
+    // (step 8); only the first holds it in its title.
+    assert_eq!(titles(&launcher), ["Notebook", "Second"]);
+}
+
+/// Titles compare with their digit runs as numbers, so "Tool 2" comes
+/// before "Tool 10" however they were registered (step 13).
+#[test]
+fn titles_collate_their_digit_runs_by_value() {
+    let launcher = without_runtime(vec![
+        command("Tool 10", None),
+        command("Tool 2", None),
+        command("Tool 1", None),
+    ]);
+    block_on(launcher.set_query("tool"));
+    assert_eq!(titles(&launcher), ["Tool 1", "Tool 2", "Tool 10"]);
 }
 
 #[test]
@@ -201,12 +469,14 @@ fn the_selection_moves_among_the_matches_and_enter_opens_the_selected_one() {
         ],
     );
     block_on(launcher.set_query("sample"));
+    // The two matches rank by title collation (#197): "Other sample"
+    // before "Rust sample".
     launcher.move_selection(1);
-    assert_eq!(selected_title(&launcher).as_deref(), Some("Other sample"));
+    assert_eq!(selected_title(&launcher).as_deref(), Some("Rust sample"));
     launcher.move_selection(5);
     assert_eq!(
         selected_title(&launcher).as_deref(),
-        Some("Other sample"),
+        Some("Rust sample"),
         "the selection stays among the matches"
     );
 
@@ -280,7 +550,9 @@ fn returning_to_root_search_starts_a_new_search() {
     launcher.back();
     let view = launcher.view();
     assert_eq!(view.query(), Some(""));
-    assert_eq!(titles(&launcher), ["Rust sample", "Other", "Settings…"]);
+    // The blank query lists everything in the no-query order (#199):
+    // title collation among the commands.
+    assert_eq!(titles(&launcher), ["Other", "Rust sample", "Settings…"]);
 }
 
 /// Test-local directories: package sources and Pane's data location.
@@ -398,7 +670,7 @@ fn an_installed_command_is_found_by_its_title_or_its_package_title() {
     // manager by its subtitle ("Configure, update and remove extensions in
     // Settings", #168).
     block_on(launcher.set_query("install"));
-    assert_eq!(titles(&launcher), [INSTALL_ROW, NPM_ROW, GIT_ROW]);
+    assert_eq!(titles(&launcher), [INSTALL_ROW, GIT_ROW, NPM_ROW]);
     // The authoring rows are searched by their titles too (#222): each
     // matches its own verb, none of them the install rows'.
     block_on(launcher.set_query("create"));
@@ -407,6 +679,22 @@ fn an_installed_command_is_found_by_its_title_or_its_package_title() {
     assert_eq!(titles(&launcher), [IMPORT_ROW]);
     block_on(launcher.set_query("configure"));
     assert_eq!(titles(&launcher), [MANAGE_ROW]);
+}
+
+/// A manifest for a package titled `title` with one command titled
+/// `command` whose own subtitle is `subtitle` and whose `keywords` are
+/// given.
+fn manifest_with_keywords(title: &str, command: &str, subtitle: &str, keywords: &[&str]) -> String {
+    let keywords = keywords
+        .iter()
+        .map(|keyword| format!("\"{keyword}\""))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(
+        r#"{{ "manifestVersion": 1, "title": "{title}", "apiVersion": "0.1",
+  "commands": [{{ "id": "hello", "title": "{command}", "subtitle": "{subtitle}",
+    "keywords": [{keywords}], "component": "hello.wasm" }}] }}"#
+    )
 }
 
 /// A manifest for a package titled `title` with one command titled
@@ -436,11 +724,36 @@ fn a_command_with_its_own_subtitle_is_found_by_its_package_title_last() {
         Some("Five days ahead"),
         "the command still shows its own subtitle"
     );
-    // Words may match the title, subtitle and package title together.
+    // A query may span a result's title and subtitle, through the
+    // composite of the two — but no longer across its package title:
+    // "weather five" holds words of the package title and the subtitle,
+    // and no single text holds them both.
+    block_on(launcher.set_query("forecast five"));
+    assert_eq!(titles(&launcher), ["Forecast"]);
     block_on(launcher.set_query("weather five"));
-    assert_eq!(titles(&launcher), ["Forecast"]);
-    block_on(launcher.set_query("forecast weather"));
-    assert_eq!(titles(&launcher), ["Forecast"]);
+    assert!(titles(&launcher).is_empty(), "{:?}", titles(&launcher));
+}
+
+/// A manifest's `keywords` find a command as its subtitle does: below a
+/// title match (step 10, a keyword holds nothing in the title), and the
+/// query being one exactly ranks as the subtitle would (step 4).
+#[test]
+fn a_manifests_keywords_find_the_command_as_its_subtitle_does() {
+    let dirs = Dirs::new();
+    let launcher = Launcher::with_packages(Ok(dirs.runtime()), vec![], dirs.packages_dir());
+    let tidy = manifest_with_keywords("Tidy", "Remove Notes", "Unused", &["trash"]);
+    install(&launcher, &dirs.package("tidy", &tidy));
+    let orderly = manifest("Orderly", "Trash Rules", None);
+    install(&launcher, &dirs.package("orderly", &orderly));
+
+    // "tras" holds in "Trash Rules"'s title and in Remove Notes' keyword
+    // alike (step 8); only the former holds it in its title.
+    block_on(launcher.set_query("tras"));
+    assert_eq!(titles(&launcher), ["Trash Rules", "Remove Notes"]);
+    // "trash" is Remove Notes' keyword exactly, as a subtitle would be
+    // the query, ranking it above the title match.
+    block_on(launcher.set_query("trash"));
+    assert_eq!(titles(&launcher), ["Remove Notes", "Trash Rules"]);
 }
 
 #[test]
@@ -524,9 +837,10 @@ fn an_unavailable_command_matches_and_explains_why_it_does_not_run() {
 }
 
 /// The presentation root search hands the window: every row a command,
-/// under one "Commands" label for a blank query — root search's own
-/// order, claiming no recent use — and under "Results" with their count
-/// for a query, each title's match where the query matched it.
+/// under one "Commands" label for a blank query — the no-query order
+/// (#199), with no section of suggestions — and under "Results" with
+/// their count for a query, each title's match where the query matched
+/// it.
 #[test]
 fn root_search_presents_its_rows_with_kinds_sections_and_title_matches() {
     let launcher = downloads();

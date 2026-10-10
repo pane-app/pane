@@ -65,6 +65,19 @@ impl SharedApplications {
         *lock(&self.0.changed) = Some(changed);
     }
 
+    /// The components that asked for the installed applications and may
+    /// still run: what they supply ahead of the query may have changed
+    /// when the applications did, so they are asked for again then (see
+    /// the launcher's `application_changes`) — and no sooner, not for a
+    /// show of root search that changed nothing.
+    pub fn askers(&self) -> Vec<PathBuf> {
+        lock(&self.0.askers)
+            .iter()
+            .filter(|asker| !asker.mark.ended())
+            .map(|asker| asker.component.clone())
+            .collect()
+    }
+
     /// Notes that `component`, running in `generation` (none for a command
     /// built into Pane), asked for the installed applications.
     pub fn asked_by(&self, component: &Path, generation: Option<&Generation>) {

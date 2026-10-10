@@ -284,14 +284,14 @@ fn each_way_in_runs_the_command_once_with_its_record_and_opens_no_screen(fixture
     );
     assert_eq!(launcher.view().query(), Some("rl  hello  world "));
 
-    // As a fallback, which the user chooses.
+    // As a fallback: the first is selected when nothing else matches,
+    // so Enter sends it the text (ADR 0031).
     manage(launcher);
     select_title(launcher, "Fallback: Report launch");
     block_on(launcher.activate_selected());
     pane.search("zqx  words ");
     assert_eq!(titles(launcher), ["Report launch"]);
-    assert_eq!(launcher.view().selected, None);
-    launcher.move_selection(1);
+    assert_eq!(launcher.view().selected, Some(0));
     block_on(launcher.activate_selected());
     assert_eq!(
         shown(launcher),

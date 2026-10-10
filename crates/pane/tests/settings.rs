@@ -2303,17 +2303,18 @@ fn disabling_a_required_extension_from_its_page_confirms_and_disables_all(cx: &m
     assert!(!extension_enabled(&mut settings_cx, "Greeter"));
 
     // Root search offers the commands of neither disabled package, and
-    // "Manage Extensions" is a command of Pane's.
+    // "Manage Extensions" is a command of Pane's. The blank query's order
+    // (#199) collates Pane's own rows by title: Git before npm.
     cx.read_entity(&launcher, |window, _| window.launcher().back());
     assert_eq!(
         titles(&launcher, cx),
         [
-            "Install extension from folder…",
-            "Install extension from npm…",
-            "Install extension from Git…",
+            "Check for Extension Updates",
             "Create Extension…",
             "Import Extension…",
-            "Check for Extension Updates",
+            "Install extension from folder…",
+            "Install extension from Git…",
+            "Install extension from npm…",
             "Manage Extensions",
             "Settings…"
         ]

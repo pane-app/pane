@@ -164,6 +164,34 @@ fn open_sample<'a>(
     )
 }
 
+/// Moves the selection to the root row titled `title`, with the down
+/// key, as the blank query's order (#199) no longer puts any command
+/// first: the row is found by its title, never its place.
+fn select_row(
+    window: &gpui::Entity<LauncherWindow>,
+    cx: &mut VisualTestContext,
+    title: &str,
+) -> pane_core::LauncherView {
+    let view = settle(window, cx);
+    let index = view
+        .rows
+        .iter()
+        .position(|row| row.title == title)
+        .unwrap_or_else(|| panic!("the {title} row is listed"));
+    for _ in 0..index {
+        cx.simulate_keystrokes("down");
+    }
+    assert_eq!(
+        settle(window, cx)
+            .selected
+            .and_then(|selected| view.rows.get(selected))
+            .map(|row| row.title.as_str()),
+        Some(title),
+        "the down keys selected the {title} row"
+    );
+    view
+}
+
 /// The launcher window's handle, for liveness checks.
 fn handle_of(cx: &mut VisualTestContext) -> WindowHandle<LauncherWindow> {
     cx.update(|window, _| window.window_handle())
@@ -333,7 +361,7 @@ fn a_rebind_takes_effect_at_once_is_saved_and_survives_a_restart(cx: &mut TestAp
     let (window, cx) = open_sample(cx, Some(data.path()));
 
     // Two results to move between, with the query keeping focus.
-    cx.simulate_input("script");
+    cx.simulate_input("script sample");
     let view = settle(&window, cx);
     assert_eq!(view.selected, Some(0));
 
@@ -371,7 +399,7 @@ fn a_rebind_takes_effect_at_once_is_saved_and_survives_a_restart(cx: &mut TestAp
             cx,
         )
     });
-    fresh_cx.simulate_input("script");
+    fresh_cx.simulate_input("script sample");
     settle(&window, fresh_cx);
     fresh_cx.simulate_keystrokes("ctrl-n");
     assert_eq!(
@@ -425,7 +453,10 @@ fn the_footers_keycap_follows_the_invoke_binding(cx: &mut TestAppContext) {
         "no stale Enter keycap, {nodes:#?}"
     );
 
-    // The new key opens the selected command; Enter no longer does.
+    // The new key opens the selected command; Enter no longer does. The
+    // sample is found by its name: the blank query's order (#199) does
+    // not put the Rust sample first.
+    cx.simulate_input("rust");
     cx.simulate_keystrokes("ctrl-j");
     let view = settle(&window, cx);
     assert_eq!(
@@ -506,6 +537,9 @@ fn a_chord_on_the_invoke_action_is_shown_announced_and_pressed_whole(cx: &mut Te
         );
 
         // The chord opens the selected command; the bare Enter does not.
+        // The sample is found by its name: the blank query's order (#199)
+        // does not put the Rust sample first.
+        cx.simulate_input("rust");
         cx.simulate_keystrokes("enter");
         let view = settle(&window, cx);
         assert!(
@@ -851,7 +885,7 @@ fn a_save_that_fails_rolls_the_binding_back(cx: &mut TestAppContext) {
     // The failure is explained, and the binding the record holds is the
     // one that works: the change that could not be saved did not keep the
     // keys it took.
-    cx.simulate_input("script");
+    cx.simulate_input("script sample");
     settle(&window, cx);
     cx.simulate_keystrokes("ctrl-n");
     assert_eq!(
@@ -1045,7 +1079,10 @@ fn a_form_still_submits_with_the_rebound_key_and_the_footer_button(cx: &mut Test
     let data = tempfile::tempdir().unwrap();
     let (window, cx) = open_sample(cx, Some(data.path()));
 
-    // Open the form, and rebind the invoke action to Ctrl+J.
+    // Open the form. The blank query's order (#199) collates Pane's own
+    // rows among the commands, so the Rust sample's row is reached by
+    // its title, not its place.
+    select_row(&window, cx, "Rust sample");
     cx.simulate_keystrokes("enter");
     settle(&window, cx);
     cx.simulate_keystrokes("down down down down enter");
@@ -1386,7 +1423,7 @@ fn the_navigation_bindings_move_the_selection_unless_an_action_has_their_keys(
     let data = tempfile::tempdir().unwrap();
     let (window, cx) = open_sample(cx, Some(data.path()));
     // Two results to move between, with the query keeping focus.
-    cx.simulate_input("script");
+    cx.simulate_input("script sample");
     assert_eq!(settle(&window, cx).selected, Some(0));
 
     // The choices are Raycast's, each labelled with the keys it binds,
@@ -1467,7 +1504,7 @@ fn the_navigation_bindings_move_the_selection_unless_an_action_has_their_keys(
     cx.simulate_keystrokes(&nav("j"));
     let view = settle(&window, cx);
     assert_eq!(view.selected, Some(0), "Alt+J no longer moves");
-    assert_eq!(view.query(), Some("script"));
+    assert_eq!(view.query(), Some("script sample"));
     cx.simulate_keystrokes("down");
     assert_eq!(settle(&window, cx).selected, Some(1), "Down still moves");
     cx.simulate_keystrokes("up");
@@ -1502,7 +1539,7 @@ fn the_navigation_bindings_move_the_selection_unless_an_action_has_their_keys(
 fn a_navigation_choice_that_fails_to_save_restores_the_recorded_keys(cx: &mut TestAppContext) {
     let data = tempfile::tempdir().unwrap();
     let (window, cx) = open_sample(cx, Some(data.path()));
-    cx.simulate_input("script");
+    cx.simulate_input("script sample");
     assert_eq!(settle(&window, cx).selected, Some(0));
 
     // Saved: Emacs.
@@ -1568,7 +1605,7 @@ fn the_behavior_choices_are_applied_by_a_fresh_application(cx: &mut TestAppConte
         .with_hotkeys(Arc::new(FakeSystem::default()));
     let (window, fresh_cx) =
         fresh.add_window_view(|window, cx| LauncherWindow::new(launcher, window, cx));
-    fresh_cx.simulate_input("script");
+    fresh_cx.simulate_input("script sample");
     assert_eq!(settle(&window, fresh_cx).selected, Some(0));
     fresh_cx.simulate_keystrokes(&nav("n"));
     assert_eq!(

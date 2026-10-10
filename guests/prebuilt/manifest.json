@@ -81,6 +81,30 @@
       "bytes": 4377005,
       "sha256": "fc12e13a22bf1117d721be0488087183d59c3338a561a48456b8f6d0a865a4a2"
     },
+    "sample_keywords_js": {
+      "source": "guests/sample-keywords-js",
+      "inputs_sha256": "d3c40fe6fb6f05523653685b26c7fc37ed74cff38fe656fe180cb5dd606e82a9",
+      "bytes": 4178250,
+      "sha256": "3a55755849f0dcc1e8954d4f8523f89d44c4555ee3d4f8a61a60546ea8d901a6"
+    },
+    "sample_keywords_ts": {
+      "source": "guests/sample-keywords-ts",
+      "inputs_sha256": "ce6044b8a1e3eea6136f6e9bdb523306faecc8b052c0d474be25caf673ff7e34",
+      "bytes": 4178266,
+      "sha256": "e7146be6d7d8c20f220db609e8a6e0b4b60ae8852247fcdddd8d10a2b137a946"
+    },
+    "sample_matches_js": {
+      "source": "guests/sample-matches-js",
+      "inputs_sha256": "26b2dbf30d2be426e80437259d667882fb3e037dbbcd0b2481094c91f65850bd",
+      "bytes": 4169235,
+      "sha256": "24734253c5615669cfdd5e212a98f0dc4feae6cd2821f6a90d471c8a454c0283"
+    },
+    "sample_matches_ts": {
+      "source": "guests/sample-matches-ts",
+      "inputs_sha256": "3d46d25b1750e89ee09af3576d177284a00ac40dba286014d622f817edc7d4ea",
+      "bytes": 4169205,
+      "sha256": "8e973abbdeaf9cfb00cb10e4f012760c08b285be9369841300ae8b9ebbd0e628"
+    },
     "sample_no_view_js": {
       "source": "guests/sample-no-view-js",
       "inputs_sha256": "13a2c596dccb67505c45f13683531c2122f3a0d333e450b12f900a49811f16e2",

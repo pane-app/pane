@@ -37,11 +37,12 @@ open. The page edits the same records, so nothing differs between the two.
 In root search, a query that is the alias, compared the same caseless way,
 lists the command first, above every other result, computed results
 included; Enter opens it as usual.
-For a command that takes a query, the alias, a space and more text ("ec
-hello world") list a row titled with the command, subtitled "Send “hello
-world” · alias ec", first and selected; Enter sends "hello world" (the text
-after the alias, trimmed) and shows the command's answer as the result,
-root search staying as it was. The answer is cleared from the status line as
+For a command that takes a query and declares no arguments, the alias, a
+space and more text ("ec hello world") list a row titled with the command,
+subtitled "Send “hello world” · alias ec", first and selected; Enter sends
+"hello world" (the text after the alias, trimmed) and shows the command's
+answer as the result, root search staying as it was. The answer is cleared
+from the status line as
 soon as the query changes, and an answer that arrives after it changed is
 not shown. Text after the alias of a command that takes no query sends
 nothing (the query is then matched as usual). When another command offered
@@ -49,12 +50,23 @@ has the same title (copies of a package from other sources), the row's
 subtitle also names its source ("Send “hi” · alias ec · local folder …"),
 and so does a fallback row.
 
+An alias and a space is also the user's way into a command's
+[arguments](root-search.md#inline-argument-fields) (#205): for a command
+that declares them there is no row that sends the text after the alias —
+the alias stays in the query and the command's inline fields show after
+it, entered at their first empty one, with what is typed next going into
+the first text or password one. Tab after the alias alone does the same.
+A command without arguments that takes no query opens at once instead,
+as Raycast does: a view command opens its screen, a no-view command runs.
+
 A command **takes a query** when its manifest says `"takesQuery": true`, or
 when its first [argument](../guests/README.md#arguments) is text and every
 other argument is optional (Raycast's rule, #144). The text sent fills its
 first text or password argument unless that already has a value, and is
 its launch record's fallback text as well; when another required argument
-is still empty, Pane's argument form asks for it before the command runs.
+is still empty, Pane's argument form asks for it before the command runs
+— for a fallback row, which never shows the inline fields, as for every
+launch that does not come from root search.
 
 ## Making a command a fallback
 
@@ -63,11 +75,11 @@ it below the results for any text typed" or "On · …". Enter turns it on
 ("Echo is now offered for any text typed in root search") or off ("Echo is
 no longer a fallback"). For any query that is not blank, each fallback is
 listed **below every other result**, in the order the user turned them on,
-subtitled "Send “zqx” · fallback". A fallback row is **never selected by
-itself**: when nothing else matches, root search shows "No results for
-“zqx”" above the fallbacks with nothing selected, so Enter does nothing, as
-before; Down (or Up, or a click) selects one and Enter sends the whole
-query, trimmed.
+subtitled "Send “zqx” · fallback". When nothing else matches, root search
+selects the first, so Enter sends it the whole query, trimmed (ADR 0031),
+with its notice that nothing matched above the fallbacks; when anything
+else is listed, the fallbacks stay below it unselected until the user
+moves to one.
 
 ## What keeps and removes them
 
@@ -148,9 +160,10 @@ shown and never counts towards [pausing](pausing.md); a trap does.
   shows its answer and keeps root search; an error answer is shown; kept
   after a restart; the form starts with the alias and an empty one removes
   it; an alias ranks above a computed result (the calculator's). A fallback
-  is listed last for any text, not selected, Enter then does nothing and
-  Echo does not start; Down and Enter send the query; not for a blank query;
-  turned off again. The answer cleared when the query changes, and one
+  is listed last for any text, the first selected when nothing else
+  matches, so Enter sends the query without a move, and unselected below a
+  match; not for a blank query; turned off again. Echo does not start while
+  typing. The answer cleared when the query changes, and one
   arriving after the change not shown. Three crashes of the query "crash"
   pause the package; its alias row explains it and runs nothing. Refusals
   (another command's alias "straße" given as "STRASSE", a space, 33
@@ -170,17 +183,26 @@ shown and never counts towards [pausing](pausing.md); a trap does.
   row, with no text, runs and opens no screen. The launch record's source
   (alias or fallback) and a view command opened through its alias with
   text are checked in [`no_view.rs`](../crates/pane-core/tests/no_view.rs).
+  What an alias and a space opens — the inline fields of a command that
+  declares arguments, run from its alias with the first argument filled;
+  the row that sends the text kept for a command that takes a query with
+  none; a command without either opened at once — is checked in
+  [`arguments.rs`](../crates/pane-core/tests/arguments.rs), and with real
+  keys, including a space held with the query's list, in
+  [`crates/pane/tests/arguments.rs`](../crates/pane/tests/arguments.rs).
 - Window ([`crates/pane/tests/aliases.rs`](../crates/pane/tests/aliases.rs)),
   on GPUI's test platform with real key events: the alias typed in its form
   and saved, the form reopened filled with it, the fallback turned on; "ec
-  hello" and Enter show Echo's answer; "zqx" shows "No results" and the
-  fallback unselected, Enter changes nothing (checked once the runtime has
-  served every call: Echo, stopped before, has not started again), Down and
-  Enter send "zqx". Rows are chosen by title.
+  hello" and Enter show Echo's answer; "zqx words" shows the notice above
+  the first fallback, preselected (its accessibility node is the selection)
+  and typing starts nothing (checked once the runtime has served every
+  call: Echo, stopped before, has not started again); Enter, and Ctrl+1 as
+  any row, send the trimmed query. Rows are chosen by title.
 - Native GUI smokes, one identical phase on all three systems (screenshots
   66 to 74): with data folders of their own, install the query sample, set
-  the alias "ec" and the fallback in Settings › Extensions, send "ec hello" and,
-  from the fallback chosen with Down, "zqx"; check `aliases.json`; restart,
+  the alias "ec" and the fallback in Settings › Extensions, send "ec hello",
+  then "zqx", which Enter hands to the preselected first fallback (ADR
+  0031); check `aliases.json`; restart,
   disable the extension and check that "ec hello" gives the same screen as
   a Pane with nothing installed. See the
   [Linux](platforms/linux.md#aliases-and-fallbacks-31),
@@ -202,5 +224,5 @@ shown and never counts towards [pausing](pausing.md); a trap does.
   when the user types on (its late answer is discarded); calls run one at a
   time on the runtime thread (#29, #18).
 - Screen readers: fallback rows are ordinary options of the results list;
-  with none selected, the combo box itself is reported as focused. No
+  the combo box itself is reported as focused, whatever is selected. No
   screen reader was run ([root search](root-search.md#accessibility)).

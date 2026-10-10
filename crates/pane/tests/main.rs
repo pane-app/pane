@@ -26,6 +26,8 @@ mod feedback;
 mod file_actions;
 mod file_search_settings;
 mod game_mode;
+mod held_keys;
+mod history;
 mod hotkeys;
 mod icons;
 mod install;

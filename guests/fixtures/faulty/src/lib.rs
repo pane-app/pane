@@ -7,6 +7,7 @@ use core::cell::Cell;
 
 use pane_extension::alloc::{format, string::String, vec, vec::Vec};
 use pane_extension::feedback::{Toast, show_toast};
+use pane_extension::root::WallTime;
 use pane_extension::{
     Command, CustomView, CustomViewInfo, CustomViewRole, Field, FieldKind, FieldValue, Form,
     FormError, Frame, GuestCustomView, Item, Key, List, Shape, Text, TextField, ViewEvent,
@@ -204,7 +205,10 @@ pane_extension::root::export!(Faulty);
 /// The query "0 + 0" is answered slowly, after about a second of busy work,
 /// with one result titled "Slow answer". Any other query has no results.
 impl pane_extension::root::Guest for Faulty {
-    async fn results_for(query: String) -> Result<Vec<pane_extension::root::RootResult>, String> {
+    async fn results_for(
+        query: String,
+        _at: WallTime,
+    ) -> Result<Vec<pane_extension::root::RootResult>, String> {
         match query.as_str() {
             "error" => Err("the guest refused the query".into()),
             "file link" => Ok(vec![pane_extension::root::RootResult {
@@ -212,6 +216,7 @@ impl pane_extension::root::Guest for Faulty {
                 title: "A local file".into(),
                 subtitle: None,
                 action: pane_extension::root::RootAction::OpenUrl("file:///etc/hosts".into()),
+                answer: None,
             }]),
             // Files it names by a path of its own, not an id Pane gave it:
             // Pane must list and open neither.
@@ -220,6 +225,7 @@ impl pane_extension::root::Guest for Faulty {
                 title: "hosts".into(),
                 subtitle: None,
                 action: pane_extension::root::RootAction::OpenFile("/etc/hosts".into()),
+                answer: None,
             }]),
             // Each file of its granted folder under a harmless title: Pane
             // must show the file's own name instead.
@@ -232,6 +238,7 @@ impl pane_extension::root::Guest for Faulty {
                         title: "harmless.txt".into(),
                         subtitle: Some("File in Documents".into()),
                         action: pane_extension::root::RootAction::OpenFile(file.id),
+                        answer: None,
                     })
                     .collect()),
                 _ => Ok(Vec::new()),
@@ -247,6 +254,7 @@ impl pane_extension::root::Guest for Faulty {
                     title: "Slow answer".into(),
                     subtitle: Some(format!("after {sum} steps")),
                     action: pane_extension::root::RootAction::Copy("slow".into()),
+                    answer: None,
                 }])
             }
             _ => Ok(Vec::new()),

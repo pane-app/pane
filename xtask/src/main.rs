@@ -226,6 +226,8 @@ fn guests() -> Result<(), String> {
                 "sample_operations",
                 "sample_dependencies",
                 "sample_query",
+                "sample_keywords",
+                "sample_matches",
                 "sample_no_view",
                 "sample_search",
                 "sample_schedule",
@@ -504,7 +506,7 @@ fn git_sample(root: &Path, out: &Path) -> Result<(), String> {
 /// the commits its pins name (`crates/pane/defaults.json`) — except the
 /// Windows power features' three (#125), which this repository still
 /// builds until their own repositories release.
-const SAMPLE_PACKAGES: [(&str, &str); 66] = [
+const SAMPLE_PACKAGES: [(&str, &str); 72] = [
     ("sample-rust", "sample_rust"),
     ("sample-settings", "sample_settings"),
     ("sample-js", "sample_js"),
@@ -524,6 +526,12 @@ const SAMPLE_PACKAGES: [(&str, &str); 66] = [
     ("sample-query", "sample_query"),
     ("sample-query-js", "sample_query_js"),
     ("sample-query-ts", "sample_query_ts"),
+    ("sample-keywords", "sample_keywords"),
+    ("sample-keywords-js", "sample_keywords_js"),
+    ("sample-keywords-ts", "sample_keywords_ts"),
+    ("sample-matches", "sample_matches"),
+    ("sample-matches-js", "sample_matches_js"),
+    ("sample-matches-ts", "sample_matches_ts"),
     ("sample-no-view", "sample_no_view"),
     ("sample-no-view-js", "sample_no_view_js"),
     ("sample-no-view-ts", "sample_no_view_ts"),

@@ -802,9 +802,11 @@ pub(crate) struct ResultGeometry {
     pub(crate) card_gap: Pixels,
     pub(crate) card_radius: Pixels,
     /// The 16 between the card's columns, and the 4 between a value and its
-    /// caption.
+    /// caption or its swatch.
     pub(crate) card_column_gap: Pixels,
     pub(crate) card_value_gap: Pixels,
+    /// The answer's swatch: 28 high, the width of its column.
+    pub(crate) card_swatch: Pixels,
     /// The arrow's 40px disc and its 18px glyph.
     pub(crate) card_arrow_disc: Pixels,
     pub(crate) card_arrow: Pixels,
@@ -841,6 +843,7 @@ impl ResultGeometry {
             card_radius: px(14.),
             card_column_gap: px(16.),
             card_value_gap: px(4.),
+            card_swatch: px(28.),
             card_arrow_disc: px(40.),
             card_arrow: px(18.),
             also_padding_top: px(14.),

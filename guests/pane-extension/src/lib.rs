@@ -19,9 +19,10 @@
 //! its own package publishes with [`publish`], find and open installed
 //! applications with [`applications`], supply root results ahead of the
 //! query with [`indexed`], run its package's native helpers with
-//! [`helpers`], the system's own programs with [`programs`] and what
+//! [`helpers`] and the system's own programs with [`programs`], what
 //! Windows' Run dialog runs, sharing its history, with [`run`], list the
-//! files of a folder with [`files`], search as the
+//! files of a folder with [`files`] and the entries of a folder the user
+//! typed with [`typed_folder`], search as the
 //! user types into its own search field with [`search`], make web
 //! requests with [`http`], keep clipboard history with
 //! [`clipboard_history`], and lock, log out, restart, shut down, sleep,
@@ -285,6 +286,12 @@ pub mod publish {
 /// pane_extension::root::export!(Calculator);
 /// ```
 ///
+/// Pane asks with the query and when it was typed ([`root::WallTime`]), so a
+/// command can answer about the current date or time. A result that is an
+/// answer card can say more than its title and action in
+/// [`root::AnswerDetail`]: the section it sits under, a colour swatch, and
+/// further ways to copy it.
+///
 /// A command whose only job is this, as the calculator's, also says
 /// `"mode": "provider"` (a root provider): it has no row of its own and
 /// Pane never opens or runs it, so its [`Command`](crate::Command) keeps
@@ -297,7 +304,9 @@ pub mod root {
         default_bindings_module: "pane_extension::root",
     });
 
-    pub use exports::pane::extension::root_results::{Guest, RootAction, RootResult};
+    pub use exports::pane::extension::root_results::{
+        AnswerCopy, AnswerDetail, Guest, RootAction, RootResult, WallTime,
+    };
 }
 
 /// The applications installed on the system (`pane:extension/applications`),
@@ -511,6 +520,28 @@ pub mod file_index {
             }
         }
     }
+}
+
+/// The entries of a folder the user typed into root search
+/// (`pane:extension/typed-folder`, #204): Pane's host lists the folder for
+/// the command, within bounds like the granted folder's scan policy (the
+/// direct entries only, folders first and each in name order, at most 500,
+/// a partial listing saying so), since a pure WASI guest has no folders to
+/// read. No folder is granted: the user named it, so the command passes
+/// what the user typed and Pane resolves it (`~` to the home folder,
+/// `file://` taken off). [`typed_folder::list_entries`] answers the entries, each
+/// with the id Pane gave it, its name, whether it is a folder and whether
+/// opening it would run a program; a command answers `open-file` results
+/// ([`root::RootAction::OpenFile`]) with the ids, and Pane checks each
+/// entry again before acting on it.
+pub mod typed_folder {
+    wit_bindgen::generate!({
+        path: "wit",
+        world: "typed-folder-user",
+        default_bindings_module: "pane_extension::typed_folder",
+    });
+
+    pub use pane::extension::typed_folder::{FolderEntry, FolderListing, list_entries};
 }
 
 /// Root results a command supplies ahead of the query

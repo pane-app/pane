@@ -1,7 +1,19 @@
 //! The Launcher page: the choices that govern the launcher window — which
-//! display it opens on, when reopening it pops back to root search, and
-//! its layout: the window mode (expanded or compact), how the pins are
-//! laid out, and whether the compact window shows them.
+//! display it opens on, when reopening it pops back to root search, how
+//! strict root search's matching is, and its layout: the window mode
+//! (expanded or compact), how the pins are laid out, and whether the
+//! compact window shows them.
+//!
+//! The page also governs what root search
+//! [learns](../../../docs/root-search.md) (#200): the "Learn from what I
+//! choose" switch, on by default, which stops any use being recorded and
+//! ranking weighing what was learned when turned off (what was learned is
+//! kept until it is reset), and "Reset ranking…", which clears what every
+//! result learned, asking for the confirmation such a loss needs — the
+//! first press arms the row and the second runs it, with Cancel standing
+//! it down. "Reset search history" (#206) clears the recent queries Up
+//! recalls the same way, and the switch is one for both records: turned
+//! off, no use and no query is recorded.
 //!
 //! Every value it shows and every choice it takes goes through the host
 //! settings ([`crate::settings`]), so the record's own rules — atomic
@@ -12,13 +24,19 @@
 //! every time the launcher opens (through [`crate::placement`], the
 //! platform seam this page also reads to explain the choices), and what
 //! reopening shows is applied when the launcher is next opened. The
-//! layout choices are read by the launcher window as it draws.
+//! layout choices are read by the launcher window as it draws, and the
+//! search sensitivity is applied by the launcher's matcher on the next
+//! keystroke after the choice is taken; the learning switch is applied
+//! as the query changes and as the launcher is made, and the reset
+//! re-ranks the list the launcher is showing at once. What was learned
+//! is the launcher's own record, not a host setting, so the reset
+//! reports its own failures beside the page's rows.
 //!
-//! The display and the reopening delay are Pane-styled searchable
-//! selects ([`crate::ui::select`]); the window mode and the pinned
-//! layout are segmented choices (#99, the Settings board's family), two
-//! fixed choices a user scans faster than searches; showing the pins in
-//! the compact window is a switch.
+//! The display, the reopening delay and the search sensitivity are
+//! Pane-styled searchable selects ([`crate::ui::select`]); the window mode
+//! and the pinned layout are segmented choices (#99, the Settings board's
+//! family), two fixed choices a user scans faster than searches; showing
+//! the pins in the compact window is a switch.
 //!
 //! What the page explains, as the General page does for its hotkey: the
 //! choices the platform cannot answer — the display with the mouse where
@@ -37,7 +55,7 @@ use gpui::{
     prelude::*,
 };
 use pane_core::placement::{DisplayLayout, resolve};
-use pane_core::{Launcher, OpeningMonitor, PinnedLayout, Reopening, WindowMode};
+use pane_core::{Launcher, OpeningMonitor, PinnedLayout, Reopening, SearchSensitivity, WindowMode};
 
 use super::{Page, SettingsWindow, search};
 use crate::ui::controls::{self, status_note as note};
@@ -104,6 +122,29 @@ pub(crate) const REOPENINGS: [(Reopening, &str, &str, &str); 4] = [
 pub(crate) const REOPENING_NAME: &str = "Pop to root search";
 pub(crate) const REOPENING_DEBUG: &str = "launcher-reopening";
 
+/// The search sensitivity choices the page offers, in list order: the
+/// preference, the choice's name (the select's id too) and what it
+/// matches. High is the default, so it comes first.
+pub(crate) const SENSITIVITY_NAME: &str = "Search sensitivity";
+pub(crate) const SENSITIVITY_DEBUG: &str = "launcher-sensitivity";
+pub(crate) const SENSITIVITIES: [(SearchSensitivity, &str, &str); 3] = [
+    (
+        SearchSensitivity::High,
+        "High",
+        "Matches that also start the text or a word of it",
+    ),
+    (
+        SearchSensitivity::Medium,
+        "Medium",
+        "Word starts and tighter placements",
+    ),
+    (
+        SearchSensitivity::Low,
+        "Low",
+        "Every placement the letters can make",
+    ),
+];
+
 /// The layout rows: their names, and their segments — the preference, the
 /// segment's name and its test selector.
 pub(crate) const WINDOW_MODE_NAME: &str = "Window mode";
@@ -128,6 +169,21 @@ pub(crate) const PINNED_LAYOUTS: [(PinnedLayout, &str, &str); 2] = [
 /// field: its name, and its id and selector.
 pub(crate) const COMPACT_PINNED_NAME: &str = "Show pinned in compact window mode";
 pub(crate) const COMPACT_PINNED_DEBUG: &str = "launcher-compact-pinned";
+
+/// The switch that stops root search learning from what the user
+/// chooses (#200): its name, and its id and selector.
+pub(crate) const LEARN_NAME: &str = "Learn from what I choose";
+pub(crate) const LEARN_DEBUG: &str = "launcher-learn";
+
+/// The row that clears what every result learned (#200): its name, and
+/// its id and selector.
+pub(crate) const RESET_NAME: &str = "Reset ranking";
+pub(crate) const RESET_DEBUG: &str = "launcher-reset-ranking";
+
+/// The row that clears root search's recent queries (#206): its name,
+/// and its id and selector.
+pub(crate) const HISTORY_NAME: &str = "Reset search history";
+pub(crate) const HISTORY_DEBUG: &str = "launcher-reset-history";
 
 /// What the page is, in one line: its sidebar entry's description in
 /// the search.
@@ -164,6 +220,29 @@ pub(crate) struct State {
     monitor: Entity<Select>,
     /// The reopening choice's select.
     reopening: Entity<Select>,
+    /// The search sensitivity choice's select.
+    sensitivity: Entity<Select>,
+    /// The "Reset ranking…" row: resting, or asking its confirmation.
+    pub(crate) reset: Resetting,
+    /// Why the last reset could not be written, if it could not.
+    pub(crate) reset_problem: Option<String>,
+    /// The "Reset search history" row (#206): resting, or asking its
+    /// confirmation.
+    pub(crate) history: Resetting,
+    /// Why the last search-history reset could not be written, if it
+    /// could not.
+    pub(crate) history_problem: Option<String>,
+}
+
+/// The "Reset ranking…" row's confirmation: resting, or asking whether
+/// to clear what every result learned.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Resetting {
+    /// The row offers its reset.
+    Idle,
+    /// The row asks for the confirmation the reset needs: the next press
+    /// runs it, Cancel stands it down.
+    Asking,
 }
 
 impl State {
@@ -226,7 +305,46 @@ impl State {
             window,
             cx,
         );
-        State { monitor, reopening }
+        let sensitivity = super::choice_select(
+            SENSITIVITY_NAME,
+            SENSITIVITY_DEBUG,
+            |_| {
+                SENSITIVITIES
+                    .iter()
+                    .map(|&(_, name, does)| crate::ui::select::Choice {
+                        subtitle: Some(does.into()),
+                        ..super::choice(name, name, None)
+                    })
+                    .collect()
+            },
+            |cx| {
+                let chosen = crate::settings::shared(cx).read(cx).search_sensitivity();
+                SENSITIVITIES
+                    .iter()
+                    .find(|&&(sensitivity, ..)| sensitivity == chosen)
+                    .map_or("High", |&(_, name, _)| name)
+            },
+            |name, cx| {
+                if let Some(&(sensitivity, ..)) =
+                    SENSITIVITIES.iter().find(|&&(_, of, _)| of == name)
+                {
+                    crate::settings::shared(cx).update(cx, |settings, cx| {
+                        settings.set_search_sensitivity(sensitivity, cx);
+                    });
+                }
+            },
+            window,
+            cx,
+        );
+        State {
+            monitor,
+            reopening,
+            sensitivity,
+            reset: Resetting::Idle,
+            reset_problem: None,
+            history: Resetting::Idle,
+            history_problem: None,
+        }
     }
 
     /// The popup's search field, for tests that drive composition the
@@ -327,14 +445,15 @@ impl SettingsWindow {
 }
 
 /// The settings the page offers the sidebar's search: each choice of the
-/// display and reopening selects, named as the page names it, in the group
-/// it sits in, saying why it cannot be used where the system does not
-/// answer it — the result stays listed with its reason, as the control
-/// does on the page — then the Layout card's three rows. Each select's
-/// choices all jump to the one select control that offers them. The
-/// reopening and layout choices are no platform integration: they are
-/// always usable.
-fn entries(_launcher: &Launcher, cx: &App) -> Vec<search::Entry> {
+/// display, reopening and search sensitivity selects, named as the page
+/// names it, in the group it sits in, saying why it cannot be used where
+/// the system does not answer it — the result stays listed with its
+/// reason, as the control does on the page — then the learning controls
+/// and the Layout card's three rows. Each select's choices all jump to
+/// the one select control that offers them. The reopening, sensitivity
+/// and layout choices are no platform integration: they are always
+/// usable.
+fn entries(launcher: &Launcher, cx: &App) -> Vec<search::Entry> {
     let placement = crate::placement::shared(cx);
     let layout = placement.layout();
     let unavailable = placement.unavailable();
@@ -357,6 +476,40 @@ fn entries(_launcher: &Launcher, cx: &App) -> Vec<search::Entry> {
         group: Some(REOPENING_NAME.into()),
         unavailable: None,
     });
+    let sensitivities = SENSITIVITIES.iter().map(|&(_, name, _)| search::Entry {
+        control: Some(SENSITIVITY_DEBUG.into()),
+        title: name.into(),
+        group: Some(SENSITIVITY_NAME.into()),
+        unavailable: None,
+    });
+    // The learning controls: the switch always usable, the resets only
+    // while what they clear can be read — the record is never replaced
+    // otherwise, which the result says as the row does. The switch stops
+    // both records (#200, #206: one switch for both).
+    let learning = [
+        (LEARN_DEBUG, LEARN_NAME, None),
+        (
+            RESET_DEBUG,
+            RESET_NAME,
+            launcher
+                .learned_problem()
+                .map(|problem| format!("What root search learned cannot be read: {problem}")),
+        ),
+        (
+            HISTORY_DEBUG,
+            HISTORY_NAME,
+            launcher
+                .history_problem()
+                .map(|problem| format!("The search history cannot be read: {problem}")),
+        ),
+    ]
+    .into_iter()
+    .map(|(control, title, unavailable)| search::Entry {
+        control: Some(control.into()),
+        title: title.into(),
+        group: Some(title.into()),
+        unavailable,
+    });
     let layout = [
         ("launcher-window-mode", WINDOW_MODE_NAME),
         (COMPACT_PINNED_DEBUG, COMPACT_PINNED_NAME),
@@ -369,15 +522,21 @@ fn entries(_launcher: &Launcher, cx: &App) -> Vec<search::Entry> {
         group: Some(LAYOUT.into()),
         unavailable: None,
     });
-    monitors.chain(reopenings).chain(layout).collect()
+    monitors
+        .chain(reopenings)
+        .chain(sensitivities)
+        .chain(learning)
+        .chain(layout)
+        .collect()
 }
 
-/// The page's keyboard controls are its two selects, the display and the
-/// reopening delay: a select's trigger takes focus (it is a tab stop, and
-/// Enter opens its choices), so a jump to any of its choices focuses it.
-/// The Layout card's segments and switch take no keyboard focus (they are
-/// chosen with the pointer, as the reference's settings rows are), so a
-/// jump to one reveals it and the sidebar keeps the focus: `false`.
+/// The page's keyboard controls are its three selects, the display, the
+/// reopening delay and the search sensitivity: a select's trigger takes
+/// focus (it is a tab stop, and Enter opens its choices), so a jump to
+/// any of its choices focuses it. The Layout card's segments and switch
+/// take no keyboard focus (they are chosen with the pointer, as the
+/// reference's settings rows are), so a jump to one reveals it and the
+/// sidebar keeps the focus: `false`.
 fn focus(
     this: &mut SettingsWindow,
     target: &str,
@@ -387,6 +546,7 @@ fn focus(
     let select = match target {
         "launcher-monitor" => &this.launcher_page.monitor,
         REOPENING_DEBUG => &this.launcher_page.reopening,
+        SENSITIVITY_DEBUG => &this.launcher_page.sensitivity,
         _ => return false,
     };
     let trigger = select.read(cx).trigger_focus();
@@ -408,6 +568,8 @@ pub(crate) struct LauncherView {
     /// Whether the compact window shows the pins under its search field.
     pub(crate) compact_pinned: bool,
     pub(crate) pinned_layout: PinnedLayout,
+    /// Whether root search learns from what the user chooses (#200).
+    pub(crate) learning: bool,
     /// What a save reported, if it failed.
     pub(crate) status: Option<String>,
 }
@@ -426,22 +588,23 @@ pub(crate) enum LauncherControl {
 pub(crate) const LAYOUT: &str = "Layout";
 
 /// Draws the Launcher page: the opening monitor's and the reopening
-/// choice's selects, the layout choices, and whatever the host settings
-/// and the platform report — an unsupported choice, a fallback, a save
-/// that failed.
+/// choice's selects, the learning controls, the layout choices, and
+/// whatever the host settings and the platform report — an unsupported
+/// choice, a fallback, a save that failed.
 fn render(
     this: &mut SettingsWindow,
     _window: &mut Window,
     cx: &mut Context<SettingsWindow>,
 ) -> AnyElement {
     let settings = crate::settings::shared(cx);
-    let (chosen, window_mode, compact_pinned, pinned_layout, status) = {
+    let (chosen, window_mode, compact_pinned, pinned_layout, learning, status) = {
         let state = settings.read(cx);
         (
             state.opening_monitor(),
             state.window_mode(),
             state.compact_pinned(),
             state.pinned_layout(),
+            state.learning(),
             state.status(),
         )
     };
@@ -453,6 +616,7 @@ fn render(
         window_mode,
         compact_pinned,
         pinned_layout,
+        learning,
         status,
     };
     let visuals = crate::settings::visuals(cx);
@@ -474,12 +638,51 @@ fn render(
         .flex_none()
         .anchor_scroll(Some(this.search_anchor(REOPENING_DEBUG)))
         .child(this.launcher_page.reopening.clone());
+    let sensitivity = div()
+        .id(SENSITIVITY_DEBUG)
+        .flex_none()
+        .anchor_scroll(Some(this.search_anchor(SENSITIVITY_DEBUG)))
+        .child(this.launcher_page.sensitivity.clone());
+    // The learning controls (#200): the switch and the reset, built here
+    // because their behavior is the page's own.
+    let learn = super::general::switch_row(
+        super::general::SwitchRow {
+            id: LEARN_DEBUG,
+            selector: LEARN_DEBUG,
+            title: LEARN_NAME,
+            on: view.learning,
+            offered: true,
+            lines: vec![controls::row_line(
+                "Turned off, nothing is recorded and ranking ignores what was \
+                 learned until it is reset",
+                theme.text_muted,
+                theme,
+            )],
+        },
+        theme,
+        |switch| {
+            let anchor = this.search_anchor(LEARN_DEBUG);
+            switch.anchor_scroll(Some(anchor)).on_click(cx.listener(
+                |_, _: &gpui::ClickEvent, _, cx| {
+                    let settings = crate::settings::shared(cx);
+                    let on = settings.read(cx).learning();
+                    settings.update(cx, |settings, cx| {
+                        settings.set_learning(!on, cx);
+                    });
+                },
+            ))
+        },
+    )
+    .into_any_element();
+    let reset = reset_row(this, theme, cx);
+    let history_reset = history_row(this, theme, cx);
     let mode_anchor = this.search_anchor("launcher-window-mode");
     let pinned_anchor = this.search_anchor("launcher-pinned");
     let compact_pinned_anchor = this.search_anchor(COMPACT_PINNED_DEBUG);
     compose(
         &view,
-        (select, Some(reopening)),
+        (select, Some(reopening), Some(sensitivity)),
+        [learn, reset, history_reset],
         theme,
         |control, element| match control {
             LauncherControl::WindowMode(mode) => element
@@ -510,6 +713,103 @@ fn render(
     .into_any_element()
 }
 
+/// The "Reset ranking…" row (#200): what the reset clears, and the
+/// button that asks for the confirmation such a loss needs — the first
+/// press arms the row and the second runs the reset, with Cancel
+/// standing it down. The reset clears what every result learned through
+/// the launcher (its own record, not the host settings), so the row
+/// reports the reset's own failures beside it, and nothing is offered
+/// while what was learned cannot be read: that record is never replaced.
+fn reset_row(
+    this: &mut SettingsWindow,
+    theme: &Theme,
+    cx: &mut Context<SettingsWindow>,
+) -> AnyElement {
+    let anchor = this.search_anchor(RESET_DEBUG);
+    let asking = this.launcher_page.reset == Resetting::Asking;
+    let problem = this.launcher_page.reset_problem.clone();
+    // Why what was learned cannot be read, if it cannot: the record is
+    // never replaced then, so the reset cannot run.
+    let unreadable = this.launcher.learned_problem();
+    let mut lines = vec![controls::row_line(
+        if asking {
+            "Clear what every result learned — its frecency and queries?"
+        } else {
+            "Clears what every result learned: its frecency and queries"
+        },
+        theme.text_muted,
+        theme,
+    )];
+    // What the last reset could not be written with, and why what was
+    // learned cannot be read, if they need saying.
+    if let Some(problem) = problem.as_deref() {
+        lines.push(controls::row_line(problem, theme.danger, theme));
+    }
+    if let Some(problem) = unreadable.as_deref() {
+        lines.push(controls::row_line(problem, theme.warning, theme));
+    }
+    let offered = unreadable.is_none();
+    let anchor = Some(anchor);
+    let buttons = if asking {
+        let confirm = controls::button("launcher-reset-ranking-reset", "Reset", offered, theme)
+            .debug_selector(|| "launcher-reset-ranking-reset".into())
+            .role(Role::Button)
+            .aria_label("Reset what every result learned")
+            .text_color(theme.danger)
+            .anchor_scroll(anchor)
+            .when(offered, |reset| {
+                reset.on_click(cx.listener(|this, _: &gpui::ClickEvent, _, cx| {
+                    this.launcher_page.reset = Resetting::Idle;
+                    this.launcher_page.reset_problem = None;
+                    let (_, recorded) = this.launcher.reset_all_learned();
+                    cx.spawn(async move |this, cx| {
+                        let outcome = recorded.await;
+                        this.update(cx, |this, cx| {
+                            this.launcher_page.reset_problem = outcome.err();
+                            cx.notify();
+                        })
+                        .ok();
+                    })
+                    .detach();
+                    cx.notify();
+                }))
+            });
+        let cancel = controls::ghost_button("launcher-reset-ranking-cancel", "Cancel", true, theme)
+            .debug_selector(|| "launcher-reset-ranking-cancel".into())
+            .role(Role::Button)
+            .aria_label("Cancel the reset")
+            .on_click(cx.listener(|this, _: &gpui::ClickEvent, _, cx| {
+                this.launcher_page.reset = Resetting::Idle;
+                cx.notify();
+            }));
+        div()
+            .flex()
+            .items_center()
+            .gap(theme.geometry.controls.button_gap)
+            .child(confirm)
+            .child(cancel)
+            .into_any_element()
+    } else {
+        let ask = controls::button(RESET_DEBUG, "Reset ranking…", offered, theme)
+            .debug_selector(|| RESET_DEBUG.into())
+            .role(Role::Button)
+            .aria_label("Reset ranking")
+            .anchor_scroll(anchor)
+            .when(offered, |reset| {
+                reset.on_click(cx.listener(|this, _: &gpui::ClickEvent, _, cx| {
+                    this.launcher_page.reset = Resetting::Asking;
+                    this.launcher_page.reset_problem = None;
+                    cx.notify();
+                }))
+            });
+        ask.into_any_element()
+    };
+    controls::setting_row(RESET_NAME, lines, theme)
+        .debug_selector(|| "launcher-reset-ranking-field".into())
+        .child(div().flex().items_center().flex_none().child(buttons))
+        .into_any_element()
+}
+
 /// One segmented choice at a settings row's end, named `group`: `choices`
 /// (the preference, its name, its selector), `chosen` marked, each
 /// attached as the `control` it is.
@@ -537,25 +837,138 @@ fn segments<T: Copy + PartialEq>(
         .children(segments)
 }
 
+/// The "Reset search history" row (#206): what the reset clears — the
+/// recent queries Up recalls, with the argument values recorded with
+/// them — and the button that asks for the confirmation such a loss
+/// needs, as "Reset ranking…" does: the first press arms the row and
+/// the second runs the reset, with Cancel standing it down. The history
+/// is the launcher's own record, not a host setting, so the row reports
+/// the reset's own failures beside it, and nothing is offered while the
+/// record cannot be read: that record is never replaced.
+fn history_row(
+    this: &mut SettingsWindow,
+    theme: &Theme,
+    cx: &mut Context<SettingsWindow>,
+) -> AnyElement {
+    let anchor = this.search_anchor(HISTORY_DEBUG);
+    let asking = this.launcher_page.history == Resetting::Asking;
+    let problem = this.launcher_page.history_problem.clone();
+    // Why the search history cannot be read, if it cannot: the record is
+    // never replaced then, so the reset cannot run.
+    let unreadable = this.launcher.history_problem();
+    let mut lines = vec![controls::row_line(
+        if asking {
+            "Clear the recent queries Up recalls, with their argument values?"
+        } else {
+            "Clears the recent queries Up recalls, with their argument values"
+        },
+        theme.text_muted,
+        theme,
+    )];
+    // What the last reset could not be written with, and why the history
+    // cannot be read, if they need saying.
+    if let Some(problem) = problem.as_deref() {
+        lines.push(controls::row_line(problem, theme.danger, theme));
+    }
+    if let Some(problem) = unreadable.as_deref() {
+        lines.push(controls::row_line(problem, theme.warning, theme));
+    }
+    let offered = unreadable.is_none();
+    let anchor = Some(anchor);
+    let buttons = if asking {
+        let confirm = controls::button("launcher-reset-history-reset", "Reset", offered, theme)
+            .debug_selector(|| "launcher-reset-history-reset".into())
+            .role(Role::Button)
+            .aria_label("Reset the search history")
+            .text_color(theme.danger)
+            .anchor_scroll(anchor)
+            .when(offered, |reset| {
+                reset.on_click(cx.listener(|this, _: &gpui::ClickEvent, _, cx| {
+                    this.launcher_page.history = Resetting::Idle;
+                    this.launcher_page.history_problem = None;
+                    let (_, recorded) = this.launcher.reset_search_history();
+                    cx.spawn(async move |this, cx| {
+                        let outcome = recorded.await;
+                        this.update(cx, |this, cx| {
+                            this.launcher_page.history_problem = outcome.err();
+                            cx.notify();
+                        })
+                        .ok();
+                    })
+                    .detach();
+                    cx.notify();
+                }))
+            });
+        let cancel = controls::ghost_button("launcher-reset-history-cancel", "Cancel", true, theme)
+            .debug_selector(|| "launcher-reset-history-cancel".into())
+            .role(Role::Button)
+            .aria_label("Cancel the reset")
+            .on_click(cx.listener(|this, _: &gpui::ClickEvent, _, cx| {
+                this.launcher_page.history = Resetting::Idle;
+                cx.notify();
+            }));
+        div()
+            .flex()
+            .items_center()
+            .gap(theme.geometry.controls.button_gap)
+            .child(confirm)
+            .child(cancel)
+            .into_any_element()
+    } else {
+        let ask = controls::button(HISTORY_DEBUG, "Reset search history…", offered, theme)
+            .debug_selector(|| HISTORY_DEBUG.into())
+            .role(Role::Button)
+            .aria_label("Reset search history")
+            .anchor_scroll(anchor)
+            .when(offered, |reset| {
+                reset.on_click(cx.listener(|this, _: &gpui::ClickEvent, _, cx| {
+                    this.launcher_page.history = Resetting::Asking;
+                    this.launcher_page.history_problem = None;
+                    cx.notify();
+                }))
+            });
+        ask.into_any_element()
+    };
+    controls::setting_row(HISTORY_NAME, lines, theme)
+        .debug_selector(|| "launcher-reset-history-field".into())
+        .child(div().flex().items_center().flex_none().child(buttons))
+        .into_any_element()
+}
+
 /// The Launcher page's composition: a card of the Display row — `selects.0`, the opening
 /// monitor's searchable select (see [`crate::ui::select`]), with the
 /// fallback it explains under its name, or where the platform cannot
-/// choose the display at all, why — and the Pop to root search row
-/// (`selects.1`); then the Layout card's window mode segments, the switch
-/// that shows the pins in the compact window, and the pinned items
-/// segments. A failed save's status sits above the cards. `attach` adds
-/// each control's behavior; the composition gives each its identity, its
-/// accessibility and its look.
+/// choose the display at all, why — the Pop to root search row
+/// (`selects.1`), the Search sensitivity row (`selects.2`) and the
+/// learning rows (`learning`: the "Learn from what I choose" switch, the
+/// "Reset ranking…" row #200 and the "Reset search history" row #206);
+/// then the Layout card's window mode
+/// segments, the switch that shows the pins in the compact window, and
+/// the pinned items segments. A failed save's status sits above the
+/// cards. `attach` adds each control's behavior; the composition gives
+/// each its identity, its accessibility and its look.
+/// The page's three selects as [`compose`] arranges them: the opening
+/// monitor's, the reopening choice's and the search sensitivity's.
+pub(crate) type Selects = (
+    Option<Stateful<Div>>,
+    Option<Stateful<Div>>,
+    Option<Stateful<Div>>,
+);
+
 pub(crate) fn compose(
     view: &LauncherView,
-    selects: (Option<Stateful<Div>>, Option<Stateful<Div>>),
+    selects: Selects,
+    learning: impl IntoIterator<Item = AnyElement>,
     theme: &Theme,
     attach: impl Fn(LauncherControl, Stateful<Div>) -> Stateful<Div>,
 ) -> Stateful<Div> {
-    let (select, reopening) = selects;
+    let (select, reopening, sensitivity) = selects;
     let reopening = controls::setting_row(REOPENING_NAME, Vec::new(), theme)
         .debug_selector(|| "launcher-reopening-field".into())
         .children(reopening);
+    let sensitivity = controls::setting_row(SENSITIVITY_NAME, Vec::new(), theme)
+        .debug_selector(|| "launcher-sensitivity-field".into())
+        .children(sensitivity);
     // The opening display, with the choice's own honesty: what the
     // launcher opens on now, when that is not the display the choice
     // names; or, where the platform cannot choose the display at all, why.
@@ -576,7 +989,13 @@ pub(crate) fn compose(
         .debug_selector(|| "launcher-monitor-field".into())
         .children(select);
     let card = controls::card(
-        [display.into_any_element(), reopening.into_any_element()],
+        [
+            display.into_any_element(),
+            reopening.into_any_element(),
+            sensitivity.into_any_element(),
+        ]
+        .into_iter()
+        .chain(learning),
         theme,
     );
     let mode = controls::setting_row(WINDOW_MODE_NAME, Vec::new(), theme)

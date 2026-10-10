@@ -214,6 +214,7 @@ impl Launcher {
     /// forgotten: nothing the user could find before is lost.
     pub fn with_file_index(self, config: IndexerConfig) -> Self {
         let files = self.lock().files.clone();
+        let home = config.rules.home.clone();
         if let Some(files) = files {
             let dir = self
                 .installation
@@ -242,6 +243,9 @@ impl Launcher {
             }
             files.indexer().configure(config, rules);
         }
+        // The index's home folder is the one `~` in a typed path resolves
+        // to (#195): the same folder the index covers.
+        self.lock().home = home;
         self.sync_file_index(&self.lock());
         self
     }

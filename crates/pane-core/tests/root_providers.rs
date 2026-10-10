@@ -218,7 +218,13 @@ fn typing_a_providers_name_finds_no_row_while_its_results_still_answer() {
     );
     // Each application is still its own root result.
     search(&launcher, "fire");
-    assert_eq!(titles(&launcher), ["Launch Firefox"]);
+    // Pane's install row matches the four letters fuzzily below the
+    // application's prefix match (#193); the calculator's arithmetic left
+    // with its sources (#285), the Rust sample answering in its place.
+    assert_eq!(
+        titles(&launcher),
+        ["Launch Firefox", "Install extension from Git…"]
+    );
     // The Rust sample still answers from the query, with its answer card.
     search(&launcher, "reverse 42");
     assert_eq!(titles(&launcher), ["24"]);

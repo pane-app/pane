@@ -4,21 +4,24 @@
 //! launcher.
 //!
 //! Only what the launcher holds is drawn. The notice names the real query
-//! and is shown when nothing but fallbacks is listed for it; the fallbacks
-//! under it stay unselected until the user selects one (#100). A computed
-//! answer's card shows the query it answers and the text Enter copies —
-//! no units, conversions or history, which no command supplies — and the
+//! and is shown when nothing but fallbacks is listed for it; the first
+//! fallback under it is selected, so Enter sends it the query (ADR 0031).
+//! A computed answer's card shows the query it answers and the text Enter
+//! copies, with a swatch when the command answered a colour (#196) — no
+//! units, conversions or history, which no command supplies — and the
 //! row behind it keeps its id, its selection and its copy action.
 
 use gpui::prelude::*;
-use gpui::{Div, Role, Stateful};
+use gpui::{Div, Hsla, Role, Stateful, rgb_to_hsla, rgba};
 use pane_core::{ComputedAnswer, Screen};
 
 use crate::ui::result_layouts::{self, AnswerCard, AnswerSide, NoticeCopy};
 use crate::ui::theme::Theme;
 
-/// The notice's description while fallbacks are listed under it.
-const WITH_FALLBACKS: &str = "Pick a fallback below, or install an extension that knows about it.";
+/// The notice's description while fallbacks are listed under it: the
+/// first is selected (ADR 0031), so Enter sends the text to it.
+const WITH_FALLBACKS: &str =
+    "Enter sends it to the first fallback below, or install an extension that knows about it.";
 
 /// The notice's description while the user has no fallback for the text:
 /// the extension list offers a command that takes text as a fallback.
@@ -73,8 +76,9 @@ pub(crate) fn notice(copy: &NoticeCopy, theme: &Theme) -> Stateful<Div> {
 }
 
 /// The card a computed answer is drawn as: the query it answers, its
-/// answer, and whether it is the selected result. It carries no captions
-/// and no chips: nothing the launcher holds fills them.
+/// answer, the swatch of a colour answer, and whether it is the selected
+/// result. It carries no captions and no chips: nothing the launcher
+/// holds fills them.
 pub(crate) fn answer_card(answer: &ComputedAnswer, selected: bool, theme: &Theme) -> Div {
     let side = |value: &str| AnswerSide {
         value: value.to_owned().into(),
@@ -85,10 +89,24 @@ pub(crate) fn answer_card(answer: &ComputedAnswer, selected: bool, theme: &Theme
             source: side(&answer.query),
             answer: side(&answer.answer),
             also: Vec::new(),
+            swatch: answer.swatch.as_deref().and_then(swatch),
             selected,
         },
         theme,
     )
+}
+
+/// The colour of a swatch the answer holds, "#RRGGBB" or "#RRGGBBAA",
+/// if it parses as one (a command that answers none, or an unreadable
+/// one, shows no swatch).
+fn swatch(hex: &str) -> Option<Hsla> {
+    let digits = hex.strip_prefix('#')?;
+    let value = u32::from_str_radix(digits, 16).ok()?;
+    Some(rgb_to_hsla(match digits.len() {
+        6 => rgba(value << 8 | 0xff),
+        8 => rgba(value),
+        _ => return None,
+    }))
 }
 
 /// The card's accessible name: "6*7 = 42", what was typed and its answer.

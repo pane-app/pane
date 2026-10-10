@@ -9,7 +9,7 @@ use core::cell::Cell;
 
 use pane_extension::alloc::{format, string::String, vec, vec::Vec};
 use pane_extension::feedback::{Toast, show_toast};
-use pane_extension::root::{RootAction, RootResult};
+use pane_extension::root::{RootAction, RootResult, WallTime};
 use pane_extension::{
     Choice, Command, CustomView, CustomViewInfo, CustomViewRole, Field, FieldKind, FieldValue,
     Form, FormError, Frame, GuestCustomView, Item, Key, List, Platform, Rect, Shape, Text,
@@ -347,13 +347,14 @@ impl pane_extension::root::Guest for Sample {
     /// "reverse <text>" typed into root search lists the text reversed,
     /// which Enter copies, and "pane website" lists Pane's website, which
     /// Enter opens; other queries have no results.
-    async fn results_for(query: String) -> Result<Vec<RootResult>, String> {
+    async fn results_for(query: String, _at: WallTime) -> Result<Vec<RootResult>, String> {
         if query == WEBSITE_QUERY {
             return Ok(vec![RootResult {
                 id: "website".into(),
                 title: "Pane's website".into(),
                 subtitle: Some("Opened by the Rust guest".into()),
                 action: RootAction::OpenUrl(WEBSITE.into()),
+                answer: None,
             }]);
         }
         let text = query.strip_prefix("reverse ").unwrap_or_default().trim();
@@ -366,6 +367,7 @@ impl pane_extension::root::Guest for Sample {
             title: reversed.clone(),
             subtitle: Some("Reversed by the Rust guest".into()),
             action: RootAction::Copy(reversed),
+            answer: None,
         }])
     }
 }

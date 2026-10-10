@@ -91,6 +91,27 @@ pub fn until(
     }
 }
 
+/// Runs the window until the list for the query typed is published and
+/// the window has drawn it (#201): until then the rows shown stay the
+/// previous query's, while the field shows what was typed. A query that
+/// asks no provider is published at once, so this never waits for one.
+pub fn published(window: &Entity<LauncherWindow>, cx: &mut VisualTestContext) -> LauncherView {
+    // Generous: a provider answering within the budget still takes a
+    // moment of real time, and CI's runners are slow.
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        cx.run_until_parked();
+        if cx.read_entity(window, |window, _| window.launcher().list_published()) {
+            return settle(window, cx);
+        }
+        assert!(
+            Instant::now() < deadline,
+            "timed out waiting for the query's list to be published"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
 /// Runs the window until the launcher is no longer running an action, as
 /// [`settle`] does, and answers what the user reads of the outcome, as the
 /// status line said it before toasts (#141): the toast in the footer while

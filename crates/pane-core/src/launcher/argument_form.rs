@@ -49,7 +49,7 @@ use crate::runtime::{Choice, FieldKind};
 
 /// What a required field left empty says, next to it and in the status
 /// line after its label.
-const MISSING: &str = "Enter a value to run the command";
+pub(super) const MISSING: &str = "Enter a value to run the command";
 
 /// The dropdown values each command was last launched with, recorded in
 /// `arguments.json` as `{ "version": 1, "dropdowns": { "<command id>": {
@@ -124,7 +124,7 @@ impl Choices for ArgumentChoices {
 impl ArgumentChoices {
     /// The value of the dropdown `argument` the command `command` was last
     /// launched with.
-    fn remembered(&self, command: &str, argument: &str) -> Option<&str> {
+    pub(super) fn remembered(&self, command: &str, argument: &str) -> Option<&str> {
         self.dropdowns
             .get(command)?
             .get(argument)
@@ -163,7 +163,10 @@ pub(super) struct Submitted {
 /// The arguments the command `opening` launches declares, its id in
 /// Pane's records and its title; `None` for a command that declares none
 /// (or one built into Pane).
-fn declared(state: &State, opening: &Opening) -> Option<(Vec<ManifestArgument>, String, String)> {
+pub(super) fn declared(
+    state: &State,
+    opening: &Opening,
+) -> Option<(Vec<ManifestArgument>, String, String)> {
     let package = owner(&state.packages, &opening.component)?;
     let declared = package.arguments_of(&opening.command);
     if declared.is_empty() {
@@ -186,6 +189,34 @@ fn command_title(package: &InstalledPackage, command: &str) -> String {
         .map_or_else(|| command.to_owned(), |command| command.title.clone())
 }
 
+/// Whether launching `opening` from root search now would be refused for
+/// a blank required argument: the inline fields' refusal, which runs
+/// nothing and shows no form (#205). A use of the row records nothing for
+/// it, since nothing was dispatched (#199, see `learned`);
+/// `ask_for_arguments` makes the same decision when the launch runs.
+pub(super) fn blank_required_inline(state: &State, opening: &Opening) -> bool {
+    // The fields stand in for the form only for the selected row's own
+    // launch, from root search or through its alias.
+    if !matches!(state.view.screen, Screen::Root { .. })
+        || !matches!(
+            opening.launch.source,
+            LaunchSource::RootSearch | LaunchSource::Alias
+        )
+    {
+        return false;
+    }
+    let Some((declared, command, _)) = declared(state, opening) else {
+        return false;
+    };
+    // The values the fields hold, filled as the launch fills them.
+    let mut given = opening.launch.arguments.clone();
+    if let Some(typed) = state.arguments.of(&command) {
+        given = typed.clone();
+    }
+    let filled = arguments::fill(&declared, &given, opening.launch.fallback_text.as_deref());
+    arguments::first_missing(&declared, &filled).is_some()
+}
+
 /// Whether launching `opening` now would show the argument form: a launch
 /// the user started that leaves a required argument without a value. A
 /// no-view command's global hotkey then shows Pane's window
@@ -205,16 +236,37 @@ pub(super) fn asks_first(state: &State, opening: &Opening) -> bool {
 
 impl Launcher {
     /// The argument form's step of a launch: fills `opening`'s arguments
-    /// from what the launch was given and returns it, ready to launch, or
-    /// shows the argument form and returns `None` when a required argument
-    /// is still without a value. Nothing is shown, and nothing launched,
-    /// once the screen of `epoch` was left, or for a background launch (a
+    /// from what the launch was given and returns it, ready to launch,
+    /// with the command whose dropdown values to remember; `None` when
+    /// a required argument is still without a value — the form is shown
+    /// then, except in root search, where the selected row's fields are
+    /// on screen in the form's place: the blank required one is marked
+    /// and named in the status line, and nothing runs (#205, see
+    /// `argument_fields`). Nothing is shown, and nothing launched, once
+    /// the screen of `epoch` was left, or for a background launch (a
     /// guest's is refused before it starts).
-    pub(super) fn ask_for_arguments(&self, epoch: u64, mut opening: Opening) -> Option<Opening> {
+    pub(super) fn ask_for_arguments(
+        &self,
+        epoch: u64,
+        mut opening: Opening,
+    ) -> Option<(Opening, Option<String>)> {
         let mut state = self.lock();
         let Some((declared, command, title)) = declared(&state, &opening) else {
-            return Some(opening);
+            return Some((opening, None));
         };
+        // Root search's inline fields (#205) carry the values typed into
+        // them when the launch is the selected row's own — from root
+        // search, or through its alias. Every other way in (a hotkey, a
+        // quick slot, another command) asks with what the launch was
+        // given, as it always did.
+        let inline = matches!(state.view.screen, Screen::Root { .. })
+            && matches!(
+                opening.launch.source,
+                LaunchSource::RootSearch | LaunchSource::Alias
+            );
+        if inline && let Some(typed) = state.arguments.of(&command) {
+            opening.launch.arguments = typed.clone();
+        }
         let launch = &mut opening.launch;
         launch.arguments = arguments::fill(
             &declared,
@@ -222,9 +274,27 @@ impl Launcher {
             launch.fallback_text.as_deref(),
         );
         if arguments::first_missing(&declared, &launch.arguments).is_none() {
-            return Some(opening);
+            // The inline fields' dropdown values are remembered as the
+            // form remembers them on submitting; the form's own are,
+            // when it is submitted.
+            let remembered = if inline {
+                remember_dropdowns(&mut state, &command, &declared, &launch.arguments)
+            } else {
+                None
+            };
+            return Some((opening, remembered));
         }
         if launch.is_background() || state.screen_epoch != epoch {
+            return None;
+        }
+        if inline {
+            // The fields replace the form here: the blank required one is
+            // marked and the status line names it, and nothing runs —
+            // the window takes focus to it (#205).
+            if let Some(missing) = arguments::first_missing(&declared, &launch.arguments) {
+                state.arguments.mark(&command, &missing.name);
+                state.view.status = Status::Error(format!("Enter {}", missing.label()));
+            }
             return None;
         }
         let asking = Asking {
@@ -424,6 +494,19 @@ impl Launcher {
         }
     }
 
+    /// Records the dropdown values remembered for `command` (the
+    /// `arguments.json` record), off the calling thread as every record
+    /// write is: root search's inline fields launch with them remembered
+    /// (#205), as the form's submission does.
+    pub(super) async fn record_remembered(&self, command: &str) {
+        let launcher = self.clone();
+        let command = command.to_owned();
+        let saved = off_thread(move || launcher.save::<ArgumentChoices>(Some(&command))).await;
+        if let Err(problem) = saved {
+            crate::diagnostic!("Pane could not remember a command's dropdown choices: {problem}");
+        }
+    }
+
     /// Records the dropdown values the form remembered, then launches the
     /// command with the form's values: the setup gate, then the form, are
     /// behind it.
@@ -435,13 +518,7 @@ impl Launcher {
             remembered,
         } = submitted;
         if let Some(command) = remembered {
-            let launcher = self.clone();
-            let saved = off_thread(move || launcher.save::<ArgumentChoices>(Some(&command))).await;
-            if let Err(problem) = saved {
-                crate::diagnostic!(
-                    "Pane could not remember a command's dropdown choices: {problem}"
-                );
-            }
+            self.record_remembered(&command).await;
         }
         self.launch_ready(epoch, opening, data).await
     }
@@ -460,6 +537,32 @@ impl Launcher {
         let launcher = self.clone();
         Some(move || launcher.save::<ArgumentChoices>(None))
     }
+}
+
+/// Remembers the dropdown values of `command`'s launch for the next one
+/// (the `arguments.json` record), as submitting the form does; the
+/// command to record, if a dropdown's value changed what was remembered.
+fn remember_dropdowns(
+    state: &mut State,
+    command: &str,
+    declared: &[ManifestArgument],
+    values: &[(String, String)],
+) -> Option<String> {
+    let mut remembered = false;
+    for argument in declared {
+        let value = values
+            .iter()
+            .find(|(name, _)| *name == argument.name)
+            .map(|(_, value)| value);
+        if let (ArgumentKind::Dropdown(_), Some(value)) = (&argument.kind, value) {
+            remembered |=
+                state
+                    .remembered_arguments
+                    .chosen
+                    .remember(command, &argument.name, value);
+        }
+    }
+    remembered.then(|| command.to_owned())
 }
 
 #[cfg(test)]

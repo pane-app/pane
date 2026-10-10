@@ -41,6 +41,7 @@ mod aliases;
 mod application_changes;
 mod application_icons;
 mod application_update;
+mod argument_fields;
 mod argument_form;
 mod choices;
 mod clipboard_settings;
@@ -60,12 +61,14 @@ mod own_actions;
 mod presentation;
 mod programs;
 mod providers;
+mod publishing;
 mod quick_slots;
 mod run;
 pub mod search_files;
 mod submenus;
 mod switch_windows;
 mod system_commands;
+pub(crate) mod typed_query;
 
 use crate::clipboard::{Capture, ClipboardSystem};
 use crate::dependencies;
@@ -73,22 +76,23 @@ use crate::extension_data::{ExtensionData, PackageData};
 use crate::files::FileAccess;
 use crate::game_mode::{Foreground, ForegroundSource, ForegroundTold};
 use crate::generation::End;
+use crate::host_settings::SearchSensitivity;
 use crate::hotkeys::{self as system_hotkeys, Hotkeys};
 use crate::keyboard::PaneKeys;
 use crate::launch::{LaunchRecord, LaunchSource};
 use crate::links::{LinkOpener, NoOpener};
 use crate::operations::Installed;
 use crate::packages::{
-    InstalledPackage, PackageError, PackageIdentity, RetainedData, SavedData, SourcePackage, Store,
-    paused_reason,
+    CommandMatches, CommandWhen, InstalledPackage, PackageError, PackageIdentity, RetainedData,
+    SavedData, SourcePackage, Store, paused_reason,
 };
 use crate::platform;
 use crate::runtime::{
-    CallError, CustomViewInfo, CustomViewRole, FieldKind, FieldValue, Form, Frame, Item, Point,
-    ResultListing, RootAction, RootResult as ComputedResult, Runtime, ScreenForm, View, ViewEvent,
-    ViewId, WeakRuntime,
+    AnswerDetail as ComputedDetail, CallError, CustomViewInfo, CustomViewRole, FieldKind,
+    FieldValue, Form, Frame, Item, Point, ResultListing, RootAction, RootResult as ComputedResult,
+    Runtime, ScreenForm, View, ViewEvent, ViewId, WallTime, WeakRuntime,
 };
-use crate::search::{self, Keys, Query};
+use crate::search::{self, Candidate, Keys, Query};
 
 mod dependents;
 mod developing;
@@ -96,7 +100,9 @@ mod error_overlay;
 mod extensions;
 mod file_search;
 mod files;
+mod history;
 mod install;
+mod learned;
 mod looks;
 mod pausing;
 mod recovery;
@@ -116,9 +122,11 @@ use acquire::{Acquisitions, Defaults};
 use actions::selected_action;
 pub use actions::{DISMISS_NOTICE, ResultAction, ResultActionItem, ResultActions};
 use aliases::AliasChoices;
+pub use aliases::AliasFlow;
 pub use aliases::AliasOutcome;
 pub use application_update::ApplicationUpdate;
 use application_update::{Application, Updates};
+pub use argument_fields::ArgumentFields;
 use choices::Record;
 pub use crash_notice::{LogNotice, UNEXPECTED_QUIT};
 pub use create::FolderAsk;
@@ -185,6 +193,11 @@ pub struct CommandRegistration {
     pub title: String,
     pub subtitle: Option<String>,
     pub component: PathBuf,
+    /// The keywords the command declares in its manifest (`"keywords"`),
+    /// which find its row as its subtitle does: an author's search
+    /// terms, distinct from the user's aliases (#197). Pane's own
+    /// commands declare none.
+    pub keywords: Vec<String>,
     /// Whether the command takes a query (`"takesQuery": true`, or a first
     /// argument that is text with every other optional): text typed into
     /// root search, sent to it through its alias or as a fallback.
@@ -192,6 +205,16 @@ pub struct CommandRegistration {
     /// Whether the command searches as the user types into its own search
     /// field once it is open (`"search": true`); root search never asks it.
     pub search: bool,
+    /// When root search lists the command (`"when"` in its manifest, #195;
+    /// always when it does not say).
+    pub when: CommandWhen,
+    /// What root search matches the command's row by (`"matches"` in its
+    /// manifest, #195; its title when it does not say). A command declared
+    /// for URL-like or path-like queries is listed only for such a query,
+    /// without title matching, and the parsed address or resolved path is
+    /// sent to it as its launch record's fallback text when invoked (see
+    /// `typed_query`).
+    pub matches: CommandMatches,
 }
 
 impl CommandRegistration {
@@ -752,16 +775,58 @@ struct State {
     /// The root results commands computed from the current query, listed
     /// first; each command's results are added when it answers.
     computed: Vec<Computed>,
+    /// The answers that arrived while the current query's list is held
+    /// (#201, see `publishing`): listed when the list is published, in
+    /// place of every answer of an earlier query.
+    staged: Vec<Computed>,
+    /// While the current query's list is not yet published (#201, see
+    /// `publishing`): what still holds it. `None` once it is, and for a
+    /// query that asks no provider.
+    holding: Option<publishing::Holding>,
+    /// When a late answer's merge into the published list happens, by the
+    /// launcher's clock, while one is coalescing (#201): answers arriving
+    /// close together become one update.
+    merge: Option<u64>,
+    /// The query whose list the rows shown are (#201): the field's own
+    /// query once its list is published, the previous query's until then.
+    published: String,
     /// The root results commands supplied ahead of the query, such as the
     /// installed applications, listed for a query that is not blank.
     indexes: indexed::Indexes,
+    /// What the query typed into root search is, beyond the words it
+    /// holds: a web address or a path, parsed once per change of the query
+    /// (see `typed_query`, #195). `None` for words and for a blank query.
+    typed: Option<typed_query::TypedQuery>,
+    /// The user's home folder, which `~` in a typed path resolves to: the
+    /// one the file index is configured with, else the environment's.
+    home: Option<PathBuf>,
     /// Incremented on every search, so that an answer arriving for an
     /// earlier search, even of the same query, is discarded.
     search_epoch: u64,
     /// Kept while the current search's calls for computed results may run:
-    /// dropping it, when the query changes or root search is left, cancels
-    /// those still pending (see [`State::next_screen`]).
+    /// dropping it, when root search is left, cancels those still pending
+    /// (see [`State::next_screen`]).
     search_alive: Option<tokio::sync::oneshot::Sender<()>>,
+    /// The calls of the search the current one replaced (#202): kept
+    /// until this search needs the runtime — it is about to ask — so a
+    /// call that answers within the quiet period keeps its instance for
+    /// the queries after it, and one that has not is cancelled then, not
+    /// at each keystroke. Dropped with [`State::search_alive`] when root
+    /// search is left.
+    superseded: Option<tokio::sync::oneshot::Sender<()>>,
+    /// The rows of root search that are not the query's computed results,
+    /// ranked once per query and spliced around them (#202): `None`
+    /// until a query's list is first built. Kept while the query and what
+    /// they were ranked from (see [`State::statics`]) stand still.
+    ranked: Option<Ranked>,
+    /// The generation of what root search's static rows are ranked from —
+    /// the commands, the results supplied ahead of the query, the aliases,
+    /// the sensitivity — bumped wherever any of them changes, so the rows
+    /// kept for a query are ranked again then (#202).
+    statics: u64,
+    /// How many times root search has ranked its static rows: a diagnostic
+    /// for tests (#202), read through [`Launcher::root_rankings`].
+    rankings: u64,
     /// The folders granted to packages and their listings, shared with the
     /// runtime; `None` without a runtime.
     files: Option<FileAccess>,
@@ -825,6 +890,11 @@ struct State {
     /// The dropdown arguments' values each command was last launched with
     /// (see `argument_form`).
     remembered_arguments: Record<argument_form::ArgumentChoices>,
+    /// The values typed into root search's inline argument fields, and
+    /// the required arguments left blank once (see `argument_fields`,
+    /// #205): the selected row's command's, kept while the query stands
+    /// and the list is rebuilt around them.
+    arguments: argument_fields::Typed,
     /// The quick slots the user pinned results to, and their record (see
     /// `quick_slots`).
     quick_slots: quick_slots::Kept,
@@ -872,6 +942,16 @@ struct State {
     /// Pane's own keys in force, which no action shortcut takes (see
     /// `item_actions`).
     pane_keys: PaneKeys,
+    /// How strict root search's matching is, as the window holds the
+    /// Launcher page's choice: High until one is pushed, applied on the
+    /// next keystroke (see [`Launcher::set_search_sensitivity`]).
+    sensitivity: SearchSensitivity,
+    /// Whether root search learns from what the user chooses, as the
+    /// window holds the Launcher page's switch: on until one is pushed
+    /// (see [`Launcher::set_learning`]). Turned off, nothing is recorded
+    /// and ranking acts as if nothing was learned — what was learned is
+    /// kept until it is reset.
+    learning: bool,
     /// The open command's unbound shortcuts as last noted, so a developed
     /// package's report is made again only when they change.
     reported_unbound: Vec<UnboundShortcut>,
@@ -887,6 +967,17 @@ struct State {
     subtitles: Record<subtitles::Subtitles>,
     /// The writes of the subtitles' record still going on.
     subtitle_saves: Arc<launching::InFlight>,
+    /// What root search learned from what the user chooses, and its
+    /// record (see `learned`, #199).
+    learned: Record<learned::LearnedChoices>,
+    /// The writes of the learned record still going on.
+    learned_saves: Arc<launching::InFlight>,
+    /// Root search's recent queries, and their record (see `history`,
+    /// #206): the queries Up recalls, with the argument values typed
+    /// with them.
+    history: Record<history::RecentQueries>,
+    /// The writes of the search history's record still going on.
+    history_saves: Arc<launching::InFlight>,
     /// The submenus open in the Actions panel over the selected item (see
     /// `submenus`).
     submenus: submenus::Submenus,
@@ -1036,6 +1127,18 @@ impl State {
     fn next_screen(&mut self) {
         self.screen_epoch += 1;
         self.search_alive = None;
+        // The search the current one had replaced is cancelled with it:
+        // leaving root search, nothing needs the runtime any more (#202).
+        self.superseded = None;
+        // The query's list is neither held nor merged any more (#201): its
+        // providers' calls are cancelled, and whatever is shown next
+        // builds its own list.
+        self.holding = None;
+        self.merge = None;
+        self.staged.clear();
+        // Root search's inline argument values belong to the search that
+        // is left (#205).
+        self.arguments = argument_fields::Typed::default();
         // A submenu belongs to the screen it opened on; an answer still on
         // its way finds it gone.
         self.submenus.close_all();
@@ -1149,15 +1252,29 @@ struct RootResult {
     /// command, or an indexed result under its command (see
     /// `quick_slots`).
     pin: Option<PinTarget>,
+    /// When the command's row is listed (`"when"`, #195): always, only
+    /// with a blank query, or only while the user searches.
+    when: CommandWhen,
+    /// What the command's row is matched by (`"matches"`, #195): its
+    /// title, or only URL-like or path-like queries (see `typed_query`).
+    matches: CommandMatches,
 }
 
 /// A root result a command computed from the current query.
 struct Computed {
     /// The component of the command that computed it.
     component: PathBuf,
+    /// The query it was computed for, which its card answers (#201): the
+    /// query the field shows may have moved on while the list is held.
+    query: String,
     /// The title of the command that computed it, which labels its
     /// answers in root search ("Calculator").
     command_title: String,
+    /// What the answer's card says beyond its title and action, when the
+    /// result is one (see `runtime::AnswerDetail`): its own section, its
+    /// swatch and further ways to copy it, as the command answered — the
+    /// calculator's colour and date answers (#196).
+    answer: Option<ComputedDetail>,
     row: Row,
     entry: Entry,
     /// A file row, or the row searching all files: listed after what is
@@ -1511,6 +1628,16 @@ impl Launcher {
             .map_or_else(Record::default, |installation| {
                 Record::open(&installation.dir)
             });
+        let learned = installation
+            .as_ref()
+            .map_or_else(Record::default, |installation| {
+                Record::open(&installation.dir)
+            });
+        let history = installation
+            .as_ref()
+            .map_or_else(Record::default, |installation| {
+                Record::open(&installation.dir)
+            });
         let confirmations = installation
             .as_ref()
             .map_or_else(Record::default, |installation| {
@@ -1568,9 +1695,19 @@ impl Launcher {
             entries: Vec::new(),
             root: Vec::new(),
             computed: Vec::new(),
+            staged: Vec::new(),
+            holding: None,
+            merge: None,
+            published: String::new(),
             indexes: indexed::Indexes::default(),
+            typed: None,
+            home: home_folder(),
             search_epoch: 0,
             search_alive: None,
+            superseded: None,
+            ranked: None,
+            statics: 0,
+            rankings: 0,
             files: runtime.as_ref().ok().map(Runtime::file_access),
             open: None,
             launch: LaunchRecord::default(),
@@ -1594,6 +1731,7 @@ impl Launcher {
             game,
             aliases,
             remembered_arguments,
+            arguments: argument_fields::Typed::default(),
             quick_slots: quick_slots::Kept::default(),
             acquisitions: Acquisitions::default(),
             updates: Updates::default(),
@@ -1607,11 +1745,17 @@ impl Launcher {
             update_controls,
             update_results,
             pane_keys: PaneKeys::default(),
+            sensitivity: SearchSensitivity::default(),
+            learning: true,
             reported_unbound: Vec::new(),
             open_command: None,
             feedback: feedback::Feedback::default(),
             subtitles,
             subtitle_saves: Arc::default(),
+            learned,
+            learned_saves: Arc::default(),
+            history,
+            history_saves: Arc::default(),
             submenus: submenus::Submenus::default(),
             system: crate::system::none(),
             run: crate::run::none(),
@@ -1743,14 +1887,15 @@ impl Launcher {
         Launcher { sources, ..self }
     }
 
-    /// This launcher telling the time for clipboard history, scheduled work
-    /// and continuing services by `clock` rather than the system's clock,
-    /// for tests and development builds: clipboard items are kept and
-    /// expire by it, scheduled commands run by it, their intervals
-    /// restarting from its now, and services cycle by it, their cadence
-    /// restarting from its now. Items that already expired by the system's
-    /// clock were removed when the launcher started. Release builds have
-    /// no way to replace the system's clock.
+    /// This launcher telling the time for clipboard history, scheduled work,
+    /// continuing services and root search's publishing by `clock` rather
+    /// than the system's clock, for tests and development builds: clipboard
+    /// items are kept and expire by it, scheduled commands run by it, their
+    /// intervals restarting from its now, services cycle by it, their
+    /// cadence restarting from its now, and a query's list is published by
+    /// its budget (#201). Items that already expired by the system's clock
+    /// were removed when the launcher started. Release builds have no way
+    /// to replace the system's clock.
     #[cfg(any(test, debug_assertions))]
     pub fn with_clock(self, clock: Arc<dyn crate::clipboard::Clock>) -> Self {
         // Rows' dates are shown relative to it too (see `looks`).
@@ -1767,8 +1912,17 @@ impl Launcher {
             services.follow(clock.clone());
         }
         if let Some(updates) = &self.updates {
-            updates.follow(clock);
+            updates.follow(clock.clone());
         }
+        // A clock a test advances publishes what is due by it (#201): the
+        // system's clock only moves by time passing, which a thread of the
+        // launcher's own waits out.
+        let publisher = self.downgrade();
+        clock.on_change(Box::new(move || {
+            if let Some(launcher) = publisher.upgrade() {
+                launcher.publish_due();
+            }
+        }));
         self
     }
     /// Waits until Pane's clipboard history expiry thread swept after every
@@ -2125,8 +2279,9 @@ impl Launcher {
                 let last = view.rows.len() - 1;
                 view.selected = Some(selected.saturating_add_signed(delta).min(last));
             }
-            // Only root search's fallbacks are listed with none selected:
-            // Down chooses the first, Up the last.
+            // Nothing is selected only while the list is empty — root
+            // search selects its first fallback too (ADR 0031): Down
+            // chooses the first, Up the last.
             None if view.rows.is_empty() => {}
             None if delta > 0 => view.selected = Some(0),
             None => view.selected = Some(view.rows.len() - 1),
@@ -2134,17 +2289,27 @@ impl Launcher {
     }
 
     /// Searches root search for `query`: the rows become the root results
-    /// that match it, best match first, and the best match is selected. An
-    /// empty query lists every root result. Ignored on other screens, and
-    /// when `query` is already the query.
+    /// that match it, best match first, and the best match is selected —
+    /// the first fallback, when nothing but fallbacks is listed (ADR 0031).
+    /// An empty query lists every root result. Ignored on other screens,
+    /// and when `query` is already the query.
     ///
     /// Metadata is searched at once, without running any guest. For a query
     /// that is not blank, the enabled commands that compute root results
-    /// (such as the calculator) are asked too, one after another: await the
-    /// returned future to list each one's results, above the others, as soon
-    /// as it answers. Their answers are discarded if the query has changed
-    /// meanwhile, and a command that fails is listed as a result explaining
-    /// the failure.
+    /// (such as the calculator) are asked too, one after another, once the
+    /// query has been quiet for a short while (#202, see `publishing`): a
+    /// burst of keystrokes asks once. The new
+    /// query's list is published once every one of them has answered, or
+    /// 200 ms after the query changed, whichever comes first (#201); until
+    /// then the rows shown stay the previous query's, while the field shows
+    /// this query at once (see `publishing`). An answer arriving after the
+    /// list was published is merged into it, coalesced within 16 ms with
+    /// any that arrives close after. The answers are discarded if the query
+    /// has changed meanwhile, and a command that fails is listed as a
+    /// result explaining the failure. A call still pending is cancelled
+    /// when a newer query needs the runtime — as its quiet period ends —
+    /// or root search is left (#202), not at each keystroke, so a call
+    /// that answers within the quiet period keeps its instance.
     ///
     /// The first query that is not blank since root search was shown also
     /// asks the enabled commands that supply results ahead of the query
@@ -2175,18 +2340,17 @@ impl Launcher {
         }
         let (asked, indexing, cancelled) = match &state.view.screen {
             Screen::Root { query: current } if current != query => {
-                let cancelled = self.search(&mut state, query);
+                let (cancelled, asked) = self.search(&mut state, query);
                 let indexing = self.ask_for_indexed_results(&mut state, query);
-                (
-                    self.ask_for_root_results(&state, query),
-                    indexing,
-                    Some(cancelled),
-                )
+                (asked, indexing, Some(cancelled))
             }
             // Searching the same query again changes nothing, not even the
             // selection.
             _ => (Vec::new(), Vec::new(), None),
         };
+        // When the query is asked about, for a command that answers about
+        // the moment ("now", "today", #196): the whole search shares it.
+        let at = asked_at(&state);
         let query = query.to_owned();
         let epoch = state.screen_epoch;
         let search = state.search_epoch;
@@ -2200,8 +2364,27 @@ impl Launcher {
                 launcher.show_indexed_results(indexing).await;
                 return;
             };
+            // A burst of keystrokes asks the commands that compute results
+            // once (#202): the search waits out the quiet period — real
+            // time, off the calling thread — and a newer query that arrives
+            // before it ends replaces this one without asking anything,
+            // its own quiet period to wait out.
+            let quiet = off_thread(|| std::thread::sleep(publishing::QUIET));
+            if until_cancelled(quiet, &mut cancelled).await.is_none() {
+                // A newer query replaced this one: what it was going to ask
+                // is that query's to ask, but the results supplied ahead of
+                // the query were marked asked for by this search, so it
+                // finishes asking for them.
+                launcher.show_indexed_results(indexing).await;
+                return;
+            }
+            // The query needs the runtime: the search it replaced has its
+            // pending call cancelled now (#202), not when its query
+            // changed, so one that answered within the quiet period kept
+            // its instance for this query to reuse.
+            launcher.cancel_superseded(search);
             let listing = launcher
-                .show_root_results(epoch, search, &query, asked, &mut cancelled)
+                .show_root_results(epoch, search, &query, at, asked, &mut cancelled)
                 .await;
             launcher.show_indexed_results(indexing).await;
             // Commands whose granted folder was still being listed are asked
@@ -2211,13 +2394,51 @@ impl Launcher {
                     return;
                 }
                 let asked = launcher
-                    .show_one_root_result(epoch, search, &query, command, data, &mut cancelled)
+                    .show_one_root_result(epoch, search, &query, at, command, data, &mut cancelled)
                     .await;
                 if asked.is_none() {
                     return;
                 }
             }
         }
+    }
+
+    /// Tells the launcher how strict root search's matching is now: the
+    /// Launcher page's choice as the window holds it, pushed as the query
+    /// field changes. It applies on the next keystroke — the list the
+    /// current query has already made stays as it is — and its late
+    /// answers re-rank with it. Until one is pushed, the default (High)
+    /// applies.
+    pub fn set_search_sensitivity(&self, sensitivity: SearchSensitivity) {
+        let mut state = self.lock();
+        if state.sensitivity != sensitivity {
+            state.sensitivity = sensitivity;
+            // The rows kept for the current query were ranked by the
+            // sensitivity before (#202): a late answer's merge re-ranks
+            // them with the choice now in force.
+            state.statics += 1;
+        }
+    }
+
+    /// Tells the launcher whether root search learns from what the user
+    /// chooses now: the Launcher page's "Learn from what I choose"
+    /// switch as the window holds it, pushed as the query field changes
+    /// and as the window is made, so the blank query's list follows it
+    /// too. Turned off, nothing is recorded and ranking acts as if
+    /// nothing was learned — what was learned is kept until it is reset,
+    /// so turning it on again uses it — and the rows the current query
+    /// already made rank again at once, unlike the sensitivity's choice,
+    /// which the next keystroke applies. Until one is pushed, the default
+    /// (on) applies.
+    pub fn set_learning(&self, on: bool) {
+        let mut state = self.lock();
+        if state.learning == on {
+            return;
+        }
+        state.learning = on;
+        // The rows the current query already made were ranked from what
+        // was learned while it was on (#202): they rank again now.
+        reranked(&mut state);
     }
 
     /// The enabled commands that supply root results ahead of the query and
@@ -2249,6 +2470,39 @@ impl Launcher {
             })
             .collect();
         state.indexes.begin_asking(commands)
+    }
+
+    /// Asks the enabled commands that supply results ahead of the query
+    /// for those results, if they have not been asked since root search
+    /// was last shown (coming back marks them stale): what the blank
+    /// query's list needs below the pins (#199), and what the quick slots
+    /// pinning one of them resolve through — a cold visit of root
+    /// search's home would otherwise list none of them, since the indexed
+    /// results are asked for otherwise only once a query is typed. The
+    /// query stays as it is and nothing is searched; await the returned
+    /// future to list them, which resolves the slots holding them.
+    pub fn resolve_root_home(&self) -> impl Future<Output = ()> + Send + 'static {
+        let mut guard = self.lock();
+        let state = &mut *guard;
+        let commands: Vec<_> = state
+            .packages
+            .iter()
+            .filter(|package| state.runs(package))
+            .flat_map(|package| {
+                let data = self
+                    .installation
+                    .as_ref()
+                    .map(|installation| installation.data.owned_by(&package.identity));
+                package
+                    .indexed_result_commands()
+                    .into_iter()
+                    .map(move |command| (command, data.clone()))
+            })
+            .collect();
+        let asking = state.indexes.begin_asking(commands);
+        drop(guard);
+        let launcher = self.clone();
+        async move { launcher.show_indexed_results(asking).await }
     }
 
     /// Asks each of `commands` in turn for its results ahead of the query
@@ -2286,6 +2540,9 @@ impl Launcher {
                     continue;
                 }
                 state.indexes.answer(&command, answer);
+                // Their results changed what the static rows are ranked
+                // from (#202): they are ranked again with them.
+                state.statics += 1;
                 // Their applications' icons are refreshed (#172).
                 application_icons::listed(state);
                 // Pins made before applications had stable identities
@@ -2293,7 +2550,12 @@ impl Launcher {
                 let carried = applications.is_some_and(|applications| {
                     quick_slots::carry_over(state, &command.id, applications.as_ref())
                 });
-                if let Some(query) = state.view.query().map(str::to_owned) {
+                // While the query's list is held, its publication ranks the
+                // answer with everything else (#201): the rows shown stay
+                // the previous query's.
+                if state.holding.is_none()
+                    && let Some(query) = state.view.query().map(str::to_owned)
+                {
                     relist(state, &query);
                 }
                 carried
@@ -2317,6 +2579,9 @@ impl Launcher {
         state
             .indexes
             .retain(|component| indexing.iter().any(|kept| kept == component));
+        // What the static rows are ranked from changed (#202): a command
+        // forgotten supplied results ahead of the query no longer.
+        state.statics += 1;
         application_icons::listed(state);
     }
 
@@ -2372,28 +2637,100 @@ impl Launcher {
         };
     }
 
-    /// Shows the root results matching `query` from metadata alone; results
-    /// computed for an earlier query are gone, and the calls still asking
-    /// for them are cancelled. Returns what resolves once this search is
-    /// replaced too, or root search is left.
-    fn search(&self, state: &mut State, query: &str) -> tokio::sync::oneshot::Receiver<()> {
+    /// Begins the search for `query`: the field shows it at once, and the
+    /// query's list is published once every provider asked has answered or
+    /// its budget ended (#201, see `publishing`) — until then the rows
+    /// shown stay the previous query's. Results computed for an earlier
+    /// query are gone once the list is published, and the calls still
+    /// asking for them are cancelled. Returns the commands to ask for what
+    /// they compute — after the quiet period, in the future `set_query`
+    /// returns (#202) — and what resolves once this search's calls are
+    /// cancelled: when a newer search needs the runtime, or root search is
+    /// left.
+    fn search(
+        &self,
+        state: &mut State,
+        query: &str,
+    ) -> (
+        tokio::sync::oneshot::Receiver<()>,
+        Vec<(CommandRegistration, Option<PackageData>)>,
+    ) {
+        // A query cleared while not blank becomes a recent one Up can
+        // restore (#206), with the argument values typed with it — before
+        // the search takes them below.
+        if query.trim().is_empty() {
+            let cleared = state.view.query().unwrap_or("").to_owned();
+            self.record_cleared_query(state, &cleared);
+        }
         state.search_epoch += 1;
         let (alive, cancelled) = tokio::sync::oneshot::channel();
-        // Dropping the earlier search's cancels its pending calls.
+        // The search this one replaces keeps its calls running (#202):
+        // they are cancelled only when this search needs the runtime, so a
+        // call that answers within the quiet period keeps its instance for
+        // the queries after it.
+        state.superseded = state.search_alive.take();
         state.search_alive = Some(alive);
-        state.computed.clear();
         // A command's answer to the query sent is not an answer to this one.
         if state.sent_from.take().is_some_and(|sent| sent != query) {
             state.view.status = Status::Idle;
         }
-        let (rows, entries) = root_rows(state, query);
+        // What the query is, beyond its words, is understood once per
+        // change of it (#195).
+        state.typed = typed_query::analyze(query, state.home.as_deref());
         state.view.screen = Screen::Root {
             query: query.to_owned(),
         };
-        state.view.selected = aliases::first_choice(&entries);
-        state.view.rows = rows;
-        state.entries = entries;
-        cancelled
+        // A merge still coalescing belongs to the query that was; this
+        // query's publication relists whatever it would have.
+        state.merge = None;
+        state.staged.clear();
+        // The argument values typed into the previous query's fields go
+        // with it (#205): another query is another search.
+        state.arguments = argument_fields::Typed::default();
+        let asked = self.ask_for_root_results(state, query);
+        if asked.is_empty() {
+            // No provider is asked: the list is published at once, the
+            // metadata ranked as it always was (a blank query asks none).
+            state.computed.clear();
+            state.holding = None;
+            let (rows, entries) = root_rows(state, query);
+            state.view.selected = aliases::first_choice(&entries);
+            state.view.rows = rows;
+            state.entries = entries;
+            state.published = query.to_owned();
+        } else {
+            // The query's list is held (#201): the rows shown stay the
+            // previous query's while the field's own query runs ahead of
+            // them.
+            state.holding = Some(publishing::Holding {
+                query: query.to_owned(),
+                awaiting: asked
+                    .iter()
+                    .map(|(command, _)| command.component.clone())
+                    .collect(),
+                deadline: state
+                    .clock
+                    .now()
+                    .saturating_add(publishing::milliseconds(publishing::BUDGET)),
+            });
+            // The system's clock only moves by time passing, so a thread
+            // waits the budget out; a clock a test advances publishes what
+            // is due through `Clock::on_change`.
+            self.wait_for(publishing::BUDGET);
+        }
+        (cancelled, asked)
+    }
+
+    /// Cancels the calls of the search `search` replaced (#202): they were
+    /// left running — an answer that arrived within the quiet period was
+    /// kept, its instance with it — and are stopped now that the newer
+    /// query needs the runtime. A search that was itself replaced asks
+    /// nothing, so cancels nothing: the search that replaced it does.
+    fn cancel_superseded(&self, search: u64) {
+        let mut state = self.lock();
+        if state.search_epoch == search {
+            state.superseded = None;
+        }
     }
 
     /// The enabled commands that compute root results, each with its
@@ -2427,21 +2764,24 @@ impl Launcher {
             .collect()
     }
 
-    /// Asks each of `commands` in turn for its root results for `query` and
-    /// lists each one's as soon as it answers, unless the query, the search
-    /// or the screen has changed meanwhile.
+    /// Asks each of `commands` in turn for its root results for `query`,
+    /// asked about at `at` (see [`WallTime`]), unless the query, the
+    /// search or the screen has changed meanwhile.
     ///
     /// Once `cancelled` resolves (the search was replaced, or root search
     /// was left), the pending call is dropped, which cancels it in the
     /// runtime, and no further command is asked. The runtime serves calls one
     /// at a time, so a command that is slow or hangs still delays the
     /// commands asked after it until then (timeouts are #18); it no longer
-    /// hides the answers of those asked before it.
+    /// hides the answers of those asked before it — they are staged for the
+    /// query's list, which the budget publishes without waiting for it
+    /// (#201, see [`Launcher::set_query`]).
     async fn show_root_results(
         &self,
         epoch: u64,
         search: u64,
         query: &str,
+        at: WallTime,
         commands: Vec<(CommandRegistration, Option<PackageData>)>,
         cancelled: &mut tokio::sync::oneshot::Receiver<()>,
     ) -> Option<Vec<Listing>> {
@@ -2452,6 +2792,7 @@ impl Launcher {
                     epoch,
                     search,
                     query,
+                    at,
                     command.clone(),
                     data.clone(),
                     cancelled,
@@ -2464,23 +2805,38 @@ impl Launcher {
         Some(listing)
     }
 
-    /// Asks `command` for its root results for `query` and lists them in
-    /// place of any it gave before, unless the query, the search or the
-    /// screen changed meanwhile (then `None`: ask nothing more). Answers
-    /// what resolves once the granted folder its package's answer was still
-    /// waiting for is listed, if it was.
+    /// Asks `command` for its root results for `query`, asked about at
+    /// `at`, and keeps them for the query's list (#201): staged while the
+    /// list is held, and merged into it once it is published — coalesced,
+    /// within 16 ms, with any answer that arrives close after. Nothing is
+    /// kept if the query, the search or the screen changed meanwhile (then
+    /// `None`: ask nothing more). Answers what resolves once the granted
+    /// folder its package's answer was still waiting for is listed, if it
+    /// was.
+    #[allow(clippy::too_many_arguments)]
     async fn show_one_root_result(
         &self,
         epoch: u64,
         search: u64,
         query: &str,
+        at: WallTime,
         command: CommandRegistration,
         data: Option<PackageData>,
         cancelled: &mut tokio::sync::oneshot::Receiver<()>,
     ) -> Option<Option<ListedFuture>> {
+        // The search was replaced while it waited out its quiet period
+        // (#202): nothing is asked for a query the field has moved on
+        // from. The search that replaced it asks when its own quiet period
+        // ends.
+        {
+            let state = self.lock_if_current(epoch)?;
+            if state.search_epoch != search || state.view.query() != Some(query) {
+                return None;
+            }
+        }
         let answer = match self.runtime() {
             Ok(runtime) => {
-                let call = runtime.root_results_with(&command.component, query, data.clone());
+                let call = runtime.root_results_with(&command.component, query, at, data.clone());
                 until_cancelled(call, cancelled).await?
             }
             Err(error) => Err(error),
@@ -2490,8 +2846,10 @@ impl Launcher {
             return None;
         }
         let state = &mut *state;
-        // A command disabled or replaced meanwhile contributes nothing.
+        // A command disabled or replaced meanwhile contributes nothing; it
+        // has answered all the same, so the list need not wait for it.
         if data.as_ref().and_then(PackageData::stopped).is_some() {
+            publishing::answered(state, &command.component);
             return Some(None);
         }
         let owner = owner(&state.packages, &command.component).map(|p| p.identity.key());
@@ -2502,9 +2860,6 @@ impl Launcher {
             _ => None,
         };
         let component = command.component.clone();
-        state
-            .computed
-            .retain(|computed| computed.component != component);
         let files = state.files.clone();
         let computed = computed_results(command, owner.as_deref(), files.as_ref(), query, answer);
         // The system icons of the files it found (#142), unless the window
@@ -2512,8 +2867,21 @@ impl Launcher {
         if !looks::loads_as_shown(state) {
             file_search::want_icons(state, computed.iter().map(|computed| &computed.entry));
         }
-        state.computed.extend(computed);
-        relist_root(state, query);
+        if state.holding.is_some() {
+            // The query's list is still held (#201): the answer waits for
+            // it, staged, and is listed when the list is published.
+            state.staged.retain(|staged| staged.component != component);
+            state.staged.extend(computed);
+        } else {
+            // The answer is late: it merges into the published list,
+            // coalesced with any that arrives close after (#201).
+            state
+                .computed
+                .retain(|computed| computed.component != component);
+            state.computed.extend(computed);
+            self.merge_soon(state);
+        }
+        publishing::answered(state, &component);
         Some(listed)
     }
 
@@ -2541,6 +2909,19 @@ impl Launcher {
     pub fn presented_list(&self) -> (LauncherView, ListPresentation) {
         let state = self.lock();
         (state.view.clone(), presentation::list_presentation(&state))
+    }
+
+    /// How many times root search has ranked its static rows — every row
+    /// but the results computed for the query — since the launcher started:
+    /// a diagnostic for tests (#202). A query pays one ranking,
+    /// when its list is made at once or published; a provider's answer
+    /// that merges into it splices its section in without another, and
+    /// the ranking is made again only when the query or what the rows are
+    /// ranked from changed.
+    #[cfg(any(test, debug_assertions))]
+    #[doc(hidden)]
+    pub fn root_rankings(&self) -> u64 {
+        self.lock().rankings
     }
 
     /// The presentation of the row at `index` as the window draws it now
@@ -2816,6 +3197,21 @@ impl Launcher {
             .view
             .selected
             .and_then(|index| state.entries.get(index).cloned());
+        // A use of the selected root result, recorded once its action
+        // dispatches (#199, see `learned`): read before activation, which
+        // changes the screen. The inline fields' refusal (#205) runs
+        // nothing, so a row refused for a blank required argument
+        // records no use.
+        let learned = entry.as_ref().and_then(|entry| {
+            let refused = match entry {
+                Entry::Open(opening) => argument_form::blank_required_inline(&state, opening),
+                Entry::Send(sending) => {
+                    argument_form::blank_required_inline(&state, &sending.opening)
+                }
+                _ => false,
+            };
+            (!refused).then(|| learned::use_of(&state, entry)).flatten()
+        });
         // The status line is about this action from now on.
         state.sent_from = None;
         let pending = match entry {
@@ -2824,6 +3220,12 @@ impl Launcher {
         };
         let work = self.pending_work(&state, pending);
         drop(state);
+        // The row's action was dispatched, not refused: the use is
+        // recorded off this thread, and the list on screen is not
+        // re-sorted for it.
+        if let Some((id, query)) = learned {
+            self.record_use(&id, Some(query.as_str()));
+        }
         work
     }
 
@@ -3500,9 +3902,24 @@ impl Launcher {
         state.list_entered = false;
         self.note_setup_needed(state);
         state.root = self.root_results(state);
+        // What the static rows are ranked from changed with the root
+        // results of this visit (#202): they are ranked again below.
+        state.statics += 1;
         state.sent_from = None;
         state.computed.clear();
-        state.indexes.stale();
+        // What a held query's search had staged is gone with it (#201): the
+        // empty query's list is published at once.
+        state.staged.clear();
+        state.holding = None;
+        state.merge = None;
+        // The results supplied ahead of the query are asked for again with
+        // the next query — except a command whose data tells of its own
+        // changes: one that asked for the installed applications is asked
+        // when they change (see `application_changes`), not for a show of
+        // root search that changed nothing (#202).
+        state.indexes.stale(&self.applications_askers());
+        state.typed = None;
+        state.published = String::new();
         let (rows, entries) = root_rows(state, "");
         let selected = select
             .and_then(|component| {
@@ -3511,15 +3928,38 @@ impl Launcher {
                 )
             })
             .or_else(|| aliases::first_choice(&entries));
+        // Root search shown fresh over a query it had: the query is
+        // cleared by the showing (#206) — recorded, with the values typed
+        // with it, as a recent one Up can restore, before the view below
+        // takes them.
+        let cleared = state.view.query().unwrap_or("").to_owned();
+        self.record_cleared_query(state, &cleared);
+        // The argument values typed into the search before this visit go
+        // with the search (#205): taken only once the record above read
+        // them, so the entry keeps them.
+        state.arguments = argument_fields::Typed::default();
         self.leave_command(state);
         state.entries = entries;
         state.view = LauncherView {
             rows,
             selected,
-            status: match (&state.store_problem, state.quick_slots.unreadable()) {
-                (Some(problem), _) => Status::Error(problem.clone()),
-                (None, Some(problem)) => Status::Error(quick_slots::unreadable_report(problem)),
-                (None, None) => Status::Idle,
+            status: match (
+                &state.store_problem,
+                state.quick_slots.unreadable(),
+                state.learned.unreadable(),
+                state.history.unreadable(),
+            ) {
+                (Some(problem), _, _, _) => Status::Error(problem.clone()),
+                (None, Some(problem), _, _) => {
+                    Status::Error(quick_slots::unreadable_report(problem))
+                }
+                (None, None, Some(problem), _) => {
+                    Status::Error(learned::unreadable_report(problem))
+                }
+                (None, None, None, Some(problem)) => {
+                    Status::Error(history::unreadable_report(problem))
+                }
+                (None, None, None, None) => Status::Idle,
             },
             ..LauncherView::new(
                 Screen::Root {
@@ -3539,6 +3979,17 @@ impl Launcher {
     pub fn show_root_search(&self) {
         let mut state = self.lock();
         self.show_root(&mut state, None);
+    }
+
+    /// The components that asked for the installed applications and may
+    /// still run: what they supply ahead of the query may have changed
+    /// when the applications did, and is asked for again then (see
+    /// `application_changes`), so a show of root search that changed
+    /// nothing asks them for nothing (#202).
+    fn applications_askers(&self) -> Vec<PathBuf> {
+        self.runtime()
+            .map(|runtime| runtime.applications_askers())
+            .unwrap_or_default()
     }
 
     /// Whether the view on screen can be restored by a reopened launcher:
@@ -3655,6 +4106,10 @@ impl Launcher {
             .map(|row| row.id.clone());
         self.note_setup_needed(state);
         state.root = self.root_results(state);
+        // What the static rows are ranked from changed with the root
+        // results (#202): they are ranked again, held list or not — a
+        // held query's publication ranks them for it.
+        state.statics += 1;
         // A command that was disabled, paused or replaced contributes
         // nothing more; one enabled again answers from the next change of the
         // query.
@@ -3668,9 +4123,17 @@ impl Launcher {
         state
             .computed
             .retain(|computed| computing.contains(&computed.component));
+        state
+            .staged
+            .retain(|staged| computing.contains(&staged.component));
         Launcher::forget_indexes(state);
-        let query = state.view.query().unwrap_or_default();
-        let (rows, entries) = root_rows(state, query);
+        let query = state.view.query().unwrap_or_default().to_owned();
+        // While the query's list is held (#201), the rows shown stay the
+        // previous query's: what changed is ranked when it is published.
+        if state.holding.is_some() {
+            return;
+        }
+        let (rows, entries) = root_rows(state, &query);
         let selected = selected_id
             .and_then(|id| rows.iter().position(|row| row.id == id))
             .or_else(|| aliases::first_choice(&entries));
@@ -3684,9 +4147,17 @@ impl Launcher {
     /// Pane's own rows.
     fn root_results(&self, state: &State) -> Vec<RootResult> {
         let mut results = Vec::new();
-        let mut add = |row: Row, entry: Entry, package: Option<&str>, target| {
+        let mut add = |row: Row,
+                       entry: Entry,
+                       package: Option<&str>,
+                       target,
+                       keywords: &[String],
+                       when: CommandWhen,
+                       matches: CommandMatches| {
             let alias = state.aliases.chosen.active_alias(&row.id);
-            let keys = Keys::new(&row.title, row.subtitle.as_deref(), package).with_alias(alias);
+            let keys = Keys::new(&row.title, row.subtitle.as_deref(), package)
+                .with_keywords(keywords)
+                .with_alias(alias);
             // A command's row, available or not, is a registered command a
             // quick slot can hold by its id; Pane's own rows are not.
             let pin = matches!(entry, Entry::Open(_) | Entry::Unavailable(_))
@@ -3697,6 +4168,8 @@ impl Launcher {
                 keys,
                 target,
                 pin,
+                when,
+                matches,
             });
         };
         let command = |(command, unavailable): (CommandRegistration, Option<Unavailable>),
@@ -3722,9 +4195,17 @@ impl Launcher {
         };
         // A disabled package contributes nothing to root search.
         let enabled = || state.packages.iter().filter(|package| package.enabled);
-        for built in self.commands.iter().cloned() {
-            let (row, entry) = command((built, None), false);
-            add(row, entry, None, None);
+        for built in self.commands.iter() {
+            let (row, entry) = command((built.clone(), None), false);
+            add(
+                row,
+                entry,
+                None,
+                None,
+                &built.keywords,
+                built.when,
+                built.matches,
+            );
         }
         for package in enabled() {
             // Its commands are found by its title too, even those that show
@@ -3743,14 +4224,24 @@ impl Launcher {
                     .or(unavailable.map(Unavailable::OnThisSystem));
                 let no_view = package.mode_of(registration.manifest_id())
                     == crate::packages::CommandMode::NoView;
+                let (when, matches) = (registration.when, registration.matches);
                 let target = aliases::Target {
                     registration: registration.clone(),
                     identity: package.identity.clone(),
                     unavailable: unavailable.clone(),
                     no_view,
                 };
+                let keywords = registration.keywords.clone();
                 let (row, entry) = command((registration, unavailable), no_view);
-                add(row, entry, Some(&title), Some(target));
+                add(
+                    row,
+                    entry,
+                    Some(&title),
+                    Some(target),
+                    &keywords,
+                    when,
+                    matches,
+                );
             }
         }
         for package in enabled() {
@@ -3766,7 +4257,15 @@ impl Launcher {
                     package.title(),
                     package.location.display()
                 );
-                add(row, Entry::Broken(problem), None, None);
+                add(
+                    row,
+                    Entry::Broken(problem),
+                    None,
+                    None,
+                    &[],
+                    CommandWhen::Always,
+                    CommandMatches::Title,
+                );
             }
         }
         if self.installation.is_some() {
@@ -3776,21 +4275,45 @@ impl Launcher {
                 subtitle: Some("Choose a local extension package to install".into()),
                 unavailable: None,
             };
-            add(row, Entry::InstallFromFolder, None, None);
+            add(
+                row,
+                Entry::InstallFromFolder,
+                None,
+                None,
+                &[],
+                CommandWhen::Always,
+                CommandMatches::Title,
+            );
             let row = Row {
                 id: INSTALL_FROM_NPM.into(),
                 title: "Install extension from npm…".into(),
                 subtitle: Some("Download an extension package published to npm".into()),
                 unavailable: None,
             };
-            add(row, Entry::AskNpm, None, None);
+            add(
+                row,
+                Entry::AskNpm,
+                None,
+                None,
+                &[],
+                CommandWhen::Always,
+                CommandMatches::Title,
+            );
             let row = Row {
                 id: INSTALL_FROM_GIT.into(),
                 title: "Install extension from Git…".into(),
                 subtitle: Some("Fetch an extension package from a Git repository".into()),
                 unavailable: None,
             };
-            add(row, Entry::AskGit, None, None);
+            add(
+                row,
+                Entry::AskGit,
+                None,
+                None,
+                &[],
+                CommandWhen::Always,
+                CommandMatches::Title,
+            );
             // The authoring rows (ADR 0047, #222): an author starts in the
             // app, writing a new package or importing one that exists;
             // both hand the folder to the install preview the author
@@ -3801,14 +4324,30 @@ impl Launcher {
                 subtitle: Some("Write a new extension package from a template".into()),
                 unavailable: None,
             };
-            add(row, Entry::CreateExtension, None, None);
+            add(
+                row,
+                Entry::CreateExtension,
+                None,
+                None,
+                &[],
+                CommandWhen::Always,
+                CommandMatches::Title,
+            );
             let row = Row {
                 id: IMPORT_EXTENSION.into(),
                 title: "Import Extension…".into(),
                 subtitle: Some("Develop an extension package that already exists".into()),
                 unavailable: None,
             };
-            add(row, Entry::ImportExtension, None, None);
+            add(
+                row,
+                Entry::ImportExtension,
+                None,
+                None,
+                &[],
+                CommandWhen::Always,
+                CommandMatches::Title,
+            );
         }
         // A default extension Pane could not acquire can be tried again;
         // the row is gone while one is being acquired, or once it is
@@ -3821,14 +4360,30 @@ impl Launcher {
                     subtitle: Some(failed.why.clone()),
                     unavailable: None,
                 };
-                add(row, Entry::Acquire(failed.id.clone()), None, None);
+                add(
+                    row,
+                    Entry::Acquire(failed.id.clone()),
+                    None,
+                    None,
+                    &[],
+                    CommandWhen::Always,
+                    CommandMatches::Title,
+                );
             }
         }
         // Pane's own update, when a check found one the user can choose to
         // install, or failed in a way that can be tried again.
         if self.application.is_some() {
             for (row, entry) in state.updates.rows() {
-                add(row, entry, None, None);
+                add(
+                    row,
+                    entry,
+                    None,
+                    None,
+                    &[],
+                    CommandWhen::Always,
+                    CommandMatches::Title,
+                );
             }
         }
         // The extensions' updates, checked on the user's demand: the row
@@ -3842,12 +4397,28 @@ impl Launcher {
                 subtitle: Some("Check every extension now, and update what it finds".into()),
                 unavailable: None,
             };
-            add(row, Entry::CheckExtensionUpdates, None, None);
+            add(
+                row,
+                Entry::CheckExtensionUpdates,
+                None,
+                None,
+                &[],
+                CommandWhen::Always,
+                CommandMatches::Title,
+            );
         }
         // That Pane quit unexpectedly last time, until the user dismisses
         // it or opens the log folder (see `crash_notice`).
         for (row, entry) in state.crash.rows() {
-            add(row, entry, None, None);
+            add(
+                row,
+                entry,
+                None,
+                None,
+                &[],
+                CommandWhen::Always,
+                CommandMatches::Title,
+            );
         }
         // Retained data is managed there too, while nothing is installed.
         if self.installation.is_some() && !(state.packages.is_empty() && state.retained.is_empty())
@@ -3858,7 +4429,15 @@ impl Launcher {
                 subtitle: Some("Configure, update and remove extensions in Settings".into()),
                 unavailable: None,
             };
-            add(row, Entry::Manage, None, None);
+            add(
+                row,
+                Entry::Manage,
+                None,
+                None,
+                &[],
+                CommandWhen::Always,
+                CommandMatches::Title,
+            );
         }
         // Pane's Settings window is the app's to open; the row is listed
         // whatever is installed, since Settings is reachable without any
@@ -3871,7 +4450,15 @@ impl Launcher {
                 subtitle: Some("Open Pane's settings window".into()),
                 unavailable: None,
             };
-            add(row, Entry::Settings, None, None);
+            add(
+                row,
+                Entry::Settings,
+                None,
+                None,
+                &[],
+                CommandWhen::Always,
+                CommandMatches::Title,
+            );
         }
         results
     }
@@ -4032,6 +4619,14 @@ impl Launcher {
             }
             Err(error) => Err(error),
         };
+        // The submission ran the command's form callback, itself a change
+        // nothing tells of (Create Quicklink saves a quicklink): every
+        // command's results are marked stale, as a run's ending marks them
+        // (#202), so the next query asks for them again. Not even the
+        // screen having moved on meanwhile — the command's own
+        // pop-to-root — holds this back: the change is the package's, not
+        // the screen's.
+        self.lock().indexes.stale(&[]);
         let Some(mut state) = self.lock_if_current(epoch) else {
             return;
         };
@@ -4521,6 +5116,14 @@ impl Launcher {
             result,
             Ok(_) | Err(CallError::Guest(_) | CallError::Unreadable(_))
         );
+        // The command handled the event, whatever it answered: its tree may
+        // have changed — and what its package supplies ahead of the query may
+        // have too (Delete Quicklinks removes a quicklink), so every command's
+        // results are marked stale, as a run's ending marks them (#202),
+        // whatever the screen did meanwhile: the change is the package's.
+        if handled {
+            self.lock().indexes.stale(&[]);
+        }
         {
             let Some(mut state) = self.lock_if_current(epoch) else {
                 return;
@@ -4726,6 +5329,13 @@ impl Launcher {
             let mut searching = None;
             match result {
                 Ok(view) => {
+                    // A command the query's alias named and a space opened
+                    // (#205): the text typed after the alias lands in the
+                    // root query while the command opens — the open is not
+                    // done before the keys that follow the space arrive —
+                    // and it is the command's own search the user was
+                    // typing toward.
+                    let alias_search = Launcher::alias_opened_search(state, &launch, search);
                     let extra = looks::remember(state, &component, &view.items);
                     let CommandList { rows, entries } =
                         self.command_list(state, &component, view.items);
@@ -4742,6 +5352,14 @@ impl Launcher {
                     state.entries = entries;
                     state.open = Some(component);
                     state.launch = launch;
+                    // The command's opening takes the query with it —
+                    // returning to root starts empty — so the query is
+                    // cleared as far as the user can reach it: recorded,
+                    // with the values typed with it, as a recent one Up
+                    // can restore (#206), before the screen change takes
+                    // them.
+                    let cleared = state.view.query().unwrap_or("").to_owned();
+                    self.record_cleared_query(state, &cleared);
                     state.next_screen();
                     state.view = LauncherView::new(screen, view.title).with_rows(rows);
                     state.reported_unbound = Vec::new();
@@ -4767,6 +5385,9 @@ impl Launcher {
                         searching = self.search_in_command(state, &text);
                     } else if files {
                         searching = self.ask_files(state, "", 0);
+                    } else if let Some(text) = alias_search {
+                        // Searched at once, as if typed.
+                        searching = self.search_in_command(state, &text);
                     }
                 }
                 Err(error) => {
@@ -4792,6 +5413,27 @@ impl Launcher {
         if let Some(searching) = searching {
             searching.await;
         }
+    }
+
+    /// The text typed after the alias that opened the command this opening
+    /// is for, as that command's own search's start (#205): the launch
+    /// came from root search through the command's alias — its record
+    /// carries no fallback text, which the row that sends text to a
+    /// query-taking command does — and the root query still holds the
+    /// alias with what followed it. `None` when the command does not
+    /// search, or the query is only the alias.
+    fn alias_opened_search(state: &State, launch: &LaunchRecord, search: bool) -> Option<String> {
+        if !search || launch.source != LaunchSource::Alias || launch.fallback_text.is_some() {
+            return None;
+        }
+        let Screen::Root { query } = &state.view.screen else {
+            return None;
+        };
+        query
+            .trim()
+            .split_once(char::is_whitespace)
+            .map(|(_, text)| text.trim().to_owned())
+            .filter(|text| !text.is_empty())
     }
 
     /// The extension data of the installed package `component` belongs to,
@@ -4955,35 +5597,265 @@ fn open_form_for(state: &mut State, purpose: FormPurpose, form: Form) {
     state.next_screen();
 }
 
+/// The user's home folder, which `~` in a typed path resolves to
+/// (#195), as the environment names it: `USERPROFILE` on Windows, `HOME`
+/// elsewhere. The file index's configuration replaces it with the home it
+/// is built over (see [`Launcher::with_file_index`]), which is the same
+/// folder on a real Pane; the typed folder the user names is resolved with
+/// the same home ([`crate::typed_folder`]).
+pub(crate) fn home_folder() -> Option<PathBuf> {
+    let var = if cfg!(windows) { "USERPROFILE" } else { "HOME" };
+    std::env::var_os(var).map(PathBuf::from)
+}
+
+/// When a query is asked about, by the clock root search's own dates are
+/// shown by (a test's, in a test): the moment the user stopped at the
+/// query, and how far the local time there is from UTC, so a command can
+/// answer about the local date or time (#196). The whole search shares
+/// one moment, whatever a slow command delays.
+fn asked_at(state: &State) -> WallTime {
+    let milliseconds = state.clock.now();
+    WallTime {
+        milliseconds,
+        offset: state.clock.local_offset(milliseconds),
+    }
+}
+
+/// What a listed row can show to tell itself apart from another row
+/// with the same folded title (#197): an installed command names its
+/// package's source after its subtitle, as the send rows already do. An
+/// indexed result's own subtitle is what its provider gave to tell it
+/// apart (an application's distinction, a quicklink's target), a
+/// computed result's section names the command that computed it, and a
+/// file row shows its folder, so none of them adds anything.
+#[derive(Clone)]
+enum Told {
+    /// The package the command was installed from.
+    Source(PackageIdentity),
+    /// Nothing: the row already tells itself apart.
+    Apart,
+}
+
+/// One root result as the search module ranks it (see `Candidate`): the
+/// result's keys, what kind of thing it is, the position of the provider
+/// that supplied it among the others, and what root search learned about
+/// it (#199), looked up by its row id.
+fn candidate<'a>(
+    result: &'a RootResult,
+    kind: search::Kind,
+    provider: usize,
+    learned: &'a HashMap<String, search::Learned>,
+) -> Candidate<'a> {
+    Candidate {
+        keys: &result.keys,
+        kind,
+        provider,
+        learned: learned.get(&result.row.id),
+    }
+}
+
+/// What kind of thing a root result is, as the comparator ranks kinds:
+/// commands above links, above applications, above files. Folders,
+/// fallbacks and the like are never ranked by the comparator — they keep
+/// their places below the results — so they take the lowest kind, which
+/// the order names for files.
+fn kind(entry: &Entry) -> search::Kind {
+    match presentation::kind(entry) {
+        Some(presentation::RowKind::Command) => search::Kind::Command,
+        Some(presentation::RowKind::Link) => search::Kind::Link,
+        Some(presentation::RowKind::Application) => search::Kind::Application,
+        _ => search::Kind::File,
+    }
+}
+
 /// The rows of root search for `query`, and what activating each does: the
-/// results computed from it, then the root results matching it, best match
-/// first, with, for a query that is not blank, those supplied ahead of it
-/// (after the others of the same rank), then the computed results that open
-/// a file, then the rows explaining why a command could not supply them.
-fn root_rows(state: &State, query: &str) -> (Vec<Row>, Vec<Entry>) {
+/// results computed from it, then the root results matching it, in the
+/// comparator's order — those supplied ahead of the query ranked with
+/// them, also for the blank query, whose own order is the no-query
+/// order (#199) — then the rows declared for the address or path the
+/// query is, then the computed results that open a file, then the rows
+/// explaining why a command could not supply them.
+///
+/// The rows that are not the query's computed results are ranked once per
+/// query and kept in the state (#202, see [`Ranked`]): a provider's answer
+/// that merges into the list splices its section into them without
+/// ranking again, so a query pays its ranking once, whatever merges into
+/// the list later.
+fn root_rows(state: &mut State, query: &str) -> (Vec<Row>, Vec<Entry>) {
+    if !kept_ranking(state, query) {
+        state.rankings += 1;
+        let ranked = rank_statics(state, query);
+        state.ranked = Some(ranked);
+    }
+    let ranked = state.ranked.as_ref().expect("ranked above");
+    // The computed results sit between the static rows: those that are not
+    // files above what is found by title, the files below it, since a
+    // folder can hold many.
+    let (files, computed): (Vec<&Computed>, Vec<&Computed>) = state
+        .computed
+        .iter()
+        .partition(|computed| computed.in_files);
+    let computed_row = |computed: &Computed| StaticRow {
+        row: computed.row.clone(),
+        entry: computed.entry.clone(),
+        told: Told::Apart,
+        folded: search::fold(&computed.row.title),
+    };
+    let listed: Vec<StaticRow> = ranked
+        .before
+        .iter()
+        .cloned()
+        .chain(computed.into_iter().map(computed_row))
+        .chain(ranked.middle.iter().cloned())
+        .chain(files.into_iter().map(computed_row))
+        .chain(ranked.after.iter().cloned())
+        .collect();
+    // Rows that share a folded title each show what tells them apart.
+    let shared: Vec<bool> = {
+        let folded: Vec<&str> = listed.iter().map(|row| row.folded.as_str()).collect();
+        (0..folded.len())
+            .map(|at| folded.iter().filter(|other| **other == folded[at]).count() > 1)
+            .collect()
+    };
+    let mut rows: Vec<Row> = Vec::with_capacity(listed.len());
+    let mut entries: Vec<Entry> = Vec::with_capacity(listed.len());
+    for (listed, shared) in listed.into_iter().zip(shared) {
+        let StaticRow {
+            row, entry, told, ..
+        } = listed;
+        let row = match (told, shared) {
+            (Told::Source(identity), true) => Row {
+                subtitle: Some(match row.subtitle {
+                    Some(subtitle) => format!("{subtitle} · {identity}"),
+                    None => identity.to_string(),
+                }),
+                ..row
+            },
+            _ => row,
+        };
+        rows.push(row);
+        entries.push(entry);
+    }
+    (rows, entries)
+}
+
+/// The rows of root search that are not the query's computed results,
+/// ranked once per query (#202, see [`root_rows`]) and spliced around
+/// them: `before` comes ahead of the results that are not files, `middle`
+/// between those and the files, `after` the files.
+struct Ranked {
+    /// The query they were ranked for.
+    query: String,
+    /// The generation of the static inputs they were ranked from (see
+    /// [`State::statics`]).
+    statics: u64,
+    /// The rows that come ahead of the computed results that are not
+    /// files: what the user's alias sends, then the commands the query
+    /// names by their alias, hoisted above every other row.
+    before: Vec<StaticRow>,
+    /// The rows that come after those and before the computed file
+    /// results: the root results matching the query in the comparator's
+    /// order, then the rows declared for the address or path the query
+    /// is.
+    middle: Vec<StaticRow>,
+    /// The rows that come after the computed file results: the rows
+    /// explaining why a command could not supply the results it supplies
+    /// ahead of the query, then the fallbacks.
+    after: Vec<StaticRow>,
+}
+
+/// One row of root search as it is spliced: the row, what activating it
+/// does, what it can show to tell itself apart from another row with the
+/// same folded title, and that folded title — all computed once per query
+/// (#202, see [`Ranked`]).
+#[derive(Clone)]
+struct StaticRow {
+    row: Row,
+    entry: Entry,
+    told: Told,
+    folded: String,
+}
+
+/// Whether the rows kept for `query` are still the ones to show (#202,
+/// see [`State::ranked`]): the query stands, and nothing they were ranked
+/// from has changed since they were ranked.
+fn kept_ranking(state: &State, query: &str) -> bool {
+    state
+        .ranked
+        .as_ref()
+        .is_some_and(|ranked| ranked.query == query && ranked.statics == state.statics)
+}
+
+/// Ranks root search's static rows for `query` (see [`Ranked`]): every
+/// row but the results computed for it, in root search order.
+fn rank_statics(state: &State, query: &str) -> Ranked {
     let blank = query.trim().is_empty();
-    let candidates: Vec<&RootResult> = state
+    // What the comparator ranks: the root results — Pane's own rows and
+    // every package's commands, one provider in the order root search
+    // lists them — then each command that supplies results ahead of the
+    // query, in the order they were first asked. The blank query ranks
+    // them too (#199): what the user opens most rises to the top.
+    let candidates: Vec<(&RootResult, search::Kind, usize)> = state
         .root
         .iter()
-        .chain(state.indexes.results().filter(|_| !blank))
+        // A command declared for URL-like or path-like queries is never
+        // matched by title: it is listed for such a query alone, below
+        // (see `typed_query`).
+        .filter(|result| result.matches == CommandMatches::Title)
+        // A command may show with a blank query alone, or only while the
+        // user searches (its `when`, #195).
+        .filter(|result| result.when.listed(blank))
+        .map(|result| (result, kind(&result.entry), 0))
+        .chain(
+            state
+                .indexes
+                .grouped_results()
+                .map(|(provider, result)| (result, kind(&result.entry), provider + 1)),
+        )
+        // The blank query lists the commands and applications the user
+        // opens most (#122), never a link: a quicklink is neither, and
+        // what opens most is not it.
+        .filter(|&(_, kind, _)| !blank || kind != search::Kind::Link)
         .collect();
-    let keys: Vec<&Keys> = candidates.iter().map(|result| &result.keys).collect();
+    // What root search learned about them, as ranking sees it now
+    // (#199): each recorded result's decayed frecency and counting
+    // queries, by its row id — a command's or an indexed result's own.
+    // While "Learn from what I choose" is off (#200), ranking acts as if
+    // nothing was learned: what was learned is kept until it is reset.
+    let learned = if state.learning {
+        state.learned.chosen.ranked(state.clock.now())
+    } else {
+        Default::default()
+    };
+    let keys = |&(result, kind, provider)| candidate(result, kind, provider, &learned);
     let parsed = Query::new(query);
-    let named = |index: &usize| parsed.is_alias_of(&candidates[*index].keys);
+    let named = |index: &usize| parsed.is_alias_of(&candidates[*index].0.keys);
+    let matches: Vec<usize> =
+        search::ranked_matches(&parsed, candidates.iter().map(keys), state.sensitivity)
+            .into_iter()
+            .filter(|index| !named(index))
+            .collect();
+    // A command the query names by its alias is hoisted above every
+    // other row, computed results included.
     let by_alias: Vec<usize> = (0..candidates.len()).filter(named).collect();
-    let matches: Vec<usize> = search::ranked_matches(&parsed, keys.into_iter())
-        .into_iter()
-        .filter(|index| !named(index))
-        .collect();
+    // The row a listed candidate becomes, with what it can show to tell
+    // itself apart: an installed command's package source.
     let found = |index: usize| {
+        let told = candidates[index]
+            .0
+            .target
+            .as_ref()
+            .map(|target| Told::Source(target.identity.clone()))
+            .unwrap_or(Told::Apart);
         (
-            candidates[index].row.clone(),
-            candidates[index].entry.clone(),
+            candidates[index].0.row.clone(),
+            candidates[index].0.entry.clone(),
+            told,
         )
     };
     // A command the query names by its alias is launched from its alias.
     let by_its_alias = |index: usize| {
-        let (row, entry) = found(index);
+        let (row, entry, told) = found(index);
         let entry = match entry {
             Entry::Open(mut opening) => {
                 opening.launch.source = LaunchSource::Alias;
@@ -4991,36 +5863,61 @@ fn root_rows(state: &State, query: &str) -> (Vec<Row>, Vec<Entry>) {
             }
             entry => entry,
         };
-        (row, entry)
+        (row, entry, told)
     };
     let failures = state
         .indexes
         .failures()
         .filter(|_| !blank)
         .map(|(row, entry)| (row.clone(), entry.clone()));
-    let (files, computed): (Vec<&Computed>, Vec<&Computed>) = state
-        .computed
-        .iter()
-        .partition(|computed| computed.in_files);
-    let computed_row = |computed: &Computed| (computed.row.clone(), computed.entry.clone());
+    let apart = |(row, entry)| (row, entry, Told::Apart);
     // What the user's alias names comes first, even before computed
-    // results; files found for the query follow what is found by title,
-    // since a folder can hold many; the fallbacks, which the user must
-    // choose, come last.
-    aliases::rows_sending_after_alias(state, query)
-        .into_iter()
-        .chain(by_alias.into_iter().map(by_its_alias))
-        .chain(computed.into_iter().map(computed_row))
-        .chain(matches.into_iter().map(found))
-        .chain(files.into_iter().map(computed_row))
-        .chain(failures)
-        .chain(aliases::fallback_rows(state, query))
-        .unzip()
+    // results; the rows declared for the address or path the query is
+    // (#195) come below the results found by title and above the files;
+    // the fallbacks, which the user chooses when anything else is listed,
+    // come last.
+    Ranked {
+        query: query.to_owned(),
+        statics: state.statics,
+        before: aliases::rows_sending_after_alias(state, query)
+            .into_iter()
+            .map(apart)
+            .chain(by_alias.into_iter().map(by_its_alias))
+            .map(into_static)
+            .collect(),
+        middle: matches
+            .into_iter()
+            .map(found)
+            // The rows declared for the address or path the query is
+            // (#195), below the results found by title and above the
+            // files.
+            .chain(typed_query::rows(state).into_iter().map(apart))
+            .map(into_static)
+            .collect(),
+        after: failures
+            .map(apart)
+            .chain(aliases::fallback_rows(state, query).into_iter().map(apart))
+            .map(into_static)
+            .collect(),
+    }
+}
+
+/// The row as it is kept for a query, with its title folded once for
+/// the same-name pass (#202, see [`Ranked`]).
+fn into_static((row, entry, told): (Row, Entry, Told)) -> StaticRow {
+    StaticRow {
+        folded: search::fold(&row.title),
+        row,
+        entry,
+        told,
+    }
 }
 
 /// Lists root search's rows for `query` again after results arrived: the
 /// best match stays selected, now that better ones may be first, and a row
-/// the user moved to stays selected.
+/// the user moved to stays selected. The query's list must be published
+/// (#201): while it is held, the rows shown stay the previous query's. The
+/// rows that did not change are not ranked again (#202, see `root_rows`).
 fn relist_root(state: &mut State, query: &str) {
     let keep = state
         .view
@@ -5036,11 +5933,31 @@ fn relist_root(state: &mut State, query: &str) {
     state.entries = entries;
 }
 
+/// Ranks the rows the current Root query already made again, at once: a
+/// change the user made to what ranking weighs — the learning switch, a
+/// reset of what was learned (see `learned`, #200) — re-lists them,
+/// unlike a use recorded, which never re-sorts the list on screen (#199,
+/// see [`State::statics`]). While the query's list is held (#201), its
+/// publication ranks them with everything else: the rows shown stay the
+/// previous query's.
+fn reranked(state: &mut State) {
+    state.statics += 1;
+    // While the query's list is held (#201), its publication ranks them
+    // with everything else: the rows shown stay the previous query's.
+    if state.holding.is_some() {
+        return;
+    }
+    if let Screen::Root { query } = state.view.screen.clone() {
+        relist_root(state, &query);
+    }
+}
+
 /// The rows for `command`'s `answer` to `query`: its results, or one
 /// explaining why it failed. A result that opens a file is shown with the
 /// file's own name and folder, as the host found it in the latest listing
-/// of `owner`'s granted folder, whatever the extension titled it; one the
-/// host does not know is left out.
+/// of `owner`'s granted folder or in the folder the user typed (#204),
+/// whatever the extension titled it; one the host does not know is left
+/// out.
 fn computed_results(
     command: CommandRegistration,
     owner: Option<&str>,
@@ -5048,9 +5965,11 @@ fn computed_results(
     query: &str,
     answer: Result<Vec<ComputedResult>, CallError>,
 ) -> Vec<Computed> {
-    let computed = |row: Row, entry: Entry| Computed {
+    let computed = |row: Row, entry: Entry, detail: Option<ComputedDetail>| Computed {
         component: command.component.clone(),
+        query: query.to_owned(),
         command_title: command.title.clone(),
+        answer: detail,
         in_files: matches!(entry, Entry::File(_)),
         row,
         entry,
@@ -5063,7 +5982,14 @@ fn computed_results(
             let mut listed: Vec<Computed> = results
                 .into_iter()
                 .filter_map(|result| {
-                    let ComputedResult { listing, action } = result;
+                    let ComputedResult {
+                        listing,
+                        action,
+                        answer,
+                    } = result;
+                    // Only a result whose action copies is an answer's
+                    // card: a detail on another action is not shown.
+                    let detail = answer.filter(|_| matches!(action, RootAction::Copy(_)));
                     let (listing, entry) = match action {
                         RootAction::Copy(text) => (listing, Entry::Copy(text)),
                         RootAction::OpenUrl(url) => (listing, Entry::OpenUrl(url)),
@@ -5077,10 +6003,14 @@ fn computed_results(
                                 }
                                 indexed += 1;
                             }
-                            return Some(computed(row, Entry::File(file)));
+                            return Some(computed(row, Entry::File(file), None));
                         }
                     };
-                    Some(computed(Row::listed(listing, Some(&command.id)), entry))
+                    Some(computed(
+                        Row::listed(listing, Some(&command.id)),
+                        entry,
+                        detail,
+                    ))
                 })
                 .collect();
             if indexed > 0
@@ -5088,7 +6018,36 @@ fn computed_results(
             {
                 listed.push(Computed {
                     in_files: true,
-                    ..computed(row, entry)
+                    ..computed(row, entry, None)
+                });
+            }
+            // A typed folder that holds more entries than Pane lists says
+            // so with a row of its own at the end of them (#204).
+            let typed = listed
+                .iter()
+                .any(|computed| matches!(&computed.entry, Entry::File(file) if file.typed));
+            let partial = match (files, owner) {
+                (Some(files), Some(owner)) => files.typed().partial(owner),
+                _ => false,
+            };
+            if typed && partial {
+                listed.push(Computed {
+                    in_files: true,
+                    ..computed(
+                        Row {
+                            id: format!("{}:typed-more", command.id),
+                            title: "…and more entries".into(),
+                            subtitle: Some(format!(
+                                "Pane lists a folder's first {} entries",
+                                crate::typed_folder::MAX_ENTRIES
+                            )),
+                            unavailable: None,
+                        },
+                        // The row cannot be activated: it says something,
+                        // it does not do anything.
+                        Entry::NoActions,
+                        None,
+                    )
                 });
             }
             listed
@@ -5101,7 +6060,7 @@ fn computed_results(
                 unavailable: None,
             };
             let problem = format!("{} could not answer “{query}”: {error}", command.title);
-            vec![computed(row, Entry::Broken(problem))]
+            vec![computed(row, Entry::Broken(problem), None)]
         }
     }
 }

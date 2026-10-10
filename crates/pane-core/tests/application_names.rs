@@ -211,8 +211,18 @@ fn a_program_s_name_finds_its_application_unless_generic_shared_or_given_argumen
     let fixture = launcher(&system, "sample-applications-js");
     let launcher = &fixture.launcher;
 
-    assert_eq!(titles_for(launcher, "code"), ["Launch Visual Studio Code"]);
-    assert_eq!(titles_for(launcher, "wt"), ["Launch Windows Terminal"]);
+    // Fuzzy matching (#193) finds the application by its program name —
+    // an alternate title — and Pane's own rows whose texts the letters run
+    // through: "Manage Extensions" by its subtitle, and the authoring row
+    // by its (#222). The titles are sorted; the ranking is search.rs's.
+    assert_eq!(
+        titles_for(launcher, "code"),
+        ["Launch Visual Studio Code", "Manage Extensions"]
+    );
+    assert_eq!(
+        titles_for(launcher, "wt"),
+        ["Create Extension…", "Launch Windows Terminal"]
+    );
     // Typing a role finds nothing by it.
     assert!(titles_for(launcher, "launcher").is_empty());
     assert!(titles_for(launcher, "setup").is_empty());

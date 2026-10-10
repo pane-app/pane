@@ -9,6 +9,7 @@
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use futures::executor::block_on;
 use pane_core::{CallError, Launcher, PackageIdentity, Runtime, Screen, Status};
@@ -269,28 +270,21 @@ fn clearing_one_copy_keeps_the_other_identity_and_external_files(fixture: &Fixtu
     let launcher = dirs.launcher();
     block_on(launcher.install_package(&published));
     block_on(launcher.install_package(&development));
-    // Root lists each copy's Greeting in install order; each saves its own.
-    for copy in 0..2 {
-        launcher.back();
-        let greeting = titles(&launcher)
-            .iter()
-            .enumerate()
-            .filter(|(_, title)| *title == "Greeting")
-            .map(|(index, _)| index)
-            .nth(copy)
-            .unwrap();
+    // Each copy's Greeting saves its own: the copies are told apart by the
+    // source their subtitles name (#197), not by position — what root
+    // search learned about one ranks it first (#199), wherever that
+    // leaves the other.
+    for folder in [&published, &development] {
         for item in [
             "Use a formal greeting",
             "Greet me",
             "Save a note",
             "Sign in",
         ] {
-            launcher.back();
-            launcher.select(greeting);
-            block_on(launcher.activate_selected());
-            select_title(&launcher, item);
-            block_on(launcher.activate_selected());
-            assert!(matches!(shown(&launcher), Status::Result(_)));
+            assert!(matches!(
+                run_in_copy(&launcher, folder, item),
+                Status::Result(_)
+            ));
         }
     }
     let sources = files(dirs.sources.path());
@@ -308,22 +302,9 @@ fn clearing_one_copy_keeps_the_other_identity_and_external_files(fixture: &Fixtu
         Status::Result(format!("Cleared the cache of Greeter{WHILE_RUNNING}"))
     );
 
-    let answers: Vec<Status> = (0..2)
-        .map(|copy| {
-            launcher.back();
-            let greeting = titles(&launcher)
-                .iter()
-                .enumerate()
-                .filter(|(_, title)| *title == "Greeting")
-                .map(|(index, _)| index)
-                .nth(copy)
-                .unwrap();
-            launcher.select(greeting);
-            block_on(launcher.activate_selected());
-            select_title(&launcher, "Show what Pane keeps");
-            block_on(launcher.activate_selected());
-            shown(&launcher)
-        })
+    let answers: Vec<Status> = [&published, &development]
+        .into_iter()
+        .map(|folder| run_in_copy(&launcher, folder, "Show what Pane keeps"))
         .collect();
     assert_eq!(
         answers,
@@ -372,6 +353,12 @@ fn an_unreadable_cache_is_explained_and_nothing_is_deleted(fixture: &Fixture) {
     block_on(dirs.launcher().install_package(&folder));
     let launcher = dirs.launcher();
     save_everything(&launcher);
+    // What the runs taught root search is written off the thread (#199):
+    // it is waited for, so the snapshot below is of everything written.
+    assert!(
+        launcher.wait_for_learned_recorded(Duration::from_secs(30)),
+        "the learned record was written"
+    );
     drop(launcher);
     let cache = dirs.packages_dir().join("cache.json");
     fs::write(&cache, "not json").unwrap();
@@ -407,19 +394,28 @@ fn an_unreadable_cache_is_explained_and_nothing_is_deleted(fixture: &Fixture) {
     assert_eq!(kept(&launcher), Status::Result(CACHE_CLEARED.into()));
 }
 
-/// From root search, runs `item` of the Greeting command of the `copy`th
-/// installed package (root lists each package's Greeting in install order),
-/// returning the outcome: its toast, or the status line.
-fn run_in_copy(launcher: &Launcher, copy: usize, item: &str) -> Status {
+/// From root search, opens the Greeting command of the package installed
+/// from `folder` and runs its item titled `item`, returning the outcome:
+/// its toast, or the status line. Two copies of the package are told apart
+/// by the source the same-name pass names in the row's subtitle (#197),
+/// not by position: what root search learned about one ranks it first
+/// (#199), wherever that leaves the other.
+fn run_in_copy(launcher: &Launcher, folder: &Path, item: &str) -> Status {
     launcher.back();
     launcher.back();
-    let greeting = titles(launcher)
+    let source = format!("local folder {}", folder.display());
+    let greeting = launcher
+        .view()
+        .rows
         .iter()
-        .enumerate()
-        .filter(|(_, title)| *title == "Greeting")
-        .map(|(index, _)| index)
-        .nth(copy)
-        .unwrap();
+        .position(|row| {
+            row.title == "Greeting"
+                && row
+                    .subtitle
+                    .as_deref()
+                    .is_some_and(|subtitle| subtitle.ends_with(&source))
+        })
+        .unwrap_or_else(|| panic!("no Greeting row of {source}"));
     launcher.select(greeting);
     block_on(launcher.activate_selected());
     select_title(launcher, item);
@@ -435,12 +431,18 @@ fn clearing_keeps_a_cache_another_pane_saved_meanwhile(fixture: &Fixture) {
     block_on(pane.install_package(&first));
     block_on(pane.install_package(&second));
     for item in ["Use a formal greeting", "Greet me"] {
-        assert!(matches!(run_in_copy(&pane, 0, item), Status::Result(_)));
+        assert!(matches!(
+            run_in_copy(&pane, &first, item),
+            Status::Result(_)
+        ));
     }
     // A second Pane on the same data folder caches Second's greeting.
     let other = dirs.launcher();
     for item in ["Use a formal greeting", "Greet me"] {
-        assert!(matches!(run_in_copy(&other, 1, item), Status::Result(_)));
+        assert!(matches!(
+            run_in_copy(&other, &second, item),
+            Status::Result(_)
+        ));
     }
 
     assert_eq!(
@@ -449,11 +451,11 @@ fn clearing_keeps_a_cache_another_pane_saved_meanwhile(fixture: &Fixture) {
     );
 
     let restarted = dirs.launcher();
-    let Status::Result(kept) = run_in_copy(&restarted, 1, "Show what Pane keeps") else {
+    let Status::Result(kept) = run_in_copy(&restarted, &second, "Show what Pane keeps") else {
         panic!("{:?}", restarted.view().status);
     };
     assert!(kept.ends_with("Cached greeting: Good day to you"), "{kept}");
-    let Status::Result(kept) = run_in_copy(&restarted, 0, "Show what Pane keeps") else {
+    let Status::Result(kept) = run_in_copy(&restarted, &first, "Show what Pane keeps") else {
         panic!("{:?}", restarted.view().status);
     };
     assert!(kept.ends_with("Cached greeting: none"), "{kept}");

@@ -18,7 +18,7 @@ use serde_json::json;
 
 /// (component file in `guests/prebuilt/` and `target/guests/`, source
 /// package) of each prebuilt JS/TS sample.
-pub(crate) const SAMPLES: [(&str, &str); 41] = [
+pub(crate) const SAMPLES: [(&str, &str); 45] = [
     ("sample_js", "guests/sample-js"),
     ("sample_ts", "guests/sample-ts"),
     ("sample_settings_js", "guests/sample-settings-js"),
@@ -29,6 +29,10 @@ pub(crate) const SAMPLES: [(&str, &str); 41] = [
     ("sample_applications_ts", "guests/sample-applications-ts"),
     ("sample_query_js", "guests/sample-query-js"),
     ("sample_query_ts", "guests/sample-query-ts"),
+    ("sample_keywords_js", "guests/sample-keywords-js"),
+    ("sample_keywords_ts", "guests/sample-keywords-ts"),
+    ("sample_matches_js", "guests/sample-matches-js"),
+    ("sample_matches_ts", "guests/sample-matches-ts"),
     ("sample_no_view_js", "guests/sample-no-view-js"),
     ("sample_no_view_ts", "guests/sample-no-view-ts"),
     ("sample_search_js", "guests/sample-search-js"),

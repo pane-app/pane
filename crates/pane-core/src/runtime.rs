@@ -93,7 +93,7 @@ pub use tree::{
 pub(crate) mod bindings {
     wasmtime::component::bindgen!({
         path: "../../wit",
-        world: "extension-with-windows",
+        world: "extension-with-typed-folder",
         imports: {
             "pane:extension/operations": store,
             "pane:extension/helpers": store,
@@ -110,6 +110,9 @@ pub(crate) mod bindings {
             // starting, the clipboard held by another program), off the
             // runtime thread, which awaits them.
             "pane:extension/system": async,
+            // Listing the folder the user typed reads the file system,
+            // which may block, off the runtime thread, which awaits it.
+            "pane:extension/typed-folder": async,
             // What the Run dialog runs waits for the shell and Windows'
             // elevation prompt, off the runtime thread, which awaits it.
             "pane:extension/run": async,
@@ -180,7 +183,8 @@ use bindings::pane::extension::{
 };
 use bindings::pane::extension::{
     feedback as feedback_host, run as run_host, system as system_host,
-    system_commands as system_commands_host, window as window_host, windows as windows_host,
+    system_commands as system_commands_host, typed_folder as typed_folder_host,
+    window as window_host, windows as windows_host,
 };
 use indexed_bindings::exports::pane::extension::indexed_results;
 use root_bindings::exports::pane::extension::root_results;
@@ -298,6 +302,45 @@ fn stoppable() -> (StopSearch, SearchStopped) {
 pub(crate) struct RootResult {
     pub listing: ResultListing,
     pub action: RootAction,
+    /// The answer's card, when the result is one: its own section, its
+    /// swatch and further ways to copy it (see [`AnswerDetail`]).
+    pub answer: Option<AnswerDetail>,
+}
+
+/// What a root result that is an answer's card says beyond its title and
+/// action: the section it sits under, the colour of its swatch and
+/// further ways to copy it, as the command answered (the calculator's
+/// colour and date answers, #196).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct AnswerDetail {
+    /// The section the answer is listed under, in place of the command's
+    /// title ("Color", "Date & Time").
+    pub section: String,
+    /// The colour of the card's swatch, as `#RRGGBB` or `#RRGGBBAA`;
+    /// `None` when the answer is not a colour.
+    pub swatch: Option<String>,
+    /// Further ways to copy the answer, each an entry of the Actions
+    /// panel, in order.
+    pub copies: Vec<AnswerCopy>,
+}
+
+/// One further way to copy a computed answer, as the Actions panel offers
+/// it: what the copy is called and the text it copies.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct AnswerCopy {
+    pub title: String,
+    pub text: String,
+}
+
+/// When a query is asked about: the moment the user stopped at it, in
+/// milliseconds since the Unix epoch, and how far the local time there
+/// is from UTC, by the clock root search's own dates are shown by (a
+/// test's, in a test).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct WallTime {
+    pub milliseconds: u64,
+    /// In milliseconds.
+    pub offset: i64,
 }
 
 /// What invoking a computed root result does; Pane performs it.
@@ -836,6 +879,7 @@ enum Request {
     RootResults {
         component: PathBuf,
         query: String,
+        at: WallTime,
         data: Option<PackageData>,
         reply: oneshot::Sender<Result<Vec<RootResult>, CallError>>,
     },
@@ -1389,6 +1433,15 @@ impl Runtime {
         self.shared.applications.on_change(Arc::new(changed));
     }
 
+    /// The components that asked for the installed applications and may
+    /// still run: what they supply ahead of the query may have changed
+    /// when the applications did, and is asked for again then (see
+    /// [`Runtime::on_applications_changed`]), so a show of root search
+    /// that changed nothing asks them for nothing (#202).
+    pub(crate) fn applications_askers(&self) -> Vec<PathBuf> {
+        self.shared.applications.askers()
+    }
+
     /// Has the runtime list granted folders through `folders` from now on,
     /// instead of this system's own ([`crate::files::native`]).
     pub fn set_folders(&self, folders: Arc<dyn Folders>) {
@@ -1427,12 +1480,13 @@ impl Runtime {
     }
 
     /// Asks the command in `component`, which computes root results, for
-    /// its results for `query`; the command reads and saves `data`.
-    /// Starts its instance if it has none.
+    /// its results for `query` at `at` (see [`WallTime`]); the command
+    /// reads and saves `data`. Starts its instance if it has none.
     pub(crate) async fn root_results_with(
         &self,
         component: &Path,
         query: &str,
+        at: WallTime,
         data: Option<PackageData>,
     ) -> Result<Vec<RootResult>, CallError> {
         let (reply, response) = oneshot::channel();
@@ -1440,6 +1494,7 @@ impl Runtime {
             Request::RootResults {
                 component: component.to_path_buf(),
                 query: query.to_owned(),
+                at,
                 data,
                 reply,
             },
@@ -1621,6 +1676,17 @@ impl Runtime {
     /// searching commands starts none; invoking a command starts its own.
     pub async fn running(&self) -> Vec<PathBuf> {
         self.try_running().await.unwrap_or_default()
+    }
+
+    /// How many times an instance of `component` was started: a diagnostic
+    /// for tests and logs, like [`Runtime::running`]. A cancelled call
+    /// drops its instance, so a call after it starts one again; root search
+    /// asks a provider once a burst of keystrokes has gone quiet (#202).
+    pub fn instance_starts(&self, component: &Path) -> u64 {
+        lock(&self.shared.starts)
+            .get(component)
+            .copied()
+            .unwrap_or(0)
     }
 
     /// The components with calls the user asked for that have not answered
@@ -2556,7 +2622,7 @@ impl WasiHttpView for GuestState {
 /// A running guest instance of one component.
 struct Instance {
     store: Store<GuestState>,
-    bindings: bindings::ExtensionWithWindows,
+    bindings: bindings::ExtensionWithTypedFolder,
     /// Its root results export, if it has one.
     root_results: Option<root_bindings::RootResultsProvider>,
     /// Its indexed results export, if it has one.
@@ -2689,6 +2755,9 @@ struct Host {
     next_chain: Cell<u64>,
     /// The next instance's serial.
     next_serial: Cell<u64>,
+    /// How many times each component was instantiated, shared with the
+    /// runtime's handles: a diagnostic for tests (#202).
+    starts: Arc<Mutex<HashMap<PathBuf, u64>>>,
     /// Woken whenever an instance taken out for a call comes back or goes.
     returned: tokio::sync::Notify,
     /// Where an instance's undo asks this thread to drop the instances of
@@ -2784,6 +2853,11 @@ impl Code {
             |state| state,
         )
         .expect("registering the file index in a fresh linker cannot conflict");
+        typed_folder_host::add_to_linker::<_, wasmtime::component::HasSelf<_>>(
+            &mut linker,
+            |state| state,
+        )
+        .expect("registering the typed folder listing in a fresh linker cannot conflict");
         launching::add_to_linker::<_, wasmtime::component::HasSelf<_>>(&mut linker, |state| state)
             .expect("registering launching commands in a fresh linker cannot conflict");
         window_host::add_to_linker::<_, wasmtime::component::HasSelf<_>>(&mut linker, |state| {
@@ -2950,7 +3024,7 @@ impl Code {
                 ))
             })?;
         }
-        bindings::ExtensionWithWindowsPre::new(pre).map_err(interface)?;
+        bindings::ExtensionWithTypedFolderPre::new(pre).map_err(interface)?;
         Ok(Checked { network, programs })
     }
 }
@@ -2974,6 +3048,7 @@ impl Host {
             next_view: shared.next_view.clone(),
             next_chain: Cell::new(0),
             next_serial: Cell::new(0),
+            starts: shared.starts.clone(),
             returned: tokio::sync::Notify::new(),
             nudge,
             directory: shared.directory.clone(),
@@ -3121,10 +3196,13 @@ impl Host {
             Request::RootResults {
                 component,
                 query,
+                at,
                 data,
                 mut reply,
             } => Box::pin(async move {
-                let result = self.root_results(&component, query, data, &mut reply).await;
+                let result = self
+                    .root_results(&component, query, at, data, &mut reply)
+                    .await;
                 let _ = reply.send(result);
             }),
 
@@ -3742,6 +3820,7 @@ impl Host {
         &self,
         path: &Path,
         query: String,
+        at: WallTime,
         data: Option<PackageData>,
         reply: &mut oneshot::Sender<Result<Vec<RootResult>, CallError>>,
     ) -> Result<Vec<RootResult>, CallError> {
@@ -3765,6 +3844,11 @@ impl Host {
             .ok_or_else(|| {
                 CallError::Interface(format!("it does not export {ROOT_RESULTS_INTERFACE}"))
             })?;
+        // The moment the query was asked about, as the interface carries it.
+        let at = root_results::WallTime {
+            milliseconds: at.milliseconds,
+            offset: at.offset,
+        };
         let result = self
             .run_guest_until(
                 path,
@@ -3772,7 +3856,9 @@ impl Host {
                 async |instance| {
                     instance
                         .store
-                        .run_concurrent(async |store| provider.call_results_for(store, query).await)
+                        .run_concurrent(async |store| {
+                            provider.call_results_for(store, query, at).await
+                        })
                         .await
                 },
                 reply.closed(),
@@ -3792,6 +3878,18 @@ impl Host {
                     root_results::RootAction::OpenUrl(url) => RootAction::OpenUrl(url),
                     root_results::RootAction::OpenFile(path) => RootAction::OpenFile(path),
                 },
+                answer: result.answer.map(|answer| AnswerDetail {
+                    section: answer.section,
+                    swatch: answer.swatch,
+                    copies: answer
+                        .copies
+                        .into_iter()
+                        .map(|copy| AnswerCopy {
+                            title: copy.title,
+                            text: copy.text,
+                        })
+                        .collect(),
+                }),
             })
             .collect())
     }
@@ -4514,7 +4612,8 @@ impl Host {
             }
             started => started?,
         };
-        let bindings = bindings::ExtensionWithWindows::new(&mut store, &instance).map_err(load)?;
+        let bindings =
+            bindings::ExtensionWithTypedFolder::new(&mut store, &instance).map_err(load)?;
         // Only a command that computes root results exports them.
         let root_results = root_bindings::RootResultsProvider::new(&mut store, &instance).ok();
         // Only a command that supplies results ahead of the query exports
@@ -4546,6 +4645,10 @@ impl Host {
         });
         let serial = self.next_serial.get();
         self.next_serial.set(serial + 1);
+        // Counted for the diagnostic of when a component starts again
+        // (#202): a cancelled call drops its instance, so the call after
+        // it starts one.
+        *lock(&self.starts).entry(path.to_path_buf()).or_insert(0) += 1;
         self.instances.borrow_mut().insert(
             path.to_path_buf(),
             Instance {

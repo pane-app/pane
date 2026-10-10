@@ -244,6 +244,10 @@ pub(super) struct Shared {
     /// The threads made to hang, for releasing them.
     #[cfg(any(test, debug_assertions))]
     hung: Mutex<Vec<Arc<Faults>>>,
+    /// How many times each component was instantiated: a diagnostic for
+    /// tests of when a component starts again (#202). The runtime thread
+    /// counts; the handles read.
+    pub(super) starts: Arc<Mutex<HashMap<PathBuf, u64>>>,
     /// Where compiled code, and the installed applications' icons, are
     /// kept; `None` for a runtime keeping no disposable data.
     pub(super) cache_dir: Option<PathBuf>,
@@ -359,6 +363,7 @@ impl Shared {
             busy: Mutex::default(),
             #[cfg(any(test, debug_assertions))]
             hung: Mutex::default(),
+            starts: Arc::default(),
             cache_dir,
             current: Mutex::new(Current {
                 thread: None,

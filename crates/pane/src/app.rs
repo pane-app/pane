@@ -18,16 +18,17 @@ use std::path::Path;
 
 use gpui::{
     App, ClipboardItem, Context, Div, Entity, EntityInputHandler, FocusHandle, Focusable, Hsla,
-    KeyDownEvent, MouseMoveEvent, ObjectFit, PathPromptOptions, Pixels, Point, Role, SharedString,
-    Size, Stateful, Window, div, img, prelude::*, px, relative,
+    KeyDownEvent, Keystroke, MouseMoveEvent, ObjectFit, PathPromptOptions, Pixels, Point, Role,
+    SharedString, Size, Stateful, Window, div, img, prelude::*, px, relative,
 };
 use pane_core::changes::Changes;
 use pane_core::feedback::WindowRequest;
 use pane_core::hotkeys::Shortcut;
 use pane_core::tray::TrayAction;
 use pane_core::{
-    ComputedAnswer, FolderAsk, Launcher, LauncherView, ListPresentation, NextShowing, Row,
-    RowPresentation, Screen, SelectedAction, SettingsTarget, Status, WindowPresence,
+    ComputedAnswer, FolderAsk, KeyboardAction, Launcher, LauncherView, ListPresentation,
+    NextShowing, Row, RowPresentation, Screen, SelectedAction, SettingsTarget, Status,
+    WindowPresence,
 };
 
 use crate::extension_views::{custom_view, form};
@@ -37,10 +38,12 @@ use crate::features::clipboard_history;
 use crate::features::compact_pins;
 use crate::features::confirmation;
 use crate::features::footer_menu;
+use crate::features::held_keys;
 use crate::features::hud;
 use crate::features::number_hints::row_number;
 use crate::features::quick_slots;
 use crate::features::root_search;
+use crate::features::root_search::arguments as argument_fields;
 use crate::features::settings;
 use crate::features::toast;
 use crate::features::update_results;
@@ -99,6 +102,22 @@ pub struct LauncherWindow {
     /// What the window's live region says of the selection and the
     /// footer's message (#132); see [`features::announcer`].
     pub(crate) announcer: announcer::Announcer,
+    /// The keys the window holds while the current query's list is not
+    /// yet published, and how they are replayed (#203; see
+    /// [`features::held_keys`]).
+    pub(crate) held: held_keys::HeldKeys,
+    /// Root search's inline argument fields' controls, while the selected
+    /// row's command declares arguments (#205; see
+    /// [`features::root_search::arguments`]).
+    pub(crate) arguments: Option<argument_fields::ArgumentControls>,
+    /// The walk through root search's recent queries while one stands
+    /// (#206; see [`features::root_search::recall`]): which entry the
+    /// query on screen was restored from.
+    pub(crate) recall: Option<root_search::Recall>,
+    /// The caret's place in the query, in characters, as the window last
+    /// knew it — counted wherever the window moves it, so the argument
+    /// fields' edge keys know when Right leaves the query (#205).
+    pub(crate) query_caret: usize,
     /// The HUD's window, while one shows; see [`features::hud`].
     pub(crate) hud: hud::HudWindow,
     /// The confirmation a command asks for: its focus and "Don't ask
@@ -190,7 +209,7 @@ struct ScrolledFor {
 impl LauncherWindow {
     pub fn new(launcher: Launcher, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let focus_handle = cx.focus_handle();
-        let query = root_search::QueryField::new(cx);
+        let query = root_search::QueryField::new(window, cx);
         // The launcher starts at root search.
         query.focus(window, cx);
         // The footer menu's button, first of the strip's controls.
@@ -201,6 +220,11 @@ impl LauncherWindow {
         // in effect, and the platform's appearance notification feeds the
         // system's appearance back into them (see `crate::settings`).
         crate::settings::bind_window_appearance(&crate::settings::ensure(cx), window, cx);
+        // Root search's learning follows the Launcher page's switch from
+        // the start: the blank query's list was ranked when the launcher
+        // was made, before any keystroke pushed the switch, so it ranks
+        // again at once here while the switch is off (#200).
+        launcher.set_learning(crate::settings::learning_of(cx));
         // The launcher this window runs owns the global-shortcut
         // registration: the recorded Open Pane hotkey is applied to the
         // system here, at startup, and the settings keep this launcher for
@@ -241,6 +265,10 @@ impl LauncherWindow {
             update_results: None,
             toast: toast::ToastControls::new(cx),
             announcer: announcer::Announcer::default(),
+            held: held_keys::HeldKeys::default(),
+            arguments: None,
+            recall: None,
+            query_caret: 0,
             hud: hud::HudWindow::default(),
             confirmation: confirmation::ConfirmationControls::new(cx),
             home: quick_slots::Home::default(),
@@ -384,6 +412,9 @@ impl LauncherWindow {
                             .update(cx, |settings, _| settings.set_tray_paused(paused));
                     }
                     this.sync_screen(window, cx);
+                    // A publication that arrived in the background applies
+                    // the keys the window held for the query's list (#203).
+                    this.replay_held_keys_if_published(window, cx);
                     cx.notify();
                 });
                 if shown.is_err() {
@@ -485,20 +516,44 @@ impl LauncherWindow {
         self.window_requested(WindowRequest::Hud(hud), window, cx);
     }
 
-    pub(crate) fn select_next(&mut self, _: &SelectNext, _: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn select_next(
+        &mut self,
+        _: &SelectNext,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        // Down ends the walk through the recent queries (#206): any
+        // other key than the walking Up does.
+        self.recall = None;
         self.launcher.move_selection(1);
         self.announcer.user_moved();
+        // The selected row's argument fields follow it (#205).
+        self.sync_arguments(window, cx);
         cx.notify();
     }
 
     pub(crate) fn select_previous(
         &mut self,
         _: &SelectPrevious,
-        _: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // The previous-result key is the history's while the query is
+        // empty or a standing walk's, and the first row (or no row) is
+        // selected (#206): the key is handed on to the listener that
+        // sees the press itself, which walks only a press — the system's
+        // repeat of a key still held never walks.
+        if self.recall_ready() {
+            cx.propagate();
+            return;
+        }
+        // The key moves the selection as it always did: the walk, if one
+        // stood, is over.
+        self.recall = None;
         self.launcher.move_selection(-1);
         self.announcer.user_moved();
+        // The selected row's argument fields follow it (#205).
+        self.sync_arguments(window, cx);
         cx.notify();
     }
 
@@ -508,12 +563,17 @@ impl LauncherWindow {
     pub(crate) fn select_next_page(
         &mut self,
         _: &SelectNextPage,
-        _: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // Page Down ends the walk through the recent queries, as Down
+        // does (#206).
+        self.recall = None;
         let step = virtual_list::page_move(Some(self.paged_list()), true);
         self.launcher.move_selection(step);
         self.announcer.user_moved();
+        // The selected row's argument fields follow it (#205).
+        self.sync_arguments(window, cx);
         cx.notify();
     }
 
@@ -522,12 +582,17 @@ impl LauncherWindow {
     pub(crate) fn select_previous_page(
         &mut self,
         _: &SelectPreviousPage,
-        _: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // Page Up ends the walk through the recent queries, as Up moving
+        // the selection does (#206).
+        self.recall = None;
         let step = virtual_list::page_move(Some(self.paged_list()), false);
         self.launcher.move_selection(step);
         self.announcer.user_moved();
+        // The selected row's argument fields follow it (#205).
+        self.sync_arguments(window, cx);
         cx.notify();
     }
 
@@ -539,11 +604,35 @@ impl LauncherWindow {
             .map_or(&self.results.list, |files| &files.list)
     }
 
+    /// The query field's placeholder on root search: the selected
+    /// command's title, while its argument fields show after the query,
+    /// so the user knows what they are filling in — else the search's own
+    /// (#205).
+    fn search_placeholder(&self) -> String {
+        self.launcher
+            .argument_fields()
+            .map(|fields| fields.title)
+            .unwrap_or_else(|| root_search::ROOT_PLACEHOLDER.to_owned())
+    }
+
     pub(crate) fn confirm(&mut self, _: &Confirm, window: &mut Window, cx: &mut Context<Self>) {
+        // Enter ends the walk through the recent queries (#206), whatever
+        // it runs — a held key included.
+        self.recall = None;
         // The open Actions panel takes Enter from the key press itself, once
         // per press ([`LauncherWindow::panel_keys`]).
         if self.actions.is_some() {
             cx.propagate();
+            return;
+        }
+        // Enter waits for the current query's list to be published (#203):
+        // the key is held, then replayed through this same path, so it
+        // invokes the row the published list selects — and hands itself on
+        // to the item's actions below as a pressed Enter does. The key is
+        // consumed here, nothing else seeing it.
+        if held_keys::keystroke_of(KeyboardAction::InvokeSelectedAction, cx)
+            .is_some_and(|key| self.hold_key(key, window, cx))
+        {
             return;
         }
         // An item of a command's list (or a row of root search with actions
@@ -634,6 +723,12 @@ impl LauncherWindow {
         if event.is_held {
             return;
         }
+        // The chord or the shortcut waits for the current query's list to
+        // be published (#203), as Enter does, and is replayed through this
+        // same path — applied to the row the published list selects.
+        if self.hold_key(event.keystroke.clone(), window, cx) {
+            return;
+        }
         if actions
             .actions
             .get(index)
@@ -662,6 +757,12 @@ impl LauncherWindow {
             || self.close_open_menu(window, cx)
             || self.close_actions(window, cx)
         {
+            return;
+        }
+        // Escape in an argument field returns the focus to the query with
+        // its text selected; the next Escape is the usual one (#205).
+        if self.focused_argument(window, cx).is_some() {
+            self.escape_argument(window, cx);
             return;
         }
         // The Keyboard page's escape behavior: hide from wherever the
@@ -1229,6 +1330,69 @@ impl LauncherWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // Tab ends the walk through the recent queries (#206), as any
+        // key but the walking Up does — held or pressed.
+        self.recall = None;
+        // Tab waits for the current query's list to be published (#203)
+        // and is replayed through this same path, so a Tab held under one
+        // query completes the typed folder the published list selects
+        // (#204) as a pressed Tab does.
+        if self.hold_key(
+            Keystroke::parse("tab").expect("tab is a keystroke"),
+            window,
+            cx,
+        ) {
+            return;
+        }
+        // Tab completes the query to a folder of the typed folder's
+        // entries when the selected row is one of them (#204), in place
+        // of focusing the next field: only a row of that kind takes it,
+        // so Tab still focuses the argument fields (#205) on any other
+        // row.
+        if let Some(query) = self.launcher.typed_folder_completion() {
+            self.query.replace(&query, cx);
+            return;
+        }
+        // Tab in an argument field goes to the next one, and from the
+        // last back to the query (#205).
+        if let Some(index) = self.focused_argument(window, cx) {
+            self.mark_left_argument(index);
+            let last = self
+                .launcher
+                .argument_fields()
+                .map(|fields| fields.fields.len())
+                .unwrap_or(0);
+            if index + 1 >= last {
+                self.query.focus(window, cx);
+            } else {
+                self.focus_argument(index + 1, window, cx);
+            }
+            return;
+        }
+        if self.query_field().focus_handle(cx).is_focused(window) {
+            // Tab after a word that is a command's alias enters what the
+            // alias names, as a space after it does (#205): the command's
+            // fields, focused on their first empty one, or the command
+            // itself.
+            match self.launcher.alias_after_tab() {
+                Some(pane_core::AliasFlow::Fields) => {
+                    self.enter_arguments(window, cx);
+                    return;
+                }
+                Some(pane_core::AliasFlow::Opens) => {
+                    self.activate_selected(window, cx);
+                    return;
+                }
+                None => {}
+            }
+            // Tab in the query, the selected row's fields showing: the
+            // first empty one of them, the first when none is empty
+            // (#205).
+            if self.launcher.argument_fields().is_some() {
+                self.enter_arguments(window, cx);
+                return;
+            }
+        }
         window.focus_next(cx);
     }
 
@@ -1238,6 +1402,44 @@ impl LauncherWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // Shift+Tab ends the walk through the recent queries (#206), as
+        // any key but the walking Up does — held or pressed.
+        self.recall = None;
+        // Shift+Tab waits for the query's list as Tab does (#203), and
+        // removes the last path component of the published query when
+        // replayed (#204).
+        if self.hold_key(
+            Keystroke::parse("shift-tab").expect("shift-tab is a keystroke"),
+            window,
+            cx,
+        ) {
+            return;
+        }
+        // Shift+Tab removes the last path component of the typed path the
+        // query is (#204), in place of focusing the previous field.
+        if let Some(query) = self.launcher.typed_path_parent() {
+            self.query.replace(&query, cx);
+            return;
+        }
+        // Shift+Tab in an argument field goes to the previous one, and
+        // from the first back to the query (#205).
+        if let Some(index) = self.focused_argument(window, cx) {
+            self.mark_left_argument(index);
+            if index == 0 {
+                self.query.focus(window, cx);
+            } else {
+                self.focus_argument(index - 1, window, cx);
+            }
+            return;
+        }
+        // Shift+Tab in the query, the selected row's fields showing: the
+        // last one of them (#205).
+        if self.query_field().focus_handle(cx).is_focused(window)
+            && let Some(fields) = self.launcher.argument_fields()
+        {
+            self.focus_argument(fields.fields.len().saturating_sub(1), window, cx);
+            return;
+        }
         window.focus_prev(cx);
     }
 
@@ -1263,6 +1465,23 @@ impl LauncherWindow {
     /// again after calling this (see [`crate::ui::motion`]).
     pub(crate) fn activate_selected(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.motion.land_at_once();
+        // Enter (or a click, the footer's button, Ctrl and a digit) inside
+        // an argument field that is required and blank marks it, and the
+        // launcher says what it waits for; nothing runs (#205).
+        if let Some(name) = self.focused_blank_argument(window, cx) {
+            self.launcher.argument_entered(&name);
+            cx.notify();
+            return;
+        }
+        // A blank required argument in the selected row's fields: the
+        // field takes the focus instead of the row running, so a command
+        // is never sent half-filled (#205).
+        if self.blank_required_argument().is_some() {
+            self.sync_arguments(window, cx);
+            let blank = self.blank_required_argument().unwrap_or(0);
+            self.focus_argument(blank, window, cx);
+            return;
+        }
         // The Settings root result opens the Settings window, "Manage
         // Extensions" opens it at the extensions, and the install rows at
         // its install flow (#168): Settings is where extensions are
@@ -1417,6 +1636,9 @@ impl LauncherWindow {
         self.sync_hotkey_recording(window, cx);
         self.sync_form(window, cx);
         self.sync_custom_view(window, cx);
+        // Root search's inline argument fields follow the selected row
+        // (#205).
+        self.sync_arguments(window, cx);
         // Last: coming back to root search, even as a view closes, focuses
         // the query rather than the list.
         self.sync_root_search(window, cx);
@@ -1530,6 +1752,7 @@ impl LauncherWindow {
         &mut self,
         index: usize,
         position: Point<Pixels>,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let moved = self.pointer.is_some_and(|last| last != position);
@@ -1537,7 +1760,7 @@ impl LauncherWindow {
             return;
         }
         if self.launcher.selected() != Some(index) {
-            self.select_under_pointer(index);
+            self.select_under_pointer(index, window, cx);
             cx.notify();
         }
     }
@@ -1548,9 +1771,11 @@ impl LauncherWindow {
     /// row under it, which the next small movement would select and
     /// scroll in turn. Only the keys' selection scrolls, as the
     /// reference's does.
-    fn select_under_pointer(&mut self, index: usize) {
+    fn select_under_pointer(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
         self.launcher.select(index);
         self.announcer.user_moved();
+        // The selected row's argument fields follow it (#205).
+        self.sync_arguments(window, cx);
         if let Some(scrolled_for) = self.scrolled_for.as_mut() {
             scrolled_for.selected = Some(index);
         }
@@ -1569,7 +1794,7 @@ impl LauncherWindow {
             self.activate_selected(window, cx);
             self.motion.pointer_open();
         } else {
-            self.select_under_pointer(index);
+            self.select_under_pointer(index, window, cx);
             cx.notify();
         }
     }
@@ -1676,9 +1901,11 @@ impl LauncherWindow {
         // rows also select under the moving pointer; a command's rows keep
         // their click-runs semantics.
         .when(root, |row| {
-            row.on_mouse_move(cx.listener(move |this, event: &MouseMoveEvent, _, cx| {
-                this.pointer_moved_over(index, event.position, cx);
-            }))
+            row.on_mouse_move(
+                cx.listener(move |this, event: &MouseMoveEvent, window, cx| {
+                    this.pointer_moved_over(index, event.position, window, cx);
+                }),
+            )
         })
         .debug_selector(|| format!("row-{}", row.title))
         // The selected row is not reported as focused: the focus stays in
@@ -1739,9 +1966,11 @@ impl LauncherWindow {
             let press = pressed(visuals.theme.results.card_fill);
             move |card| card.bg(press)
         })
-        .on_mouse_move(cx.listener(move |this, event: &MouseMoveEvent, _, cx| {
-            this.pointer_moved_over(index, event.position, cx);
-        }))
+        .on_mouse_move(
+            cx.listener(move |this, event: &MouseMoveEvent, window, cx| {
+                this.pointer_moved_over(index, event.position, window, cx);
+            }),
+        )
         .debug_selector(|| format!("row-{}", row.title))
         .role(Role::ListBoxOption)
         .aria_label(root_search::layouts::answer_label(answer))
@@ -2190,12 +2419,8 @@ impl Render for LauncherWindow {
             // pins' row under it, where the Launcher page shows them.
             Screen::Root { query } if collapsed => {
                 let pins = self.render_compact_pins(numbers, &theme, cx);
-                self.render_search(
-                    query,
-                    root_search::ROOT_PLACEHOLDER,
-                    div().children(pins),
-                    cx,
-                )
+                let placeholder = self.search_placeholder();
+                self.render_search(query, &placeholder, div().children(pins), cx)
             }
             Screen::Root { query } => {
                 let results = actions_panel::dimmed(
@@ -2203,7 +2428,10 @@ impl Render for LauncherWindow {
                     self.actions.is_some(),
                     &theme,
                 );
-                self.render_search(query, root_search::ROOT_PLACEHOLDER, results, cx)
+                // While the selected row's argument fields show, the
+                // query field's placeholder is the command's title (#205).
+                let placeholder = self.search_placeholder();
+                self.render_search(query, &placeholder, results, cx)
             }
             // The opened command's own search field, the same control.
             Screen::CommandSearch { query } => {
@@ -2268,6 +2496,12 @@ impl Render for LauncherWindow {
             // said last (#141).
             .capture_key_down(cx.listener(Self::toast_action_keys))
             .capture_key_down(cx.listener(Self::item_action_keys))
+            .capture_key_down(cx.listener(Self::held_typing_keys))
+            // The previous-result key pressed while it could be the
+            // history's, seen as the press itself (#206) — after the
+            // item actions' and the held keys' captures, which the key
+            // never matches.
+            .capture_key_down(cx.listener(Self::recall_key))
             .on_action(cx.listener(Self::focus_next))
             .on_action(cx.listener(Self::focus_previous))
             .on_modifiers_changed(cx.listener(Self::modifiers_changed))

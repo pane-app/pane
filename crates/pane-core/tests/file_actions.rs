@@ -38,11 +38,14 @@ use tempfile::TempDir;
 mod feedback;
 #[path = "support/rows.rs"]
 mod rows;
+#[path = "support/settle.rs"]
+mod settle;
 #[path = "support/system.rs"]
 mod system;
 
 use feedback::RecordingWindow;
 use rows::{select_title, titles};
+use settle::wait_for_merges;
 use system::{Done, RecordingSystem};
 
 fn built(path: &str) -> PathBuf {
@@ -275,6 +278,12 @@ impl Pane {
     /// Types `query` into the field on screen and waits for its answer.
     fn search(&self, query: &str) {
         block_on(self.launcher.set_query(query));
+        // The JavaScript and TypeScript guests answer past the 200 ms
+        // budget while their engine starts, and a folder that was still
+        // being listed answers again once it is: the answer merges into
+        // the published list within 16 ms of the search's end (#201),
+        // which the rows read below wait out.
+        wait_for_merges(&self.launcher);
     }
 
     /// Selects the row `title`, with the window shown, as the user sees it.

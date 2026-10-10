@@ -51,6 +51,9 @@ impl Pane {
                 component: component(),
                 takes_query: false,
                 search: false,
+                keywords: Vec::new(),
+                when: pane_core::CommandWhen::Always,
+                matches: pane_core::CommandMatches::Title,
             }],
         );
         Pane { runtime, launcher }
@@ -59,6 +62,17 @@ impl Pane {
     /// The launcher with the fixture's command opened.
     fn opened() -> Pane {
         let pane = Pane::new();
+        // The blank query lists the command and Pane's own rows in the
+        // no-query order (#199): "Settings…" comes before "Trees", so the
+        // fixture's row is chosen by its title.
+        let index = pane
+            .launcher
+            .view()
+            .rows
+            .iter()
+            .position(|row| row.title == "Trees")
+            .expect("the fixture's command is listed");
+        pane.launcher.select(index);
         block_on(pane.launcher.activate_selected());
         assert_eq!(pane.launcher.view().screen, Screen::Command);
         pane
@@ -234,6 +248,16 @@ fn an_unreadable_tree_when_the_command_opens_is_shown_as_a_failed_view() {
         Ok(pane_core::Answer::default())
     );
 
+    // The blank query lists the fixture's row behind "Settings…" in the
+    // no-query order (#199): the command is chosen by its title.
+    let index = pane
+        .launcher
+        .view()
+        .rows
+        .iter()
+        .position(|row| row.title == "Trees")
+        .expect("the fixture's command is listed");
+    pane.launcher.select(index);
     block_on(pane.launcher.activate_selected());
 
     assert!(

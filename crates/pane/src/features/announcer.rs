@@ -153,8 +153,7 @@ pub(crate) enum Target {
     /// Nothing, because the list has nothing to select: no rows, or root
     /// search's notice that nothing matched.
     NoResults,
-    /// Nothing, with rows listed (root search's fallbacks are never
-    /// selected by themselves).
+    /// Nothing, with rows listed but none of them selected.
     Nothing,
 }
 

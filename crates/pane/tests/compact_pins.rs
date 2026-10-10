@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 
 use gpui::{Entity, Modifiers, TestAppContext, VisualTestContext, px};
 use pane::LauncherWindow;
-use pane_core::{CommandRegistration, Launcher, Runtime, Screen};
+use pane_core::{CommandMatches, CommandRegistration, CommandWhen, Launcher, Runtime, Screen};
 
 #[path = "support/settle.rs"]
 mod settle;
@@ -39,6 +39,9 @@ fn command(title: &str, guest: &str) -> CommandRegistration {
         component,
         takes_query: false,
         search: false,
+        keywords: Vec::new(),
+        when: CommandWhen::Always,
+        matches: CommandMatches::Title,
     }
 }
 

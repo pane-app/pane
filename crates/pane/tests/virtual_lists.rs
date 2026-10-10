@@ -60,6 +60,9 @@ fn commands(count: usize, title: impl Fn(usize) -> String) -> Vec<CommandRegistr
             component: PathBuf::from("never-run.wasm"),
             takes_query: false,
             search: false,
+            keywords: Vec::new(),
+            when: pane_core::CommandWhen::Always,
+            matches: pane_core::CommandMatches::Title,
         })
         .collect()
 }

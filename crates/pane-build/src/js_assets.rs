@@ -20,7 +20,7 @@ use std::path::Path;
 /// needs of it, and the adapter and `console` the bundled entry imports.
 /// Staged at `<work>/js` beside the package, where its `file:../js`
 /// devDependency resolves.
-const SDK: [(&str, &str); 39] = [
+const SDK: [(&str, &str); 40] = [
     (
         "LICENSE-APACHE",
         include_str!("../../../guests/js/LICENSE-APACHE"),
@@ -127,6 +127,10 @@ const SDK: [(&str, &str); 39] = [
     ),
     ("system.js", include_str!("../../../guests/js/system.js")),
     (
+        "typed-folder.d.ts",
+        include_str!("../../../guests/js/typed-folder.d.ts"),
+    ),
+    (
         "windows.d.ts",
         include_str!("../../../guests/js/windows.d.ts"),
     ),
@@ -138,7 +142,7 @@ const SDK: [(&str, &str); 39] = [
 ];
 
 /// Pane's WIT, copied into the world's `deps/pane-extension/`.
-const PANE_WIT: [(&str, &str); 19] = [
+const PANE_WIT: [(&str, &str); 20] = [
     ("extension.wit", include_str!("../../../wit/extension.wit")),
     ("commands.wit", include_str!("../../../wit/commands.wit")),
     ("feedback.wit", include_str!("../../../wit/feedback.wit")),
@@ -175,6 +179,10 @@ const PANE_WIT: [(&str, &str); 19] = [
     (
         "file-index.wit",
         include_str!("../../../wit/file-index.wit"),
+    ),
+    (
+        "typed-folder.wit",
+        include_str!("../../../wit/typed-folder.wit"),
     ),
 ];
 

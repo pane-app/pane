@@ -338,6 +338,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "sample-keywords"
+version = "0.1.0"
+dependencies = [
+ "pane-extension",
+]
+
+[[package]]
+name = "sample-matches"
+version = "0.1.0"
+dependencies = [
+ "pane-extension",
+]
+
+[[package]]
 name = "sample-no-view"
 version = "0.1.0"
 dependencies = [

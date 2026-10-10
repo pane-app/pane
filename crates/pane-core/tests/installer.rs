@@ -394,7 +394,10 @@ fn acquiring_says_what_is_being_set_up_and_leaves_the_core_usable() {
         "{:?}",
         titles(&launcher)
     );
-    // Typing in root search still works while the fetches are in flight.
+    // Typing in root search still works while the fetches are in flight,
+    // and Pane's install row matches "calc" fuzzily (#193).
+    search(&launcher, "calc");
+    assert_eq!(titles(&launcher), ["Install extension from folder…"]);
     search(&launcher, "zzz");
     assert!(titles(&launcher).is_empty(), "{:?}", titles(&launcher));
     acquiring.join().unwrap();
@@ -615,14 +618,14 @@ fn an_unreachable_repository_leaves_the_core_usable_and_a_row_tries_again() {
     assert_eq!(
         titles(&launcher),
         [
-            "Install extension from folder…",
-            "Install extension from npm…",
-            "Install extension from Git…",
             "Create Extension…",
             "Import Extension…",
-            "Set up Icons sample",
+            "Install extension from folder…",
+            "Install extension from Git…",
+            "Install extension from npm…",
             "Set up Helper sample",
-            // Pane's own row, listed after every command.
+            "Set up Icons sample",
+            // Pane's own row, ranked with the retry rows by title (#199).
             "Settings…"
         ]
     );

@@ -15,8 +15,8 @@ use gpui::{Entity, Modifiers, MouseButton, TestAppContext, VisualTestContext, pr
 use pane::LauncherWindow;
 use pane_core::tray::TrayAction;
 use pane_core::{
-    CommandRegistration, Hud, Launcher, LauncherView, Runtime, Screen, ShownToast, Status,
-    ToastStyle,
+    CommandMatches, CommandRegistration, CommandWhen, Hud, Launcher, LauncherView, Runtime, Screen,
+    ShownToast, Status, ToastStyle,
 };
 
 #[path = "support/settle.rs"]
@@ -56,6 +56,9 @@ fn opened(cx: &mut TestAppContext) -> (Entity<LauncherWindow>, &mut VisualTestCo
         component,
         takes_query: false,
         search: false,
+        keywords: Vec::new(),
+        when: CommandWhen::Always,
+        matches: CommandMatches::Title,
     };
     let launcher = Launcher::new(Runtime::start(), vec![command]);
     cx.executor().allow_parking();

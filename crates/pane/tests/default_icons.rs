@@ -22,7 +22,7 @@ mod packages;
 #[path = "support/settle.rs"]
 mod settle;
 
-use settle::settle;
+use settle::{published, settle};
 
 /// A sample package: its name, its title, and its rows' tiles (the row's
 /// title, the image file it draws).
@@ -136,7 +136,9 @@ fn search(window: &Entity<LauncherWindow>, cx: &mut VisualTestContext, query: &s
         cx.simulate_keystrokes(&vec!["backspace"; typed].join(" "));
     }
     cx.simulate_input(query);
-    settle(window, cx);
+    // The query's list is published once its providers answered or its
+    // budget ended (#201).
+    published(window, cx);
 }
 
 /// The selected row's title.
