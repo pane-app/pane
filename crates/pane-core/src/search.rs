@@ -604,7 +604,7 @@ pub(crate) fn ranked_matches<'a>(
     let mut ranked: Vec<(usize, Ranked)> = candidates
         .enumerate()
         .filter(|(_, candidate)| matches(candidate))
-        .map(|(index, candidate)| (index, Ranked::of(query, candidate)))
+        .map(|(index, candidate)| (index, Ranked::of(query, &candidate)))
         .collect();
     ranked.sort_by(|(_, a), (_, b)| compare(a, b));
     ranked.into_iter().map(|(index, _)| index).collect()

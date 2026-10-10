@@ -92,7 +92,10 @@ fn app(name: &str) -> Application {
 fn found_as(name: &str, alternate: &[&str], keywords: &[&str]) -> Application {
     Application {
         alternate_titles: alternate.iter().map(|title| (*title).to_owned()).collect(),
-        keywords: keywords.iter().map(|keyword| (*keyword).to_owned()).collect(),
+        keywords: keywords
+            .iter()
+            .map(|keyword| (*keyword).to_owned())
+            .collect(),
         ..app(name)
     }
 }

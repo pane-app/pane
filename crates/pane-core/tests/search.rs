@@ -305,7 +305,11 @@ fn every_letter_of_the_query_must_place_in_order() {
 fn matches_the_comparator_cannot_tell_apart_keep_root_search_order() {
     let launcher = without_runtime(vec![
         command_titled("first", "Sample", Some("One row of a title two rows share")),
-        command_titled("second", "Sample", Some("One row of a title two rows share")),
+        command_titled(
+            "second",
+            "Sample",
+            Some("One row of a title two rows share"),
+        ),
         command_titled("third", "Sample", Some("One row of a title two rows share")),
     ]);
     // Three rows no step can tell apart: the exact title ties (step 2),
@@ -341,7 +345,11 @@ fn rows(launcher: &Launcher) -> Vec<String> {
 fn the_query_being_the_alias_ranks_above_an_exact_title() {
     let dirs = Dirs::new();
     let launcher = with_commands(&dirs, vec![command("Alpha", None), command("Beta", None)]);
-    block_on(launcher.set_alias("beta", "alpha").expect("the alias is taken"));
+    block_on(
+        launcher
+            .set_alias("beta", "alpha")
+            .expect("the alias is taken"),
+    );
 
     block_on(launcher.set_query("alpha"));
     assert_eq!(titles(&launcher), ["Beta", "Alpha"]);
@@ -355,9 +363,16 @@ fn an_exact_title_ranks_above_a_result_the_alias_of_which_starts_with_the_query(
     let dirs = Dirs::new();
     let launcher = with_commands(
         &dirs,
-        vec![command("Alpha", None), command_titled("best", "Alpha Best", None)],
+        vec![
+            command("Alpha", None),
+            command_titled("best", "Alpha Best", None),
+        ],
     );
-    block_on(launcher.set_alias("best", "alphabet").expect("the alias is taken"));
+    block_on(
+        launcher
+            .set_alias("best", "alphabet")
+            .expect("the alias is taken"),
+    );
 
     block_on(launcher.set_query("alpha"));
     assert_eq!(titles(&launcher), ["Alpha", "Alpha Best"]);
@@ -385,7 +400,11 @@ fn the_alias_starting_with_the_query_matches_and_ranks_above_the_scores() {
         &dirs,
         vec![command("Zed Row", None), command("Quiet Owl", None)],
     );
-    block_on(launcher.set_alias("quiet-owl", "zedx").expect("the alias is taken"));
+    block_on(
+        launcher
+            .set_alias("quiet-owl", "zedx")
+            .expect("the alias is taken"),
+    );
 
     block_on(launcher.set_query("zed"));
     assert_eq!(
@@ -650,12 +669,7 @@ fn an_installed_command_is_found_by_its_title_or_its_package_title() {
 /// A manifest for a package titled `title` with one command titled
 /// `command` whose own subtitle is `subtitle` and whose `keywords` are
 /// given.
-fn manifest_with_keywords(
-    title: &str,
-    command: &str,
-    subtitle: &str,
-    keywords: &[&str],
-) -> String {
+fn manifest_with_keywords(title: &str, command: &str, subtitle: &str, keywords: &[&str]) -> String {
     let keywords = keywords
         .iter()
         .map(|keyword| format!("\"{keyword}\""))

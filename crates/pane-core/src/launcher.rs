@@ -4917,14 +4917,11 @@ fn root_rows(state: &State, query: &str) -> (Vec<Row>, Vec<Entry>) {
     let keys = |&(result, kind, provider)| candidate(result, kind, provider);
     let parsed = Query::new(query);
     let named = |index: &usize| parsed.is_alias_of(&candidates[*index].0.keys);
-    let matches: Vec<usize> = search::ranked_matches(
-        &parsed,
-        candidates.iter().map(keys),
-        state.sensitivity,
-    )
-    .into_iter()
-    .filter(|index| !named(index))
-    .collect();
+    let matches: Vec<usize> =
+        search::ranked_matches(&parsed, candidates.iter().map(keys), state.sensitivity)
+            .into_iter()
+            .filter(|index| !named(index))
+            .collect();
     // A command the query names by its alias is hoisted above every
     // other row, computed results included.
     let by_alias: Vec<usize> = (0..candidates.len()).filter(named).collect();
@@ -4937,7 +4934,11 @@ fn root_rows(state: &State, query: &str) -> (Vec<Row>, Vec<Entry>) {
             .as_ref()
             .map(|target| Told::Source(target.identity.clone()))
             .unwrap_or(Told::Apart);
-        (candidates[index].0.row.clone(), candidates[index].0.entry.clone(), told)
+        (
+            candidates[index].0.row.clone(),
+            candidates[index].0.entry.clone(),
+            told,
+        )
     };
     // A command the query names by its alias is launched from its alias.
     let by_its_alias = |index: usize| {
@@ -4960,9 +4961,8 @@ fn root_rows(state: &State, query: &str) -> (Vec<Row>, Vec<Entry>) {
         .computed
         .iter()
         .partition(|computed| computed.in_files);
-    let computed_row = |computed: &Computed| {
-        (computed.row.clone(), computed.entry.clone(), Told::Apart)
-    };
+    let computed_row =
+        |computed: &Computed| (computed.row.clone(), computed.entry.clone(), Told::Apart);
     let apart = |(row, entry)| (row, entry, Told::Apart);
     // What the user's alias names comes first, even before computed
     // results; files found for the query follow what is found by title,

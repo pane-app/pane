@@ -507,8 +507,7 @@ fn copies_from_other_sources_with_the_same_title_stay_distinct(fixture: &Fixture
     // The commands' own rows share that title too (#197): each names its
     // package's source after its subtitle, the first copy's first.
     assert!(
-        subtitle(&launcher, 1)
-            .starts_with("Answers the text you send it from root search · "),
+        subtitle(&launcher, 1).starts_with("Answers the text you send it from root search · "),
         "{}",
         subtitle(&launcher, 1)
     );
