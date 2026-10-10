@@ -286,7 +286,10 @@ fn a_space_typed_while_the_query_could_still_be_an_alias_waits(cx: &mut TestAppC
     install(cx, &launcher, &calculator_folder());
     let folder = assembled_package("sample-query", &sources.path().join("query"));
     install(cx, &launcher, &folder);
-    let echo = format!("{}#echo", pane_core::PackageIdentity::local(&folder).unwrap().key());
+    let echo = format!(
+        "{}#echo",
+        pane_core::PackageIdentity::local(&folder).unwrap().key()
+    );
     cx.foreground_executor()
         .block_on(launcher.set_alias(&echo, "ec").expect("“ec” is one word"));
     let (window, cx) = open_launcher(cx, launcher);

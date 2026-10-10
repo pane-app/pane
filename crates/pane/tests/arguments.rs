@@ -106,9 +106,12 @@ fn installed(
     );
     // Root search shown afresh leaves the launcher idle (the install's
     // result owns the status strip until then), so the tests below can
-    // tell that nothing ran from the status line alone.
-    let launcher = cx.read_entity(&window, |window, _| window.launcher().clone());
-    launcher.show_root_search();
+    // tell that nothing ran from the status line alone. The window is
+    // shown the change as the launcher's own tests redraw it.
+    window.update(cx, |window, cx| {
+        window.launcher().show_root_search();
+        cx.notify();
+    });
     settle(&window, cx);
     (window, cx, sources, data, folder)
 }

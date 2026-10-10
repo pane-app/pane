@@ -1093,7 +1093,10 @@ fn the_delayed_reopening_and_the_vertical_layout_are_applied_by_a_fresh_applicat
     placement.layout(None, None);
     let (_window, cx) = open(cx, Some(data.path()), &placement);
 
-    // Both choices, taken through the page's own controls.
+    // Both choices, taken through the page's own controls. The page
+    // grew with the specification's rows (#200, #206), so the pinned
+    // layout's row sits below the page's fold: the settings search jumps
+    // to it and reveals it, as it does for any row.
     let (_settings, mut settings_cx) = open_launcher_page(cx);
     choose_reopening(
         &mut settings_cx,
@@ -1101,6 +1104,12 @@ fn the_delayed_reopening_and_the_vertical_layout_are_applied_by_a_fresh_applicat
         "launcher-reopening-After90Seconds",
         "\"reopening\": \"after-90-seconds\"",
     );
+    settings_cx.simulate_keystrokes(find_shortcut());
+    settings_cx.simulate_input("pinned");
+    settings_cx.run_until_parked();
+    settings_cx.simulate_keystrokes("enter");
+    settings_cx.run_until_parked();
+    settle_frames(&mut settings_cx);
     click(&mut settings_cx, "launcher-pinned-Vertical");
     settings_cx.run_until_parked();
     until_record_holds(
