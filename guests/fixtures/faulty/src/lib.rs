@@ -238,14 +238,27 @@ impl pane_extension::root::Guest for Faulty {
             },
             "trap" => panic!("trap requested"),
             "0 + 0" => {
+                // About a second of busy work, bounded by the clock rather
+                // than a count of steps: the wait must outlast the loading
+                // bar's threshold on a fast machine while staying well
+                // inside the runtime's unresponsive limit on a slow one
+                // (a fixed count stretched past the limit on CI's slower
+                // runners, and Pane stopped the call before it answered).
+                let now = wasip3::clocks::monotonic_clock::now;
+                let end = now() + 1_000_000_000;
                 let mut sum = 0u64;
-                for step in 0..1u64 << 32 {
-                    sum = core::hint::black_box(sum.wrapping_add(step));
+                let mut steps = 0u64;
+                while now() < end {
+                    for step in 0..1_000_000u64 {
+                        sum = sum.wrapping_add(step);
+                        steps += 1;
+                    }
+                    sum = core::hint::black_box(sum);
                 }
                 Ok(vec![pane_extension::root::RootResult {
                     id: "slow".into(),
                     title: "Slow answer".into(),
-                    subtitle: Some(format!("after {sum} steps")),
+                    subtitle: Some(format!("after {steps} steps")),
                     action: pane_extension::root::RootAction::Copy("slow".into()),
                 }])
             }

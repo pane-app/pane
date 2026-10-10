@@ -880,8 +880,10 @@ fn a_hud_fades_out_over_about_a_second(cx: &mut TestAppContext) {
         (0.35..0.65).contains(&half),
         "half a second in, about half as strong: {half}"
     );
-    // Past the fade's span the window closes.
-    frame(&mut shown, Duration::from_millis(600));
+    // Past the fade's span the window closes: the clock's passing runs
+    // the close itself — a timer the fade set — so no frame is asked of
+    // the window it has closed.
+    wait(Duration::from_millis(600), cx);
     assert_eq!(hud(&window, cx), None, "gone once the fade has run");
 }
 
