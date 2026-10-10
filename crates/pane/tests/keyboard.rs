@@ -365,7 +365,10 @@ fn the_footers_keycap_follows_the_invoke_binding(cx: &mut TestAppContext) {
         "no stale Enter keycap, {nodes:#?}"
     );
 
-    // The new key opens the selected command; Enter no longer does.
+    // The new key opens the selected command; Enter no longer does. The
+    // sample is found by its name: the blank query's order (#199) does
+    // not put the Rust sample first.
+    cx.simulate_input("rust");
     cx.simulate_keystrokes("ctrl-j");
     let view = settle(&window, cx);
     assert_eq!(
@@ -446,6 +449,9 @@ fn a_chord_on_the_invoke_action_is_shown_announced_and_pressed_whole(cx: &mut Te
         );
 
         // The chord opens the selected command; the bare Enter does not.
+        // The sample is found by its name: the blank query's order (#199)
+        // does not put the Rust sample first.
+        cx.simulate_input("rust");
         cx.simulate_keystrokes("enter");
         let view = settle(&window, cx);
         assert!(
