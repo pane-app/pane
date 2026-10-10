@@ -1,0 +1,17 @@
+{
+  "$schema": "https://raw.githubusercontent.com/pane-app/pane/main/guests/js/schema/pane.schema.json",
+  "manifestVersion": 1,
+  "title": "__TITLE__",
+  "description": "A command that opens a form and answers what was filled in.",
+  "version": "0.1.0",
+  "apiVersion": "0.1",
+  "icon": "icon.png",
+  "commands": [
+    {
+      "id": "__NAME__",
+      "title": "__TITLE__",
+      "subtitle": "Fills in a form and answers what was filled in",
+      "component": "target/wasm32-wasip2/release/__CRATE__.wasm"
+    }
+  ]
+}

@@ -1,0 +1,6 @@
+# The toolchain an extension builds with: stable Rust, its formatter and
+# linter, and the WebAssembly target Pane runs.
+[toolchain]
+channel = "stable"
+components = ["rustfmt", "clippy"]
+targets = ["wasm32-wasip2"]

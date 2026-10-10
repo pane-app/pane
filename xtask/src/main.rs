@@ -29,8 +29,9 @@
 //! - `sdks`: check that the SDKs package as they would be published,
 //!   publishing nothing: the Rust SDK's copy of the WIT is `wit/`, `cargo
 //!   publish --dry-run` packages `pane-extension` and builds it from the
-//!   package alone, and `npm pack` packs `@pane-app/extension` into
-//!   `target/sdks/`. Publishing them is a person's step, never CI's (#128).
+//!   package alone, and `npm pack` packs `@pane-app/extension` and
+//!   `@pane-app/create` into `target/sdks/`. Publishing them is a person's
+//!   step, never CI's (#128).
 //! - `ci-tests`: build the guests, then run the workspace's tests with
 //!   cargo-nextest, which retries a failing test twice before the run
 //!   fails for it, so one flaky failure costs time, not the run. Options
@@ -591,11 +592,31 @@ fn ci_lints() -> Result<(), String> {
         "guests/fixtures/mixed-p2",
         "guests/helpers/echo",
         "guests/hello-rust",
+        // The Rust templates pane-ext new writes, each a package of its
+        // own that no workspace holds (#221).
+        "crates/pane-core/templates/rust/list",
+        "crates/pane-core/templates/rust/detail",
+        "crates/pane-core/templates/rust/form",
+        "crates/pane-core/templates/rust/no-view",
     ] {
         run(cargo()
             .current_dir(root.join(dir))
             .args(["fmt", "--all", "--check"]))?;
     }
+    // The command files pane-ext new command writes are no package's
+    // source, so rustfmt checks them directly.
+    let rustfmt = if cfg!(windows) { "rustfmt.exe" } else { "rustfmt" };
+    run(Command::new(rustfmt)
+        .current_dir(&root)
+        .arg("--check")
+        .arg("--edition")
+        .arg("2024")
+        .args([
+            "crates/pane-core/templates/rust/command/list.rs",
+            "crates/pane-core/templates/rust/command/detail.rs",
+            "crates/pane-core/templates/rust/command/form.rs",
+            "crates/pane-core/templates/rust/command/no-view.rs",
+        ]))?;
     // The committed pane.json schema is the one Pane's manifest types
     // generate, before anything slower runs.
     schema(false)?;
@@ -622,7 +643,8 @@ fn ci_lints() -> Result<(), String> {
 /// nothing: the WIT the Rust SDK carries, and is generated from, is a copy
 /// of `wit/`; `cargo publish --dry-run` packages `pane-extension` and
 /// builds it from its package alone, as crates.io would; and `npm pack`
-/// packs `@pane-app/extension` into `target/sdks/`. Publishing them is a
+/// packs `@pane-app/extension` and `@pane-app/create` (the package `npm
+/// create @pane-app` runs, #221) into `target/sdks/`. Publishing them is a
 /// person's step, never CI's (#128).
 fn sdks() -> Result<(), String> {
     let root = root();
@@ -643,6 +665,14 @@ fn sdks() -> Result<(), String> {
     let npm = if cfg!(windows) { "npm.cmd" } else { "npm" };
     run(Command::new(npm)
         .current_dir(root.join("guests/js"))
+        .arg("pack")
+        .arg("--pack-destination")
+        .arg(&out))?;
+    // The create package packs the same way, so what npm would publish of
+    // it is checked: its one dependency (@pane-app/cli) resolves at
+    // install, never at pack.
+    run(Command::new(npm)
+        .current_dir(root.join("packages/create"))
         .arg("pack")
         .arg("--pack-destination")
         .arg(&out))

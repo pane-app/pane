@@ -1,0 +1,3 @@
+# rustfmt's own defaults, with the line width named: the same 100
+# characters Pane's own Rust is formatted with.
+max_width = 100

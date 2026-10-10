@@ -1,0 +1,23 @@
+{
+  "name": "__NAME__",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A command that opens a list of items, each running an action.",
+  "type": "module",
+  "main": "src/index.ts",
+  "scripts": {
+    "dev": "pane-ext dev",
+    "check": "pane-ext check",
+    "pack": "pane-ext pack"
+  },
+  "devDependencies": {
+    "@pane-app/cli": "0.1.0",
+    "@pane-app/extension": "0.1.0",
+    "@eslint/js": "^9.0.0",
+    "esbuild": "0.28.2",
+    "eslint": "^9.0.0",
+    "prettier": "^3.0.0",
+    "typescript": "7.0.2",
+    "typescript-eslint": "^8.0.0"
+  }
+}

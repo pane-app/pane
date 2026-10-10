@@ -1,9 +1,11 @@
 # `pane-ext`, the command-line tool authors use beside the app (ADR 0047,
-# #128): `pane-ext dev` builds a package folder in the terminal with the
-# build crate development mode uses, and hands each build to the running
-# Pane over the local channel (#217); `pane-ext check` reports everything
-# Pane would refuse at install (#224); `pane-ext pack` builds the release
-# components and assembles what users download (#225).
+# #128): `pane-ext new` writes a fresh package from the templates pane-core
+# embeds, and adds a command to one that exists (#221); `pane-ext dev`
+# builds a package folder in the terminal with the build crate development
+# mode uses, and hands each build to the running Pane over the local
+# channel (#217); `pane-ext check` reports everything Pane would refuse at
+# install (#224); `pane-ext pack` builds the release components and
+# assembles what users download (#225).
 [package]
 name = "pane-ext"
 version = "0.1.0"

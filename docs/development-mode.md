@@ -228,6 +228,47 @@ without a word. Enabling the package again does not develop it again.
   A process the command starts in the instant before it is assigned to the
   job escapes it.
 
+## Starting a package: `pane-ext new`
+
+`pane-ext new [folder]` ([#221](https://github.com/pane-app/pane/issues/221),
+[ADR 0047](adr/0047-extensions-are-built-from-the-app-first-with-pane-ext-beside-it.md))
+writes a fresh extension package, from the templates the ADR settles —
+`list`, `detail`, `form` and `no-view`, in TypeScript and in Rust — kept
+in the repository as the files `pane-core` embeds
+([`crates/pane-core/templates`](../crates/pane-core/templates)), so the
+CLI and the app's coming Create Extension command write the same package.
+`npm create @pane-app` runs it too, through the
+[`@pane-app/create`](../packages/create) package, so an author starts with
+Node.js and npm alone:
+
+```
+npm create @pane-app notes -- --language typescript --template list
+cd notes
+npm install
+npm run dev
+```
+
+Every choice has a flag — `--name` (the extension's title, from which its
+package name and command id come), `--language` (`rust` or `typescript`)
+and `--template` — and in an interactive terminal the missing ones are
+asked for, each with a default; a script that passes them all is never
+asked. An existing folder is written into only while empty: an author's
+files are never overwritten. A template's folder holds what a package
+needs: `pane.json` with a `"$schema"` an editor checks (Pane ignores
+fields it does not know), the command's source, a README, a placeholder
+512×512 icon, `.gitignore`, and either a `package.json` (naming
+`@pane-app/extension` and `@pane-app/cli` from npm, whose `dev`, `check`
+and `pack` scripts run `pane-ext`) or a `Cargo.toml` (naming the
+`pane-extension` crate, with a stable toolchain file), plus the
+formatter's, linter's and type checker's configuration.
+
+`pane-ext new command <folder>` adds a command to a package that already
+exists: an entry in its `pane.json` (served by the component its other
+commands are, as one component serves every command of a package), a
+source file, and the entry file's dispatch arm, added at a marker the
+templates write, so the package still builds and the command runs without
+the author touching anything.
+
 ## From the terminal: `pane-ext dev`
 
 `pane-ext dev [folder]` ([#217](https://github.com/pane-app/pane/issues/217),
@@ -343,6 +384,15 @@ These are implementation choices of #12/#13, not user decisions:
 
 ## Checks
 
+- `pane-core`'s unit tests on `templates` check every scaffold's file set,
+  its manifest (through Pane's own reading of it), its placeholder icon
+  and `pane-ext new command`'s edits; `pane-ext`'s tests on
+  [`new`](../crates/pane-ext/tests/new.rs) and
+  [`create`](../crates/pane-ext/tests/create.rs) run the commands and the
+  `@pane-app/create` package as processes, and
+  [`templates`](../crates/pane-ext/tests/templates.rs) builds and
+  installs every template in both languages through the build and
+  launcher above (#221).
 - [`crates/pane-core/tests/develop.rs`](../crates/pane-core/tests/develop.rs)
   drives development through the launcher with the system's file watcher
   and a stand-in build that stages a real guest, waiting on what the

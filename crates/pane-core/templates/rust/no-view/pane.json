@@ -1,0 +1,19 @@
+{
+  "$schema": "https://raw.githubusercontent.com/pane-app/pane/main/guests/js/schema/pane.schema.json",
+  "manifestVersion": 1,
+  "title": "__TITLE__",
+  "description": "A command that runs without a screen and answers in a toast.",
+  "version": "0.1.0",
+  "apiVersion": "0.1",
+  "icon": "icon.png",
+  "commands": [
+    {
+      "id": "__NAME__",
+      "title": "__TITLE__",
+      "subtitle": "Runs without a screen and answers in a toast",
+      "component": "target/wasm32-wasip2/release/__CRATE__.wasm",
+      "mode": "no-view",
+      "takesQuery": true
+    }
+  ]
+}

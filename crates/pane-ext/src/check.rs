@@ -161,6 +161,16 @@ fn run_eslint(folder: &Path, report: &mut CheckReport) -> Eslint {
     if !has_eslint(folder) {
         return Eslint::Skipped("the package has no eslint of its own".into());
     }
+    if !folder.join("node_modules/eslint").is_dir() {
+        // A fresh `pane-ext new` scaffold names eslint among its
+        // devDependencies before `npm install` has run; the check says so
+        // rather than failing on a tool that is not installed yet.
+        return Eslint::Skipped(
+            "the package has eslint, but its dependencies are not installed; run npm install \
+             first"
+                .into(),
+        );
+    }
     let npm = if cfg!(windows) { "npm.cmd" } else { "npm" };
     if !on_path(npm) {
         return Eslint::Skipped(format!(
@@ -273,6 +283,27 @@ mod tests {
         assert!(!has_eslint(folder.path()));
         std::fs::write(folder.path().join("package.json"), "{}").unwrap();
         assert!(!has_eslint(folder.path()));
+    }
+
+    #[test]
+    fn eslint_is_skipped_with_the_reason_until_its_dependencies_are_installed() {
+        // A fresh `pane-ext new` scaffold, before `npm install`: the check
+        // says so rather than failing on a tool that is not there.
+        let folder = tempfile::tempdir().unwrap();
+        std::fs::write(
+            folder.path().join("package.json"),
+            r#"{ "devDependencies": { "eslint": "^9" } }"#,
+        )
+        .unwrap();
+        std::fs::write(folder.path().join("eslint.config.js"), "{}\n").unwrap();
+        let mut report = CheckReport::default();
+        match run_eslint(folder.path(), &mut report) {
+            Eslint::Skipped(reason) => {
+                assert!(reason.contains("run npm install first"), "{reason}")
+            }
+            Eslint::Ran => panic!("nothing ran without the dependencies installed"),
+        }
+        assert!(report.errors.is_empty());
     }
 
     #[test]

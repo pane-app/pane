@@ -1,23 +1,27 @@
 //! `pane-ext`, the command-line tool authors use beside the app to create,
 //! develop, check and pack an extension package (ADR 0047, #128).
 //! `pane-ext dev [folder]` builds the package in the terminal and hands
-//! each build to the running Pane (see `dev`); `check [folder]` reports
+//! each build to the running Pane (see `dev`); `new [folder]` writes a
+//! fresh package from the templates (see `new`); `check [folder]` reports
 //! everything Pane would refuse at install, with Pane's own messages, plus
 //! the authoring lint rules and the package's own eslint (see `check`);
 //! `pack [folder]` builds the release components with the same code and
 //! assembles what users will download, checked with Pane's own rules (see
-//! `pack`); `new` is to follow.
+//! `pack`).
 
 use std::path::PathBuf;
 use std::process::ExitCode;
 
 mod check;
 mod dev;
+mod new;
 mod pack;
 mod start;
 
 const USAGE: &str = "\
 Usage: pane-ext dev [folder]
+       pane-ext new [folder] [options]
+       pane-ext new command <folder> [options]
        pane-ext check [folder] [options]
        pane-ext pack [folder]
 
@@ -25,6 +29,29 @@ Usage: pane-ext dev [folder]
                 here, hand the build to the running Pane, starting Pane if
                 none is running, then build it again after each save and
                 have Pane reload it, until Ctrl+C.
+
+  new [folder]  Write a fresh extension package into folder, from the
+                templates, with the choices the options below give, or
+                asked for in an interactive terminal. An existing folder
+                is written into only while empty; without a folder, the
+                package's own name becomes one: pane-ext new notes --name
+                \"Word Count\"
+
+    --name <name>        The extension's title (\"Word Count\"), from which
+                         its package name and command id come; the folder's
+                         name when not given.
+    --language <lang>    rust or typescript (typescript by default).
+    --template <kind>    list, detail, form or no-view (list by default).
+
+  new command <folder>
+                Add a command to the package in folder: an entry in its
+                pane.json (served by the component its other commands
+                are), a source file, and the entry file's dispatch arm,
+                so the package still builds and the command runs.
+
+    --id <id>            The command's id, its title's when not given.
+    --title <title>      The command's title, its id's when not given.
+    --template <kind>    list, detail, form or no-view (list by default).
 
   check [folder]
                 Check the package in folder (the current folder by default)
@@ -66,6 +93,7 @@ fn main() -> ExitCode {
             }
             dev::run(folder)
         }
+        Some("new") => new::run(args),
         Some("check") => {
             let (folder, json, deny_warnings) = match check_arguments(args) {
                 Ok(arguments) => arguments,
@@ -93,12 +121,6 @@ fn main() -> ExitCode {
         Some("--help" | "-h" | "help") => {
             print!("{USAGE}");
             ExitCode::SUCCESS
-        }
-        Some("new") => {
-            eprintln!(
-                "pane-ext: `pane-ext new` is not available yet; `dev`, `check` and `pack` are"
-            );
-            ExitCode::FAILURE
         }
         _ => usage_error(),
     }

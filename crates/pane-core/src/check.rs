@@ -374,7 +374,7 @@ const SMALL_WORDS: [&str; 16] = [
 /// an uppercase letter, except the small words in the middle, which stay
 /// lowercase. The rest of each word is left as written, so names like
 /// \"TypeScript\" or \"API\" keep their own capital letters.
-fn title_case(title: &str) -> String {
+pub(crate) fn title_case(title: &str) -> String {
     let words: Vec<&str> = title.split_whitespace().collect();
     let words = words
         .iter()

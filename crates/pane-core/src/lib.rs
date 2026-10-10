@@ -51,6 +51,7 @@ mod search;
 mod source_map;
 pub mod system;
 pub mod system_icons;
+pub mod templates;
 mod threads;
 pub mod tray;
 mod util;
