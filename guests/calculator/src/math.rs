@@ -43,12 +43,46 @@ pub(super) fn sqrt(x: f64) -> f64 {
     y
 }
 
+/// The largest whole number not greater than `x`, for a finite `x`:
+/// the fraction bits of `|x|` cleared, and a whole negative `x` kept as
+/// it is (a fraction steps it down).
+pub(super) fn floor(x: f64) -> f64 {
+    let whole = truncate(x.abs());
+    if x >= 0.0 {
+        whole
+    } else if whole == x.abs() {
+        // Already whole.
+        x
+    } else {
+        -(whole + 1.0)
+    }
+}
+
+/// `v` without its fraction bits, for a finite `v >= 0` (a whole `v`
+/// unchanged).
+fn truncate(v: f64) -> f64 {
+    let bits = v.to_bits();
+    let exponent = ((bits >> 52) & 0x7ff) as i64 - 1023;
+    if exponent < 0 {
+        // Below one, there is no whole part.
+        return 0.0;
+    }
+    if exponent > 52 {
+        // This large, every double is whole.
+        return v;
+    }
+    // How many of the mantissa's 52 bits sit below the value's binary
+    // point: the low that many of them are the fraction.
+    let fraction = (52 - exponent) as u32;
+    f64::from_bits(bits & !((1u64 << fraction) - 1))
+}
+
 /// `x` rounded to the nearest whole number, half away from zero.
 pub(super) fn round(x: f64) -> f64 {
     if x < 0.0 {
         -round(-x)
     } else {
-        (x + 0.5).floor()
+        floor(x + 0.5)
     }
 }
 
@@ -135,7 +169,7 @@ fn reduced(radians: f64) -> (i32, f64) {
     const TAU: f64 = core::f64::consts::TAU;
     const QUARTER: f64 = core::f64::consts::FRAC_PI_2;
     let turn = remainder(radians, TAU);
-    let quadrant = (turn / QUARTER).floor();
+    let quadrant = floor(turn / QUARTER);
     (quadrant as i32, turn - quadrant * QUARTER)
 }
 

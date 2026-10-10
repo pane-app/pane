@@ -259,7 +259,8 @@ impl Colour {
         };
         format!(
             "hsl({}, {}%, {}%)",
-            math::round(degrees(hue)) as i64,
+            // Modulo again, so a hue a hair under 360 rounds to 0, not 360.
+            math::round(degrees(hue)) as i64 % 360,
             math::round(saturation * 100.0) as i64,
             math::round(lightness * 100.0) as i64,
         )
@@ -296,7 +297,8 @@ impl Colour {
         let hue = if chroma == "0" {
             0
         } else {
-            math::round(degrees(hue)) as i64
+            // Modulo again, so a hue a hair under 360 rounds to 0.
+            math::round(degrees(hue)) as i64 % 360
         };
         format!("oklch({} {} {})", rounded(lightness), chroma, hue)
     }
