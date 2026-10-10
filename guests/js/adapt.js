@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 //
 // Pane's adapter between a JS/TS command's exports and its component. The
-// build (tools/componentize-js/pane_js.py) bundles it into every JS/TS
+// build (crates/pane-build's JavaScript build) bundles it into every JS/TS
 // component, around the objects the command exports.
 //
 // It is the SDK's side of ADR 0036's envelope: the command's `render`

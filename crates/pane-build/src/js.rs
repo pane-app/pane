@@ -1,6 +1,6 @@
 //! Pane's JavaScript and TypeScript build (ADR 0047, `#218`, spec `#128`):
-//! the steps `tools/componentize-js/pane_js.py` used to run, moved into the
-//! crate Pane's development mode and `pane-ext` both build with — so the two
+//! the steps of the old Python pipeline (`pane_js.py`, retired by `#219`),
+//! moved into the crate Pane's development mode and `pane-ext` both build with — so the two
 //! can never build a package differently — and `cargo xtask js-guests`
 //! rebuilds the committed samples with. A build needs Node.js and npm alone:
 //! no Python, no nightly Rust, no wasi-sdk (the wasm parts are the committed

@@ -4,9 +4,9 @@
 //! beside the package so its `file:../js` devDependency installs; Pane's WIT
 //! and WASI's, which the build assembles into the world a command is
 //! componentized against; and the wasm parts the componentizer links, the
-//! QuickJS `runtime.wasm` and wasi-sdk's WASI 0.3 `libc.so`, which
-//! `componentizer.yml` builds once on Linux and this repository commits
-//! (`tools/componentize-js/wasm-parts`).
+//! QuickJS `runtime.wasm` and wasi-sdk's WASI 0.3 `libc.so`, which the
+//! `cli-packages` workflow builds once on Linux (`cargo xtask wasm-parts`)
+//! and this repository commits (`tools/componentize-js/wasm-parts`).
 //!
 //! They are embedded with `include_str!`/`include_bytes!` from the committed
 //! files, so what this crate builds with is what the repository holds: a
@@ -171,8 +171,9 @@ const WASI_WIT: [(&str, &str); 6] = [
 
 /// The QuickJS runtime (`tools/componentize-js/wasm-parts/runtime.wasm`) the
 /// componentizer embeds, built for `wasm32-wasip3` with the pinned nightly
-/// Rust and wasi-sdk (`componentizer.yml`'s wasm-parts job, #215): the same
-/// bytes on every platform, so one committed file serves them all. Only the
+/// Rust and wasi-sdk (`cargo xtask wasm-parts`, the `cli-packages` workflow's
+/// Wasm parts job, #215): the same bytes on every platform, so one committed
+/// file serves them all. Only the
 /// componentizer pane-build links (`componentizer` feature) reads it; one
 /// spawned as a binary reads the copy its folder holds.
 #[cfg(feature = "componentizer")]

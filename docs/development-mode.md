@@ -51,10 +51,13 @@ the componentizer is `pane-ext`'s own, linked in (#218).
    (`const GREETING: string = 42;`) is shown as "Hello TypeScript did not
    build: src/index.ts(12,7): error TS2322: …".
 
-The `pane-ext` must be one built from a checkout, which links the
-componentizer (`crates/pane-build`'s `componentizer` feature) and embeds the
-committed `runtime.wasm` and `libc.so`
-(`tools/componentize-js/wasm-parts`).
+The `pane-ext` must be one that links the componentizer
+(`crates/pane-build`'s `componentizer` feature) and embeds the committed
+`runtime.wasm` and `libc.so`
+(`tools/componentize-js/wasm-parts`) — one built from a checkout, or the
+`@pane-app/cli` npm package (whose JavaScript shim picks the platform
+package for the system), which the `cli-packages` workflow builds the same
+way.
 
 ## What Pane does
 

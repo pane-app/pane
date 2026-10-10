@@ -15,6 +15,19 @@
 //!   `pane-build`'s JavaScript build (prerequisites: Node.js 22+ with npm;
 //!   the samples' `package.json`s pin esbuild and TypeScript), then run
 //!   `guests`.
+//! - `cli-package <folder>`: build `pane-ext` and the componentizer for
+//!   this system, and assemble the npm packages that ship them under
+//!   `folder` — `cli/`, `@pane-app/cli`'s shim package, and
+//!   `cli-<target>/`, the platform package — ready for `npm pack` (#219).
+//!   The workflow packs and publishes-checks them; publishing stays a
+//!   person's step.
+//! - `wasm-parts <folder>`: build the QuickJS runtime for `wasm32-wasip3`
+//!   with the pinned nightly Rust and wasi-sdk, copy the SDK's WASI 0.3
+//!   `libc.so`, and record both with their digests — the maintenance step
+//!   that rebuilds the committed wasm parts (#219; what `pane_js.py` did,
+//!   in the task runner so no Python is needed).
+//! - `check-parts <folder>`: compare the committed wasm parts with a fresh
+//!   build in `folder`, so they cannot drift from the vendored source.
 //! - `schema`: generate `pane.json`'s JSON Schema from pane-core's own
 //!   manifest types and check the committed copy against it (`--write` to
 //!   rewrite the file), so the schema cannot drift from what Pane reads
@@ -26,11 +39,13 @@
 //!   half of `ci` that runs no tests and builds no guest but the Rust SDK.
 //!   The prebuilt-samples check needs no toolchain at all (#218): it
 //!   verifies digests and staleness in `js_guests`.
-//! - `sdks`: check that the SDKs package as they would be published,
-//!   publishing nothing: the Rust SDK's copy of the WIT is `wit/`, `cargo
-//!   publish --dry-run` packages `pane-extension` and builds it from the
-//!   package alone, and `npm pack` packs `@pane-app/extension` into
-//!   `target/sdks/`. Publishing them is a person's step, never CI's (#128).
+//! - `sdks`: check that the SDKs and the CLI package as they would be
+//!   published, publishing nothing: the Rust SDK's copy of the WIT is
+//!   `wit/`, `cargo publish --dry-run` packages `pane-extension` and builds
+//!   it from the package alone, `npm pack` packs `@pane-app/extension` and
+//!   `@pane-app/cli` into `target/sdks/`, and the CLI's platform package
+//!   templates match the targets pane-build looks for. Publishing them is a
+//!   person's step, never CI's (#128).
 //! - `ci-tests`: build the guests, then run the workspace's tests with
 //!   cargo-nextest, which retries a failing test twice before the run
 //!   fails for it, so one flaky failure costs time, not the run. Options
@@ -61,6 +76,7 @@
 //!   fails when a measure is over its generous ceiling. `ci-branch.yml`'s
 //!   Linux tests run it in one shard, after the tests.
 
+mod cli_packages;
 mod js_guests;
 mod package;
 mod zip;
@@ -123,6 +139,15 @@ fn main() -> ExitCode {
     let result = match (task.as_deref(), version) {
         (Some("guests"), _) => guests(),
         (Some("js-guests"), _) => js_guests(std::env::args().any(|arg| arg == "--check")),
+        (Some("cli-package"), _) => {
+            folder_argument("cli-package").and_then(|out| cli_packages::cli_package(&out))
+        }
+        (Some("wasm-parts"), _) => {
+            folder_argument("wasm-parts").and_then(|into| cli_packages::wasm_parts(&into))
+        }
+        (Some("check-parts"), _) => {
+            folder_argument("check-parts").and_then(|fresh| cli_packages::check_parts(&fresh))
+        }
         (Some("schema"), _) => schema(write),
         (Some("ci-lints"), _) => ci_lints(),
         (Some("sdks"), _) => sdks(),
@@ -132,10 +157,12 @@ fn main() -> ExitCode {
         (Some("package-macos"), Ok(version)) => package::macos(dev, version),
         (_, Err(why)) => Err(why),
         _ => Err("usage: cargo xtask \
-             <guests|js-guests|ci-lints|sdks|schema|file-index-guard|package-linux|\
-             package-windows|package-macos> [--dev] [--package-version <version>], cargo xtask \
-             schema [--write], cargo xtask js-guests --check (the staleness check alone), \
-             cargo xtask <ci|ci-tests> [nextest options], or cargo xtask \
+             <guests|js-guests|cli-package|wasm-parts|check-parts|ci-lints|sdks|schema|\
+             file-index-guard|package-linux|package-windows|package-macos> [--dev] \
+             [--package-version <version>], cargo xtask \
+             <cli-package|wasm-parts|check-parts> <folder>, cargo xtask schema [--write], \
+             cargo xtask js-guests --check (the staleness check alone), cargo xtask \
+             <ci|ci-tests> [nextest options], or cargo xtask \
              file-index-bench [options]"
             .into()),
     };
@@ -153,6 +180,17 @@ fn root() -> PathBuf {
         .parent()
         .unwrap()
         .to_path_buf()
+}
+
+/// The one folder argument of a task that takes one: `cli-package`,
+/// `wasm-parts` and `check-parts` name where they assemble or compare.
+fn folder_argument(task: &str) -> Result<PathBuf, String> {
+    let mut arguments = std::env::args().skip(2);
+    let folder = arguments.next();
+    match (folder, arguments.next().is_some()) {
+        (Some(folder), false) if !folder.starts_with('-') => Ok(PathBuf::from(folder)),
+        _ => Err(format!("usage: cargo xtask {task} <folder>")),
+    }
 }
 
 fn cargo() -> Command {
@@ -618,12 +656,14 @@ fn ci_lints() -> Result<(), String> {
         .args(clippy))
 }
 
-/// Checks that the SDKs package as they would be published, publishing
-/// nothing: the WIT the Rust SDK carries, and is generated from, is a copy
-/// of `wit/`; `cargo publish --dry-run` packages `pane-extension` and
-/// builds it from its package alone, as crates.io would; and `npm pack`
-/// packs `@pane-app/extension` into `target/sdks/`. Publishing them is a
-/// person's step, never CI's (#128).
+/// Checks that the SDKs and the CLI package as they would be published,
+/// publishing nothing: the WIT the Rust SDK carries, and is generated from,
+/// is a copy of `wit/`; `cargo publish --dry-run` packages `pane-extension`
+/// and builds it from its package alone, as crates.io would; `npm pack`
+/// packs `@pane-app/extension` and `@pane-app/cli` into `target/sdks/`; and
+/// the CLI's platform package templates match each other and the targets
+/// pane-build looks for (`cli_packages::check`). Publishing any of them is
+/// a person's step, never CI's (#128).
 fn sdks() -> Result<(), String> {
     let root = root();
     same_files(&root.join("wit"), &root.join("guests/pane-extension/wit"))?;
@@ -637,15 +677,19 @@ fn sdks() -> Result<(), String> {
         "--target",
         GUEST_TARGET,
     ]))?;
+    cli_packages::check(&root)?;
     let out = root.join("target/sdks");
     std::fs::create_dir_all(&out).map_err(|error| error.to_string())?;
     // npm is a batch file on Windows, which is started by its full name.
     let npm = if cfg!(windows) { "npm.cmd" } else { "npm" };
-    run(Command::new(npm)
-        .current_dir(root.join("guests/js"))
-        .arg("pack")
-        .arg("--pack-destination")
-        .arg(&out))
+    for package in ["guests/js", "packages/cli"] {
+        run(Command::new(npm)
+            .current_dir(root.join(package))
+            .arg("pack")
+            .arg("--pack-destination")
+            .arg(&out))?;
+    }
+    Ok(())
 }
 
 /// Checks that the folder `copy` holds the files `original` holds, with the

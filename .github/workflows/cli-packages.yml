@@ -1,0 +1,228 @@
+name: CLI packages
+
+# Pane's npm packages for extension authors (#219, spec #128): `@pane-app/cli`,
+# a small JavaScript shim, and `@pane-app/cli-<target>`, one platform package
+# per system Pane ships on — Windows, macOS and Linux on x64 and arm64 —
+# holding the `pane-ext` program the shim runs and the componentizer
+# (`componentize-qjs-p3`, `runtime.wasm`, `libc.so`) a JavaScript or
+# TypeScript package's build uses. The platform packages are
+# `@pane-app/cli`'s `optionalDependencies`, chosen by the shim as esbuild,
+# biome and turbo choose theirs. This workflow builds the six, packs the
+# tarballs `npm pack` makes of them, checks each the way its users get it —
+# installed into a scratch project with nothing but Node.js and npm, building
+# the TypeScript sample — and uploads the tarballs as artifacts. Publishing
+# them is a person's step, never CI's (ADR 0047).
+#
+# The wasm parts are the same everywhere, so one Linux job builds them from
+# the vendored source (`cargo xtask wasm-parts`, what `pane_js.py` did) and
+# checks them against the committed parts the packages ship, so those cannot
+# drift from the source. Each platform's job then uses the committed parts,
+# which are also what the repository's own builds embed — and verifies their
+# digests before packing (`cargo xtask cli-package`, which assembles the
+# packages).
+#
+# It runs on demand and when the packages, the toolchain, the CLI or what
+# they build from change; nothing else waits for it. docs/agents/ci.md
+# describes the tiers.
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "packages/**"
+      - "tools/componentize-js/**"
+      - "crates/**"
+      - "wit/**"
+      - "guests/js/**"
+      - "guests/hello-ts/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "rust-toolchain.toml"
+      - ".github/workflows/cli-packages.yml"
+      - ".github/actions/**"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  # The wasm parts, built once from the vendored source and checked against
+  # the committed ones. As in the componentizer workflow this replaced: the
+  # parts are uploaded before the check, so a mismatch still leaves the
+  # fresh build to commit, and the runtime's lock is uploaded beside them
+  # for the first run or a pins change.
+  wasm-parts:
+    name: Wasm parts (ubuntu-24.04)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+      # The pinned wasi-sdk archive.
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/pane/componentize-js/downloads
+          key: componentizer-downloads-${{ hashFiles('tools/componentize-js/pins.json') }}
+      - name: Build runtime.wasm and take wasi-sdk's P3 libc.so
+        run: |
+          parts="$RUNNER_TEMP/wasm-parts"
+          mkdir -p "$parts"
+          cargo xtask wasm-parts "$parts"
+          {
+            echo '### Wasm parts'
+            echo '```json'
+            cat "$parts/wasm-parts.json"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wasm-parts
+          path: ${{ runner.temp }}/wasm-parts
+          if-no-files-found: error
+      # The lock the build resolved, held by every later build to the same
+      # versions, which is what makes the runtime's bytes comparable by
+      # check-parts.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: runtime-lock
+          path: ~/.cache/pane/componentize-js/src/runtime/Cargo.lock
+          if-no-files-found: error
+      # The repository builds JS/TS packages with the committed parts
+      # (tools/componentize-js/wasm-parts), and the platform packages ship
+      # them, so they must not drift from the vendored source this fresh
+      # build came from.
+      - name: Check the committed wasm parts against the fresh build
+        run: cargo xtask check-parts "$RUNNER_TEMP/wasm-parts"
+
+  # One job per system: build pane-ext and the componentizer, assemble and
+  # pack both packages, then check them as their users get them — installed
+  # from the packed tarballs into a scratch project that has nothing but
+  # Node.js and npm, building the TypeScript sample — and upload the
+  # tarballs. The x86-64 Linux job also uploads @pane-app/cli's tarball, the
+  # same bytes every platform's job packed.
+  packages:
+    name: Package (${{ matrix.target }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            id: linux-x86_64
+            os: ubuntu-24.04
+          - target: aarch64-unknown-linux-gnu
+            id: linux-aarch64
+            os: ubuntu-24.04-arm
+          - target: x86_64-pc-windows-msvc
+            id: windows-x86_64
+            os: windows-2025
+          - target: aarch64-pc-windows-msvc
+            id: windows-aarch64
+            os: windows-11-arm
+          - target: x86_64-apple-darwin
+            id: macos-x86_64
+            os: macos-15-intel
+          - target: aarch64-apple-darwin
+            id: macos-aarch64
+            os: macos-15
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - uses: ./.github/actions/setup
+      # Builds pane-ext and the componentizer (release), verifies the
+      # committed wasm parts against their record and the pins, and
+      # assembles the two package folders.
+      - name: Assemble the npm packages
+        run: cargo xtask cli-package "$RUNNER_TEMP/packages"
+      - name: What the platform package was built from
+        run: |
+          {
+            echo "### ${{ matrix.target }}"
+            echo '```json'
+            cat "$RUNNER_TEMP/packages/cli-${{ matrix.id }}/toolchain.json"
+            echo '```'
+          } >> "$GITHUB_STEP_SUM"
+      - name: Pack the tarballs
+        run: |
+          tarballs="$RUNNER_TEMP/tarballs"
+          mkdir -p "$tarballs"
+          cli=$(cd "$RUNNER_TEMP/packages/cli" && npm pack --pack-destination "$tarballs" | tail -n 1)
+          platform=$(cd "$RUNNER_TEMP/packages/cli-${{ matrix.id }}" && npm pack --pack-destination "$tarballs" | tail -n 1)
+          cli_tarball=$(basename "$cli")
+          platform_tarball=$(basename "$platform")
+          echo "cli_tarball=$cli_tarball" >> "$GITHUB_ENV"
+          echo "platform_tarball=$platform_tarball" >> "$GITHUB_ENV"
+          ls -l "$tarballs"
+      # The packages as their users get them: installed with npm into a
+      # scratch project that has nothing else, and building the TypeScript
+      # development sample. The platform packages are not on the registry
+      # (publishing is a person's step, so this check cannot resolve them
+      # the way a real install would): the one for this system is the
+      # second tarball, installed directly, and npm omits resolving the
+      # other five.
+      - name: Install them into a scratch project and build the sample with them
+        run: |
+          scratch="$RUNNER_TEMP/scratch"
+          mkdir -p "$scratch"
+          cd "$scratch"
+          echo '{"name": "scratch", "private": true}' > package.json
+          npm install --omit=optional --ignore-scripts --no-audit --no-fund \
+            "$RUNNER_TEMP/tarballs/$cli_tarball" \
+            "$RUNNER_TEMP/tarballs/$platform_tarball"
+          # The TypeScript development sample as an author's package: with
+          # the icon a published one needs, so pack accepts it.
+          cp -r "$GITHUB_WORKSPACE/guests/hello-ts" hello-ts
+          cp "$GITHUB_WORKSPACE/guests/packages/sample-icons/icon.png" hello-ts/icon.png
+          node -e '
+            const fs = require("node:fs");
+            const manifest = JSON.parse(fs.readFileSync("hello-ts/pane.json", "utf8"));
+            manifest.icon = "icon.png";
+            fs.writeFileSync("hello-ts/pane.json", JSON.stringify(manifest, null, 2) + "\n");
+          '
+          # The shim runs the platform package's pane-ext, which builds the
+          # sample with the componentizer it links and checks it as Pane
+          # would at install.
+          npx pane-ext pack hello-ts
+          test -f hello-ts/dist/hello_ts.wasm
+          # And the componentizer the platform package carries — the one an
+          # installed Pane's development mode spawns for a package that
+          # installed @pane-app/cli (PANE_COMPONENTIZER names the folder)
+          # — builds it too.
+          PANE_COMPONENTIZER="$scratch/node_modules/@pane-app/cli-${{ matrix.id }}" npx pane-ext pack hello-ts
+          test -f hello-ts/dist/pane-hello-ts-0.1.0.tgz
+      - uses: actions/upload-artifact@v4
+        with:
+          name: npm-cli-${{ matrix.id }}
+          path: ${{ runner.temp }}/tarballs/${{ env.platform_tarball }}
+          if-no-files-found: error
+      # The shim package is platform-independent; one job uploads it.
+      - uses: actions/upload-artifact@v4
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        with:
+          name: npm-cli
+          path: ${{ runner.temp }}/tarballs/${{ env.cli_tarball }}
+          if-no-files-found: error
+
+  # The one check to require, as in the other workflows: green when every
+  # job above passed or was skipped.
+  passed:
+    name: CI passed
+    if: always()
+    needs: [wasm-parts, packages]
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Every job passed or was skipped
+        run: |
+          for result in ${{ join(needs.*.result, ' ') }}; do
+            case "$result" in
+              success|skipped) ;;
+              *) echo "A job ended with: $result"; exit 1 ;;
+            esac
+          done

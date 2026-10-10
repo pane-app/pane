@@ -610,9 +610,10 @@ impl Build for JsBuild {
 /// or a test harness) injected for Pane itself, so the package's own
 /// toolchain file and target folder apply. The author's own settings, such
 /// as `CARGO_HOME`, `CARGO_TARGET_DIR`, registry tokens, `CARGO_HTTP_*` or
-/// `CARGO_NET_OFFLINE`, are kept. (`pane_js.py`'s `clean_env` strips every
-/// `CARGO_*` but `CARGO_HOME` for the toolchain it builds itself; its builds
-/// of a package run cargo only for that toolchain.)
+/// `CARGO_NET_OFFLINE`, are kept. (The old Python pipeline's `clean_env`
+/// stripped every `CARGO_*` but `CARGO_HOME`, because it built a whole
+/// toolchain of its own; `cargo xtask`'s toolchain tasks still do, in
+/// `xtask`.)
 pub(crate) fn without_pane_build_environment(command: &mut Command) {
     for (key, _) in std::env::vars_os() {
         let Some(key) = key.to_str() else { continue };

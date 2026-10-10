@@ -77,7 +77,7 @@ const PANE_WIT: [&str; 16] = [
 ];
 
 /// Toolchain inputs that decide what a component contains: the wasm parts
-/// (their digests are in `wasm-parts.json`, which `componentizer.yml`
+/// (their digests are in `wasm-parts.json`, which the `cli-packages` workflow
 /// compares against a fresh build), the vendored componentizer, the build
 /// itself, and the pins of record.
 const TOOL_INPUTS: [&str; 7] = [

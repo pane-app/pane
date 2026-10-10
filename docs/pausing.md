@@ -625,7 +625,7 @@ Quit leaves no marker).
   generation ends.
 - The crash count is not kept across restarts; a package that crashes
   twice per session is never paused.
-- `pane_js.py`'s generated entry, which applies the JS adapter, is not part
+- The build's generated entry, which applies the JS adapter, is not part
   of the prebuilt components' input digest (the adapter itself is): a change
   to that template alone needs `cargo xtask js-guests` by hand.
 - Nothing here is platform-specific (it lives in `pane-core`); it has run on

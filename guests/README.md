@@ -523,10 +523,11 @@ Prerequisites, in addition to the Rust ones in the [README](../README.md):
 - Node.js 22 or later with npm. Nothing else: no Python, no nightly Rust,
   no wasi-sdk — the componentizer is linked into the build
   (`crates/pane-build`'s `componentizer` feature), with the wasm parts the
-  repository commits. Python 3.12+ and rustup are needed only to build the
-  wasm parts themselves (`tools/componentize-js/pane_js.py wasm-parts`, a
-  maintenance step `componentizer.yml` runs, not part of building a
-  package).
+  repository commits; the published CLI (`npm install @pane-app/cli`, whose
+  JavaScript shim picks the platform package for the system) is the same
+  build. Rebuilding the wasm parts themselves is a maintainer's step
+  (`cargo xtask wasm-parts`), never part of building a package — see
+  [tools/componentize-js](../tools/componentize-js/README.md).
 - **Windows:** Node.js from nodejs.org; run from a normal shell. **macOS:**
   Node.js from its installer or Homebrew. **Linux:** the distribution's
   `nodejs` and `npm` (Node.js 22+, for example through nvm).
@@ -543,9 +544,13 @@ built with the repository's Rust 1.98.1, esbuild 0.28.2 and TypeScript
 through its libc, whatever the source uses, and `wasi:http`'s `types` and
 `client` too if its bundle imports `wasi:http` (itself or through
 `@pane-app/extension/http`), which Pane then lists as using the network; it is
-about 4.4 MB. The componentizer itself is built in CI for Windows, macOS and
-Linux on x64 and arm64, from the committed wasm parts, and each build's
-TypeScript sample passes Pane's checks there (`componentizer.yml`). See
+about 4.4 MB. The componentizer and the `pane-ext` that runs it ship as npm
+packages (`@pane-app/cli`, whose JavaScript shim picks the
+`@pane-app/cli-<target>` platform package for the system), built in CI for
+Windows, macOS and Linux on x64 and arm64 from the committed wasm parts; the
+workflow that packs them also installs them into a scratch project with
+only Node.js and npm and builds this sample with them
+(`cli-packages.yml`). See
 [tools/componentize-js](../tools/componentize-js/README.md) for the patch
 queue and the wasm parts.
 

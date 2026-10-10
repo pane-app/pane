@@ -11,7 +11,7 @@ members = [
 ]
 # Guests target WebAssembly and form their own workspace, as does the
 # vendored componentize-qjs's runtime crate (built only for wasm32-wasip3
-# with a pinned nightly and wasi-sdk, by pane_js.py's wasm-parts; nothing in
+# with a pinned nightly and wasi-sdk, by `cargo xtask wasm-parts`; nothing in
 # this workspace compiles it).
 exclude = ["guests", "tools/componentize-js/componentize-qjs/crates/runtime"]
 
