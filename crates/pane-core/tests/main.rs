@@ -40,6 +40,7 @@ mod file_actions;
 mod file_index;
 mod files;
 mod helpers;
+mod history;
 mod hotkeys;
 mod icons;
 mod installer;

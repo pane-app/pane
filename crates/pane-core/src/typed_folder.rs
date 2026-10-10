@@ -245,15 +245,13 @@ fn entries_of(text: &str, home: Option<&Path>) -> Result<TypedListing, String> {
         Err(error) => return Err(unreadable(&resolved, &error)),
     }
     let read = fs::read_dir(&folder).map_err(|error| unreadable(&resolved, &error))?;
-    // Entries are counted as the folder is read, so a huge folder stops at
-    // the entry bound rather than being read whole first.
+    // The entries are read and named before the bound takes the first of
+    // them in name order: a partial listing is the folder's first entries,
+    // not whichever the file system happened to hand over first. Only the
+    // names are read of a huge folder; nothing else is done with the rest.
     let mut entries = Vec::new();
     let mut truncated = false;
     for entry in read {
-        if entries.len() == MAX_ENTRIES {
-            truncated = true;
-            break;
-        }
         match entry {
             Ok(entry) => entries.push(entry),
             Err(_) => truncated = true,
@@ -262,6 +260,10 @@ fn entries_of(text: &str, home: Option<&Path>) -> Result<TypedListing, String> {
     entries.sort_by_key(fs::DirEntry::file_name);
     let mut listed = Vec::new();
     for entry in entries {
+        if listed.len() == MAX_ENTRIES {
+            truncated = true;
+            break;
+        }
         let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
             continue;
         };

@@ -1258,12 +1258,13 @@ mod tests {
     fn an_empty_query_matches_every_entry_in_order() {
         assert_eq!(
             settings_matches("", &catalog()),
-            vec![0, 1, 2, 3, 4],
-            "the window decides what an empty query shows; the core just ranks"
+            vec![0, 2, 3, 4, 1],
+            "the window decides what an empty query shows; the core just ranks, by the \
+             no-query order (#199): title collation here, everything else tying"
         );
         assert_eq!(
             settings_matches("   ", &catalog()),
-            vec![0, 1, 2, 3, 4],
+            vec![0, 2, 3, 4, 1],
             "whitespace is no query"
         );
     }

@@ -4332,6 +4332,14 @@ impl Launcher {
             }
             Err(error) => Err(error),
         };
+        // The submission ran the command's form callback, itself a change
+        // nothing tells of (Create Quicklink saves a quicklink): every
+        // command's results are marked stale, as a run's ending marks them
+        // (#202), so the next query asks for them again. Not even the
+        // screen having moved on meanwhile — the command's own
+        // pop-to-root — holds this back: the change is the package's, not
+        // the screen's.
+        self.lock().indexes.stale(&[]);
         let Some(mut state) = self.lock_if_current(epoch) else {
             return;
         };

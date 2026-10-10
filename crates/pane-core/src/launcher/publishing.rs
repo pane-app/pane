@@ -81,6 +81,16 @@ impl Launcher {
         self.lock().holding.is_none()
     }
 
+    /// Whether a late answer's merge is still coalescing (#201): the
+    /// window's close relists the published list. A diagnostic for tests
+    /// that wait a merge out as the window's own tests advance the clock,
+    /// like the ranking counter `root_rankings`.
+    #[cfg(any(test, debug_assertions))]
+    #[doc(hidden)]
+    pub fn merge_pending(&self) -> bool {
+        self.lock().merge.is_some()
+    }
+
     /// Notes that a late answer must merge into the published list
     /// (#201), if none is coalescing yet: one arriving within 16 ms of
     /// another becomes the same update.
