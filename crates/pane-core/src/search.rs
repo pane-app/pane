@@ -1,9 +1,9 @@
 //! Matching and ranking for root search.
 //!
 //! A query is matched against each result's texts — its title, each
-//! alternate title, its subtitle (with its keywords), the composites
-//! "title subtitle" and "subtitle title", and, for an installed
-//! command, its package's title — as a subsequence with a score: a
+//! alternate title, its subtitle, each keyword, the composites "title
+//! subtitle" and "subtitle title", and, for an installed command, its
+//! package's title — as a subsequence with a score: a
 //! letter matched at the text's first position scores 4, at a word
 //! start (after a separator) 3, elsewhere 2; a separator matched to a
 //! separator scores 1. Each gap between two consecutive matched
@@ -32,27 +32,38 @@
 //! I are out of scope.
 //!
 //! An indexed result may also have alternate titles (an application's
-//! untranslated or program name), each matched as the title is, the
-//! best of them counting, and keywords, matched as the subtitle is; the
-//! row still shows its title.
+//! untranslated or program name), each matched as the title is, the best
+//! of them counting, and keywords, each its own text matched as the
+//! subtitle is; the row still shows its title. A command's keywords are
+//! its manifest's — an author's search terms, distinct from the user's
+//! aliases.
 //!
-//! Matches are ranked by how well the title matches, best first:
+//! A result matches when its alias matches — the query is it, or starts
+//! it — or one of its texts passes the sensitivity's threshold. Matches
+//! are then ordered by the comparator, the first difference winning:
 //!
-//! 1. the title is the query;
-//! 2. the title starts with the query;
-//! 3. every word of the query starts a word of the title;
-//! 4. every word of the query appears in the title;
-//! 5. every word appears in the title or subtitle;
-//! 6. otherwise (some word appears only in the package title);
-//! 7. a match only the scorer found — the query's letters scattered
-//!    through a title, or words the texts merely hold — ranks after the
-//!    six, best score first.
+//! 1. the query is the result's alias;
+//! 2. the query is longer than three characters and is exactly the title
+//!    or an alternate title;
+//! 4. the query is exactly the subtitle (a keyword counts: keywords rank
+//!    as subtitles);
+//! 5. the alias starts with the query;
+//! 8. the higher of the title, alternate-title and subtitle scores (a
+//!    keyword's counts where the subtitle's does);
+//! 10. higher title score;
+//! 11. kind priority — commands above links, above applications, above
+//!     files;
+//! 12. the provider's own order;
+//! 13. the title, with digits compared by their value ("Item 2" before
+//!     "Item 10").
 //!
-//! Results that rank the same keep their order in root search, and an
-//! empty query lists every result in that order. This ranking is the
-//! deliberately simple one from before fuzzy matching, kept until the
-//! ranking ticket that follows (#197); no typo tolerance, frequency or
-//! recency.
+//! Steps 3, 6, 7 and 9 (the learned queries, and the frecency they
+//! weigh) are #199's, filled in beside these: until then every result
+//! compares equal at them, as it does at the no-query order that follows
+//! the comparator. Results the comparator cannot tell apart keep the
+//! order they were given — the provider's own, within one provider — and
+//! an empty query lists every result in that order. No typo tolerance,
+//! frequency or recency.
 //!
 //! A query that is the alias the user gave a result ([`Query::is_alias_of`])
 //! is compared caselessly instead ([`same_text`]), never transliterated,
@@ -76,19 +87,17 @@ pub(crate) fn same_text(a: &str, b: &str) -> bool {
     UniCase::unicode(normalize(a)) == UniCase::unicode(normalize(b))
 }
 
-/// How well a result matches a query; lower is better. The first six
-/// steps are the order root search has kept since its first matching;
-/// the seventh holds a match only the scorer found, ranked by its score.
+/// What kind of thing a result is, as the comparator's kind step ranks
+/// it: commands — installed and Pane's own — above links (quicklinks),
+/// above applications, above files. Files are never ranked by the
+/// comparator (they keep their place below the results); the kind
+/// completes the order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-enum Rank {
-    Exact,
-    Prefix,
-    WordPrefixes,
-    InTitle,
-    InSubtitle,
-    InPackage,
-    /// A match only the scorer found, ranked after the six by its score.
-    Fuzzy,
+pub(crate) enum Kind {
+    Command,
+    Link,
+    Application,
+    File,
 }
 
 /// Whether `c` separates words for the scorer: whitespace, or one of
@@ -110,8 +119,8 @@ fn normalize(text: &str) -> String {
 /// every script the table covers romanised), then lowercase, its words
 /// separated by single spaces. Unlike [`normalize`], accents never
 /// survive it, so "cafe" finds "Café" and "tieng viet" finds "Tiếng
-/// Việt".
-fn fold(text: &str) -> String {
+/// Việt". The launcher also folds titles to tell rows of one title apart.
+pub(crate) fn fold(text: &str) -> String {
     if text.is_ascii() {
         return text
             .to_lowercase()
@@ -135,11 +144,11 @@ pub(crate) struct Keys {
     /// Other titles that find the result as its title does (an indexed
     /// result's alternate titles); the row still shows the title.
     alternates: Vec<Title>,
-    /// The subtitle and the keywords together, as the subtitle is
-    /// matched: keywords find the result as the subtitle does today, and
-    /// the composites below span them with the title (keywords join the
-    /// matcher's own texts in #197).
+    /// The subtitle, as it is matched.
     subtitle: String,
+    /// The keywords, each its own folded text, matched as the subtitle
+    /// is: an author's search terms, distinct from the user's aliases.
+    keywords: Vec<String>,
     /// The composites "title subtitle" and "subtitle title", folded, so
     /// a query can span both ("utub vid" finding a result titled "Search
     /// YouTube" with the subtitle "Videos"); both empty when there is no
@@ -155,19 +164,11 @@ pub(crate) struct Keys {
 #[derive(Clone, Debug)]
 struct Title {
     text: String,
-    /// Its words: runs of letters and digits.
-    words: Vec<String>,
 }
 
 impl Title {
     fn new(title: &str) -> Title {
-        let text = fold(title);
-        let words = text
-            .split(|c: char| !c.is_alphanumeric())
-            .filter(|word| !word.is_empty())
-            .map(str::to_owned)
-            .collect();
-        Title { text, words }
+        Title { text: fold(title) }
     }
 }
 
@@ -192,33 +193,39 @@ impl Keys {
             title,
             alternates: Vec::new(),
             subtitle,
+            keywords: Vec::new(),
             package: package.map(fold).unwrap_or_default(),
             alias: None,
         }
     }
 
     /// These keys, also matched by `alternate_titles` as the title is and
-    /// by `keywords` as the subtitle is. Blank ones are ignored.
+    /// by each of `keywords` as the subtitle is. Blank ones are ignored.
     pub(crate) fn with_alternates(self, alternate_titles: &[String], keywords: &[String]) -> Keys {
-        let keywords = keywords
-            .iter()
-            .map(|keyword| fold(keyword))
-            .filter(|keyword| !keyword.is_empty())
-            .collect::<Vec<_>>()
-            .join(" ");
-        let subtitle = [self.subtitle.clone(), keywords]
-            .into_iter()
-            .filter(|text| !text.is_empty())
-            .collect::<Vec<_>>()
-            .join(" ");
         Keys {
             alternates: alternate_titles
                 .iter()
                 .map(|title| Title::new(title))
                 .filter(|title| !title.text.is_empty())
                 .collect(),
-            composites: composites(&self.title.text, &subtitle),
-            subtitle,
+            keywords: keywords
+                .iter()
+                .map(|keyword| fold(keyword))
+                .filter(|keyword| !keyword.is_empty())
+                .collect(),
+            ..self
+        }
+    }
+
+    /// These keys, also matched by each of `keywords` as the subtitle
+    /// is: a command's manifest keywords. Blank ones are ignored.
+    pub(crate) fn with_keywords(self, keywords: &[String]) -> Keys {
+        Keys {
+            keywords: keywords
+                .iter()
+                .map(|keyword| fold(keyword))
+                .filter(|keyword| !keyword.is_empty())
+                .collect(),
             ..self
         }
     }
@@ -232,23 +239,40 @@ impl Keys {
     }
 
     /// The best score this query places in any of these keys' texts at
-    /// `sensitivity`: the title, each alternate title, the subtitle with
-    /// its keywords, the composites of the two, or the package title.
-    /// `None` when no text holds the query's letters in order, or none
-    /// of their best placements passes the sensitivity's threshold —
-    /// which is the same thing, since every threshold is monotone in the
-    /// score.
+    /// `sensitivity`: the title, each alternate title, the subtitle, each
+    /// keyword, the composites of the title and the subtitle, or the
+    /// package title. `None` when no text holds the query's letters in
+    /// order, or none of their best placements passes the sensitivity's
+    /// threshold — which is the same thing, since every threshold is
+    /// monotone in the score.
     fn scored(&self, query: &Query, sensitivity: SearchSensitivity) -> Option<i32> {
-        let texts = std::iter::once(&self.title.text)
-            .chain(self.alternates.iter().map(|title| &title.text))
-            .chain([
-                &self.subtitle,
-                &self.composites[0],
-                &self.composites[1],
-                &self.package,
-            ]);
+        let texts = self.texts();
         let best = texts.filter_map(|text| query.score(text)).max();
         best.filter(|&score| sensitivity.accepts(score, query.letters))
+    }
+
+    /// Every text the query is matched against, each a whole text of its
+    /// own: the title, each alternate title, the subtitle, each keyword,
+    /// the composites of the title and the subtitle, and the package
+    /// title.
+    fn texts(&self) -> impl Iterator<Item = &str> {
+        std::iter::once(self.title.text.as_str())
+            .chain(self.alternates.iter().map(|title| title.text.as_str()))
+            .chain(std::iter::once(self.subtitle.as_str()))
+            .chain(self.keywords.iter().map(String::as_str))
+            .chain([self.composites[0].as_str(), self.composites[1].as_str()])
+            .chain([self.package.as_str()])
+    }
+
+    /// The texts whose scores the comparator's eighth step weighs: the
+    /// title, each alternate title, the subtitle and each keyword. A
+    /// match the composites or the package title found holds none of
+    /// them, and ranks by whatever else it has.
+    fn ranked_texts(&self) -> impl Iterator<Item = &str> {
+        std::iter::once(self.title.text.as_str())
+            .chain(self.alternates.iter().map(|title| title.text.as_str()))
+            .chain(std::iter::once(self.subtitle.as_str()))
+            .chain(self.keywords.iter().map(String::as_str))
     }
 }
 
@@ -267,8 +291,9 @@ pub(crate) struct Query {
     text: String,
     /// The query as aliases see it: normalized, not transliterated.
     plain: String,
-    /// The folded text's words: runs of letters and digits.
-    words: Vec<String>,
+    /// Whether the query, as the user typed it, is longer than three
+    /// characters: only then does an exact title match count as one.
+    long: bool,
     /// How many of the query's characters are not separators: the n of
     /// the sensitivity thresholds. Separators are the only characters
     /// the scorer may skip, so they are not counted.
@@ -293,13 +318,10 @@ impl Query {
     pub(crate) fn new(query: &str) -> Query {
         let text = fold(query);
         let plain = normalize(query);
-        let words = text
-            .split(' ')
-            .filter(|word| !word.is_empty())
-            .map(str::to_owned);
+        let long = plain.chars().count() > 3;
         let letters = text.chars().filter(|c| !is_separator(*c)).count();
         Query {
-            words: words.collect(),
+            long,
             letters,
             text,
             plain,
@@ -316,61 +338,30 @@ impl Query {
                 .is_some_and(|alias| UniCase::unicode(alias) == UniCase::unicode(&self.plain))
     }
 
-    /// How well a result with `keys` matches this non-empty query, as
-    /// today's six steps count it; `None` when only the scorer found the
-    /// match, which ranks after the six ([`Rank::Fuzzy`]).
-    fn rank(&self, keys: &Keys) -> Option<Rank> {
-        // The best a title or an alternate title matches.
-        let titled = std::iter::once(&keys.title)
-            .chain(&keys.alternates)
-            .filter_map(|title| self.title_rank(title))
-            .min();
-        if titled.is_some() {
-            return titled;
-        }
-        let in_titles = |word: &String| {
-            std::iter::once(&keys.title)
-                .chain(&keys.alternates)
-                .any(|title| title.text.contains(word.as_str()))
-        };
-        let in_subtitle = |word: &String| in_titles(word) || keys.subtitle.contains(word.as_str());
-        if self.words.iter().all(in_subtitle) {
-            Some(Rank::InSubtitle)
-        } else if self
-            .words
-            .iter()
-            .all(|word| in_subtitle(word) || keys.package.contains(word.as_str()))
-        {
-            Some(Rank::InPackage)
-        } else {
-            None
-        }
+    /// Whether the alias the user gave the result with `keys` starts with
+    /// this query (a prefix, not the alias itself: [`Query::is_alias_of`]),
+    /// compared caselessly as aliases are. A result is matched by such a
+    /// prefix even when no text of it holds the query's letters.
+    pub(crate) fn is_prefix_of_alias_of(&self, keys: &Keys) -> bool {
+        !self.plain.is_empty()
+            && keys
+                .alias
+                .as_deref()
+                .is_some_and(|alias| alias.starts_with(&self.plain))
     }
 
-    /// How well `title` alone matches this non-empty query, at best
-    /// [`Rank::Exact`] and at worst [`Rank::InTitle`]; `None` if some word
-    /// is not in it.
-    fn title_rank(&self, title: &Title) -> Option<Rank> {
-        if title.text == self.text {
-            Some(Rank::Exact)
-        } else if title.text.starts_with(&self.text) {
-            Some(Rank::Prefix)
-        } else if self.words.iter().all(|word| {
-            title
-                .words
-                .iter()
-                .any(|title_word| title_word.starts_with(word.as_str()))
-        }) {
-            Some(Rank::WordPrefixes)
-        } else if self
-            .words
-            .iter()
-            .all(|word| title.text.contains(word.as_str()))
-        {
-            Some(Rank::InTitle)
-        } else {
-            None
-        }
+    /// Whether this query, longer than three characters, is exactly the
+    /// title or an alternate title of the result with `keys`, folded.
+    fn is_title_of(&self, keys: &Keys) -> bool {
+        self.long
+            && (keys.title.text == self.text
+                || keys.alternates.iter().any(|title| title.text == self.text))
+    }
+
+    /// Whether this query is exactly the subtitle or a keyword of the
+    /// result with `keys`, folded: keywords rank as subtitles.
+    fn is_subtitle_of(&self, keys: &Keys) -> bool {
+        keys.subtitle == self.text || keys.keywords.iter().any(|keyword| keyword == &self.text)
     }
 
     /// The score of the best placement of this query in `text`, both
@@ -576,31 +567,166 @@ fn place(query: &[char], text: &[char], trace: bool) -> Option<Placed> {
     Some(Placed { score, at })
 }
 
-/// The indices of the results with `keys` that match `query` at
-/// `sensitivity`, best match first; equally good matches keep their
-/// order. An empty query matches every result, in order.
+/// One result as the comparator ranks it, beside its matched texts:
+/// what kind of thing it is, and the position of the provider that
+/// supplied it among the others — Pane's root list first, then each
+/// command that supplies results ahead of the query, in the order they
+/// were first asked. A candidate's kind comes from what activating it
+/// does, never from its title.
+pub(crate) struct Candidate<'a> {
+    pub(crate) keys: &'a Keys,
+    pub(crate) kind: Kind,
+    /// The provider's position: the comparator's twelfth step, ahead of
+    /// the title comparison, so one provider's results stay together and
+    /// rows of it the title cannot tell apart keep the order it gave.
+    pub(crate) provider: usize,
+}
+
+/// The indices of the `candidates` that match `query` at `sensitivity`,
+/// in the comparator's order, the first difference winning; candidates
+/// the comparator cannot tell apart keep the order they were given. An
+/// empty query matches every candidate, in order.
 pub(crate) fn ranked_matches<'a>(
     query: &Query,
-    keys: impl ExactSizeIterator<Item = &'a Keys>,
+    candidates: impl ExactSizeIterator<Item = Candidate<'a>>,
     sensitivity: SearchSensitivity,
 ) -> Vec<usize> {
     if query.text.is_empty() {
-        return (0..keys.len()).collect();
+        return (0..candidates.len()).collect();
     }
-    let mut matches: Vec<(Rank, i32, usize)> = keys
+    // A result matches through its alias — the query is it, or starts it
+    // — even when no text of it passes the threshold.
+    let matches = |candidate: &Candidate| {
+        query.is_alias_of(candidate.keys)
+            || query.is_prefix_of_alias_of(candidate.keys)
+            || candidate.keys.scored(query, sensitivity).is_some()
+    };
+    let mut ranked: Vec<(usize, Ranked)> = candidates
         .enumerate()
-        .filter_map(|(index, keys)| {
-            let score = keys.scored(query, sensitivity)?;
-            Some((query.rank(keys).unwrap_or(Rank::Fuzzy), score, index))
-        })
+        .filter(|(_, candidate)| matches(candidate))
+        .map(|(index, candidate)| (index, Ranked::of(query, candidate)))
         .collect();
-    // Stable: the six ranked steps keep root search order among
-    // themselves, and a fuzzy match orders by its score, best first.
-    matches.sort_by(|a, b| match (a.0, b.0) {
-        (Rank::Fuzzy, Rank::Fuzzy) => b.1.cmp(&a.1),
-        _ => a.0.cmp(&b.0),
-    });
-    matches.into_iter().map(|(_, _, index)| index).collect()
+    ranked.sort_by(|(_, a), (_, b)| compare(a, b));
+    ranked.into_iter().map(|(index, _)| index).collect()
+}
+
+/// One matching result, as the comparator ranks it: every step's key,
+/// computed once per result for a query.
+struct Ranked<'a> {
+    /// Step 1: the query is the result's alias.
+    alias: bool,
+    /// Step 2: the query is longer than three characters and is exactly
+    /// the title or an alternate title.
+    exact_title: bool,
+    /// Step 4: the query is exactly the subtitle, or a keyword.
+    exact_subtitle: bool,
+    /// Step 5: the alias starts with the query.
+    alias_prefix: bool,
+    /// Step 8: the best score the query places in the title, an
+    /// alternate title, the subtitle or a keyword; `None` when none of
+    /// them holds the query's letters in order (a match the composites
+    /// or the package title found).
+    best: Option<i32>,
+    /// Step 10: the best score the query places in the title alone.
+    title: Option<i32>,
+    /// Step 11.
+    kind: Kind,
+    /// Step 12.
+    provider: usize,
+    /// The folded title, for the last step's collation.
+    folded_title: &'a str,
+}
+
+impl<'a> Ranked<'a> {
+    /// The comparator's keys for `candidate` under `query`.
+    fn of(query: &Query, candidate: &Candidate<'a>) -> Ranked<'a> {
+        let keys = candidate.keys;
+        Ranked {
+            alias: query.is_alias_of(keys),
+            exact_title: query.is_title_of(keys),
+            exact_subtitle: query.is_subtitle_of(keys),
+            alias_prefix: query.is_prefix_of_alias_of(keys),
+            best: keys
+                .ranked_texts()
+                .filter_map(|text| query.score(text))
+                .max(),
+            title: query.score(&keys.title.text),
+            kind: candidate.kind,
+            provider: candidate.provider,
+            folded_title: &keys.title.text,
+        }
+    }
+}
+
+/// How two matching results stand against each other, the first
+/// difference winning — the parent's comparator. Steps 3, 6, 7 and 9
+/// (the learned queries, and the frecency both weigh) are #199's, filled
+/// in between the steps they belong to: until then every result compares
+/// equal at them, as it does at the no-query order that follows the last
+/// step.
+fn compare(a: &Ranked, b: &Ranked) -> std::cmp::Ordering {
+    // 1. the query is the result's alias; 2. the query is longer than
+    // three characters and is exactly the title or an alternate title;
+    // 4. the query is exactly the subtitle; 5. the alias starts with the
+    // query; 8. the higher of the title, alternate-title and subtitle
+    // scores; 10. higher title score.
+    let matched = b
+        .alias
+        .cmp(&a.alias)
+        .then(b.exact_title.cmp(&a.exact_title))
+        .then(b.exact_subtitle.cmp(&a.exact_subtitle))
+        .then(b.alias_prefix.cmp(&a.alias_prefix))
+        .then(b.best.cmp(&a.best))
+        .then(b.title.cmp(&a.title));
+    // 11. kind priority: commands above links, above applications, above
+    // files; 12. the provider's own order; 13. the title, with digits
+    // compared by their value. What follows — the no-query order — is
+    // #199's, so results that compare equal keep the order they were
+    // given.
+    matched
+        .then(a.kind.cmp(&b.kind))
+        .then(a.provider.cmp(&b.provider))
+        .then_with(|| collate(&a.folded_title, &b.folded_title))
+}
+
+/// How `a` and `b` stand as titles, compared with digits by their value
+/// ("Item 2" before "Item 10"): a run of digits on both sides counts as
+/// its number, everything else character by character.
+fn collate(a: &str, b: &str) -> std::cmp::Ordering {
+    let (mut a, mut b) = (a, b);
+    loop {
+        let (x, y) = (a.chars().next(), b.chars().next());
+        let (Some(x), Some(y)) = (x, y) else {
+            // The shorter title first, when one is a prefix of the other.
+            return a.len().cmp(&b.len());
+        };
+        if x.is_ascii_digit() && y.is_ascii_digit() {
+            let a_run = a.chars().take_while(|c| c.is_ascii_digit()).count();
+            let b_run = b.chars().take_while(|c| c.is_ascii_digit()).count();
+            // Leading zeros aside, a longer run of digits is the bigger
+            // number; equal lengths compare their digits, which are
+            // their number's.
+            let (a_digits, b_digits) = (
+                a[..a_run].trim_start_matches('0'),
+                b[..b_run].trim_start_matches('0'),
+            );
+            let by_number = a_digits
+                .len()
+                .cmp(&b_digits.len())
+                .then_with(|| a_digits.cmp(b_digits));
+            if by_number != std::cmp::Ordering::Equal {
+                return by_number;
+            }
+            a = &a[a_run..];
+            b = &b[b_run..];
+            continue;
+        }
+        if x != y {
+            return x.cmp(&y);
+        }
+        a = &a[x.len_utf8()..];
+        b = &b[y.len_utf8()..];
+    }
 }
 
 /// One text as it is highlighted: folded character by character, each
@@ -763,6 +889,12 @@ pub struct SettingsEntry {
 /// for matches to non-empty text. The window owns registration; this
 /// only matches and ranks, so a page can register controls as they
 /// appear and drop them as they go, without this code knowing pages.
+///
+/// Every entry is one kind of thing and one provider as far as the
+/// comparator's kind and provider steps can see, so those steps never
+/// distinguish entries; the steps that do — an exact title, an exact
+/// group, the scores, the title's collation — order them as they order
+/// root search's results.
 pub fn settings_matches(query: &str, entries: &[SettingsEntry]) -> Vec<usize> {
     let keys = entries
         .iter()
@@ -774,18 +906,34 @@ pub fn settings_matches(query: &str, entries: &[SettingsEntry]) -> Vec<usize> {
             )
         })
         .collect::<Vec<_>>();
+    let candidates = keys
+        .iter()
+        .map(|keys| Candidate {
+            keys,
+            kind: Kind::Command,
+            provider: 0,
+        })
+        .collect::<Vec<_>>();
     let query = Query::new(query);
-    ranked_matches(&query, keys.iter(), SearchSensitivity::default())
+    ranked_matches(&query, candidates.into_iter(), SearchSensitivity::default())
 }
 
 #[cfg(test)]
 mod alternate_tests {
-    use super::{Keys, Query, SearchSensitivity, ranked_matches};
+    use super::{Candidate, Keys, Kind, Query, SearchSensitivity, ranked_matches};
 
     fn matches(query: &str, keys: &[Keys]) -> Vec<usize> {
+        let candidates = keys
+            .iter()
+            .map(|keys| Candidate {
+                keys,
+                kind: Kind::Command,
+                provider: 0,
+            })
+            .collect::<Vec<_>>();
         ranked_matches(
             &Query::new(query),
-            keys.iter(),
+            candidates.into_iter(),
             SearchSensitivity::default(),
         )
     }
@@ -802,10 +950,11 @@ mod alternate_tests {
             Keys::new("Wtf Notes", Some("Application"), None),
             Keys::new("Paint", Some("Application"), None),
         ];
-        // `wt` is Windows Terminal's alternate title exactly: it ranks
-        // before a title merely starting with it.
+        // `wt` is Windows Terminal's alternate title: the title it
+        // prefixes ("windows terminal") scores better than a title
+        // merely starting with it.
         assert_eq!(matches("wt", &keys), [0, 1]);
-        // `term` starts an alternate title: as a prefix of a title.
+        // `term` starts an alternate title.
         assert_eq!(matches("term", &keys), [0]);
         assert!(matches("paintbrush", &keys).is_empty());
     }
@@ -820,9 +969,21 @@ mod alternate_tests {
         // The title match first, then the keyword's.
         assert_eq!(matches("browser", &keys), [0, 1]);
         assert_eq!(matches("internet", &keys), [1]);
-        // A query may span a title's letters and a keyword's, through the
-        // composite of the two.
-        assert_eq!(matches("fire internet", &keys), [1]);
+        // A keyword is its own text: a query spanning a title's letters
+        // and a keyword's holds in no single text, and matches nothing.
+        assert!(matches("fire internet", &keys).is_empty());
+    }
+
+    #[test]
+    fn a_keyword_found_exactly_ranks_as_the_subtitle_does() {
+        let keys = [
+            Keys::new("Notes", Some("Write things down"), None),
+            Keys::new("Firefox", Some("Application"), None)
+                .with_alternates(&[], &strings(&["browser"])),
+        ];
+        // "browser" is one of Firefox's keywords exactly: the
+        // exact-subtitle step holds it, as it would a subtitle.
+        assert_eq!(matches("browser", &keys), [1]);
     }
 
     #[test]
@@ -837,10 +998,18 @@ mod alternate_tests {
 
 #[cfg(test)]
 mod matching_tests {
-    use super::{Keys, Query, SearchSensitivity, ranked_matches};
+    use super::{Candidate, Keys, Kind, Query, SearchSensitivity, ranked_matches};
 
     fn matched(query: &str, keys: &[Keys], sensitivity: SearchSensitivity) -> Vec<usize> {
-        ranked_matches(&Query::new(query), keys.iter(), sensitivity)
+        let candidates = keys
+            .iter()
+            .map(|keys| Candidate {
+                keys,
+                kind: Kind::Command,
+                provider: 0,
+            })
+            .collect::<Vec<_>>();
+        ranked_matches(&Query::new(query), candidates.into_iter(), sensitivity)
     }
 
     fn texts(listed: &[(&str, Option<&str>)]) -> Vec<Keys> {
@@ -998,11 +1167,13 @@ mod tests {
         // match at all.
         assert_eq!(titles("dark"), vec!["Dark"]);
         // A word of the group matches beneath the title; of the page,
-        // beneath that — the same order root search's results keep.
+        // beneath that — the same order root search's results keep. The
+        // group that is the query exactly ranks above the better-scoring
+        // description of it, as the subtitle does (step 4).
         assert_eq!(
             titles("material"),
-            vec!["Appearance", "Glass"],
-            "the description of the Appearance page names the material, and so does the group"
+            vec!["Glass", "Appearance"],
+            "Glass's group is “Material”, and the Appearance page's description names it"
         );
         assert_eq!(titles("shortcuts"), vec!["Shortcuts"]);
         // A word that no text holds matches nothing.

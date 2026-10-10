@@ -44,6 +44,7 @@ mod hotkeys;
 mod icons;
 mod installer;
 mod item_actions;
+mod keywords;
 mod launcher;
 mod list_tree;
 mod local_channel;

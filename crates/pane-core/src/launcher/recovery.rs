@@ -301,6 +301,7 @@ mod tests {
             component,
             takes_query: false,
             search: false,
+            keywords: Vec::new(),
             when: CommandWhen::default(),
             matches: CommandMatches::default(),
         };

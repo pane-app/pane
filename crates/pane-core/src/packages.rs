@@ -595,6 +595,10 @@ pub struct ManifestCommand {
     /// Whether it opens a screen, runs without one, or only answers root
     /// search (`"mode"`; `view` when the entry does not say).
     pub mode: CommandMode,
+    /// The keywords the command declares (`"keywords"`, #197), which
+    /// find its row in root search as its subtitle does: an author's
+    /// search terms, distinct from the user's aliases.
+    pub keywords: Vec<String>,
     /// When root search lists the command (`"when"`, #195; `Always` when
     /// the entry does not say one).
     pub when: CommandWhen,
@@ -723,6 +727,8 @@ struct CommandJson {
     platforms: Option<Vec<String>>,
     #[serde(default)]
     mode: Option<String>,
+    #[serde(default)]
+    keywords: Vec<String>,
     #[serde(default)]
     when: Option<String>,
     #[serde(default)]
@@ -1042,6 +1048,7 @@ impl Manifest {
                 icon,
                 component,
                 platforms,
+                keywords: command.keywords,
                 mode,
                 when,
                 matches,
@@ -2068,6 +2075,7 @@ impl InstalledPackage {
                     component: self.location.join(&command.component),
                     takes_query: command.accepts_fallback_text(),
                     search: command.search,
+                    keywords: command.keywords.clone(),
                     when: command.when,
                     matches: command.matches,
                 };

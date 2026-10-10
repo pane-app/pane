@@ -44,6 +44,7 @@ pub fn sample_commands() -> Vec<CommandRegistration> {
             component: dir.join(file),
             takes_query: false,
             search: false,
+            keywords: Vec::new(),
             when: pane_core::CommandWhen::Always,
             matches: pane_core::CommandMatches::Title,
         })

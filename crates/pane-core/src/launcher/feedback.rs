@@ -849,6 +849,7 @@ mod tests {
                 component: PathBuf::from(COMPONENT),
                 takes_query: false,
                 search: false,
+                keywords: Vec::new(),
                 when: CommandWhen::default(),
                 matches: CommandMatches::default(),
             }],

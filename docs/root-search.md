@@ -6,8 +6,10 @@ the matching commands, best match first, and Enter invokes the selected one.
 Only command metadata from `pane.json` (and the commands built into Pane) is
 searched; no extension runs until the user invokes one of its commands.
 Matching is fuzzy, without accents and adjustable in strictness
-([#193](https://github.com/pane-app/pane/issues/193)); the ranking is still
-the simple ladder the later ranking ticket (#197) replaces.
+([#193](https://github.com/pane-app/pane/issues/193)); the results are
+ranked by the comparator, found by keywords and other names, and told
+apart when they share a title
+([#197](https://github.com/pane-app/pane/issues/197)).
 [#27](https://github.com/pane-app/pane/issues/27) (US06, US12, T01, T03)
 adds [results computed from the query](#results-computed-from-the-query),
 with [the calculator](#the-calculator) as a default extension.
@@ -91,14 +93,19 @@ exception: it is compared caselessly as it was recorded, never
 transliterated, so an alias means exactly what it meant
 ([#31](aliases.md)).
 
-A result matches when one of its texts passes the scorer and the user's
-Search sensitivity: its title, each alternate title, its subtitle with
-its keywords, the composites "title subtitle" and "subtitle title" (so a
-query can span both: "utub vid" finding a result titled "Search YouTube"
-with the subtitle "Videos"), or, for an installed command, its package's
-title — a command without its own subtitle still shows its package title
-as the subtitle, and one with its own subtitle is still found by its
-package title. The scorer places the query's letters in a text as a
+A result matches when its alias matches — the query is it, or starts it
+— or when one of its texts passes the scorer and the user's Search
+sensitivity: its title, each alternate title, its subtitle, each keyword,
+the composites "title subtitle" and "subtitle title" (so a query can span
+both: "utub vid" finding a result titled "Search YouTube" with the
+subtitle "Videos"), or, for an installed command, its package's title — a
+command without its own subtitle still shows its package title as the
+subtitle, and one with its own subtitle is still found by its package
+title. A keyword is a text of its own, as the subtitle is: no composite
+spans a title and a keyword. A command's keywords are its manifest's
+(`"keywords"` in `pane.json`, #197), an author's search terms, distinct
+from the user's aliases; an indexed result's come from what supplies it
+(#124). The scorer places the query's letters in a text as a
 subsequence with a score: a letter matched at the text's first position
 scores 4, at a word start 3, elsewhere 2; a separator matched to a
 separator scores 1. Each gap between two consecutive matched positions
@@ -121,36 +128,67 @@ requires more than 2n, a match that starts the text or a word of it. The
 choice applies on the next keystroke: the list the current query has
 already made stays as it is.
 
-A result that matches is ranked by how well the title matches (a ladder
-kept from before fuzzy matching until #197 replaces it), best first —
-with the lower sensitivities filling in the rows that hold only by
-containment:
+A result that matches is ranked by the **comparator**, the first
+difference winning:
 
-| Rank | The title… | Query "download" |
-| --- | --- | --- |
-| 0 | (the query is the alias the user gave it; listed above computed results) | a command with the alias "download" |
-| 1 | is the query | Download |
-| 2 | starts with the query | Downloader |
-| 3 | has a word starting with each query word | Recent downloads |
-| 4 | contains each query word | Undownloadable files |
-| 5 | (a word is only in the subtitle) | Clear cache, "Delete downloaded files" |
-| 6 | (a word is only in the package title) | a command of package "Downloads" with a subtitle of its own |
-| 7 | (a match no ladder step found) | "clhis" finding Clipboard History: c and l in "Clip", h, i and s in "History" |
+1. the query is the result's alias;
+2. the query is longer than three characters and is exactly the title or
+   an alternate title;
+3. the query is exactly one of the result's learned queries (#199);
+4. the query is exactly the subtitle (a keyword counts: keywords rank as
+   subtitles);
+5. the alias starts with the query;
+6. a learned query starts with the query (#199);
+7. the query starts with a learned query of at least three characters
+   (#199);
+8. the higher of the title, alternate-title and subtitle scores (a
+   keyword's counts where the subtitle's does; a match the composites or
+   the package title found holds none of them, and ranks below every
+   result with a score);
+9. higher frecency (#199);
+10. higher title score;
+11. kind priority — commands above links (quicklinks), above
+    applications, above files;
+12. the provider's own order: Pane's root list first, then each command
+    that supplies results ahead of the query, in the order they were
+    first asked, ahead of the title comparison — rows of one provider the
+    title cannot tell apart keep the order the provider gave;
+13. the title, with digits compared by their value ("Item 2" before
+    "Item 10").
 
-The seventh rank holds a match only the scorer found — the query's
-letters scattered through a title, or words the texts merely hold — and
-orders it by the score, best first; the first six keep root search order
-among themselves. An indexed result may also have
-**alternate titles** (an application's untranslated name or its program's
-name, such as `wt` for Windows Terminal), each matched as the title is,
-the best of them giving the rank, and **keywords**, matched as the subtitle
-is (rank 5). The row still shows its real title (#170).
+Steps 3, 6, 7 and 9 (the learned queries, and the frecency both weigh)
+are the learning ticket's (#199), filled in beside the steps they belong
+to: until then every result compares equal at them, as it does at the
+no-query order (frecency, having an alias, kind, provider, title) that
+follows the last step, so results the comparator cannot tell apart keep
+the order they were listed in. For "download" among Clear cache
+("Delete downloaded files"), Downloader, Download, Recent downloads and
+Undownloadable files: Download (its title is the query), then Downloader
+(a title that starts with the query), then Recent downloads and Clear
+cache (a word and a subtitle that start with one, 17 to Undownloadable
+files' mid-word 16), with Recent downloads first of the two because its
+title holds the query.
 
-Results of the same rank keep root search order. A blank query lists every
-root result. The best match is selected after every change of the query;
-searching the same query again changes nothing. Each result's text is
-folded once, when root search is shown or its results are rebuilt,
-not on every keystroke.
+An indexed result may also have **alternate titles** (an application's
+untranslated name or its program's name, such as `wt` for Windows
+Terminal), each matched as the title is, the best of them giving the
+rank, and **keywords**, matched as the subtitle is. The row still shows
+its real title (#170).
+
+**Same-name rows** (#197): when two or more listed rows have the same
+folded title, each shows what tells it apart. An installed command names
+its package's source after its subtitle, as the alias and fallback rows
+already do; an indexed result shows the distinguishing subtitle its
+provider supplies (an application's
+[distinction](applications.md#names) is the subtitle itself, so nothing
+is added twice); a computed result's section names the command that
+computed it, and a file row shows its folder, so neither adds anything.
+
+A blank query lists every root result, in root search order. The best
+match is selected after every change of the query; searching the same
+query again changes nothing. Each result's text is folded once, when
+root search is shown or its results are rebuilt, not on every
+keystroke.
 
 The letters a title matched are highlighted in the accent on the row
 (the title characters of the best placement, including a placement that
@@ -159,11 +197,8 @@ a keyword, its subtitle or its package title alone highlights nothing in
 its title.
 
 Not done, deliberately: typo tolerance (edit distance), locale-aware case
-folding, frequency or recency, per-user ranking, a ranking of results of
-different kinds (apps, files) against each other, and the ranking
-comparator itself (#197 replaces the ladder wholesale). Command keywords
-in the manifest join the matcher in #197; alternate titles and keywords
-exist only for indexed results (aliases are the user's, [#31](aliases.md)).
+folding, and the learning the comparator's seams leave (#199: learned
+queries, frecency, and the blank query's order).
 
 ## Host behavior
 
@@ -755,7 +790,10 @@ invalid state) apply to the query field too.
 
 Through the launcher's public interface
 ([`crates/pane-core/tests/search.rs`](../crates/pane-core/tests/search.rs)):
-the empty query, each rank in order, letter case and blank queries, spaces
+the empty query, each comparator step in order against a pair that differs
+only there (the alias, an exact title, an exact subtitle, the alias
+prefix, the best score, the title score, the title's numeric collation),
+letter case and blank queries, spaces
 inside and around titles not lowering their rank, composed and decomposed
 accents matching each other, transliteration (French accents, Vietnamese
 including đ, ß), abbreviations, word starts and gaps, a query spanning the
@@ -772,6 +810,24 @@ re-enabling a package under a query, an update finishing while the user
 searches, an unavailable command found and explained without running, and
 twelve installed packages searched with no guest running and only the
 invoked one started.
+
+For keywords, alternate titles and same-name rows
+([`crates/pane-core/tests/keywords.rs`](../crates/pane-core/tests/keywords.rs)),
+with the real `sample-keywords` packages in Rust, JavaScript and
+TypeScript: a command found by the keywords its manifest declares, its
+row keeping its title and subtitle, and invoked; the indexed result of a
+sample provider found by its alternate title and by its keywords, never
+by a query spanning a title and a keyword; and two copies of a package
+naming their sources, their indexed results keeping the provider's own
+order. Applications' own other names, keywords and same-name
+distinctions are checked in
+[`applications.rs`](../crates/pane-core/tests/applications.rs) and the
+same-name rules for commands in
+[`aliases.rs`](../crates/pane-core/tests/aliases.rs): an application
+found by its program name and by a keyword, two of one name showing
+their distinctions and opening the one chosen, a command ranking above
+an application of the same title with both naming what tells them apart,
+and two copies of a package each naming their package's source.
 
 For typed addresses and paths
 ([`crates/pane-core/tests/typed_queries.rs`](../crates/pane-core/tests/typed_queries.rs)),

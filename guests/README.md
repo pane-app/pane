@@ -150,6 +150,17 @@ Rust's standard library on `wasm32-wasip2`) is rejected with an explanation.
   `packages/sample-query-js` and `packages/sample-query-ts`; held alike by
   `crates/pane-core/tests/aliases.rs`, and the Rust one by
   `crates/pane/tests/aliases.rs`.
+- `sample-keywords`, `sample-keywords-js`, `sample-keywords-ts`: the
+  keywords sample in Rust, JavaScript and TypeScript, one component
+  serving "Empty the Bin" (`"keywords": ["trash", "rubbish"]`), a no-view
+  command found by its keywords rather than its title, and the "Moons"
+  root provider (`"indexedResults": true`), which supplies "The Moon",
+  found by its alternate title ("Luna") and its keywords ("satellite",
+  "rock") as a command's title and subtitle are found
+  ([A command's keywords](#a-commands-keywords)). Their packages are
+  `packages/sample-keywords`, `packages/sample-keywords-js` and
+  `packages/sample-keywords-ts`; held alike by
+  `crates/pane-core/tests/keywords.rs`.
 - `sample-matches`, `sample-matches-js`, `sample-matches-ts`: the
   `when`/`matches` sample in Rust, JavaScript and TypeScript, four no-view
   commands: "Hear an Address" (`"matches": "url"`) and "Hear a Path"
@@ -1794,6 +1805,43 @@ export const command: Command = {
 };
 ```
 
+## A command's keywords
+
+A command may declare `keywords` in `pane.json` — words that find its row
+in root search exactly as its subtitle finds it, ranked below a title
+match and above a scattered one: an author's search terms, distinct from
+the [aliases](../docs/aliases.md) a user gives a command. Keywords change
+nothing else: the row keeps its title and subtitle, and no text is ever
+sent for one.
+
+```json
+{ "id": "bin", "title": "Empty the Bin", "component": "sample_keywords.wasm",
+  "mode": "no-view", "keywords": ["trash", "rubbish"] }
+```
+
+Rust, JavaScript and TypeScript, as
+[`sample-keywords`](sample-keywords) and its `-js`/`-ts` copies do; the
+same sample's "Moons" command is a root provider whose indexed result
+carries `alternateTitles` and `keywords` of its own
+([indexed results](#indexed-results)):
+
+```ts
+export const indexedResults: IndexedResults = {
+  async results() {
+    return [
+      {
+        id: "moon",
+        title: "The Moon",
+        subtitle: "What the keywords sample supplies",
+        alternateTitles: ["Luna"],
+        keywords: ["satellite", "rock"],
+        action: { tag: "open", val: { target: "https://example.com/moon" } },
+      },
+    ];
+  },
+};
+```
+
 ## Commands for typed addresses and paths
 
 Root search understands a query that is a **web address** (an absolute URL
@@ -2345,8 +2393,10 @@ and TypeScript: Pane sees only components.
   has none), so put the words people will type there; Pane searches this
   metadata without running the command
   ([root search](../docs/root-search.md#matching-and-ranking)). Optional
-  `when` and `matches` say when the command's row is listed and what it is
-  matched by ([below](#commands-for-typed-addresses-and-paths)). Optional
+  `keywords` are search terms that find the command as its subtitle does
+  ([below](#a-commands-keywords)); optional `when` and `matches` say when
+  the command's row is listed and what it is matched by
+  ([below](#commands-for-typed-addresses-and-paths)). Optional
   `rootResults: true` says the command also computes
   [root results from the query](#root-results-computed-from-the-query).
   Optional `schedule` declares [scheduled work](#scheduled-work): an

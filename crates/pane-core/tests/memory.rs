@@ -66,6 +66,7 @@ fn a_command_that_grows_to_just_under_the_cap_completes() {
             component: guest("faulty"),
             takes_query: false,
             search: false,
+            keywords: Vec::new(),
             when: pane_core::CommandWhen::Always,
             matches: pane_core::CommandMatches::Title,
         }],

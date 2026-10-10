@@ -1,0 +1,22 @@
+{
+  "manifestVersion": 1,
+  "title": "JavaScript keywords sample",
+  "version": "0.1.0",
+  "apiVersion": "0.1",
+  "commands": [
+    {
+      "id": "bin",
+      "title": "Empty the Bin",
+      "component": "sample_keywords_js.wasm",
+      "mode": "no-view",
+      "keywords": ["trash", "rubbish"]
+    },
+    {
+      "id": "moons",
+      "title": "Moons",
+      "component": "sample_keywords_js.wasm",
+      "mode": "provider",
+      "indexedResults": true
+    }
+  ]
+}

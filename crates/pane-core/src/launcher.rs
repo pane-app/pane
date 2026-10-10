@@ -182,6 +182,11 @@ pub struct CommandRegistration {
     pub title: String,
     pub subtitle: Option<String>,
     pub component: PathBuf,
+    /// The keywords the command declares in its manifest (`"keywords"`),
+    /// which find its row as its subtitle does: an author's search
+    /// terms, distinct from the user's aliases (#197). Pane's own
+    /// commands declare none.
+    pub keywords: Vec<String>,
     /// Whether the command takes a query (`"takesQuery": true`, or a first
     /// argument that is text with every other optional): text typed into
     /// root search, sent to it through its alias or as a fallback.
@@ -3527,10 +3532,13 @@ impl Launcher {
                        entry: Entry,
                        package: Option<&str>,
                        target,
+                       keywords: &[String],
                        when: CommandWhen,
                        matches: CommandMatches| {
             let alias = state.aliases.chosen.active_alias(&row.id);
-            let keys = Keys::new(&row.title, row.subtitle.as_deref(), package).with_alias(alias);
+            let keys = Keys::new(&row.title, row.subtitle.as_deref(), package)
+                .with_keywords(keywords)
+                .with_alias(alias);
             // A command's row, available or not, is a registered command a
             // quick slot can hold by its id; Pane's own rows are not.
             let pin = matches!(entry, Entry::Open(_) | Entry::Unavailable(_))
@@ -3570,7 +3578,15 @@ impl Launcher {
         let enabled = || state.packages.iter().filter(|package| package.enabled);
         for built in self.commands.iter() {
             let (row, entry) = command((built.clone(), None), false);
-            add(row, entry, None, None, built.when, built.matches);
+            add(
+                row,
+                entry,
+                None,
+                None,
+                &built.keywords,
+                built.when,
+                built.matches,
+            );
         }
         for package in enabled() {
             // Its commands are found by its title too, even those that show
@@ -3596,8 +3612,17 @@ impl Launcher {
                     unavailable: unavailable.clone(),
                     no_view,
                 };
+                let keywords = registration.keywords.clone();
                 let (row, entry) = command((registration, unavailable), no_view);
-                add(row, entry, Some(&title), Some(target), when, matches);
+                add(
+                    row,
+                    entry,
+                    Some(&title),
+                    Some(target),
+                    &keywords,
+                    when,
+                    matches,
+                );
             }
         }
         for package in enabled() {
@@ -3618,6 +3643,7 @@ impl Launcher {
                     Entry::Broken(problem),
                     None,
                     None,
+                    &[],
                     CommandWhen::Always,
                     CommandMatches::Title,
                 );
@@ -3635,6 +3661,7 @@ impl Launcher {
                 Entry::InstallFromFolder,
                 None,
                 None,
+                &[],
                 CommandWhen::Always,
                 CommandMatches::Title,
             );
@@ -3649,6 +3676,7 @@ impl Launcher {
                 Entry::AskNpm,
                 None,
                 None,
+                &[],
                 CommandWhen::Always,
                 CommandMatches::Title,
             );
@@ -3663,6 +3691,7 @@ impl Launcher {
                 Entry::AskGit,
                 None,
                 None,
+                &[],
                 CommandWhen::Always,
                 CommandMatches::Title,
             );
@@ -3683,6 +3712,7 @@ impl Launcher {
                     Entry::Acquire(id),
                     None,
                     None,
+                    &[],
                     CommandWhen::Always,
                     CommandMatches::Title,
                 );
@@ -3697,6 +3727,7 @@ impl Launcher {
                     entry,
                     None,
                     None,
+                    &[],
                     CommandWhen::Always,
                     CommandMatches::Title,
                 );
@@ -3710,6 +3741,7 @@ impl Launcher {
                 entry,
                 None,
                 None,
+                &[],
                 CommandWhen::Always,
                 CommandMatches::Title,
             );
@@ -3728,6 +3760,7 @@ impl Launcher {
                 Entry::Manage,
                 None,
                 None,
+                &[],
                 CommandWhen::Always,
                 CommandMatches::Title,
             );
@@ -3748,6 +3781,7 @@ impl Launcher {
                 Entry::Settings,
                 None,
                 None,
+                &[],
                 CommandWhen::Always,
                 CommandMatches::Title,
             );
@@ -4810,15 +4844,58 @@ fn asked_at(state: &State) -> WallTime {
     }
 }
 
+/// What a listed row can show to tell itself apart from another row
+/// with the same folded title (#197): an installed command names its
+/// package's source after its subtitle, as the send rows already do. An
+/// indexed result's own subtitle is what its provider gave to tell it
+/// apart (an application's distinction, a quicklink's target), a
+/// computed result's section names the command that computed it, and a
+/// file row shows its folder, so none of them adds anything.
+enum Told {
+    /// The package the command was installed from.
+    Source(PackageIdentity),
+    /// Nothing: the row already tells itself apart.
+    Apart,
+}
+
+/// One root result as the search module ranks it: the result's keys,
+/// what kind of thing it is, and the position of the provider that
+/// supplied it among the others.
+fn candidate(result: &RootResult, kind: search::Kind, provider: usize) -> search::Candidate {
+    search::Candidate {
+        keys: &result.keys,
+        kind,
+        provider,
+    }
+}
+
+/// What kind of thing a root result is, as the comparator ranks kinds:
+/// commands above links, above applications, above files. Folders,
+/// fallbacks and the like are never ranked by the comparator — they keep
+/// their places below the results — so they take the lowest kind, which
+/// the order names for files.
+fn kind(entry: &Entry) -> search::Kind {
+    match presentation::kind(entry) {
+        Some(presentation::RowKind::Command) => search::Kind::Command,
+        Some(presentation::RowKind::Link) => search::Kind::Link,
+        Some(presentation::RowKind::Application) => search::Kind::Application,
+        _ => search::Kind::File,
+    }
+}
+
 /// The rows of root search for `query`, and what activating each does: the
-/// results computed from it, then the root results matching it, best match
-/// first, with, for a query that is not blank, those supplied ahead of it
-/// (after the others of the same rank), the rows declared for the address
-/// or path the query is, then the computed results that open a file, then
-/// the rows explaining why a command could not supply them.
+/// results computed from it, then the root results matching it, in the
+/// comparator's order, with, for a query that is not blank, those supplied
+/// ahead of it, then the rows declared for the address or path the query
+/// is, then the computed results that open a file, then the rows
+/// explaining why a command could not supply them.
 fn root_rows(state: &State, query: &str) -> (Vec<Row>, Vec<Entry>) {
     let blank = query.trim().is_empty();
-    let candidates: Vec<&RootResult> = state
+    // What the comparator ranks: the root results — Pane's own rows and
+    // every package's commands, one provider in the order root search
+    // lists them — then each command that supplies results ahead of the
+    // query, in the order they were first asked.
+    let candidates: Vec<(&RootResult, search::Kind, usize)> = state
         .root
         .iter()
         // A command declared for URL-like or path-like queries is never
@@ -4828,25 +4905,43 @@ fn root_rows(state: &State, query: &str) -> (Vec<Row>, Vec<Entry>) {
         // A command may show with a blank query alone, or only while the
         // user searches (its `when`, #195).
         .filter(|result| result.when.listed(blank))
-        .chain(state.indexes.results().filter(|_| !blank))
-        .collect();
-    let keys: Vec<&Keys> = candidates.iter().map(|result| &result.keys).collect();
-    let parsed = Query::new(query);
-    let named = |index: &usize| parsed.is_alias_of(&candidates[*index].keys);
-    let by_alias: Vec<usize> = (0..candidates.len()).filter(named).collect();
-    let matches: Vec<usize> = search::ranked_matches(&parsed, keys.into_iter(), state.sensitivity)
-        .into_iter()
-        .filter(|index| !named(index))
-        .collect();
-    let found = |index: usize| {
-        (
-            candidates[index].row.clone(),
-            candidates[index].entry.clone(),
+        .map(|result| (result, kind(&result.entry), 0))
+        .chain(
+            state
+                .indexes
+                .grouped_results()
+                .filter(|_| !blank)
+                .map(|(provider, result)| (result, kind(&result.entry), provider + 1)),
         )
+        .collect();
+    let keys = |&(result, kind, provider)| candidate(result, kind, provider);
+    let parsed = Query::new(query);
+    let named = |index: &usize| parsed.is_alias_of(&candidates[*index].0.keys);
+    let matches: Vec<usize> = search::ranked_matches(
+        &parsed,
+        candidates.iter().map(keys),
+        state.sensitivity,
+    )
+    .into_iter()
+    .filter(|index| !named(index))
+    .collect();
+    // A command the query names by its alias is hoisted above every
+    // other row, computed results included.
+    let by_alias: Vec<usize> = (0..candidates.len()).filter(named).collect();
+    // The row a listed candidate becomes, with what it can show to tell
+    // itself apart: an installed command's package source.
+    let found = |index: usize| {
+        let told = candidates[index]
+            .0
+            .target
+            .as_ref()
+            .map(|target| Told::Source(target.identity.clone()))
+            .unwrap_or(Told::Apart);
+        (candidates[index].0.row.clone(), candidates[index].0.entry.clone(), told)
     };
     // A command the query names by its alias is launched from its alias.
     let by_its_alias = |index: usize| {
-        let (row, entry) = found(index);
+        let (row, entry, told) = found(index);
         let entry = match entry {
             Entry::Open(mut opening) => {
                 opening.launch.source = LaunchSource::Alias;
@@ -4854,7 +4949,7 @@ fn root_rows(state: &State, query: &str) -> (Vec<Row>, Vec<Entry>) {
             }
             entry => entry,
         };
-        (row, entry)
+        (row, entry, told)
     };
     let failures = state
         .indexes
@@ -4865,23 +4960,50 @@ fn root_rows(state: &State, query: &str) -> (Vec<Row>, Vec<Entry>) {
         .computed
         .iter()
         .partition(|computed| computed.in_files);
-    let computed_row = |computed: &Computed| (computed.row.clone(), computed.entry.clone());
+    let computed_row = |computed: &Computed| {
+        (computed.row.clone(), computed.entry.clone(), Told::Apart)
+    };
+    let apart = |(row, entry)| (row, entry, Told::Apart);
     // What the user's alias names comes first, even before computed
     // results; files found for the query follow what is found by title,
     // since a folder can hold many; the fallbacks, which the user chooses
     // when anything else is listed, come last.
-    aliases::rows_sending_after_alias(state, query)
+    let listed: Vec<(Row, Entry, Told)> = aliases::rows_sending_after_alias(state, query)
         .into_iter()
+        .map(apart)
         .chain(by_alias.into_iter().map(by_its_alias))
         .chain(computed.into_iter().map(computed_row))
         .chain(matches.into_iter().map(found))
         // The rows declared for the address or path the query is (#195),
         // below the results found by title and above the files.
-        .chain(typed_query::rows(state))
+        .chain(typed_query::rows(state).into_iter().map(apart))
         .chain(files.into_iter().map(computed_row))
-        .chain(failures)
-        .chain(aliases::fallback_rows(state, query))
-        .unzip()
+        .chain(failures.map(apart))
+        .chain(aliases::fallback_rows(state, query).into_iter().map(apart))
+        .collect();
+    // Rows that share a folded title each show what tells them apart.
+    let folded: Vec<String> = listed
+        .iter()
+        .map(|(row, _, _)| search::fold(&row.title))
+        .collect();
+    let mut rows: Vec<Row> = Vec::with_capacity(listed.len());
+    let mut entries: Vec<Entry> = Vec::with_capacity(listed.len());
+    for ((row, entry, told), title) in listed.into_iter().zip(&folded) {
+        let shared = folded.iter().filter(|other| *other == title).count() > 1;
+        let row = match (told, shared) {
+            (Told::Source(identity), true) => Row {
+                subtitle: Some(match row.subtitle {
+                    Some(subtitle) => format!("{subtitle} · {identity}"),
+                    None => identity.to_string(),
+                }),
+                ..row
+            },
+            _ => row,
+        };
+        rows.push(row);
+        entries.push(entry);
+    }
+    (rows, entries)
 }
 
 /// Lists root search's rows for `query` again after results arrived: the

@@ -51,6 +51,7 @@ impl Pane {
                 component: component(),
                 takes_query: false,
                 search: false,
+                keywords: Vec::new(),
                 when: pane_core::CommandWhen::Always,
                 matches: pane_core::CommandMatches::Title,
             }],

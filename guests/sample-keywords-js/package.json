@@ -1,0 +1,15 @@
+{
+  "name": "pane-sample-keywords-js",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Pane's sample of a command's keywords, in JavaScript",
+  "license": "Apache-2.0 OR MIT",
+  "type": "module",
+  "main": "src/index.js",
+  "devDependencies": {
+    "@pane-app/extension": "file:../js"
+  },
+  "pane": {
+    "indexedResults": true
+  }
+}

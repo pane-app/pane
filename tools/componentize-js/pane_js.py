@@ -81,6 +81,8 @@ SAMPLES = [
     ("sample_applications_ts.wasm", "guests/sample-applications-ts"),
     ("sample_query_js.wasm", "guests/sample-query-js"),
     ("sample_query_ts.wasm", "guests/sample-query-ts"),
+    ("sample_keywords_js.wasm", "guests/sample-keywords-js"),
+    ("sample_keywords_ts.wasm", "guests/sample-keywords-ts"),
     ("sample_matches_js.wasm", "guests/sample-matches-js"),
     ("sample_matches_ts.wasm", "guests/sample-matches-ts"),
     ("sample_no_view_js.wasm", "guests/sample-no-view-js"),

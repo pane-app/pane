@@ -406,6 +406,7 @@ fn commands_built_into_pane_have_no_settings(fixture: &Fixture) {
         component: folder.join(fixture.component),
         takes_query: false,
         search: false,
+        keywords: Vec::new(),
         when: pane_core::CommandWhen::Always,
         matches: pane_core::CommandMatches::Title,
     };

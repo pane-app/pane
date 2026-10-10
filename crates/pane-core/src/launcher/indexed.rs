@@ -161,6 +161,16 @@ impl Indexes {
         self.commands.iter().flat_map(|index| &index.results)
     }
 
+    /// Every kept result with the position of the command that supplies
+    /// it among the commands asked, in the order the commands were first
+    /// asked and their answers give them: the provider's own order, as
+    /// the comparator's twelfth step ranks it.
+    pub(super) fn grouped_results(&self) -> impl Iterator<Item = (usize, &RootResult)> {
+        self.commands.iter().enumerate().flat_map(|(provider, index)| {
+            std::iter::repeat_n(provider, index.results.len()).zip(&index.results)
+        })
+    }
+
     /// Where the results of the command with component `component` stand:
     /// a quick slot pinning one of them says so while it cannot be found.
     pub(super) fn listing(&self, component: &Path) -> Listing {

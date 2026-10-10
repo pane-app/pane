@@ -87,6 +87,16 @@ fn app(name: &str) -> Application {
     }
 }
 
+/// An application with the other names and keywords its sources give it,
+/// and what tells it apart from another of its name.
+fn found_as(name: &str, alternate: &[&str], keywords: &[&str]) -> Application {
+    Application {
+        alternate_titles: alternate.iter().map(|title| (*title).to_owned()).collect(),
+        keywords: keywords.iter().map(|keyword| (*keyword).to_owned()).collect(),
+        ..app(name)
+    }
+}
+
 impl Applications for FakeSystem {
     fn installed(&self) -> Result<Vec<Application>, String> {
         let mut held = self.held.lock().unwrap();
@@ -218,6 +228,96 @@ fn applications_rank_with_commands_by_title() {
             "Install extension from npm…"
         ]
     );
+}
+
+/// An application is found by the other names and keywords its sources
+/// give it, as a command's title and subtitle are found (#124's fields,
+/// scored and ranked by #197).
+#[test]
+fn an_application_is_found_by_its_other_names_and_keywords() {
+    let dirs = Dirs::new();
+    let mut system = FakeSystem::with(&[]);
+    *system.applications.lock().unwrap() = vec![
+        found_as("Windows Terminal", &["wt"], &[]),
+        found_as("Firefox", &["Nightly"], &["browser"]),
+    ];
+    let (launcher, _) = dirs.launcher(&system, &[]);
+
+    // A program name is an alternate title: found as the title is.
+    search(&launcher, "wt");
+    assert_eq!(titles(&launcher), ["Windows Terminal"]);
+    search(&launcher, "term");
+    assert_eq!(titles(&launcher), ["Windows Terminal"]);
+    // A keyword, as the subtitle is; an untranslated name, as a title is.
+    search(&launcher, "browser");
+    assert_eq!(titles(&launcher), ["Firefox"]);
+    search(&launcher, "nightly");
+    assert_eq!(titles(&launcher), ["Firefox"]);
+    // The row keeps its title and its "Application" subtitle.
+    let view = launcher.view();
+    assert_eq!(view.rows[0].title, "Firefox");
+    assert_eq!(view.rows[0].subtitle.as_deref(), Some("Application"));
+}
+
+/// Applications of one name each show what tells them apart: their
+/// distinction, as their provider supplies it, as the subtitle itself.
+#[test]
+fn two_applications_of_one_name_show_their_distinctions() {
+    let dirs = Dirs::new();
+    let mut system = FakeSystem::with(&[]);
+    let (mut first, mut second) = (app("Firefox"), app("Firefox"));
+    first.id = "/programs/firefox/firefox.app".into();
+    first.distinction = Some("firefox.exe".into());
+    second.id = "/programs/nightly/firefox.app".into();
+    second.distinction = Some("firefox-dev.exe".into());
+    *system.applications.lock().unwrap() = vec![first, second];
+    let (launcher, _) = dirs.launcher(&system, &[]);
+
+    search(&launcher, "firefox");
+    let view = launcher.view();
+    assert_eq!(titles(&launcher), ["Firefox", "Firefox"]);
+    assert_eq!(
+        view.rows[0].subtitle.as_deref(),
+        Some("firefox.exe"),
+        "the first, as the system listed it, keeps its place"
+    );
+    assert_eq!(view.rows[1].subtitle.as_deref(), Some("firefox-dev.exe"));
+    // Opening the second, not the first, opens the second.
+    launcher.select(1);
+    block_on(launcher.activate_selected());
+    assert_eq!(
+        system.opened(),
+        ["/programs/nightly/firefox.app"],
+        "the distinction names the row, not just the list"
+    );
+}
+
+/// A command ranks above an application of the same title, and each row
+/// shows what tells it apart (step 11, and the same-name rule).
+#[test]
+fn a_command_ranks_above_an_application_of_the_same_title() {
+    let dirs = Dirs::new();
+    let system = FakeSystem::with(&["Rust sample"]);
+    let (launcher, _) = dirs.launcher(&system, &["sample-rust"]);
+
+    search(&launcher, "rust sample");
+    let view = launcher.view();
+    assert_eq!(
+        titles(&launcher),
+        ["Rust sample", "Rust sample"],
+        "the command above the application, an exact title both"
+    );
+    let command = view.rows[0].subtitle.as_deref().unwrap_or_default();
+    assert!(
+        command.starts_with("A sample command implemented by a Rust extension")
+            && command.contains("local folder "),
+        "the command names its package's source: {command}"
+    );
+    assert_eq!(view.rows[1].subtitle.as_deref(), Some("Application"));
+    // An application, ranked below, is still chosen by moving to it.
+    launcher.select(1);
+    block_on(launcher.activate_selected());
+    assert_eq!(system.opened(), ["/apps/Rust sample.app"]);
 }
 
 #[test]

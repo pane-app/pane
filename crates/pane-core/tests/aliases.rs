@@ -504,6 +504,22 @@ fn copies_from_other_sources_with_the_same_title_stay_distinct(fixture: &Fixture
             "Echo"
         ]
     );
+    // The commands' own rows share that title too (#197): each names its
+    // package's source after its subtitle, the first copy's first.
+    assert!(
+        subtitle(&launcher, 1)
+            .starts_with("Answers the text you send it from root search · "),
+        "{}",
+        subtitle(&launcher, 1)
+    );
+    assert_eq!(
+        subtitle(&launcher, 1),
+        format!("Answers the text you send it from root search · {first_source}")
+    );
+    assert_eq!(
+        subtitle(&launcher, 2),
+        format!("Answers the text you send it from root search · {second_source}")
+    );
     assert_eq!(
         subtitle(&launcher, 0),
         format!("Send “hi” · alias ec · {second_source}")
