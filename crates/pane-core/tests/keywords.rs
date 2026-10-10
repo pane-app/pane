@@ -154,10 +154,7 @@ fn a_command_is_found_by_the_keywords_its_manifest_declares(fixture: &Fixture) {
     // no-view command says what it did through its toast.
     launcher.select(0);
     block_on(launcher.activate_selected());
-    assert_eq!(
-        shown(&launcher),
-        Status::Result("Emptied the bin".into())
-    );
+    assert_eq!(shown(&launcher), Status::Result("Emptied the bin".into()));
 }
 
 /// The indexed result a command supplies is found by its alternate

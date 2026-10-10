@@ -256,7 +256,7 @@ fn applications_rank_with_commands_by_title() {
 #[test]
 fn an_application_is_found_by_its_other_names_and_keywords() {
     let dirs = Dirs::new();
-    let mut system = FakeSystem::with(&[]);
+    let system = FakeSystem::with(&[]);
     *system.applications.lock().unwrap() = vec![
         found_as("Windows Terminal", &["wt"], &[]),
         found_as("Firefox", &["Nightly"], &["browser"]),
@@ -284,7 +284,7 @@ fn an_application_is_found_by_its_other_names_and_keywords() {
 #[test]
 fn two_applications_of_one_name_show_their_distinctions() {
     let dirs = Dirs::new();
-    let mut system = FakeSystem::with(&[]);
+    let system = FakeSystem::with(&[]);
     let (mut first, mut second) = (app("Firefox"), app("Firefox"));
     first.id = "/programs/firefox/firefox.app".into();
     first.distinction = Some("firefox.exe".into());

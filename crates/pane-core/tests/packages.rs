@@ -854,7 +854,9 @@ fn the_assembled_sample_packages_install_and_run_in_every_language() {
         // The install selects the new command's row, wherever the blank
         // query's no-query order (#199) ranks it by title.
         let view = launcher.view();
-        let selected = view.rows[view.selected.expect("a row is selected")].title.clone();
+        let selected = view.rows[view.selected.expect("a row is selected")]
+            .title
+            .clone();
         assert_eq!(selected, title);
         block_on(launcher.activate_selected());
         assert_eq!(launcher.view().title, title);

@@ -282,7 +282,7 @@ fn clearing_one_copy_keeps_the_other_identity_and_external_files(fixture: &Fixtu
             "Sign in",
         ] {
             assert!(matches!(
-                run_in_copy(launcher, folder, item),
+                run_in_copy(&launcher, folder, item),
                 Status::Result(_)
             ));
         }
@@ -304,7 +304,7 @@ fn clearing_one_copy_keeps_the_other_identity_and_external_files(fixture: &Fixtu
 
     let answers: Vec<Status> = [&published, &development]
         .into_iter()
-        .map(|folder| run_in_copy(launcher, folder, "Show what Pane keeps"))
+        .map(|folder| run_in_copy(&launcher, folder, "Show what Pane keeps"))
         .collect();
     assert_eq!(
         answers,
@@ -410,9 +410,10 @@ fn run_in_copy(launcher: &Launcher, folder: &Path, item: &str) -> Status {
         .iter()
         .position(|row| {
             row.title == "Greeting"
-                && row.subtitle.as_deref().is_some_and(|subtitle| {
-                    subtitle.ends_with(&source)
-                })
+                && row
+                    .subtitle
+                    .as_deref()
+                    .is_some_and(|subtitle| subtitle.ends_with(&source))
         })
         .unwrap_or_else(|| panic!("no Greeting row of {source}"));
     launcher.select(greeting);

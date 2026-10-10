@@ -226,7 +226,10 @@ fn a_query_taken_by_a_commands_opening_is_recorded() {
         "the query was recorded"
     );
     pane.launcher.back();
-    assert_eq!(pane.launcher.view().screen, Screen::Root { query: "".into() });
+    assert_eq!(
+        pane.launcher.view().screen,
+        Screen::Root { query: "".into() }
+    );
     assert_eq!(
         pane.launcher.recent_query(0).as_deref(),
         Some("sample"),
