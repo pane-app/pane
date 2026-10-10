@@ -137,7 +137,10 @@ fn the_authoring_rows_are_listed_and_ask_the_window_for_folders() {
         select_title(&launcher, row);
         assert_eq!(launcher.selected_folder_ask(), Some(ask), "{row}");
         block_on(launcher.activate_selected());
-        assert!(matches!(launcher.view().screen, Screen::Root { .. }), "{row}");
+        assert!(
+            matches!(launcher.view().screen, Screen::Root { .. }),
+            "{row}"
+        );
         assert_eq!(launcher.view().status, Status::Idle);
     }
     // Not the other rows.
@@ -164,7 +167,11 @@ fn the_form_creates_builds_previews_and_develops_the_package() {
         .collect();
     assert_eq!(
         fields,
-        [("name", ""), ("language", "typescript"), ("template", "list")]
+        [
+            ("name", ""),
+            ("language", "typescript"),
+            ("template", "list")
+        ]
     );
 
     // A name that names no package is refused on its field, as an
@@ -183,7 +190,10 @@ fn the_form_creates_builds_previews_and_develops_the_package() {
     launcher.set_field_value("language", "rust");
     block_on(launcher.submit_form());
     let folder = sources.path().join("word-count");
-    assert!(folder.join("Cargo.toml").is_file(), "the package is written");
+    assert!(
+        folder.join("Cargo.toml").is_file(),
+        "the package is written"
+    );
     assert!(folder.join("src/lib.rs").is_file());
     let component = component_of(&folder);
     assert!(
@@ -258,12 +268,18 @@ fn a_folder_that_is_not_empty_is_refused_and_the_form_stays() {
 #[test]
 fn a_build_failure_is_shown_and_the_folder_is_kept_for_importing() {
     let (sources, data) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
-    let launcher = launcher(&data, Arc::new(TemplateBuilder::failing("error: expected `;`")));
+    let launcher = launcher(
+        &data,
+        Arc::new(TemplateBuilder::failing("error: expected `;`")),
+    );
     let status = created(&launcher, sources.path(), "Word Count", "rust");
     let Status::Error(why) = &status else {
         panic!("the failure is shown: {status:?}");
     };
-    assert!(why.starts_with("Word Count did not build: error: expected"), "{why}");
+    assert!(
+        why.starts_with("Word Count did not build: error: expected"),
+        "{why}"
+    );
     assert!(why.contains("the whole output is in "), "{why}");
     assert!(why.contains("import the extension once it builds"), "{why}");
     // The folder is written and kept.

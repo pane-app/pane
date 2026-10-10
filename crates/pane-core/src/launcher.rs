@@ -114,10 +114,10 @@ use aliases::AliasChoices;
 pub use aliases::AliasOutcome;
 pub use application_update::ApplicationUpdate;
 use application_update::{Application, Updates};
-use create::{CREATE_EXTENSION, IMPORT_EXTENSION};
-pub use create::FolderAsk;
 use choices::Record;
 pub use crash_notice::{LogNotice, UNEXPECTED_QUIT};
+pub use create::FolderAsk;
+use create::{CREATE_EXTENSION, IMPORT_EXTENSION};
 use developing::Developing;
 pub use developing::{BuildFailure, Development};
 pub(crate) use developing::{BuildNow, Remote};
@@ -2641,9 +2641,9 @@ impl Launcher {
             Screen::CommandSearch { query } if !query.is_empty() => {
                 self.clear_search_in_command(&mut state);
             }
-            Screen::Command
-            | Screen::CommandSearch { .. }
-            | Screen::Extensions { .. } => self.show_root(&mut state, None),
+            Screen::Command | Screen::CommandSearch { .. } | Screen::Extensions { .. } => {
+                self.show_root(&mut state, None)
+            }
             // Leaving an install preview drops what Create Extension or
             // Import Extension asked Pane to do once the package was
             // installed (see `create`): not installing it is the author's

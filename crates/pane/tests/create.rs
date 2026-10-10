@@ -53,7 +53,10 @@ impl Builder for TemplateBuilder {
     fn build_for(&self, folder: &Path) -> Result<Arc<dyn Build>, String> {
         let manifest: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(folder.join("pane.json")).unwrap()).unwrap();
-        let component = manifest["commands"][0]["component"].as_str().unwrap().to_owned();
+        let component = manifest["commands"][0]["component"]
+            .as_str()
+            .unwrap()
+            .to_owned();
         Ok(Arc::new(TemplateBuild {
             component: PathBuf::from(component),
         }))
@@ -187,7 +190,10 @@ fn the_create_row_opens_the_form_and_creates_builds_and_develops(cx: &mut TestAp
     let view = until(&window, cx, |view| {
         matches!(view.screen, Screen::Package { .. })
     });
-    assert!(folder.join("Cargo.toml").is_file(), "the package is written");
+    assert!(
+        folder.join("Cargo.toml").is_file(),
+        "the package is written"
+    );
     assert!(
         folder
             .join("target/wasm32-wasip2/release/word_count.wasm")
@@ -201,9 +207,11 @@ fn the_create_row_opens_the_form_and_creates_builds_and_develops(cx: &mut TestAp
     // Installing it develops it: the window says so by itself, and the
     // extension list offers to stop.
     cx.simulate_keystrokes("enter");
-    let view = until(&window, cx, |view| {
-        matches!(&view.status, Status::Result(text) if text.starts_with("Developing Word Count"))
-    });
+    let view = until(
+        &window,
+        cx,
+        |view| matches!(&view.status, Status::Result(text) if text.starts_with("Developing Word Count")),
+    );
     assert!(cx.debug_bounds("status-result").is_some());
     let identity = PackageIdentity::local(&folder).unwrap();
     assert!(
@@ -271,9 +279,11 @@ fn the_import_row_previews_a_folder_and_develops_it_once_installed(cx: &mut Test
     assert!(cx.debug_bounds("row-Install").is_some());
 
     cx.simulate_keystrokes("enter");
-    until(&window, cx, |view| {
-        matches!(&view.status, Status::Result(text) if text.starts_with("Developing Hello"))
-    });
+    until(
+        &window,
+        cx,
+        |view| matches!(&view.status, Status::Result(text) if text.starts_with("Developing Hello")),
+    );
     let identity = PackageIdentity::local(&folder).unwrap();
     assert!(
         cx.read_entity(&window, |window, _| window

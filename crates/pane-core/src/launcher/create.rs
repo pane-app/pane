@@ -32,11 +32,11 @@ use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
+use super::developing::slot;
+use super::off_thread;
 use super::{
     FormField, FormPurpose, FormView, Launcher, LauncherView, OpenForm, Screen, State, Status,
 };
-use super::developing::slot;
-use super::off_thread;
 use crate::develop::PaneManifest;
 use crate::packages::PackageIdentity;
 use crate::runtime::{Choice, FieldKind};
