@@ -275,14 +275,16 @@ async fn wizer_init(
 
     let mut linker = Linker::new(&engine);
     linker.allow_shadowing(true);
-    // Wasmtime 49 stubs an `async func` import with a concurrent trap itself,
-    // so a world importing one of the embedding host's (Pane's
-    // `pane:extension/operations`) instantiates under Wizer; the pinned
-    // Wasmtime 47 needed the retired 0003 patch for that.
-    linker.define_unknown_imports_as_traps(&comp)?;
+    // Wasmtime 49's `define_unknown_imports_as_traps` recurses into every
+    // instance import and stubs what it holds, resources included, so the
+    // real WASI is registered first: its items are already defined by then
+    // and skipped, and only what the world asks for beyond WASI (Pane's
+    // interfaces, and an `async func` import, which 49 stubs with a
+    // concurrent trap) is trapped. The pinned Wasmtime 47 needed the retired
+    // 0003 patch for the async half of this.
     wasmtime_wasi::p3::add_to_linker(&mut linker)?;
-
     register_module_loader(&mut linker, resolver.clone())?;
+    linker.define_unknown_imports_as_traps(&comp)?;
 
     let instance = linker.instantiate_async(&mut store, &comp).await?;
     let init = Init::new(&mut store, &instance)?;
