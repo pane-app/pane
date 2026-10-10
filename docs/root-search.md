@@ -28,6 +28,9 @@ off in Settings.
 [#205](https://github.com/pane-app/pane/issues/205) shows the selected
 row's [inline argument fields](#inline-argument-fields) after the query,
 and opens them with an alias and a space.
+[#206](https://github.com/pane-app/pane/issues/206) lets Up on an empty
+query [recall the recent queries](#recent-queries), with the argument
+values typed with them.
 [#28](https://github.com/pane-app/pane/issues/28) adds
 [quicklinks](quicklinks.md), which open a saved link, file, folder or
 application; #149 made them indexed results ranked with commands. [#31](https://github.com/pane-app/pane/issues/31) adds
@@ -273,9 +276,48 @@ standing it down — and a **"Learn from what I choose"** switch, recorded
 in the settings record as `learning`, on by default. Turned off, Pane
 records no use and ranking acts as if none had been recorded — what was
 learned is kept until it is reset, so turning the switch on again uses
-it. The same switch also stops search history once that exists (#206).
+it. The same switch also stops the search history being recorded
+([below](#recent-queries)); what was recorded is kept until it is reset.
 Both controls re-rank the list on screen at once, and nothing is offered
 while the learned record cannot be read: it is never replaced.
+
+## Recent queries
+
+Root search remembers the queries it was cleared of, so Up can bring
+them back (#206). **Up**, with the query empty, the first row (or no
+row) selected and the press not the system's repeat of a key still held,
+restores the most recent query with the [argument
+values](#inline-argument-fields) typed with it; while the restored query
+is unchanged, Up again restores the one before. Any other key ends the
+walk — the query changing, the selection moving — so the history never
+hijacks navigation: when a row other than the first is selected, or a
+query is typed that the walk did not restore, Up moves the selection as
+it always did. Restoring a query searches it as typing it does.
+
+A query is recorded when it is cleared while not blank: by Escape, by
+the field being emptied, by a command's opening taking it (returning to
+root always starts empty), or by root search being shown fresh over it
+(as `window.close` with `clearRootSearch` and a pop to root do). The
+query is recorded trimmed, with the argument values typed with it — a
+password's empty, its text never written — and consecutive duplicates
+are not added; at most 64 entries are kept, newest first. Uninstalling a
+package forgets the entries that carry its commands' values; disabling
+keeps them.
+
+The record is Pane's own — `search-history.json` beside
+`installed.json`, following the house record rules of `aliases.json`
+(see [learning](#learning-from-what-the-user-chooses) for what those
+rules are): versioned, validated, written atomically one change at a
+time, an unreadable record reported on root search's status line and
+never replaced, and nothing recorded while it cannot be read. What Pane
+remembers stays on this computer and is never sent anywhere.
+
+The user's controls over it: the Launcher page's **"Reset search
+history"** clears every entry, asking for its confirmation first as
+"Reset ranking…" does, and the **"Learn from what I choose"** switch
+stops queries being recorded as it stops uses being recorded — one
+switch for both; what was recorded is kept until it is reset, so the
+walk keeps reaching it while the switch is off.
 
 ## Host behavior
 
@@ -287,7 +329,7 @@ state and maps input to those calls.
 | Input | On root search |
 | --- | --- |
 | Typing, editing keys, clipboard, undo, input-method composition | Edit the query (GPUI CE's single-line editable text element); every change searches again |
-| Up / Down | Previous / next result (not the caret) |
+| Up / Down | Previous / next result (not the caret). Up, with the query empty, the first row (or no row) selected and the press not the system's repeat of a held key, restores the most recent query instead — and, while the query it restored stands, the one before: [recent queries](#recent-queries) |
 | Alt+P / Alt+N (the Keyboard page's Emacs navigation bindings) or Alt+K / Alt+J (its Vim Motions), Control instead of Alt on macOS | Previous / next result too, beside Up and Down, while that set is chosen (the default is None). Raycast for Windows puts these sets on Alt as well; its Alt+B / Alt+F and Alt+H / Alt+L move left and right in its grids, and Pane has no left or right selection to give them, so they stay unbound |
 | Moving the pointer over a result | Select it, so the footer's action and Enter act on it; a pointer resting on a result never undoes the keys' selection, and while a layer over the list owns the target (the Actions panel, the Pane menu) the pointer selects nothing. The first pointer event after the window shows only records where the pointer is |
 | A click on a result | The selected result: invoke it, as Enter does. An unselected one (the keys moved the selection away while the pointer rested on it): select it; a second click invokes it |
@@ -1203,6 +1245,31 @@ driven through the real Settings window in
 and the switch found through the Settings search, turned off recording
 nothing while the order ignores what was learned, turned on again using
 what was kept.
+
+For the recent queries Up recalls
+([`crates/pane-core/tests/history.rs`](../crates/pane-core/tests/history.rs)),
+with the real Rust arguments sample and a registered view command: a
+query cleared by each path — Escape, the field emptied, a command's
+opening taking it, root search shown fresh over it — recorded with the
+argument values typed with it, the password empty and its text never
+written; a blank query never recorded; consecutive duplicates skipped
+and the 64 entries kept; the walk restoring the query and its values,
+one entry back each time and nothing past the oldest; the learn switch
+stopping queries being recorded while what was kept stays reachable;
+the page's reset clearing every entry; the record surviving a restart
+over the same data folder; an uninstall forgetting the entries that
+carry its commands' values; and an unreadable record reported on the
+status line and never replaced. In the window
+([`crates/pane/tests/history.rs`](../crates/pane/tests/history.rs)),
+with real keys: Up on an empty query restoring the previous query with
+its argument values, and Enter running the command with them; repeated
+Up walking back, and nothing past the oldest; typing ending the walk;
+and Up with another row selected moving the selection, not the history.
+The Launcher page's "Reset search history" is driven through the real
+Settings window in
+[`crates/pane/tests/launcher_settings.rs`](../crates/pane/tests/launcher_settings.rs):
+found through the Settings search, asking for its confirmation and
+clearing the record, with the query on screen left standing.
 
 For root providers
 ([`crates/pane-core/tests/root_providers.rs`](../crates/pane-core/tests/root_providers.rs)),

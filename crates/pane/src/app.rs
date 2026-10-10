@@ -105,6 +105,10 @@ pub struct LauncherWindow {
     /// row's command declares arguments (#205; see
     /// [`features::root_search::arguments`]).
     pub(crate) arguments: Option<argument_fields::ArgumentControls>,
+    /// The walk through root search's recent queries while one stands
+    /// (#206; see [`features::root_search::recall`]): which entry the
+    /// query on screen was restored from.
+    pub(crate) recall: Option<root_search::Recall>,
     /// The caret's place in the query, in characters, as the window last
     /// knew it — counted wherever the window moves it, so the argument
     /// fields' edge keys know when Right leaves the query (#205).
@@ -239,6 +243,7 @@ impl LauncherWindow {
             announcer: announcer::Announcer::default(),
             held: held_keys::HeldKeys::default(),
             arguments: None,
+            recall: None,
             query_caret: 0,
             hud: hud::HudWindow::default(),
             confirmation: confirmation::ConfirmationControls::new(cx),
@@ -468,6 +473,9 @@ impl LauncherWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // Down ends the walk through the recent queries (#206): any
+        // other key than the walking Up does.
+        self.recall = None;
         self.launcher.move_selection(1);
         self.announcer.user_moved();
         // The selected row's argument fields follow it (#205).
@@ -481,6 +489,18 @@ impl LauncherWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // The previous-result key is the history's while the query is
+        // empty or a standing walk's, and the first row (or no row) is
+        // selected (#206): the key is handed on to the listener that
+        // sees the press itself, which walks only a press — the system's
+        // repeat of a key still held never walks.
+        if self.recall_ready() {
+            cx.propagate();
+            return;
+        }
+        // The key moves the selection as it always did: the walk, if one
+        // stood, is over.
+        self.recall = None;
         self.launcher.move_selection(-1);
         self.announcer.user_moved();
         // The selected row's argument fields follow it (#205).
@@ -497,6 +517,9 @@ impl LauncherWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // Page Down ends the walk through the recent queries, as Down
+        // does (#206).
+        self.recall = None;
         let step = virtual_list::page_move(Some(self.paged_list()), true);
         self.launcher.move_selection(step);
         self.announcer.user_moved();
@@ -513,6 +536,9 @@ impl LauncherWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // Page Up ends the walk through the recent queries, as Up moving
+        // the selection does (#206).
+        self.recall = None;
         let step = virtual_list::page_move(Some(self.paged_list()), false);
         self.launcher.move_selection(step);
         self.announcer.user_moved();
@@ -541,6 +567,9 @@ impl LauncherWindow {
     }
 
     pub(crate) fn confirm(&mut self, _: &Confirm, window: &mut Window, cx: &mut Context<Self>) {
+        // Enter ends the walk through the recent queries (#206), whatever
+        // it runs — a held key included.
+        self.recall = None;
         // The open Actions panel takes Enter from the key press itself, once
         // per press ([`LauncherWindow::panel_keys`]).
         if self.actions.is_some() {
@@ -2213,6 +2242,11 @@ impl Render for LauncherWindow {
             .capture_key_down(cx.listener(Self::toast_action_keys))
             .capture_key_down(cx.listener(Self::item_action_keys))
             .capture_key_down(cx.listener(Self::held_typing_keys))
+            // The previous-result key pressed while it could be the
+            // history's, seen as the press itself (#206) — after the
+            // item actions' and the held keys' captures, which the key
+            // never matches.
+            .capture_key_down(cx.listener(Self::recall_key))
             .on_action(cx.listener(Self::focus_next))
             .on_action(cx.listener(Self::focus_previous))
             .on_modifiers_changed(cx.listener(Self::modifiers_changed))

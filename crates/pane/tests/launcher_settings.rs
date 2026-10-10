@@ -2569,3 +2569,107 @@ fn find_shortcut() -> &'static str {
         "ctrl-f"
     }
 }
+
+/// A launcher window over `data`, whose extensions folder holds a search
+/// history of one query, "pyt", so what that record says can be reset
+/// and recalled. Where the search history's record is.
+fn over_history_data<'a>(
+    cx: &'a mut TestAppContext,
+    data: &Path,
+) -> (
+    gpui::Entity<LauncherWindow>,
+    &'a mut VisualTestContext,
+    PathBuf,
+) {
+    let extensions = data.join("extensions");
+    fs::create_dir_all(&extensions).unwrap();
+    let record = extensions.join("search-history.json");
+    fs::write(&record, r#"{ "version": 1, "queries": [ { "query": "pyt" } ] }"#).unwrap();
+    let launcher =
+        Launcher::with_packages(Ok(Runtime::start().unwrap()), vec![], extensions.clone())
+            .with_hotkeys(Arc::new(FakeSystem::default()));
+    cx.executor().allow_parking();
+    cx.update(pane::bind_keys);
+    let (window, cx) = cx.add_window_view(|window, cx| LauncherWindow::new(launcher, window, cx));
+    (window, cx, record)
+}
+
+/// The Launcher page's "Reset search history" (#206): found through the
+/// Settings search, it asks for the confirmation such a loss needs — the
+/// first press arms the row, and Cancel stands it down — and the
+/// confirmed reset clears the recent queries, so Up recalls nothing.
+#[gpui::test]
+fn reset_search_history_in_settings_asks_first_and_clears_the_queries(cx: &mut TestAppContext) {
+    let data = tempfile::tempdir().unwrap();
+    let placement = Rc::new(FakePlacement::default());
+    placement.layout(Some(Point { x: 100., y: 100. }), Some(DisplayId(1)));
+    cx.update(|cx| pane::placement::init(placement.clone() as Rc<dyn Placement>, cx));
+    init_settings(Some(data.path()), cx);
+    let (window, cx, record) = over_history_data(cx, data.path());
+
+    // Up on the empty query recalls the recorded one.
+    cx.simulate_keystrokes("up");
+    let view = settle(&window, cx);
+    assert_eq!(
+        view.screen,
+        Screen::Root { query: "pyt".into() },
+        "the recorded query is recalled"
+    );
+
+    // Settings › Launcher: the row is found through the Settings search,
+    // and the reset asks first.
+    let (settings, mut sc) = open_launcher_page(cx);
+    sc.simulate_keystrokes(find_shortcut());
+    sc.simulate_input("search history");
+    sc.run_until_parked();
+    assert!(
+        sc.debug_bounds("settings-search-result-Reset search history").is_some(),
+        "the row is found through the Settings search"
+    );
+    sc.simulate_keystrokes("enter");
+    sc.run_until_parked();
+    settle_frames(&mut sc);
+    assert!(
+        sc.debug_bounds("launcher-reset-history-field").is_some(),
+        "the row is revealed"
+    );
+    click(&mut sc, "launcher-reset-history");
+    sc.run_until_parked();
+    assert!(
+        sc.debug_bounds("launcher-reset-history-reset").is_some(),
+        "the reset asks for its confirmation"
+    );
+    assert!(sc.debug_bounds("launcher-reset-history-cancel").is_some());
+    // Cancel stands it down: nothing was reset.
+    click(&mut sc, "launcher-reset-history-cancel");
+    sc.run_until_parked();
+    assert!(
+        sc.debug_bounds("launcher-reset-history-reset").is_none(),
+        "the row stood down"
+    );
+    assert!(
+        fs::read_to_string(&record).unwrap().contains("pyt"),
+        "nothing went"
+    );
+
+    // The confirmed reset clears the record: nothing is left to recall.
+    click(&mut sc, "launcher-reset-history");
+    sc.run_until_parked();
+    click(&mut sc, "launcher-reset-history-reset");
+    sc.run_until_parked();
+    until(&mut sc, |_| {
+        fs::read_to_string(&record)
+            .ok()
+            .filter(|text| !text.contains("pyt"))
+    });
+    assert_eq!(
+        cx.read_entity(&window, |window, _| window.launcher().recent_query(0)),
+        None,
+        "nothing is recalled"
+    );
+    // The query the walk restored still stands: the reset clears the
+    // history, not the search on screen.
+    let view = settle(&window, cx);
+    assert_eq!(view.screen, Screen::Root { query: "pyt".into() });
+    let _ = settings;
+}

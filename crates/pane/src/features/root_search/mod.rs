@@ -7,7 +7,8 @@
 //! every change searches at once (the launcher decides what: root search's
 //! providers, or only the opened command). Up and Down move the selection
 //! through the results instead of the caret, Enter opens the selected result
-//! and Escape clears the query.
+//! and Escape clears the query. Up, on an empty query, recalls the recent
+//! queries instead (`recall`, #206).
 //!
 //! The field's editing keys are the ones the form's text fields use, bound
 //! once by [`crate::ui::input::bind_text_editing`] without Tab, Enter and
@@ -38,6 +39,9 @@ use crate::{SelectNext, SelectPrevious};
 
 pub(crate) mod arguments;
 pub(crate) mod layouts;
+pub(crate) mod recall;
+
+pub(crate) use recall::Recall;
 
 pub(crate) const CONTEXT: &str = "RootSearch";
 /// The query field's own context, within the search field's: the query
@@ -117,6 +121,11 @@ impl QueryField {
                     .set_search_sensitivity(crate::settings::search_sensitivity_of(cx));
                 this.launcher.set_learning(crate::settings::learning_of(cx));
                 let query = input.read(cx).as_str().to_owned();
+                // The query changed: the walk through the recent queries,
+                // if one stood, is over (#206) — any other key than the
+                // walking Up ends it. The walk that restores this query
+                // sets its own state after the replace that fired this.
+                this.recall = None;
                 // Whether the query just became a word followed by a space
                 // (#205): a word that is a command's alias, and a space
                 // typed after it, open what the alias names — the fields

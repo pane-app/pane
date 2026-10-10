@@ -94,6 +94,7 @@ mod developing;
 mod extensions;
 mod file_search;
 mod files;
+mod history;
 mod install;
 mod learned;
 mod looks;
@@ -928,6 +929,12 @@ struct State {
     learned: Record<learned::LearnedChoices>,
     /// The writes of the learned record still going on.
     learned_saves: Arc<launching::InFlight>,
+    /// Root search's recent queries, and their record (see `history`,
+    /// #206): the queries Up recalls, with the argument values typed
+    /// with them.
+    history: Record<history::RecentQueries>,
+    /// The writes of the search history's record still going on.
+    history_saves: Arc<launching::InFlight>,
     /// The submenus open in the Actions panel over the selected item (see
     /// `submenus`).
     submenus: submenus::Submenus,
@@ -1534,6 +1541,11 @@ impl Launcher {
             .map_or_else(Record::default, |installation| {
                 Record::open(&installation.dir)
             });
+        let history = installation
+            .as_ref()
+            .map_or_else(Record::default, |installation| {
+                Record::open(&installation.dir)
+            });
         let confirmations = installation
             .as_ref()
             .map_or_else(Record::default, |installation| {
@@ -1639,6 +1651,8 @@ impl Launcher {
             subtitle_saves: Arc::default(),
             learned,
             learned_saves: Arc::default(),
+            history,
+            history_saves: Arc::default(),
             submenus: submenus::Submenus::default(),
             system: crate::system::none(),
             confirmations,
@@ -2486,6 +2500,13 @@ impl Launcher {
         tokio::sync::oneshot::Receiver<()>,
         Vec<(CommandRegistration, Option<PackageData>)>,
     ) {
+        // A query cleared while not blank becomes a recent one Up can
+        // restore (#206), with the argument values typed with it — before
+        // the search takes them below.
+        if query.trim().is_empty() {
+            let cleared = state.view.query().unwrap_or("").to_owned();
+            self.record_cleared_query(state, &cleared);
+        }
         state.search_epoch += 1;
         let (alive, cancelled) = tokio::sync::oneshot::channel();
         // The search this one replaces keeps its calls running (#202):
@@ -3681,6 +3702,12 @@ impl Launcher {
                 )
             })
             .or_else(|| aliases::first_choice(&entries));
+        // Root search shown fresh over a query it had: the query is
+        // cleared by the showing (#206) — recorded, with the values typed
+        // with it, as a recent one Up can restore, before the view below
+        // takes it.
+        let cleared = state.view.query().unwrap_or("").to_owned();
+        self.record_cleared_query(state, &cleared);
         self.leave_command(state);
         state.entries = entries;
         state.view = LauncherView {
@@ -3690,11 +3717,19 @@ impl Launcher {
                 &state.store_problem,
                 state.quick_slots.unreadable(),
                 state.learned.unreadable(),
+                state.history.unreadable(),
             ) {
-                (Some(problem), _, _) => Status::Error(problem.clone()),
-                (None, Some(problem), _) => Status::Error(quick_slots::unreadable_report(problem)),
-                (None, None, Some(problem)) => Status::Error(learned::unreadable_report(problem)),
-                (None, None, None) => Status::Idle,
+                (Some(problem), _, _, _) => Status::Error(problem.clone()),
+                (None, Some(problem), _, _) => {
+                    Status::Error(quick_slots::unreadable_report(problem))
+                }
+                (None, None, Some(problem), _) => {
+                    Status::Error(learned::unreadable_report(problem))
+                }
+                (None, None, None, Some(problem)) => {
+                    Status::Error(history::unreadable_report(problem))
+                }
+                (None, None, None, None) => Status::Idle,
             },
             ..LauncherView::new(
                 Screen::Root {
@@ -4978,6 +5013,14 @@ impl Launcher {
                     state.entries = entries;
                     state.open = Some(component);
                     state.launch = launch;
+                    // The command's opening takes the query with it —
+                    // returning to root starts empty — so the query is
+                    // cleared as far as the user can reach it: recorded,
+                    // with the values typed with it, as a recent one Up
+                    // can restore (#206), before the screen change takes
+                    // them.
+                    let cleared = state.view.query().unwrap_or("").to_owned();
+                    self.record_cleared_query(state, &cleared);
                     state.next_screen();
                     state.view = LauncherView::new(screen, view.title).with_rows(rows);
                     state.reported_unbound = Vec::new();

@@ -124,6 +124,10 @@ _Avoid_: Suggestions, history, personalization, favorites
 A query the user had typed when they chose a root result from root search, which Pane remembers by the result's identity (the last few distinct ones), never by its title or row. Typing it again ranks that result above how well titles match, after only an alias and an exact title, while the result was used recently (ADR 0030).
 _Avoid_: Search history (the queries Up recalls), alias (the user's own word for a command), suggestion
 
+**Search history**:
+The recent queries root search was cleared of, kept in Pane's own record on this computer: Up on an empty query restores the newest one with the argument values typed with it (a password's empty), and Up again the one before, until any other key ends the walk. The "Learn from what I choose" switch also stops it recording; the Launcher page's "Reset search history" clears it.
+_Avoid_: Learned query (a per-result ranking input), suggestions, recent files
+
 **Frecency**:
 A root result's score of uses from root search that decays with time (halving every ten days, never below an unused result's), kept by identity in Pane's own record. It breaks ties between equally good matches and orders the blank query's commands and applications. A global hotkey's use, a computed answer and a file earn none.
 _Avoid_: Recent use, popularity, usage count

@@ -11,7 +11,9 @@
 //! kept until it is reset), and "Reset ranking…", which clears what every
 //! result learned, asking for the confirmation such a loss needs — the
 //! first press arms the row and the second runs it, with Cancel standing
-//! it down.
+//! it down. "Reset search history" (#206) clears the recent queries Up
+//! recalls the same way, and the switch is one for both records: turned
+//! off, no use and no query is recorded.
 //!
 //! Every value it shows and every choice it takes goes through the host
 //! settings ([`crate::settings`]), so the record's own rules — atomic
@@ -178,6 +180,11 @@ pub(crate) const LEARN_DEBUG: &str = "launcher-learn";
 pub(crate) const RESET_NAME: &str = "Reset ranking";
 pub(crate) const RESET_DEBUG: &str = "launcher-reset-ranking";
 
+/// The row that clears root search's recent queries (#206): its name,
+/// and its id and selector.
+pub(crate) const HISTORY_NAME: &str = "Reset search history";
+pub(crate) const HISTORY_DEBUG: &str = "launcher-reset-history";
+
 /// What the page is, in one line: its sidebar entry's description in
 /// the search.
 pub(crate) const ABOUT: &str = "Where the launcher opens and what it shows";
@@ -219,6 +226,12 @@ pub(crate) struct State {
     pub(crate) reset: Resetting,
     /// Why the last reset could not be written, if it could not.
     pub(crate) reset_problem: Option<String>,
+    /// The "Reset search history" row (#206): resting, or asking its
+    /// confirmation.
+    pub(crate) history: Resetting,
+    /// Why the last search-history reset could not be written, if it
+    /// could not.
+    pub(crate) history_problem: Option<String>,
 }
 
 /// The "Reset ranking…" row's confirmation: resting, or asking whether
@@ -329,6 +342,8 @@ impl State {
             sensitivity,
             reset: Resetting::Idle,
             reset_problem: None,
+            history: Resetting::Idle,
+            history_problem: None,
         }
     }
 
@@ -467,9 +482,10 @@ fn entries(launcher: &Launcher, cx: &App) -> Vec<search::Entry> {
         group: Some(SENSITIVITY_NAME.into()),
         unavailable: None,
     });
-    // The learning controls: the switch always usable, the reset only
-    // while what was learned can be read — it is never replaced
-    // otherwise, which the result says as the row does.
+    // The learning controls: the switch always usable, the resets only
+    // while what they clear can be read — the record is never replaced
+    // otherwise, which the result says as the row does. The switch stops
+    // both records (#200, #206: one switch for both).
     let learning = [
         (LEARN_DEBUG, LEARN_NAME, None),
         (
@@ -478,6 +494,13 @@ fn entries(launcher: &Launcher, cx: &App) -> Vec<search::Entry> {
             launcher
                 .learned_problem()
                 .map(|problem| format!("What root search learned cannot be read: {problem}")),
+        ),
+        (
+            HISTORY_DEBUG,
+            HISTORY_NAME,
+            launcher
+                .history_problem()
+                .map(|problem| format!("The search history cannot be read: {problem}")),
         ),
     ]
     .into_iter()
@@ -652,13 +675,14 @@ fn render(
     )
     .into_any_element();
     let reset = reset_row(this, theme, cx);
+    let history_reset = history_row(this, theme, cx);
     let mode_anchor = this.search_anchor("launcher-window-mode");
     let pinned_anchor = this.search_anchor("launcher-pinned");
     let compact_pinned_anchor = this.search_anchor(COMPACT_PINNED_DEBUG);
     compose(
         &view,
         (select, Some(reopening), Some(sensitivity)),
-        [learn, reset],
+        [learn, reset, history_reset],
         theme,
         |control, element| match control {
             LauncherControl::WindowMode(mode) => element
@@ -813,13 +837,112 @@ fn segments<T: Copy + PartialEq>(
         .children(segments)
 }
 
+/// The "Reset search history" row (#206): what the reset clears — the
+/// recent queries Up recalls, with the argument values recorded with
+/// them — and the button that asks for the confirmation such a loss
+/// needs, as "Reset ranking…" does: the first press arms the row and
+/// the second runs the reset, with Cancel standing it down. The history
+/// is the launcher's own record, not a host setting, so the row reports
+/// the reset's own failures beside it, and nothing is offered while the
+/// record cannot be read: that record is never replaced.
+fn history_row(
+    this: &mut SettingsWindow,
+    theme: &Theme,
+    cx: &mut Context<SettingsWindow>,
+) -> AnyElement {
+    let anchor = this.search_anchor(HISTORY_DEBUG);
+    let asking = this.launcher_page.history == Resetting::Asking;
+    let problem = this.launcher_page.history_problem.clone();
+    // Why the search history cannot be read, if it cannot: the record is
+    // never replaced then, so the reset cannot run.
+    let unreadable = this.launcher.history_problem();
+    let mut lines = vec![controls::row_line(
+        if asking {
+            "Clear the recent queries Up recalls, with their argument values?"
+        } else {
+            "Clears the recent queries Up recalls, with their argument values"
+        },
+        theme.text_muted,
+        theme,
+    )];
+    // What the last reset could not be written with, and why the history
+    // cannot be read, if they need saying.
+    if let Some(problem) = problem.as_deref() {
+        lines.push(controls::row_line(problem, theme.danger, theme));
+    }
+    if let Some(problem) = unreadable.as_deref() {
+        lines.push(controls::row_line(problem, theme.warning, theme));
+    }
+    let offered = unreadable.is_none();
+    let anchor = Some(anchor);
+    let buttons = if asking {
+        let confirm = controls::button("launcher-reset-history-reset", "Reset", offered, theme)
+            .debug_selector(|| "launcher-reset-history-reset".into())
+            .role(Role::Button)
+            .aria_label("Reset the search history")
+            .text_color(theme.danger)
+            .anchor_scroll(anchor)
+            .when(offered, |reset| {
+                reset.on_click(cx.listener(|this, _: &gpui::ClickEvent, _, cx| {
+                    this.launcher_page.history = Resetting::Idle;
+                    this.launcher_page.history_problem = None;
+                    let (_, recorded) = this.launcher.reset_search_history();
+                    cx.spawn(async move |this, cx| {
+                        let outcome = recorded.await;
+                        this.update(cx, |this, cx| {
+                            this.launcher_page.history_problem = outcome.err();
+                            cx.notify();
+                        })
+                        .ok();
+                    })
+                    .detach();
+                    cx.notify();
+                }))
+            });
+        let cancel = controls::ghost_button("launcher-reset-history-cancel", "Cancel", true, theme)
+            .debug_selector(|| "launcher-reset-history-cancel".into())
+            .role(Role::Button)
+            .aria_label("Cancel the reset")
+            .on_click(cx.listener(|this, _: &gpui::ClickEvent, _, cx| {
+                this.launcher_page.history = Resetting::Idle;
+                cx.notify();
+            }));
+        div()
+            .flex()
+            .items_center()
+            .gap(theme.geometry.controls.button_gap)
+            .child(confirm)
+            .child(cancel)
+            .into_any_element()
+    } else {
+        let ask = controls::button(HISTORY_DEBUG, "Reset search history…", offered, theme)
+            .debug_selector(|| HISTORY_DEBUG.into())
+            .role(Role::Button)
+            .aria_label("Reset search history")
+            .anchor_scroll(anchor)
+            .when(offered, |reset| {
+                reset.on_click(cx.listener(|this, _: &gpui::ClickEvent, _, cx| {
+                    this.launcher_page.history = Resetting::Asking;
+                    this.launcher_page.history_problem = None;
+                    cx.notify();
+                }))
+            });
+        ask.into_any_element()
+    };
+    controls::setting_row(HISTORY_NAME, lines, theme)
+        .debug_selector(|| "launcher-reset-history-field".into())
+        .child(div().flex().items_center().flex_none().child(buttons))
+        .into_any_element()
+}
+
 /// The Launcher page's composition: a card of the Display row — `selects.0`, the opening
 /// monitor's searchable select (see [`crate::ui::select`]), with the
 /// fallback it explains under its name, or where the platform cannot
 /// choose the display at all, why — the Pop to root search row
 /// (`selects.1`), the Search sensitivity row (`selects.2`) and the
-/// learning rows (`learning`: the "Learn from what I choose" switch and
-/// the "Reset ranking…" row, #200); then the Layout card's window mode
+/// learning rows (`learning`: the "Learn from what I choose" switch, the
+/// "Reset ranking…" row #200 and the "Reset search history" row #206);
+/// then the Layout card's window mode
 /// segments, the switch that shows the pins in the compact window, and
 /// the pinned items segments. A failed save's status sits above the
 /// cards. `attach` adds each control's behavior; the composition gives

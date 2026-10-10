@@ -115,6 +115,25 @@ impl Typed {
         self.values.retain(|(argument, _)| argument != name);
     }
 
+    /// The command the values belong to and the values by argument name,
+    /// as they were typed (#206): `None` while the search holds no values
+    /// — an empty `command` holds none. What the search history records
+    /// with a query.
+    pub(super) fn recorded(&self) -> Option<(&str, &[(String, String)])> {
+        (!self.command.is_empty()).then(|| (self.command.as_str(), self.values.as_slice()))
+    }
+
+    /// The values a recent query's entry carries, as the search's own
+    /// state again (#206): the command's fields' values, as they were
+    /// recorded — a password's empty — with no argument marked missing.
+    pub(super) fn recalled(command: &str, values: &[(String, String)]) -> Typed {
+        Typed {
+            command: command.to_owned(),
+            values: values.to_vec(),
+            missing: Vec::new(),
+        }
+    }
+
     /// Marks the argument `name` of `command` missing: left blank once.
     pub(super) fn mark(&mut self, command: &str, name: &str) {
         if self.command != command {
