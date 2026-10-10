@@ -30,6 +30,51 @@ struct Served {
     packages: BTreeMap<String, (BTreeMap<String, Version>, Option<String>)>,
     /// Every path asked for, in order.
     requests: Vec<String>,
+    /// The answers held back until their hold is dropped, by path: a
+    /// stand-in for a source slow to answer, so a test can catch a pass
+    /// mid-flight (see [`Registry::hold`]).
+    held: BTreeMap<String, Arc<Held>>,
+}
+
+/// An answer the registry holds back until it is let go.
+#[derive(Default)]
+struct Held {
+    go: Mutex<bool>,
+    let_go: std::sync::Condvar,
+}
+
+impl Held {
+    /// Waits until let go. The answering thread holds no registry lock
+    /// while it waits.
+    fn wait(&self) {
+        let mut go = self
+            .go
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        while !*go {
+            go = self
+                .let_go
+                .wait(go)
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+        }
+    }
+}
+
+/// The registry's answer to one path, held back until this is dropped:
+/// a test's stand-in for a source slow to answer, so a pass can be caught
+/// mid-flight — its toast, its record — before it goes on.
+pub struct HeldAnswer(Arc<Held>);
+
+impl Drop for HeldAnswer {
+    fn drop(&mut self) {
+        let mut go = self
+            .0
+            .go
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        *go = true;
+        self.0.let_go.notify_all();
+    }
 }
 
 pub struct Registry {
@@ -113,6 +158,18 @@ impl Registry {
     pub fn tarball_url(&self, name: &str, version: &str) -> String {
         tarball_url(&self.url, name, version)
     }
+
+    /// Holds the answer to `path` back until the returned hold is
+    /// dropped: the path is asked for and counted as usual, but the
+    /// answer waits, as a slow source's would. A test so catches a pass
+    /// mid-flight. The metadata path of `name` is
+    /// `/{name with / written %2f}`.
+    pub fn hold(&self, path: &str) -> HeldAnswer {
+        let mut served = self.served.lock().unwrap();
+        let held = Arc::new(Held::default());
+        served.held.insert(path.to_owned(), held.clone());
+        HeldAnswer(held)
+    }
 }
 
 impl Drop for Registry {
@@ -174,11 +231,16 @@ fn answer(stream: TcpStream, served: &Mutex<Served>, base: &str) {
         }
     }
     let mut stream = reader.into_inner();
-    let (status, body) = {
+    let (status, body, held) = {
         let mut served = served.lock().unwrap();
         served.requests.push(path.clone());
-        respond(&served, base, &path)
+        let answer = respond(&served, base, &path);
+        (answer.0, answer.1, served.held.get(&path).cloned())
     };
+    // The held answer waits here, holding no lock: other requests answer.
+    if let Some(held) = held {
+        held.wait();
+    }
     // `/redirect/<path>` sends the client to `/<path>`, as a registry
     // pointing elsewhere would.
     let location = path

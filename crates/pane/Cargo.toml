@@ -40,7 +40,9 @@ windows = { workspace = true, features = ["UI_ViewManagement", "Wdk_System_Syste
 # The channel the reduced-motion watch reports Windows' preference changes
 # over, from the WinRT event's thread to the app's thread — the same hop
 # pane-core's global-hotkey presses take, so no second mechanism is added.
-tokio = { workspace = true, features = ["sync"] }
+# The `net` feature is what pane-core already turns on for this build; the
+# update tests' closed port binds a socket of it.
+tokio = { workspace = true, features = ["net", "sync"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 # The displays the launcher's placement reads on X11 (the RandR monitors,
@@ -62,6 +64,9 @@ objc2.workspace = true
 [dev-dependencies]
 futures.workspace = true
 tempfile.workspace = true
+# The update tests' closed port, which binds a tokio socket that never
+# listens; `pane-core` turns the feature on for this build already.
+tokio = { workspace = true, features = ["net"] }
 tar.workspace = true
 flate2.workspace = true
 # The zip packer of that same test support, which the Settings tests now

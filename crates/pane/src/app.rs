@@ -43,6 +43,7 @@ use crate::features::quick_slots;
 use crate::features::root_search;
 use crate::features::settings;
 use crate::features::toast;
+use crate::features::update_results;
 use crate::ui::footer;
 use crate::ui::icon::{Glyph, IconTone};
 use crate::ui::keycap::CapStyle;
@@ -90,6 +91,9 @@ pub struct LauncherWindow {
     /// A package's Logs screen, while the launcher shows it; see
     /// [`features::extension_log`].
     pub(crate) log: Option<crate::features::extension_log::ExtensionLogView>,
+    /// The update results view, while the launcher shows it; see
+    /// [`features::update_results`].
+    pub(crate) update_results: Option<update_results::UpdateResultsView>,
     /// The footer toast's focus and time; see [`features::toast`].
     pub(crate) toast: toast::ToastControls,
     /// What the window's live region says of the selection and the
@@ -216,6 +220,7 @@ impl LauncherWindow {
             clipboard: None,
             files: None,
             log: None,
+            update_results: None,
             toast: toast::ToastControls::new(cx),
             announcer: announcer::Announcer::default(),
             hud: hud::HudWindow::default(),
@@ -1266,6 +1271,8 @@ impl LauncherWindow {
         // A package's Logs screen reads its lines again, and takes the
         // focus as it opens.
         self.sync_extension_log(window, cx);
+        // The update results view follows the screen the launcher shows.
+        self.sync_update_results(cx);
         self.sync_home(cx);
         // Last of all: a confirmation a command waits on keeps the focus
         // over whatever screen is shown (#146).
@@ -1752,6 +1759,7 @@ impl Render for LauncherWindow {
             Screen::Package { .. } => "Nothing to install.",
             Screen::Form(_) => "",
             Screen::Extensions { .. } => "No extensions are installed.",
+            Screen::UpdateResults { .. } => "No update results yet.",
             Screen::CustomView(_)
             | Screen::NetworkDetails { .. }
             | Screen::ProgramDetails { .. } => "",
@@ -1985,6 +1993,17 @@ impl Render for LauncherWindow {
                 Some(log) => motion::arriving(log, arriving).into_any_element(),
                 None => div().into_any_element(),
             },
+            // The update results view: the search field above, its rows
+            // under it, drawn by the view.
+            Screen::UpdateResults { query } => {
+                let results = self.render_update_results(cx);
+                self.render_search(
+                    query,
+                    update_results::PLACEHOLDER,
+                    motion::arriving(results, arriving),
+                    cx,
+                )
+            }
             // The list holds keyboard focus, and is what assistive
             // technology reports as focused: the announcer says the
             // selected row (#132). Key actions bubble to the root. A
@@ -2214,18 +2233,21 @@ const HERO_GLASS_OPACITY: f32 = 0.84;
 /// install flow from a folder, npm or Git.
 pub(crate) fn open_settings_at(launcher: &Launcher, target: SettingsTarget, cx: &mut App) {
     use crate::features::settings::extensions::{InstallSource, TITLE};
-    let install = |source: InstallSource| source.target();
+    let install = |source: InstallSource| source.target().to_owned();
     let place = match target {
         SettingsTarget::Settings => {
             settings::open(launcher, cx);
             return;
         }
-        SettingsTarget::Extensions => "",
+        SettingsTarget::Extensions => String::new(),
+        // The extension's page; where it is not installed anymore, the
+        // group's own page, as `extension_of` resolves nothing.
+        SettingsTarget::Extension(identity) => identity.key(),
         SettingsTarget::InstallFromFolder => install(InstallSource::Folder),
         SettingsTarget::InstallFromNpm => install(InstallSource::Npm),
         SettingsTarget::InstallFromGit => install(InstallSource::Git),
     };
-    settings::open_at(launcher, TITLE, place, cx);
+    settings::open_at(launcher, TITLE, &place, cx);
 }
 
 pub(crate) fn launcher_changed_outside(cx: &mut App) {
@@ -2289,7 +2311,7 @@ fn window_size(size: Size<Pixels>) -> WindowSize {
 
 /// The launcher presentation's section labels, as the shared list draws
 /// them.
-fn section_labels(listing: &ListPresentation) -> Vec<shell::SectionLabel> {
+pub(crate) fn section_labels(listing: &ListPresentation) -> Vec<shell::SectionLabel> {
     listing.sections.iter().map(section_label).collect()
 }
 
@@ -2318,6 +2340,7 @@ pub(crate) fn row_icon(id: &str) -> (IconTone, Glyph) {
         "pane.install-from-folder" => (IconTone::Folder, Glyph::Folder),
         "pane.install-from-npm" => (IconTone::Web, Glyph::Blocks),
         "pane.install-from-git" => (IconTone::Term, Glyph::Terminal),
+        "pane.check-extensions" => (IconTone::Command, Glyph::Blocks),
         pane_core::MANAGE_EXTENSIONS => (IconTone::Command, Glyph::Blocks),
         "pane.settings" => (IconTone::Command, Glyph::Gear),
         pane_core::UNEXPECTED_QUIT => (IconTone::Folder, Glyph::Folder),

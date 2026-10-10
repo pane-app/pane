@@ -26,6 +26,9 @@ use packages::package;
 const INSTALL_ROW: &str = "Install extension from folder…";
 const NPM_ROW: &str = "Install extension from npm…";
 const GIT_ROW: &str = "Install extension from Git…";
+/// Root search's row for the pass the user asks for, listed once an
+/// extension is installed (#267).
+const CHECK_ROW: &str = "Check for Extension Updates";
 const MANAGE_ROW: &str = "Manage Extensions";
 const SETTINGS_ROW: &str = "Settings…";
 
@@ -91,6 +94,7 @@ fn a_chosen_package_is_previewed_installed_and_run(cx: &mut TestAppContext) {
             INSTALL_ROW,
             NPM_ROW,
             GIT_ROW,
+            CHECK_ROW,
             MANAGE_ROW,
             SETTINGS_ROW
         ]
@@ -219,6 +223,7 @@ fn an_installed_package_is_disabled_and_enabled_from_the_extension_list(cx: &mut
             INSTALL_ROW,
             NPM_ROW,
             GIT_ROW,
+            CHECK_ROW,
             MANAGE_ROW,
             SETTINGS_ROW
         ]
@@ -259,7 +264,14 @@ fn an_installed_package_is_disabled_and_enabled_from_the_extension_list(cx: &mut
     cx.simulate_keystrokes("escape");
     assert_eq!(
         titles(&settle(&window, cx)),
-        [INSTALL_ROW, NPM_ROW, GIT_ROW, MANAGE_ROW, SETTINGS_ROW]
+        [
+            INSTALL_ROW,
+            NPM_ROW,
+            GIT_ROW,
+            CHECK_ROW,
+            MANAGE_ROW,
+            SETTINGS_ROW
+        ]
     );
 
     enter_flow(&window, cx);
@@ -276,6 +288,7 @@ fn an_installed_package_is_disabled_and_enabled_from_the_extension_list(cx: &mut
             INSTALL_ROW,
             NPM_ROW,
             GIT_ROW,
+            CHECK_ROW,
             MANAGE_ROW,
             SETTINGS_ROW
         ]

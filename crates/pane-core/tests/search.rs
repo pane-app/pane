@@ -351,9 +351,10 @@ fn many_installed_commands_are_searched_without_running_them_and_only_the_chosen
     }
 
     // A restart: listing and searching read only the managed manifests.
+    // Pane's own rows number six once an extension is installed (#267).
     let runtime = dirs.runtime();
     let launcher = Launcher::with_packages(Ok(runtime.clone()), vec![], dirs.packages_dir());
-    assert_eq!(launcher.view().rows.len(), 17);
+    assert_eq!(launcher.view().rows.len(), 18);
     block_on(launcher.set_query("tool 1"));
     assert_eq!(
         titles(&launcher),

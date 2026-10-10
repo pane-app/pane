@@ -90,6 +90,16 @@ function Capture-Until($name, $color, $seconds) {
         Start-Sleep -Milliseconds 250
     }
 }
+# Waits, for at most $seconds, until the file $path holds the text $text:
+# an update Pane applies by itself is quiet (#256), so its say is the
+# record it writes, not the status line.
+function Wait-Record($path, $text, $seconds) {
+    $deadline = (Get-Date).AddSeconds($seconds)
+    while (-not (Test-Path $path) -or -not (Select-String -Quiet -SimpleMatch $text $path)) {
+        if ((Get-Date) -gt $deadline) { throw "$path does not say $text" }
+        Start-Sleep -Milliseconds 100
+    }
+}
 # Waits, for at most $seconds, until the Pane window no longer shows text
 # in $color: a toast leaves 3 seconds after it shows (#141), but a slow
 # runner can still show it after a fixed wait, and the next answer's toast,
@@ -1588,23 +1598,20 @@ try {
     # #49: the update Pane applies by itself. A 0.2.0 of the sample is
     # published into the registry this phase serves (it reads its folder on
     # request, so publishing is dropping the tarball in), and Pane is
-    # stopped and started again: the first check, a second after the start,
-    # finds the newer version and replaces the installed copy - unpinned,
-    # and nothing of it running, so the safe boundary is at once - saying
-    # so in the status line. The new copy's command runs as the old one did.
+    # stopped and started again: the first check, a minute after the start
+    # (#256), finds the newer version and replaces the installed copy -
+    # unpinned, and nothing of it running, so the safe boundary is at once
+    # - quietly, its say the record it writes and the new copy's code. The
+    # new copy's command runs as the old one did.
     python "$PSScriptRoot/npm_publish.py" "target/guests/npm/pane-samples-greeter-0.1.0.tgz" "0.2.0"
     Stop-Pane $process
     $process = Start-Pane "stderr-npm.log"
-    # The check a second after the start, then the download and the apply:
-    # poll until the status line says the update landed, whenever that is,
-    # so a slow runner is waited for rather than slept past.
-    for ($i = 0; $i -lt 120; $i++) {
-        Capture "267-npm-updated-automatically.png"
-        python "$PSScriptRoot/check_screenshot.py" (Join-Path $OutDir "267-npm-updated-automatically.png") "success"
-        if ($LASTEXITCODE -eq 0) { break }
-        Start-Sleep -Milliseconds 500
-    }
-    Check "267-npm-updated-automatically.png" "success"   # "Updated Greeter from npm to 0.2.0"
+    # The check a minute after the start, then the download and the apply:
+    # wait for the record to say the update landed, whenever that is, so a
+    # slow runner is waited for rather than slept past; the capture shows
+    # the quiet window after it landed.
+    Wait-Record (Join-Path $env:PANE_DATA_DIR "extensions/installed.json") '"npmVersion": "0.2.0"' 180
+    Capture "267-npm-updated-automatically.png"
     Send "{ENTER}"; Start-Sleep -Seconds 3   # open Greeter from npm, the new copy
     Send "{ENTER}"; Start-Sleep -Seconds 2   # "Say hello"
     Capture "268-npm-new-copy-ran.png"
@@ -1704,8 +1711,9 @@ if ((Test-Path $downloads) -and (Get-ChildItem $downloads)) { throw "a Git downl
 # own from its tracked release branch -- `--install` naming the branch, so
 # the copy is tracked, not pinned -- with its command run; the branch then
 # moves to a 0.2.0 (repository_server.py move-sample) while Pane is
-# stopped, and the check a second after the restart replaces the installed
-# copy by itself, the new code running. Nothing reaches the network.
+# stopped, and the check a minute after the restart (#256) replaces the
+# installed copy by itself, quietly, the new code running. Nothing reaches
+# the network.
 $updateData = Join-Path $OutDir "git-update-data"
 if (Test-Path $updateData) { Remove-Item -Recurse -Force $updateData }
 $env:PANE_DATA_DIR = $updateData
@@ -1729,11 +1737,16 @@ try {
     Check "306-git-tracked-installed.png" "success"   # "Installed Greeter from Git"
     python "$PSScriptRoot/repository_server.py" move-sample (Join-Path $repositories "greeter-tracked") 0.2.0
     if ($LASTEXITCODE -ne 0) { throw "the tracked branch did not move" }
+    $moved = (python "$PSScriptRoot/repository_server.py" commit (Join-Path $repositories "greeter-tracked") release)
+    if ($LASTEXITCODE -ne 0) { throw "the moved branch's commit was not found" }
     Stop-Pane $process
     $process = Start-Pane "stderr-git-update.log"
-    # The check a second after the start, then the fetch and the apply:
-    # capture until the status line says the update landed.
-    Capture-Until "307-git-updated-automatically.png" "success" 60   # "Updated Greeter from Git to 0.2.0"
+    # The check a minute after the start, then the fetch and the apply:
+    # wait for the record to name the moved branch's commit, whenever that
+    # is (the update is quiet, its say the record and the new copy's
+    # code); the capture shows the quiet window after it landed.
+    Wait-Record (Join-Path $updateData "extensions/installed.json") $moved 180
+    Capture "307-git-updated-automatically.png"
     Send "{ENTER}"; Start-Sleep -Seconds 3   # open Greeter from Git, the new copy
     Send "{ENTER}"; Start-Sleep -Seconds 2   # "Say hello"
     Capture "308-git-new-copy-ran.png"
@@ -1750,8 +1763,8 @@ try {
     }
     Stop-Process -Id $server2.Id -ErrorAction SilentlyContinue
 }
-$moved = (python "$PSScriptRoot/repository_server.py" commit (Join-Path $repositories "greeter-tracked") release)
-if ($LASTEXITCODE -ne 0) { throw "the moved branch's commit was not found" }
+# The record was waited for above, before the new copy ran; the checks
+# name it in full.
 $record = Join-Path $updateData "extensions/installed.json"
 $fromGit = @((Get-Content -Raw $record | ConvertFrom-Json).packages | Where-Object { $_.git })
 if ($fromGit.Count -ne 1) { throw "not one package from Git recorded: $($fromGit.Count)" }

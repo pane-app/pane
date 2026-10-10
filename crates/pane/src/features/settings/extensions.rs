@@ -75,6 +75,7 @@ use gpui::{
     anchored, deferred, div, prelude::*, px,
 };
 use gpui_elements::editable_text::{EditableTextState, StringStorage, TextChanged, text_input};
+use pane_core::clipboard::{Clock as _, SystemClock};
 use pane_core::{
     ExtensionMark, ExtensionOperation, InstalledPackage, Launcher, LauncherView, OperationKind,
     PackageIdentity, PackagePreferences, PathKind, PreferenceField, PreferenceKind, Screen,
@@ -409,9 +410,10 @@ fn focus(
 
 /// Whether the launcher's screen is one an extension's operation opened:
 /// a confirmation, a package's preview, pause, build, network, program or
-/// runtime details. While it is, the pages draw it from the launcher's
-/// live view, so its confirmations show and are answered here; otherwise
-/// they read the launcher, whose screen stays wherever the user left it.
+/// runtime details, or the update results. While it is, the pages draw it
+/// from the launcher's live view, so its confirmations show and are
+/// answered here; otherwise they read the launcher, whose screen stays
+/// wherever the user left it.
 pub(crate) fn in_extension_flow(screen: &Screen) -> bool {
     matches!(
         screen,
@@ -422,6 +424,7 @@ pub(crate) fn in_extension_flow(screen: &Screen) -> bool {
             | Screen::RuntimeDetails { .. }
             | Screen::NetworkDetails { .. }
             | Screen::ProgramDetails { .. }
+            | Screen::UpdateResults { .. }
     )
 }
 
@@ -437,6 +440,7 @@ fn details_screen(screen: &Screen) -> bool {
             | Screen::NetworkDetails { .. }
             | Screen::ProgramDetails { .. }
             | Screen::Package { .. }
+            | Screen::UpdateResults { .. }
     )
 }
 
@@ -892,7 +896,11 @@ fn render(
             .into_any_element()
     });
     let body = if flow {
-        flow_screen(&live, &theme, cx)
+        if matches!(live.screen, Screen::UpdateResults { .. }) {
+            update_results_screen(this, &live, &theme, cx)
+        } else {
+            flow_screen(&live, &theme, cx)
+        }
     } else {
         match this.extension.clone() {
             Some(key) => extension_page(this, &key, &theme, window, cx),
@@ -983,6 +991,97 @@ fn flow_screen(
     ]
 }
 
+/// The update results screen in place of the page (#256): the launcher's
+/// record of the latest pass that recorded, its groups in the order
+/// Updated, Skipped, Failed, the empty ones hidden, each row the
+/// extension's icon, title and outcome, opening that extension's page —
+/// as the screen's own rows do in the launcher window. The way back is
+/// the page's own Back button, as a details screen's is.
+fn update_results_screen(
+    this: &mut SettingsWindow,
+    live: &LauncherView,
+    theme: &Theme,
+    cx: &mut Context<SettingsWindow>,
+) -> Vec<AnyElement> {
+    let results = this.launcher.update_results();
+    let mut groups = Vec::new();
+    let mut at: usize = 0;
+    for (label, group) in [
+        ("Updated", &results.updated),
+        ("Waiting", &results.waiting),
+        ("Skipped", &results.skipped),
+        ("Failed", &results.failed),
+    ] {
+        if group.is_empty() {
+            continue;
+        }
+        let mut items: Vec<AnyElement> = Vec::new();
+        for row in group {
+            let index = at;
+            at += 1;
+            let key = row.identity.key();
+            let title = row.title.clone();
+            let icon = crate::features::icons::row_icon_of(&this.launcher, &key, theme);
+            let tile = row_icon_at(
+                &icon,
+                TileSize::Row,
+                ("extension-item-icon", index),
+                &format!("extension-{title}"),
+                theme,
+            );
+            let lines = vec![
+                controls::field_description(row.detail.clone(), theme.text_muted, theme)
+                    .truncate()
+                    .into_any_element(),
+            ];
+            let selector = format!("extension-row-{title}");
+            items.push(
+                controls::list_item(
+                    ("extension-row", index),
+                    Some(tile),
+                    title.clone(),
+                    lines,
+                    theme,
+                )
+                .debug_selector(move || selector)
+                .role(Role::Link)
+                .aria_label(title)
+                .on_click(cx.listener(move |this, _: &gpui::ClickEvent, _, cx| {
+                    this.show_extension(Some(key.clone()), cx);
+                }))
+                .into_any_element(),
+            );
+        }
+        groups.push(
+            controls::section(Some(label.into()), controls::list_card(items, theme), theme)
+                .debug_selector(move || format!("section-{label}"))
+                .into_any_element(),
+        );
+    }
+    let back = controls::button("extension-back", "Back", true, theme)
+        .debug_selector(|| "extension-back".into())
+        .role(Role::Button)
+        .aria_label("Back")
+        .on_click(cx.listener(|this, _: &gpui::ClickEvent, _, cx| {
+            // The way out of the results screen, as the launcher window's
+            // Escape is there.
+            this.launcher.back();
+            launcher_changed_outside(cx);
+            cx.notify();
+        }));
+    let body = div()
+        .flex()
+        .flex_col()
+        .gap(theme.geometry.settings.section_label_gap)
+        .children(groups)
+        .child(div().flex().child(back));
+    vec![
+        controls::section(Some(live.title.clone().into()), body, theme)
+            .debug_selector(|| "extensions-title".into())
+            .into_any_element(),
+    ]
+}
+
 /// One entry of a list on these pages as a Settings list item named `id`:
 /// its tile (with the scope its icon's selectors name) and its title,
 /// and, when it cannot be used here, the reason in the warning tone, which
@@ -1007,6 +1106,33 @@ fn list_entry(
         .role(Role::Button)
         .aria_label(title.to_owned())
         .when_some(reason, |item, reason| item.aria_description(reason))
+}
+
+/// What the group's page says under its Check for updates button: when
+/// Pane last checked for extension updates, for people — "Last checked 3
+/// minutes ago" — or that it has not yet. The clock the record keeps is
+/// the launcher's, which in release builds is the system's.
+fn last_checked_words(checked: Option<u64>) -> String {
+    let Some(at) = checked else {
+        return "Not checked yet".into();
+    };
+    // A future time (the record read before this Pane's clock caught up)
+    // reads as just now, as a negative ago does elsewhere.
+    let seconds = SystemClock.now().saturating_sub(at) / 1000;
+    let ago = |count: u64, unit: &str| {
+        if count == 1 {
+            format!("1 {unit} ago")
+        } else {
+            format!("{count} {unit}s ago")
+        }
+    };
+    let when = match seconds {
+        0..60 => "just now".into(),
+        60..3600 => ago(seconds / 60, "minute"),
+        3600..86_400 => ago(seconds / 3600, "hour"),
+        _ => ago(seconds / 86_400, "day"),
+    };
+    format!("Last checked {when}")
 }
 
 /// The group's own page: the installed extensions, each opening its page;
@@ -1161,10 +1287,43 @@ fn group_page(
         .on_click(cx.listener(move |this, _: &gpui::ClickEvent, _, cx| {
             run(this, &operation, cx);
         }));
+        // Check for updates, beside the choice that governs the automatic
+        // ones: the pass the user asked for — the same pass root search's
+        // Check for Extension Updates row starts (ADR 0043: two entry
+        // points, one flow) — with when Pane last checked under it. The
+        // toast that follows the pass is the launcher window's; the page
+        // says when the check ran.
+        let words = last_checked_words(this.launcher.last_extension_check());
+        let last = controls::field_description(words.clone(), theme.text_muted, theme)
+            .id("extension-last-checked")
+            .role(Role::Status)
+            .aria_label(words)
+            .debug_selector(|| "extension-last-checked".into());
+        let check = controls::setting_row_with(
+            div()
+                .flex()
+                .flex_col()
+                .child(controls::field_label("Check for updates", theme))
+                .child(last),
+            Vec::new(),
+            theme,
+        )
+        .child(
+            controls::button("extension-check-updates", "Check for updates", true, theme)
+                .debug_selector(|| "extension-check-updates".into())
+                .role(Role::Button)
+                .aria_label("Check for updates")
+                .on_click(cx.listener(|this, _: &gpui::ClickEvent, _, cx| {
+                    this.extensions.outcome = None;
+                    keep_outcome_of(this.launcher.check_extension_updates(), cx);
+                })),
+        )
+        .id("extension-row-Check for updates")
+        .debug_selector(|| "extension-row-Check for updates".into());
         content.push(
             controls::section(
                 None,
-                controls::card([switch.into_any_element()], theme),
+                controls::card([switch.into_any_element(), check.into_any_element()], theme),
                 theme,
             )
             .into_any_element(),
@@ -2627,5 +2786,39 @@ mod tests {
             appended("KeePass.exe,1Password.exe", "keepass.EXE"),
             "KeePass.exe, 1Password.exe"
         );
+    }
+
+    /// What the group's page says of when Pane last checked, pluralized as
+    /// the codebase's other "… ago" words are.
+    #[test]
+    fn the_last_checked_line_says_when_for_people() {
+        assert_eq!(last_checked_words(None), "Not checked yet");
+        let now = SystemClock.now();
+        let minutes = |count: u64| now - count * 60 * 1000;
+        assert_eq!(last_checked_words(Some(now)), "Last checked just now");
+        assert_eq!(
+            last_checked_words(Some(now + 60_000)),
+            "Last checked just now"
+        );
+        assert_eq!(
+            last_checked_words(Some(minutes(1))),
+            "Last checked 1 minute ago"
+        );
+        assert_eq!(
+            last_checked_words(Some(minutes(3))),
+            "Last checked 3 minutes ago"
+        );
+        let hours = |count: u64| now - count * 3600 * 1000;
+        assert_eq!(
+            last_checked_words(Some(hours(1))),
+            "Last checked 1 hour ago"
+        );
+        assert_eq!(
+            last_checked_words(Some(hours(2))),
+            "Last checked 2 hours ago"
+        );
+        let days = |count: u64| now - count * 86_400 * 1000;
+        assert_eq!(last_checked_words(Some(days(1))), "Last checked 1 day ago");
+        assert_eq!(last_checked_words(Some(days(5))), "Last checked 5 days ago");
     }
 }

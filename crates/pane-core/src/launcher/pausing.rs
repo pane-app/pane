@@ -330,6 +330,11 @@ impl Launcher {
             LogLevel::Warn,
             &format!("Pane paused the extension: {}", pause.why),
         );
+        // The update results record a pause of the version the updater
+        // installed as the update's failure: no older version is
+        // restored (Q31, ADR 0004), so the record says what the update
+        // came to.
+        self.update_results_paused(state, identity, &pause);
         if let Some(installation) = &self.installation {
             installation.data.pause(identity);
             installation.records.record(identity, Some(pause.clone()));

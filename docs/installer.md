@@ -280,6 +280,43 @@ Pane stopped mid-setup recovers, and disabling a default extension (in
 Settings › Extensions) is the opt-out: a disabled default extension is
 installed, so it is never re-acquired or re-enabled.
 
+## Updating the default extensions
+
+Between Pane releases a default extension updates from its repository's
+newer release tags ([#269](https://github.com/pane-app/pane/issues/269),
+[ADR 0045](adr/0045-official-extensions-live-in-their-own-repositories.md)):
+once Pane is up and running (a minute after it starts, then daily — see
+[npm's updates](npm.md#updating-by-itself)), it reads the repository its
+record names and lists that repository's `v<semver>` tags, comparing each
+tag's version with the version the record's `defaultVersion` says is
+installed. The newest release above that version is fetched — at the
+commit its tag points to, which pins the bytes — and staged, checked and
+applied exactly as the update of an npm or Git package is, keeping the
+default identity, the saved data, the disabled state, the hotkeys and the
+aliases, waiting for the same safe activation boundary. Nothing is
+fetched while the newest tag names the version installed, and a tag older
+than it is never followed down. An update never re-enables a disabled
+default, and one the user uninstalled is never re-acquired (acquisition's
+rule); one whose record keeps no repository — an older Pane acquired it
+from Pane's own downloads — is skipped with that said and never updated.
+
+A default extension is eligible on the same terms as an unpinned npm
+package: enabled, not paused, not turned off — its `pinned` on record is
+what first setup installed (the release tag this Pane release pinned),
+never a choice of the user's. The same controls govern it: the global
+"Update extensions automatically" choice, and the per-extension switch on
+its page in Settings and in the extension list ("a newer release of its
+repository replaces it once no command of it runs"). A payload whose
+`apiVersion` this Pane cannot run is skipped with "needs a newer Pane"
+(ADR 0046), the row saying so too when Pane's own application update
+exists; a release that passes its checks but fails to start pauses the
+extension with Retry and is recorded under Failed, not rolled back; an
+update that installs required dependencies installs them all or changes
+nothing. Every default-extension check's outcome lands in the pass's
+[update results](npm.md#updating-by-itself): an Updated row saying the old
+and the new version, a Skipped row with why, a Failed row with what
+failed.
+
 ## Updating Pane itself
 
 An application update ([glossary](../CONTEXT.md)) is the artifact
@@ -516,6 +553,21 @@ On macOS, the same as on Linux (`python3`, the server backgrounded with
   run on every system, so the Windows and macOS acquisitions need no
   test of their own: it is the same code (the one Windows-only piece is
   the `.exe` helper-name rule, checked by the runner's unit tests).
+- `crates/pane-core/tests/update.rs`: the default extensions' updates
+  through the launcher's public interface, over the same loopback
+  repositories — a newer release tag updating a default by itself with
+  its identity, data, disabled state, hotkeys and aliases kept (and a
+  newest tag that names the version installed fetching nothing); one
+  disabled, turned off or uninstalled-with-kept-data not updated
+  automatically, and a pass the user asked for updating the turned-off,
+  disabled and paused ones (a disabled one stays disabled, a paused one
+  is unpaused); a payload needing a newer Pane skipped with that reason;
+  a new version that fails to start paused with Retry and recorded under
+  Failed, not rolled back; an update whose required dependency cannot be
+  installed changing nothing; the per-extension switch and the global
+  choice covering defaults; and an unreachable repository recorded and
+  leaving the installed copy alone. Every repository is served on
+  127.0.0.1, so nothing reaches a real one.
 - The [Linux smoke](platforms/linux.md#installing-pane-and-acquiring-its-calculator-53),
   the [Windows smoke](platforms/windows.md#installing-pane-and-acquiring-its-calculator-51)
   and the [macOS smoke](platforms/macos.md#installing-pane-and-acquiring-its-calculator-52):
@@ -633,16 +685,13 @@ On macOS, the same as on Linux (`python3`, the server backgrounded with
   happen), and a Pane starting removes a staging folder another Pane may
   be installing from — the same small warts the shared data folder
   already records, left as they are.
-- **No default-extension updates yet
-  ([#269](https://github.com/pane-app/pane/issues/269)).** A default
-  extension's pinned revision is never re-fetched: the pin is the
-  release's tested revision, and what a later Pane release does with its
-  repository's newer release tags is that release's work (uninstalling
-  and restarting fetches the pin again, not a newer tag). Automatic
-  extension updates are the
-  [extension update](current-decisions.md) direction, tracked for npm and
-  Git sources separately; how a default extension's updates arrive
-  (through the same controls) is an open choice recorded for the user.
+- **A default extension's repository must tag its releases.** Its
+  updates read the repository's `v<semver>` release tags
+  ([#269](https://github.com/pane-app/pane/issues/269), ADR 0044): a
+  repository that never tags a newer release — one that only moves its
+  default branch — never updates the extension, and neither does a tag
+  that names the version installed. The extension's author chooses when
+  to release; a Pane release moves its pins when it tests one.
 - **Concurrent Panes** on one data folder both acquire; each fetches its
   revision into a download folder of its own under `downloads/`, removed
   once its package is dropped. One that installs the same

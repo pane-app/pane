@@ -429,8 +429,10 @@ fn disabling_the_target_removes_its_alias_and_fallback_without_enabling_it_again
 
     search(&launcher, "ec hello");
     assert_eq!(titles(&launcher), Vec::<String>::new());
+    // The alias's letters still find Pane's own Check for Extension
+    // Updates — a disabled package's update is the user's to ask (#267).
     search(&launcher, "ec");
-    assert_eq!(titles(&launcher), Vec::<String>::new());
+    assert_eq!(titles(&launcher), ["Check for Extension Updates"]);
     assert_eq!(running(&runtime), Vec::<PathBuf>::new());
 
     // Changing them does not enable it either.

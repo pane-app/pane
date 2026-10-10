@@ -2024,6 +2024,63 @@ fn an_official_extension_is_marked_as_panes_own_wherever_settings_lists_it(
     );
 }
 
+#[gpui::test]
+fn a_default_extension_s_page_has_the_update_automatically_switch(cx: &mut TestAppContext) {
+    let data = tempfile::tempdir().unwrap();
+    // A default extension, set up at first setup from a repository served
+    // over Git's smart HTTP protocol from 127.0.0.1 (pane-core's test
+    // support; a stand-in for a default's own repository, which lives
+    // outside this one, #285 — nothing reaches the network or a real Git
+    // host), its record keeping the repository the updater updates it
+    // from (#269).
+    let server = repo_server::Server::start();
+    let repos = tempfile::tempdir().unwrap();
+    let sample = defaults::from_sample(
+        &server,
+        repos.path(),
+        "sample-rust",
+        "Rust sample",
+        "sample-rust",
+    );
+    cx.executor().allow_parking();
+    let installing =
+        Launcher::with_packages(Runtime::start(), vec![], data.path().join("extensions"))
+            .with_defaults(vec![sample]);
+    cx.foreground_executor()
+        .block_on(installing.acquire_defaults());
+    drop(installing);
+    let launcher =
+        Launcher::with_packages(Runtime::start(), vec![], data.path().join("extensions"));
+    cx.update(pane::bind_keys);
+    let (window, cx) = cx.add_window_view(|window, cx| LauncherWindow::new(launcher, window, cx));
+    let (_settings, mut settings_cx) = open_extensions(cx);
+
+    // Its page has the switch npm and Git packages have, as the default's
+    // own (#269): clicking it turns its automatic updates off, the
+    // launcher saying so, and the per-package record the updater reads
+    // holding the choice.
+    open_page(&mut settings_cx, "Rust sample");
+    assert!(
+        settings_cx.debug_bounds("extension-auto-update").is_some(),
+        "the switch is drawn on the default's page"
+    );
+    click_row(&mut settings_cx, "extension-auto-update");
+    let off = Status::Result("Automatic updates of Rust sample are off".into());
+    until(&mut settings_cx, |_| {
+        let shown = cx.read_entity(&window, |window, _| window.launcher().view().status);
+        (shown == off).then_some(())
+    });
+    let controls: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(data.path().join("extensions/updates.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        controls["off"],
+        serde_json::json!(["default:sample-rust"]),
+        "the choice is recorded for the default's own identity"
+    );
+}
+
 /// Gives the record of the package installed from the local `folder` the
 /// source `github.com/pane-app/<name>`, the record an install of that
 /// repository by hand at its release tag writes, so a restart of Pane
@@ -2122,6 +2179,7 @@ fn disabling_a_required_extension_from_its_page_confirms_and_disables_all(cx: &m
             "Install extension from folder…",
             "Install extension from npm…",
             "Install extension from Git…",
+            "Check for Extension Updates",
             "Manage Extensions",
             "Settings…"
         ]

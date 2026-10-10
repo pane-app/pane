@@ -103,6 +103,7 @@ mod shortcuts;
 mod subtitles;
 mod system;
 mod uninstall;
+mod update_results;
 mod updates;
 
 use acquire::{Acquisitions, Defaults};
@@ -136,6 +137,7 @@ pub use setup::{
 };
 pub use shortcuts::{ShortcutCatalog, ShortcutCommand, ShortcutGroup};
 pub use submenus::{OpenSubmenu, SubmenuState};
+pub use update_results::{UpdateResult, UpdateResults, UpdateResultsAction};
 pub use updates::UpdateHold;
 
 /// The id of the root row that installs a package from a local folder.
@@ -248,6 +250,13 @@ pub enum Screen {
     /// it, which the window reads ([`Launcher::extension_log`]) and follows
     /// as they come. It has no rows.
     ExtensionLog { identity: PackageIdentity },
+    /// The update results of the latest pass that recorded (see
+    /// `update_results`), searched by `query`: each group in the order
+    /// Updated, Waiting, Skipped, Failed, the empty ones hidden, each row
+    /// opening its extension's page in Settings. Reached from the failure
+    /// toast's View Details, from the asked pass's ending toast, and from
+    /// the Extensions group in Settings.
+    UpdateResults { query: String },
     /// `question` about an installed package before Pane acts on it, with
     /// lines of information under the title, answered by choosing a row.
     Confirm {
@@ -270,12 +279,15 @@ pub enum Screen {
 
 /// Where in Pane's Settings window a root row is handled (see
 /// [`Launcher::selected_settings_target`]).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SettingsTarget {
     /// The Settings window, wherever it is.
     Settings,
     /// Its extensions: "Manage Extensions".
     Extensions,
+    /// The page of the extension with this identity in its Extensions
+    /// group, wherever the group is when it is not installed anymore.
+    Extension(PackageIdentity),
     /// Its install flow from a folder.
     InstallFromFolder,
     /// Its install flow from npm.
@@ -571,12 +583,14 @@ impl LauncherView {
 }
 
 impl Screen {
-    /// The text of this screen's search field: root search's query, or the
-    /// search of an open command that searches as the user types; `None`
-    /// on a screen without one.
+    /// The text of this screen's search field: root search's query, the
+    /// search of an open command that searches as the user types, or the
+    /// search of the update results view; `None` on a screen without one.
     pub fn search_field(&self) -> Option<&str> {
         match self {
-            Screen::Root { query } | Screen::CommandSearch { query } => Some(query),
+            Screen::Root { query }
+            | Screen::CommandSearch { query }
+            | Screen::UpdateResults { query } => Some(query),
             _ => None,
         }
     }
@@ -820,6 +834,9 @@ struct State {
     /// eligible package updates in the background, and which packages the
     /// user turned it off for.
     update_controls: updates::UpdateControls,
+    /// The update results of the latest pass that found something new,
+    /// and the pass they are from (see `update_results`).
+    update_results: update_results::Record,
     /// Pane's own keys in force, which no action shortcut takes (see
     /// `item_actions`).
     pane_keys: PaneKeys,
@@ -1148,6 +1165,11 @@ enum Entry {
     /// Check for a Pane application update again, after the check failed
     /// (root).
     CheckUpdate,
+    /// Check every updatable extension at once and update what the pass
+    /// finds, whatever the cadence (root): the pass the user asked for,
+    /// whose toast follows it and whose record holds what it came to (see
+    /// `updates`).
+    CheckExtensionUpdates,
     /// Open Pane's log folder with the system's file manager, after Pane
     /// quit unexpectedly last time (root; see `crash_notice`).
     OpenLogFolder,
@@ -1218,6 +1240,12 @@ enum Entry {
     /// Show the extension log of this developed package (extension list,
     /// build details).
     ExtensionLog(PackageIdentity),
+    /// Show the update results of the latest pass that recorded (the
+    /// extension list, the failure toast's View Details).
+    UpdateResults,
+    /// Show this extension's page in Settings (the update results view's
+    /// rows; the window opens it, as it opens Settings).
+    ShowExtension(PackageIdentity),
     /// Ask whether to clear this installed package's cache (extension list).
     AskClearCache(PackageIdentity),
     /// Forget the answers remembered for this installed package's
@@ -1299,6 +1327,7 @@ enum Pending {
     Acquire(String),
     InstallUpdate,
     CheckUpdate,
+    CheckExtensionUpdates,
     OpenLogFolder,
     StopSharing(PackageIdentity),
 }
@@ -1427,6 +1456,11 @@ impl Launcher {
             .as_ref()
             .and_then(|installation| updates::UpdateControls::open(&installation.dir))
             .unwrap_or_default();
+        let update_results = installation
+            .as_ref()
+            .map_or_else(update_results::Record::default, |installation| {
+                update_results::Record::open(&installation.dir)
+            });
         let logs = runtime.as_ref().map(Runtime::logs).unwrap_or_default();
         let developing = Arc::new(Developing::new(None, None, logs));
         // A web image, a system icon or an application's icon that loaded
@@ -1497,6 +1531,7 @@ impl Launcher {
             launches: Arc::default(),
             runtime_slow: None,
             update_controls,
+            update_results,
             pane_keys: PaneKeys::default(),
             reported_unbound: Vec::new(),
             open_command: None,
@@ -2012,6 +2047,14 @@ impl Launcher {
             }
             _ => None,
         };
+        // The update results view's search: its rows filter, as root
+        // search's do, without a guest or a network — the rows are Pane's
+        // own record.
+        if let Screen::UpdateResults { query: current } = &state.view.screen
+            && current != query
+        {
+            self.search_update_results(&mut state, query);
+        }
         let (asked, indexing, cancelled) = match &state.view.screen {
             Screen::Root { query: current } if current != query => {
                 let cancelled = self.search(&mut state, query);
@@ -2476,6 +2519,7 @@ impl Launcher {
         match entry {
             Entry::Settings => Some(SettingsTarget::Settings),
             Entry::Manage => Some(SettingsTarget::Extensions),
+            Entry::ShowExtension(identity) => Some(SettingsTarget::Extension(identity.clone())),
             Entry::InstallFromFolder => Some(SettingsTarget::InstallFromFolder),
             Entry::AskNpm => Some(SettingsTarget::InstallFromNpm),
             Entry::AskGit => Some(SettingsTarget::InstallFromGit),
@@ -2555,6 +2599,12 @@ impl Launcher {
                     |entry| matches!(entry, Entry::ExtensionLog(shown) if *shown == identity),
                 );
             }
+            // Escape clears the results view's search before leaving it,
+            // as it clears root search's query.
+            Screen::UpdateResults { query } if !query.is_empty() => {
+                self.search_update_results(&mut state, "");
+            }
+            Screen::UpdateResults { .. } => self.show_extensions(&mut state),
             Screen::RuntimeDetails { .. } => {
                 self.show_extensions_at(&mut state, |entry| matches!(entry, Entry::RuntimeDetails));
             }
@@ -2696,6 +2746,7 @@ impl Launcher {
                 Pending::Acquire(id) => launcher.retry_acquiring(&id).await,
                 Pending::InstallUpdate => launcher.install_application_update().await,
                 Pending::CheckUpdate => launcher.check_application_update_again().await,
+                Pending::CheckExtensionUpdates => launcher.check_extension_updates().await,
                 Pending::OpenLogFolder => launcher.open_log_folder().await,
                 Pending::StopSharing(identity) => launcher.stop_sharing_folder(identity).await,
             }
@@ -2800,6 +2851,15 @@ impl Launcher {
                 self.show_extension_log(state, &identity);
                 Pending::Nothing
             }
+            Entry::UpdateResults => {
+                self.show_update_results(state);
+                Pending::Nothing
+            }
+            // The window acts on these, not the launcher.
+            Entry::ShowExtension(_)
+            | Entry::InstallFromFolder
+            | Entry::ChooseFolder(_)
+            | Entry::Settings => Pending::Nothing,
             Entry::AskUninstall(identity) => {
                 let closure = dependencies::required_dependents(&state.packages, &identity);
                 if closure.is_empty() {
@@ -2886,6 +2946,10 @@ impl Launcher {
                 state.view.status = Status::Running;
                 Pending::CheckUpdate
             }
+            Entry::CheckExtensionUpdates => {
+                state.view.status = Status::Running;
+                Pending::CheckExtensionUpdates
+            }
             Entry::OpenLogFolder => {
                 state.view.status = Status::Running;
                 Pending::OpenLogFolder
@@ -2898,8 +2962,6 @@ impl Launcher {
                 self.show_git_form(state);
                 Pending::Nothing
             }
-            // The window acts on these, not the launcher.
-            Entry::InstallFromFolder | Entry::ChooseFolder(_) | Entry::Settings => Pending::Nothing,
             Entry::Open(opening) => {
                 if opening.no_view {
                     Launcher::begin_run(state);
@@ -3372,6 +3434,9 @@ impl Launcher {
             // Its lines stay, also once development ended: the window reads
             // them as they are.
             Screen::ExtensionLog { .. } => {}
+            // The results of a pass that recorded meanwhile, keeping the
+            // query and the screen's epoch.
+            Screen::UpdateResults { .. } => self.refresh_update_results(state),
             Screen::RuntimeDetails { .. } => self.keep_runtime_details(state),
             // Once the build succeeded or development ended, the extension
             // list; else the latest failure. The screen epoch is kept.
@@ -3582,6 +3647,19 @@ impl Launcher {
             for (row, entry) in state.updates.rows() {
                 add(row, entry, None, None);
             }
+        }
+        // The extensions' updates, checked on the user's demand: the row
+        // starts the pass at once, whatever the cadence, over every
+        // extension Pane could update — turned-off, disabled and paused
+        // ones included — with a toast following it.
+        if self.installation.is_some() && !state.packages.is_empty() {
+            let row = Row {
+                id: "pane.check-extensions".into(),
+                title: "Check for Extension Updates".into(),
+                subtitle: Some("Check every extension now, and update what it finds".into()),
+                unavailable: None,
+            };
+            add(row, Entry::CheckExtensionUpdates, None, None);
         }
         // That Pane quit unexpectedly last time, until the user dismisses
         // it or opens the log folder (see `crash_notice`).

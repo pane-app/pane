@@ -92,22 +92,35 @@ compatible newer version, at a safe moment, without the user asking
 update a tracked Git package from the newer commit of its branch
 ([git](git.md#updating-by-itself); #50).
 
-**When it checks.** Once shortly after Pane starts (a second after, so
-that a development build's registry is in place first) and then every 24
+**When it checks.** Once a minute after Pane starts (so that the check
+never competes with Pane's own start) and then every 24
 hours while Pane runs, by the launcher's clock
 ([`Launcher::with_clock`](../crates/pane-core/src/launcher.rs), the
-system's in release builds). A check reads only the registry's metadata
+system's in release builds; tests move the clock). A check reads only the
+registry's metadata
 for each eligible package's name: nothing is downloaded while the latest
 version is the installed one. Both the cadence and the initial wait are
-provisional, as the spec leaves the delivery timing open.
+provisional, as the spec leaves the delivery timing open. The user can
+also ask for a check at once — root search's **Check for Extension
+Updates** command, or the **Check for updates** button on the Settings
+Extensions page, which says when Pane last checked under it — whatever
+the cadence (#267). A pass the user asked for looks wider than the
+automatic one: every installed package from a source Pane updates,
+whether or not its automatic updates are turned off, and disabled and
+paused ones too (the user asked; an update keeps a disabled one disabled,
+and unpauses a paused one, as the preview's Update row does). A toast
+follows it — "Checking for extension updates…", "Updating 2 of 3…" —
+ending as its summary ("Updated 3 extensions", "Extensions are up to
+date", "Updated 2, 1 failed") with View Details, and its checks run a
+few packages at a time, each bounded by Pane's HTTP limits as ever.
 
 **What a newer version goes through.** Exactly what an install does:
 downloading and checking the tarball (its integrity and everything the
 refusals below cover), reading the `pane.json` (the manifest, the
 extension API it needs, its platforms and its helpers for this system)
 and working out its dependencies as a plan. A newer version that cannot
-is explained in the status line — "Settings from npm was not updated:
-Incompatible package: it needs Pane extension API 0.2, but this Pane
+be taken is skipped in the pass's update results with that reason — "Incompatible
+package: it needs Pane extension API 0.2, but this Pane
 provides 0.1. It keeps running its installed code." — and the installed
 copy is left exactly as it is; the next check tries it again. What was
 downloaded stays staged, holding its download folder, until it is
@@ -120,7 +133,9 @@ with one open, and the user may be reading its answer), and no call of
 it the user asked for is still running (opening a command, running an
 item, a query sent from root, a command's search, a form submission).
 The running command always finishes first: while one is running, or its
-screen is open, the update waits and is tried again every second.
+screen is open, the update waits and is tried again every second, listed
+in the pass's update results as "Waiting until <title> is not in use"
+until it applies.
 Managed background work is not waited for: a replacement ends it with
 the package's generation and the new code starts it again, exactly as a
 reload does ([generations](generations.md)). In the moment between the
@@ -137,9 +152,10 @@ makes: the identity, the saved data (settings, content, credentials),
 the disabled state, the hotkeys and the aliases are kept; the old code's
 generation ends, stopping what is still pending of it; and the new code
 runs from the next call, as an update starts no code itself. The outcome
-says so in the status line of root search or the extension list ("Updated
-Settings from npm to 0.2.0"); another screen keeps its own status, and
-the list shows the new version.
+is the pass's update results ("0.1.0 → 0.2.0" in the view): a
+successful background update is quiet — the list shows the new version —
+while a failure is announced once, the next time the launcher is shown,
+with the toast that opens the results.
 
 ### Which packages update
 
@@ -152,7 +168,10 @@ development copy's code is never replaced here, and neither is a
 disabled or paused one — updating a paused package would unpause it,
 which is the user's choice to make (Retry); a disabled one is the user
 switched off, and the code it does not run does not change under it.
-These last two are provisional choices.
+These last two are provisional choices. A default extension is eligible
+on the same terms — enabled, not paused, not turned off — updating from
+its repository's newer release tags
+([installer](installer.md#updating-the-default-extensions)).
 
 **The controls.** Settings › Extensions ends with **Update extensions
 automatically** ("On · every eligible extension updates by itself, at

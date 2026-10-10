@@ -211,10 +211,24 @@ impl Launcher {
             {
                 files.indexer().launcher_shown();
             }
-            if state.feedback.presence == presence {
+            let same = state.feedback.presence == presence;
+            if !same {
+                state.feedback.presence = presence;
+            }
+            // A failure the update record holds and has not announced
+            // yet is announced now, the launcher being shown: a failure
+            // recorded while it was hidden waits for this showing, and
+            // one recorded while it was shown is announced at once (in
+            // `note_update_pass`) — as is one a start of Pane still
+            // holds, the window saying so the first time. Said once the
+            // presence above is set, so the toast is the footer's, not a
+            // HUD.
+            if presence == WindowPresence::Shown {
+                self.announce_update_failures(&mut state);
+            }
+            if same {
                 return;
             }
-            state.feedback.presence = presence;
             if presence != WindowPresence::Shown {
                 leave_if_animated(&mut state.feedback);
             }
@@ -332,6 +346,11 @@ impl Launcher {
             });
         match chosen {
             None => {}
+            // Pane's own View Details: the results screen replaces
+            // whatever the launcher shows; the toast keeps its time.
+            Some((_, _, ToastDoes::ShowUpdateResults)) => {
+                self.show_update_results(&mut state);
+            }
             Some((owner, command, ToastDoes::Copy(_))) => {
                 let copied = Toast::new(ToastStyle::Success, "Copied the error to the clipboard");
                 self.put_toast(&mut state, owner, command, copied);
@@ -603,7 +622,35 @@ impl Launcher {
     /// Shows a toast of Pane's own, of no command, with no actions: such as
     /// the one naming what a start forgot for root providers (#164).
     pub(super) fn show_own_toast(&self, state: &mut State, toast: Toast) {
-        self.put_toast(state, PathBuf::new(), None, toast);
+        self.put_own_toast(state, toast);
+    }
+
+    /// Shows a toast of Pane's own, of no command, and its id: for the
+    /// updater's asked pass, which updates it by id through its life (see
+    /// `update_results`).
+    pub(super) fn put_own_toast(&self, state: &mut State, toast: Toast) -> u64 {
+        self.put_toast(state, PathBuf::new(), None, toast)
+    }
+
+    /// Updates Pane's own toast `id` — one [`Launcher::put_own_toast`]
+    /// showed — with `toast`, and shows it again, while it is still the
+    /// launcher's toast: another that replaced it leaves the id stale,
+    /// and nothing happens. Whether it did update. Updating starts the
+    /// toast's time again and bumps its revision, so the window counts it
+    /// anew.
+    pub(super) fn update_own_toast(&self, state: &mut State, id: u64, toast: Toast) -> bool {
+        let Some(current) = state
+            .feedback
+            .toast
+            .as_mut()
+            .filter(|current| current.id == id)
+        else {
+            return false;
+        };
+        current.toast = toast;
+        current.revision += 1;
+        present(&mut state.feedback);
+        true
     }
 
     /// Shows the error `message` the command `command` in `component`

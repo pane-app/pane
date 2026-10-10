@@ -42,13 +42,17 @@ for it come first, once they arrive):
    explaining the problem;
 4. Pane's own rows: "Install extension from folder…", "Install extension
    from npm…" ([npm](npm.md)), "Install extension from Git…" ([Git](git.md)),
-   "Manage Extensions" and "Settings…". Extensions are installed and
+   "Check for Extension Updates", "Manage Extensions" and "Settings…".
+   Extensions are installed and
    managed in Settings ([ADR 0043](adr/0043-extensions-are-managed-in-settings-one-page-per-extension.md),
    #168): "Manage Extensions" opens Settings at its Extensions group, and
    the install rows open its install flow there — the folder picker, or
    the field for an npm package or a Git repository, then the package's
-   preview with its Install. The launcher itself has no screen for
-   extensions.
+   preview with its Install. "Check for Extension Updates" checks every
+   updatable extension at once, whatever the cadence, and updates what it
+   finds ([npm](npm.md#updating-by-itself)); Settings' Extensions group
+   has a "Check for updates" button that starts the same pass. The
+   launcher itself has no screen for extensions.
 
 For a query that is not blank, a command whose [alias](aliases.md) the
 query is, or starts with, comes before everything (computed results

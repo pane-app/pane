@@ -325,6 +325,25 @@ pub(crate) struct DefaultOrigin {
     pub lfs_pointers: Vec<String>,
 }
 
+/// A default extension's recorded source, as `installed.json` keeps it
+/// beside the default identity: the repository the revision was fetched
+/// from, the release tag and commit of the revision installed, and the
+/// version its manifest declared — what the updater reads to check the
+/// repository's newer release tags
+/// ([#269](https://github.com/pane-app/pane/issues/269)). A record an
+/// older Pane wrote from its own downloads keeps none of it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct InstalledDefault {
+    /// The repository, as its record names it: a Git address, fetched
+    /// from where the revision was fetched before.
+    pub repository: String,
+    /// The revision installed: the release tag it was installed from
+    /// (the pin's, or an update's), at that tag's commit.
+    pub revision: GitRevision,
+    /// The version the installed manifest declared, when it declared one.
+    pub version: Option<String>,
+}
+
 /// Why acquiring one default extension failed, after Pane's retries.
 #[derive(Debug)]
 pub(crate) struct Failed(String);

@@ -139,7 +139,7 @@ impl ToastAction {
     pub fn copies(&self) -> Option<&str> {
         match &self.does {
             ToastDoes::Copy(text) => Some(text),
-            ToastDoes::Callback(_) => None,
+            ToastDoes::Callback(_) | ToastDoes::ShowUpdateResults => None,
         }
     }
 }
@@ -151,6 +151,9 @@ pub(crate) enum ToastDoes {
     Callback(String),
     /// Copies this text: Pane's own "Copy Error".
     Copy(String),
+    /// Opens the update results screen: Pane's own "View Details" on a
+    /// pass's failure announcement.
+    ShowUpdateResults,
 }
 
 /// The toast the launcher shows now, as the window reads it.

@@ -15,3 +15,4 @@ pub(crate) mod root_search;
 pub(crate) mod search_files;
 pub(crate) mod settings;
 pub(crate) mod toast;
+pub(crate) mod update_results;

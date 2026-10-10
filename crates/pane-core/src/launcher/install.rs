@@ -27,6 +27,7 @@ use super::{
     Changing, Entry, FormField, FormPurpose, FormView, GIT_REPOSITORY_FIELD, Launcher,
     LauncherView, Mode, NPM_PACKAGE_FIELD, OpenForm, Row, Screen, State, Status, off_thread,
 };
+use crate::defaults::DefaultExtension;
 use crate::dependencies::{self, Assumptions, Plan, RequiredState};
 use crate::git::{self as git_source, GitSpec};
 use crate::npm::{self, NpmSpec, Registry};
@@ -45,6 +46,12 @@ pub(in crate::launcher) enum Request {
     /// A package from a Git repository, at the reference named or else its
     /// default branch.
     Git(GitSpec),
+    /// A default extension's revision, from its repository at the commit
+    /// its release tag points to — first setup's acquisition of a pin
+    /// ([`crate::defaults`]) and the updater's of a newer release tag
+    /// (#269), which read it with the default extension's identity. Never
+    /// previewed: only those two flows make one.
+    Default(DefaultExtension),
 }
 
 impl Request {
@@ -60,6 +67,10 @@ impl Request {
             Request::Git(spec) => (
                 format!("Git repository: {spec}"),
                 spec.repository.name().to_owned(),
+            ),
+            Request::Default(pin) => (
+                format!("Default extension: default:{}", pin.id),
+                pin.title.clone(),
             ),
         }
     }
@@ -84,6 +95,7 @@ impl Sources {
             Request::Folder(folder) => SourcePackage::read(folder),
             Request::Npm(spec) => self.fetch(spec),
             Request::Git(spec) => self.fetch_git(spec),
+            Request::Default(pin) => self.fetch_default(pin),
         }
     }
 
@@ -126,6 +138,21 @@ impl Sources {
         // As for npm, its download goes with the package read from it.
         let fetched = git_source::fetch(spec, downloads).map_err(PackageError::Git)?;
         SourcePackage::read_git(fetched)
+    }
+
+    /// Fetches the release tag's commit `pin` names and reads it as the
+    /// default extension's package — with the default extension's
+    /// identity and its Git source recorded — exactly as first setup
+    /// acquires one, retries included ([`crate::defaults::fetch`]).
+    fn fetch_default(&self, pin: &DefaultExtension) -> Result<SourcePackage, PackageError> {
+        let Some(downloads) = &self.downloads else {
+            return Err(PackageError::Storage(
+                "this launcher does not install packages".into(),
+            ));
+        };
+        let fetched = crate::defaults::fetch(pin, downloads)
+            .map_err(|why| PackageError::Defaults(why.to_string()))?;
+        SourcePackage::read_default(fetched)
     }
 }
 

@@ -386,6 +386,7 @@ pub(in crate::launcher) fn selected_action(state: &State) -> SelectedAction {
         (_, Some(Entry::Acquire(_))) => acting("Set up extension"),
         (_, Some(Entry::InstallUpdate)) => acting("Install update"),
         (_, Some(Entry::CheckUpdate)) => acting("Check for update"),
+        (_, Some(Entry::CheckExtensionUpdates)) => acting("Check for updates"),
         (_, Some(Entry::OpenLogFolder)) => acting("Open log folder"),
         (_, Some(Entry::Manage)) => acting("Manage Extensions"),
         // Pane's Settings row opens the Settings window, exactly as its
@@ -436,6 +437,8 @@ pub(in crate::launcher) fn selected_action(state: &State) -> SelectedAction {
         (_, Some(Entry::BuildDetails(_))) => acting("Show details"),
         (_, Some(Entry::BuildAgain(_))) => acting("Build again"),
         (_, Some(Entry::ExtensionLog(_))) => acting("Show logs"),
+        (_, Some(Entry::UpdateResults)) => acting("Show update results"),
+        (_, Some(Entry::ShowExtension(_))) => acting("Show extension"),
         (_, Some(Entry::AskClearCache(_))) => acting("Clear cache"),
         (_, Some(Entry::ResetConfirmations(_))) => acting("Reset confirmations"),
         (_, Some(Entry::AskHotkey(_))) => acting("Set hotkey"),
@@ -481,5 +484,7 @@ pub(in crate::launcher) fn selected_action(state: &State) -> SelectedAction {
         // The Logs screen's lines are the window's: Enter copies the one
         // it has selected.
         (Screen::ExtensionLog { .. }, None) => acting("Copy line"),
+        // The update results view: a row opens its extension's page.
+        (Screen::UpdateResults { .. }, None) => unusable("Show extension"),
     }
 }

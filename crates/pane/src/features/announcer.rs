@@ -560,9 +560,10 @@ impl LauncherWindow {
             // their own accessibility.
             Screen::Form(_) | Screen::CustomView(_) | Screen::ExtensionLog { .. } => return None,
             Screen::Root { .. } => Opening::Silent,
-            Screen::Command | Screen::CommandSearch { .. } | Screen::Extensions { .. } => {
-                Opening::Named(view.title.clone(), Noun::Results)
-            }
+            Screen::Command
+            | Screen::CommandSearch { .. }
+            | Screen::Extensions { .. }
+            | Screen::UpdateResults { .. } => Opening::Named(view.title.clone(), Noun::Results),
             Screen::Package { .. }
             | Screen::NetworkDetails { .. }
             | Screen::ProgramDetails { .. }

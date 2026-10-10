@@ -1620,18 +1620,21 @@ check 266-npm-command-ran.png success   # "Hello from the npm package"
 # #49: the update Pane applies by itself. A 0.2.0 of the sample is
 # published into the registry this phase serves (it reads its folder on
 # request, so publishing is dropping the tarball in), and Pane is stopped
-# and started again: the first check, a second after the start, finds the
-# newer version and replaces the installed copy — unpinned, and nothing
-# of it running, so the safe boundary is at once — saying so in the status
-# line. The new copy's command runs as the old one did.
+# and started again: the first check, a minute after the start (#256),
+# finds the newer version and replaces the installed copy — unpinned, and
+# nothing of it running, so the safe boundary is at once — quietly, its
+# say the record it writes and the new copy's code. The new copy's
+# command runs as the old one did.
 python3 "$(dirname "$0")/npm_publish.py" target/guests/npm/pane-samples-greeter-0.1.0.tgz 0.2.0
 stop_pane
 start_pane
 focus_launcher
-# The check a second after the start, then the download and the apply:
-# capture until the status line says the update landed, whenever that is,
-# so a slow runner is waited for rather than slept past.
-capture_until 267-npm-updated-automatically.png success 60   # "Updated Greeter from npm to 0.2.0"
+# The check a minute after the start, then the download and the apply:
+# wait for the record to say the update landed, whenever that is, so a
+# slow runner is waited for rather than slept past; the capture shows the
+# quiet window after it landed.
+wait_for "$PANE_DATA_DIR/extensions/installed.json" '"npmVersion": "0.2.0"' present 1800
+capture 267-npm-updated-automatically.png
 "$xdotool" key Return; sleep 3   # open Greeter from npm, the new copy
 "$xdotool" key Return; sleep 2   # "Say hello"
 capture 268-npm-new-copy-ran.png
@@ -1704,8 +1707,9 @@ python3 "$(dirname "$0")/check_git_record.py" "$PANE_DATA_DIR/extensions/install
 # from its tracked release branch -- `--install` naming the branch, so the
 # copy is tracked, not pinned -- with its command run; the branch then
 # moves to a 0.2.0 (repository_server.py move-sample) while Pane is
-# stopped, and the check a second after the restart replaces the installed
-# copy by itself, the new code running. Nothing reaches the network.
+# stopped, and the check a minute after the restart (#256) replaces the
+# installed copy by itself, quietly, the new code running. Nothing reaches
+# the network.
 export PANE_DATA_DIR=$out/git-update-data
 rm -rf "$PANE_DATA_DIR"
 python3 "$(dirname "$0")/repository_server.py" make-sample target/guests/git/greeter "$out/git-repositories/greeter-tracked"
@@ -1717,12 +1721,16 @@ capture_until 305-git-tracked-preview.png details 60   # "Revision: branch relea
 capture 306-git-tracked-installed.png
 check 306-git-tracked-installed.png success   # "Installed Greeter from Git"
 python3 "$(dirname "$0")/repository_server.py" move-sample "$out/git-repositories/greeter-tracked" 0.2.0
+moved=$(python3 "$(dirname "$0")/repository_server.py" commit "$out/git-repositories/greeter-tracked" release)
 stop_pane
 start_pane
 focus_launcher
-# The check a second after the start, then the fetch and the apply: capture
-# until the status line says the update landed, whenever that is.
-capture_until 307-git-updated-automatically.png success 60   # "Updated Greeter from Git to 0.2.0"
+# The check a minute after the start, then the fetch and the apply: wait
+# for the record to name the moved branch's commit, whenever that is (the
+# update is quiet, its say the record and the new copy's code); the
+# capture shows the quiet window after it landed.
+wait_for "$PANE_DATA_DIR/extensions/installed.json" "$moved" present 1800
+capture 307-git-updated-automatically.png
 "$xdotool" key Return; sleep 3   # open Greeter from Git, the new copy
 "$xdotool" key Return; sleep 2   # "Say hello"
 capture 308-git-new-copy-ran.png
@@ -1730,7 +1738,8 @@ check 308-git-new-copy-ran.png success   # "Hello from the Git repository"
 python3 "$(dirname "$0")/check_screenshot.py" --distinct "$out"/{305-git-tracked-preview,306-git-tracked-installed,307-git-updated-automatically,308-git-new-copy-ran}.png
 stop_pane
 kill "$repository_server_pid"; wait "$repository_server_pid" 2>/dev/null || true; repository_server_pid=
-moved=$(python3 "$(dirname "$0")/repository_server.py" commit "$out/git-repositories/greeter-tracked" release)
+# The record was waited for above, before the new copy ran; the checks
+# name it in full.
 python3 "$(dirname "$0")/check_git_record.py" --ref refs/heads/release --unpinned "$PANE_DATA_DIR/extensions/installed.json" "$moved" || { echo "the tracked Git package was not recorded at its moved branch"; exit 1; }
 [ -z "$(ls -A "$PANE_DATA_DIR/extensions/downloads" 2>/dev/null)" ] || { echo "a Git download was left"; exit 1; }
 

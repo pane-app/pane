@@ -19,6 +19,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::arguments::{self, ManifestArgument};
 use crate::atomic::{Readers, write_atomically};
+use crate::defaults::InstalledDefault;
 use crate::git::{GitOrigin, GitRevision, GitSpec, InstalledGit, Repository};
 use crate::helpers::runner;
 use crate::icons::{self, Icon};
@@ -46,7 +47,7 @@ const PACKAGES_DIR: &str = "packages";
 /// The identity of an installed package, derived from its source and
 /// independent of its display title. A local package is identified by its
 /// folder's resolved absolute path, as the operating system reports it.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct PackageIdentity(Source);
 
 /// A package's source, as `installed.json` records it: `"local": "<folder>"`,
@@ -1639,9 +1640,8 @@ impl SourcePackage {
                 return Err(PackageError::Defaults(format!(
                     "{revision} holds only the source of \"{command}\": its built component {} \
                      is not in it. Pane does not build packages from Git or run anything in a \
-                     repository; the release this Pane pins was tested with must include the \
-                     built components, and until its repository releases one, Pane cannot set \
-                     this default extension up",
+                     repository; a release must include the built components, and until its \
+                     repository releases one, Pane cannot install this default extension",
                     component.display()
                 )));
             }
@@ -1652,8 +1652,8 @@ impl SourcePackage {
             if origin.lfs_pointers.contains(&path) {
                 return Err(PackageError::Defaults(format!(
                     "{revision} stores its component {path} with Git LFS, which Pane does not \
-                     fetch: its repository must commit the built component itself in the \
-                     release this Pane pins"
+                     fetch: its repository must commit the built component itself in a \
+                     release revision"
                 )));
             }
         }
@@ -1749,6 +1749,14 @@ pub struct InstalledPackage {
     /// For a package from Git, the address it was fetched from and the
     /// revision installed.
     pub git: Option<InstalledGit>,
+    /// For a default extension, the Git source its record keeps: the
+    /// repository it was fetched from, the release tag and commit of the
+    /// revision installed, and the version its manifest declared — what
+    /// the updater reads to check the repository's newer release tags
+    /// ([#269](https://github.com/pane-app/pane/issues/269)). `None` for
+    /// a record an older Pane wrote from its own downloads, which kept
+    /// no repository.
+    pub default: Option<crate::defaults::InstalledDefault>,
     /// Whether a component of it imports `wasi:http`, so its code can make
     /// web requests, as found when it was installed, updated or reloaded.
     pub uses_network: bool,
@@ -1804,26 +1812,22 @@ impl PackageIcons {
 }
 
 impl InstalledPackage {
-    /// The package whose managed copy is at `location`, with the identities
-    /// its dependencies were resolved to as `recorded`; one not recorded
-    /// (installed before Pane recorded them) is resolved now.
-    fn load(
-        identity: PackageIdentity,
-        location: PathBuf,
-        enabled: bool,
-        uses_network: bool,
-        recorded: &[ResolvedJson],
-        npm: Option<&NpmRecordJson>,
-        git: Option<&GitRecordJson>,
-    ) -> InstalledPackage {
+    /// The package `record` in `installed.json` says is installed, whose
+    /// managed copy is at `location` — its source, its enabled state,
+    /// what it was installed from — with the identities its dependencies
+    /// were resolved to as the record says; one not recorded (installed
+    /// before Pane recorded them) is resolved now.
+    fn load(record: &RecordJson, location: PathBuf) -> InstalledPackage {
+        let identity = PackageIdentity(record.source.clone());
         let manifest = Manifest::read_installed(&location);
         let dependencies = match &manifest {
             Ok(manifest) => manifest
                 .dependencies
                 .iter()
                 .filter_map(|dependency| {
-                    let resolved = match recorded.iter().find(|r| r.id == dependency.id) {
-                        Some(record) => PackageIdentity(record.source.clone()),
+                    let found = record.dependencies.iter().find(|r| r.id == dependency.id);
+                    let resolved = match found {
+                        Some(recorded) => PackageIdentity(recorded.source.clone()),
                         None => identity.dependency(&dependency.source).ok()?,
                     };
                     Some((dependency.id.clone(), resolved))
@@ -1831,25 +1835,31 @@ impl InstalledPackage {
                 .collect(),
             Err(_) => Vec::new(),
         };
-        let npm = npm.and_then(|npm| npm.package(&identity));
-        let git = git.and_then(|git| git.installed(&identity));
+        let npm = record.npm.as_ref().and_then(|npm| npm.package(&identity));
+        let git = record.git.as_ref().and_then(|git| git.installed(&identity));
+        // A default extension's record keeps its Git fields in the same
+        // shape a Git package's does (see `RecordJson::git`), beside the
+        // version its manifest declared.
+        let default = record
+            .git
+            .as_ref()
+            .and_then(|git| git.installed_default(record.default_version.as_deref(), &identity));
         let mut package = InstalledPackage {
             manifest,
             identity,
             location,
-            enabled,
+            enabled: !record.disabled,
             npm,
             git,
-            uses_network,
-            // Its record says, once loaded (see `Store::installed`).
-            uses_programs: false,
+            default,
+            uses_network: record.network,
+            uses_programs: record.programs,
             dependencies,
             icons: PackageIcons {
                 package: Icon::letter_of(""),
                 commands: Vec::new(),
             },
-            // Its record says, once loaded (see `Store::installed`).
-            disabled_commands: BTreeSet::new(),
+            disabled_commands: record.disabled_commands.iter().cloned().collect(),
         };
         package.icons = PackageIcons::of(
             package.manifest.as_ref().ok(),
@@ -2221,14 +2231,30 @@ struct RecordJson {
     /// (or the dependency that installed it) pinned it to that version.
     #[serde(flatten, default, skip_serializing_if = "Option::is_none")]
     npm: Option<NpmRecordJson>,
-    /// For a package from Git, the address fetched and the revision
-    /// installed.
+    /// For a package from Git or a default extension, the address it was
+    /// fetched from and the revision installed — the fields both kinds
+    /// of record write in the same shape, so one flattened
+    /// [`GitRecordJson`] keeps them (a Git package's beside the
+    /// repository its source records, a default's beside the default
+    /// identity and `defaultVersion`). Two structs naming the same keys
+    /// cannot both be flattened here: a flattened field takes the keys
+    /// it names as it deserializes, leaving none for the other (#269).
     #[serde(flatten, default, skip_serializing_if = "Option::is_none")]
     git: Option<GitRecordJson>,
-    /// For a default extension Pane set up, the version its manifest
-    /// declares and the Git source it was fetched from.
-    #[serde(flatten, default, skip_serializing_if = "Option::is_none")]
-    default: Option<DefaultRecordJson>,
+    /// For a default extension, the version its manifest declares, when
+    /// it declares one, read back with the Git fields above to check the
+    /// repository's newer release tags
+    /// ([#269](https://github.com/pane-app/pane/issues/269)); a manifest
+    /// that declares none writes nothing, and its release tag's own
+    /// version is read instead. An older Pane, which acquired the
+    /// default from its own downloads, wrote this alone with no Git
+    /// fields, and such a record is still read as it is.
+    #[serde(
+        rename = "defaultVersion",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    default_version: Option<String>,
     /// The managed folder under `packages/`.
     dir: String,
     /// Set when the user disabled the package; absent means enabled.
@@ -2292,7 +2318,13 @@ impl NpmRecordJson {
 /// "https://github.com/o/r.git", "gitRef": "refs/tags/v1.0.0",
 /// "gitCommit": "<id>", "pinned": true`. `gitRef` is absent for the default
 /// branch and for a commit named by its id; `pinned` is set for a tag and a
-/// commit.
+/// commit. A default extension's record writes the same fields beside its
+/// default identity and `defaultVersion`: where the release tag it was
+/// acquired from was fetched from, and the tag and commit of the revision
+/// installed, which its updates read to find the repository's newer
+/// release tags (#269). For a default, `pinned` records what first setup
+/// installed (the release tag this Pane release pinned), never a choice
+/// of the user's: a default extension's updates do not read it.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 struct GitRecordJson {
     #[serde(rename = "gitUrl")]
@@ -2307,11 +2339,18 @@ struct GitRecordJson {
 
 impl GitRecordJson {
     fn of(origin: &GitOrigin) -> GitRecordJson {
+        GitRecordJson::of_revision(&origin.repository, &origin.revision)
+    }
+
+    /// The Git fields of the revision `revision`, fetched from
+    /// `repository`, as a Git package's or a default extension's record
+    /// writes them.
+    fn of_revision(repository: &Repository, revision: &GitRevision) -> GitRecordJson {
         GitRecordJson {
-            url: origin.repository.url().to_owned(),
-            reference: origin.revision.ref_name(),
-            commit: origin.revision.commit.clone(),
-            pinned: origin.revision.pinned(),
+            url: repository.url().to_owned(),
+            reference: revision.ref_name(),
+            commit: revision.commit.clone(),
+            pinned: revision.pinned(),
         }
     }
 
@@ -2328,35 +2367,29 @@ impl GitRecordJson {
             ),
         })
     }
-}
 
-/// An acquired default extension as its record writes it, beside the
-/// default extension its source records: `"default": "calculator",
-/// "defaultVersion": "0.5.0", "gitUrl": "https://github.com/…",
-/// "gitRef": "refs/tags/v0.5.0", "gitCommit": "<id>", "pinned": true`.
-/// The Git fields say where the pinned revision was fetched from, and
-/// are what a later release's updater reads to find the repository's
-/// newer release tags (#269); an older Pane, which acquired the default
-/// from its own downloads, wrote `defaultVersion` alone, and such a
-/// record is still read as it is.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-struct DefaultRecordJson {
-    /// The version the installed manifest declares, when it declares one.
-    #[serde(
-        rename = "defaultVersion",
-        default,
-        skip_serializing_if = "Option::is_none"
-    )]
-    version: Option<String>,
-    #[serde(rename = "gitUrl", default, skip_serializing_if = "Option::is_none")]
-    url: Option<String>,
-    /// `refs/tags/<tag>`; `None` for a record no Git source was kept of.
-    #[serde(rename = "gitRef", default, skip_serializing_if = "Option::is_none")]
-    reference: Option<String>,
-    #[serde(rename = "gitCommit", default, skip_serializing_if = "Option::is_none")]
-    commit: Option<String>,
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pinned: bool,
+    /// The default extension's recorded source for the package with
+    /// `identity`, a default one whose manifest declared `version`:
+    /// what the updater reads to check the repository's newer release
+    /// tags (#269). `None` when the record keeps no commit — an older
+    /// Pane acquired the default from its own downloads and wrote
+    /// `defaultVersion` alone.
+    fn installed_default(
+        &self,
+        version: Option<&str>,
+        identity: &PackageIdentity,
+    ) -> Option<InstalledDefault> {
+        identity.default_id()?;
+        Some(InstalledDefault {
+            repository: self.url.clone(),
+            revision: GitRevision::from_record(
+                self.reference.as_deref(),
+                &self.commit,
+                self.pinned,
+            ),
+            version: version.map(ToOwned::to_owned),
+        })
+    }
 }
 
 /// A dependency id and the source it resolved to.
@@ -2510,18 +2543,7 @@ impl Store {
             .packages
             .iter()
             .map(|record| {
-                let mut package = InstalledPackage::load(
-                    PackageIdentity(record.source.clone()),
-                    self.dir.join(PACKAGES_DIR).join(&record.dir),
-                    !record.disabled,
-                    record.network,
-                    &record.dependencies,
-                    record.npm.as_ref(),
-                    record.git.as_ref(),
-                );
-                package.uses_programs = record.programs;
-                package.disabled_commands = record.disabled_commands.iter().cloned().collect();
-                package
+                InstalledPackage::load(record, self.dir.join(PACKAGES_DIR).join(&record.dir))
             })
             .collect()
     }
@@ -2892,19 +2914,25 @@ impl Store {
             .npm
             .as_ref()
             .map(|origin| NpmRecordJson::of(&origin.package));
-        let git = package.git.as_ref().map(GitRecordJson::of);
-        let default = package.default.as_ref().map(|origin| {
-            let revision = &origin.revision;
-            DefaultRecordJson {
-                version: package.manifest.version.clone(),
-                url: Some(origin.repository.url().to_owned()),
-                reference: revision.ref_name(),
-                commit: Some(revision.commit.clone()),
-                pinned: revision.pinned(),
-            }
-        });
-        // An update keeps the record, so a disabled package stays disabled.
-        let enabled = match updated.packages.iter_mut().find(|r| &r.source == local) {
+        // A Git package's and a default extension's records keep the same
+        // Git fields, in the one shape; a default's own part of its record
+        // is the version its manifest declares.
+        let git = match (&package.git, &package.default) {
+            (Some(origin), _) => Some(GitRecordJson::of(origin)),
+            (None, Some(origin)) => Some(GitRecordJson::of_revision(
+                &origin.repository,
+                &origin.revision,
+            )),
+            (None, None) => None,
+        };
+        let default_version = if package.default.is_some() {
+            package.manifest.version.clone()
+        } else {
+            None
+        };
+        // An update keeps the record, so a disabled package stays disabled
+        // and the commands the user turned off stay turned off.
+        match updated.packages.iter_mut().find(|r| &r.source == local) {
             Some(record) => {
                 record.dir = dir;
                 // New code has not failed.
@@ -2912,10 +2940,9 @@ impl Store {
                 record.dependencies = dependencies.clone();
                 record.npm = npm.clone();
                 record.git = git.clone();
-                record.default = default.clone();
+                record.default_version = default_version.clone();
                 record.network = package.network;
                 record.programs = package.programs;
-                !record.disabled
             }
             None => {
                 // Data kept from an earlier installation of this identity
@@ -2925,7 +2952,7 @@ impl Store {
                     source: local.clone(),
                     npm: npm.clone(),
                     git: git.clone(),
-                    default: default.clone(),
+                    default_version: default_version.clone(),
                     dir,
                     disabled: false,
                     paused: None,
@@ -2934,7 +2961,6 @@ impl Store {
                     programs: package.programs,
                     disabled_commands: Vec::new(),
                 });
-                true
             }
         };
         if let Err(error) = write_registry(&self.dir, &updated) {
@@ -2957,24 +2983,14 @@ impl Store {
                 *registry = listed;
             }
         }
-        let mut installed = InstalledPackage::load(
-            package.identity.clone(),
-            location,
-            enabled,
-            package.network,
-            &dependencies,
-            npm.as_ref(),
-            git.as_ref(),
-        );
-        installed.uses_programs = package.programs;
-        // An update keeps the commands the user turned off.
-        installed.disabled_commands = registry
+        // The record the match above wrote, in either branch, read back
+        // as a restart reads it.
+        let record = registry
             .packages
             .iter()
             .find(|record| &record.source == local)
-            .map(|record| record.disabled_commands.iter().cloned().collect())
-            .unwrap_or_default();
-        Ok(installed)
+            .expect("written by the match above");
+        Ok(InstalledPackage::load(record, location))
     }
 }
 
@@ -3261,6 +3277,45 @@ mod tests {
                 "local": "/src/a", "dir": "1", "dependencies": [{ "id": "b", "local": "/src/b" }]
             })
         );
+    }
+
+    #[test]
+    fn a_default_extension_s_record_is_read_back_with_its_repository() {
+        // As first setup writes it (#269): the default identity, the
+        // version its manifest declared, and the Git fields of the release
+        // tag it was acquired from — the same keys a Git package's record
+        // writes, which the record must read as the default's own source,
+        // not lose to the Git record flattened beside it.
+        let dir = tempfile::tempdir().unwrap();
+        let text = r#"{ "version": 1, "next": 2, "packages": [
+            { "default": "calculator", "defaultVersion": "0.1.0",
+              "gitUrl": "http://127.0.0.1:49152/calculator.git",
+              "gitRef": "refs/tags/v0.1.0",
+              "gitCommit": "6e07ce96ea361661f2a63eaac8bd3b135c76b012",
+              "pinned": true, "dir": "1" } ] }"#;
+        fs::write(dir.path().join(REGISTRY_FILE), text).unwrap();
+        let store = Store::open(dir.path().to_path_buf());
+        let installed = store.installed();
+        let [package] = installed.as_slice() else {
+            panic!("one installed package")
+        };
+        assert!(package.git.is_none(), "not a Git package's record");
+        assert_eq!(
+            package.identity,
+            PackageIdentity::default_extension("calculator")
+        );
+        let default = package.default.as_ref().expect("the default's source");
+        assert_eq!(default.repository, "http://127.0.0.1:49152/calculator.git");
+        assert_eq!(
+            default.revision.ref_name().as_deref(),
+            Some("refs/tags/v0.1.0")
+        );
+        assert!(default.revision.pinned(), "the tag's revision, as ever");
+        assert_eq!(
+            default.revision.commit,
+            "6e07ce96ea361661f2a63eaac8bd3b135c76b012"
+        );
+        assert_eq!(default.version.as_deref(), Some("0.1.0"));
     }
 
     /// This test binary: a program for this system's target.

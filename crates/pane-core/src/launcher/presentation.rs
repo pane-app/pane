@@ -284,6 +284,11 @@ pub(super) fn want_row_icons(state: &State, index: usize) {
 /// screen.
 fn sections(state: &State) -> Vec<Section> {
     let Screen::Root { query } = &state.view.screen else {
+        // The update results view's groups, over its rows: the groups in
+        // the view's order, a group hidden when it lists nothing.
+        if matches!(state.view.screen, Screen::UpdateResults { .. }) {
+            return update_sections(state);
+        }
         return Vec::new();
     };
     let shown = state.view.rows.len().min(state.entries.len());
@@ -317,6 +322,34 @@ fn sections(state: &State) -> Vec<Section> {
         })
         .collect();
     answer_sections(query, &answers, first_fallback)
+}
+
+/// The update results view's sections (see [`sections`]): each group's
+/// label over its first row listed, in the order Updated, Waiting,
+/// Skipped, Failed, a group with nothing listed hidden.
+fn update_sections(state: &State) -> Vec<Section> {
+    let results = &state.update_results.results;
+    let mut sections = Vec::new();
+    for (label, group) in [
+        ("Updated", &results.updated),
+        ("Waiting", &results.waiting),
+        ("Skipped", &results.skipped),
+        ("Failed", &results.failed),
+    ] {
+        let first = state
+            .view
+            .rows
+            .iter()
+            .position(|row| group.iter().any(|result| result.identity.key() == row.id));
+        if let Some(first) = first {
+            sections.push(Section {
+                first,
+                label: label.into(),
+                note: None,
+            });
+        }
+    }
+    sections
 }
 
 /// The computed answer `row` is, when `entry` copies text a command
@@ -396,6 +429,7 @@ pub(super) fn kind(entry: &Entry) -> Option<RowKind> {
         | Entry::Acquire(_)
         | Entry::InstallUpdate
         | Entry::CheckUpdate
+        | Entry::CheckExtensionUpdates
         | Entry::OpenLogFolder
         | Entry::Manage
         | Entry::Settings => Some(RowKind::Command),

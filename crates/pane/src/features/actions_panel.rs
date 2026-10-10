@@ -66,7 +66,7 @@ use gpui_elements::editable_text::{EditableTextState, StringStorage, TextChanged
 use pane_core::clipboard_view::{ClipboardAction, ClipboardActionItem};
 use pane_core::{
     Icon, ItemActions, KeyboardAction, OpenSubmenu, PinnedLayout, ResultAction, ResultActions,
-    RowKind, Screen, SlotChange, SubmenuState,
+    RowKind, Screen, SlotChange, SubmenuState, UpdateResultsAction,
 };
 
 use crate::app::LauncherWindow;
@@ -265,6 +265,8 @@ enum Subject {
     /// Pane's own Clipboard History view: its selected record, and the
     /// history (#166).
     Clipboard,
+    /// The selected row of the update results view (#256).
+    UpdateResults,
 }
 
 impl Subject {
@@ -272,7 +274,9 @@ impl Subject {
     /// action.
     fn group(self) -> &'static str {
         match self {
-            Subject::Result | Subject::Item | Subject::Clipboard => PANE_GROUP,
+            Subject::Result | Subject::Item | Subject::Clipboard | Subject::UpdateResults => {
+                PANE_GROUP
+            }
             Subject::Slot => SLOT_GROUP,
         }
     }
@@ -289,6 +293,8 @@ pub(crate) enum EntryKind {
     Entry(usize),
     /// One of the Clipboard History view's actions (#166).
     Clipboard(ClipboardAction),
+    /// One of the update results view's actions (#256).
+    UpdateResults(UpdateResultsAction),
     /// What a submenu says instead of entries: that it is loading, or why
     /// the command could not give them. It runs nothing, and the filter
     /// keeps it.
@@ -535,6 +541,13 @@ impl LauncherWindow {
             self.open_slot_actions(slot, window, cx);
             return;
         }
+        // The update results view's rows: Pane's own actions on them,
+        // opening the selected row's extension's page and copying its
+        // details (#256).
+        if matches!(self.launcher.screen(), Screen::UpdateResults { .. }) {
+            self.open_update_results_actions(window, cx);
+            return;
+        }
         // A command's list, or a row of root search whose actions Pane
         // performs itself (a file, a computed answer: #150).
         let screen = self.launcher.screen();
@@ -586,6 +599,77 @@ impl LauncherWindow {
                 ),
             }
         });
+        self.open_panel(opened, window, cx);
+    }
+
+    /// Opens the Actions panel for the update results view's selected row
+    /// (#256): opening its extension's page in Settings, which Enter also
+    /// does, and copying its details — and, on the row the launcher
+    /// offers them for (#267), Retry (a Failed row: check that extension
+    /// alone) and Update Now (a Skipped row whose only reason is the
+    /// user's switch). With nothing selected, the panel says so.
+    fn open_update_results_actions(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let view = self.launcher.view();
+        let opened =
+            view.selected
+                .and_then(|index| view.rows.get(index))
+                .map(|row| {
+                    let actions = self.launcher.update_results_row_actions(&row.id);
+                    let mut entries = vec![PanelEntry {
+                        kind: EntryKind::UpdateResults(UpdateResultsAction::ShowExtension),
+                        label: "Show Extension".into(),
+                        available: true,
+                        destructive: false,
+                        submenu: false,
+                        section: None,
+                        glyph: Glyph::Gear,
+                        icon: None,
+                        keys: Some((invoke_keys(cx), CapStyle::Accent)),
+                    }];
+                    for action in actions {
+                        let (kind, label, glyph) = match action {
+                            UpdateResultsAction::Retry => {
+                                (UpdateResultsAction::Retry, "Retry", Glyph::Reset)
+                            }
+                            UpdateResultsAction::UpdateNow => (
+                                UpdateResultsAction::UpdateNow,
+                                "Update Now",
+                                Glyph::ActionRun,
+                            ),
+                            UpdateResultsAction::ShowExtension
+                            | UpdateResultsAction::CopyDetails => continue,
+                        };
+                        entries.push(PanelEntry {
+                            kind: EntryKind::UpdateResults(kind),
+                            label: label.into(),
+                            available: true,
+                            destructive: false,
+                            submenu: false,
+                            section: None,
+                            glyph,
+                            icon: None,
+                            keys: None,
+                        });
+                    }
+                    entries.push(PanelEntry {
+                        kind: EntryKind::UpdateResults(UpdateResultsAction::CopyDetails),
+                        label: "Copy Details".into(),
+                        available: true,
+                        destructive: false,
+                        submenu: false,
+                        section: None,
+                        glyph: Glyph::Clipboard,
+                        icon: None,
+                        keys: None,
+                    });
+                    Opened {
+                        target: row.id.clone(),
+                        title: row.title.clone(),
+                        kind: None,
+                        subject: Subject::UpdateResults,
+                        entries,
+                    }
+                });
         self.open_panel(opened, window, cx);
     }
 
@@ -770,6 +854,17 @@ impl LauncherWindow {
                 let record = Some(opened.target.as_str()).filter(|id| !id.is_empty());
                 clipboard_entries(&view.actions(record), &invoke)
             }),
+            // The rows as they are now: the search can hide the row the
+            // panel opened for, which loses its actions.
+            Subject::UpdateResults => {
+                let listed = self
+                    .launcher
+                    .view()
+                    .rows
+                    .iter()
+                    .any(|row| row.id == opened.target);
+                listed.then(|| opened.entries.clone())
+            }
         };
         Some(live.unwrap_or_else(|| {
             opened
@@ -1018,7 +1113,10 @@ impl LauncherWindow {
                 self.close_actions(window, cx);
                 self.show_until_done(pending, window, cx);
             }
-            EntryKind::Result(_) | EntryKind::Clipboard(_) | EntryKind::Note => {}
+            EntryKind::Result(_)
+            | EntryKind::Clipboard(_)
+            | EntryKind::UpdateResults(_)
+            | EntryKind::Note => {}
         }
     }
 
@@ -1048,6 +1146,15 @@ impl LauncherWindow {
                 }
                 return;
             }
+            // The update results view's own (#256): run on the row the
+            // panel opened for, by its identity key.
+            EntryKind::UpdateResults(action) => {
+                if entry.available {
+                    self.close_actions(window, cx);
+                    self.run_update_results_action(action, &target, window, cx);
+                }
+                return;
+            }
             EntryKind::Item(_) | EntryKind::Entry(_) | EntryKind::Note => {
                 self.choose_item_entry(&target, &entry, window, cx);
                 return;
@@ -1056,7 +1163,7 @@ impl LauncherWindow {
         let ready = match subject {
             Subject::Result => self.launcher.result_action_ready(&target, action),
             Subject::Slot => self.launcher.quick_slot_action_ready(&target, action),
-            Subject::Item | Subject::Clipboard => false,
+            Subject::Item | Subject::Clipboard | Subject::UpdateResults => false,
         };
         if !ready {
             return;
@@ -1809,9 +1916,13 @@ pub(crate) fn dimmer(theme: &Theme) -> Div {
         .bg(theme.actions_dimmer)
 }
 
-/// Whether `screen` is an open command's list, whose items have actions.
+/// Whether `screen` is an open command's list, whose items have actions,
+/// or the update results view, whose rows have Pane's own (#256).
 pub(crate) fn commands_list(screen: &Screen) -> bool {
-    matches!(screen, Screen::Command | Screen::CommandSearch { .. })
+    matches!(
+        screen,
+        Screen::Command | Screen::CommandSearch { .. } | Screen::UpdateResults { .. }
+    )
 }
 
 /// Whether the selected row of `screen` may have actions of its own, which
