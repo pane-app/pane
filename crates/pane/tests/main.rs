@@ -23,6 +23,7 @@ mod extension_log;
 mod feedback;
 mod file_actions;
 mod file_search_settings;
+mod held_keys;
 mod hotkeys;
 mod icons;
 mod install;

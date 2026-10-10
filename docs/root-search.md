@@ -214,9 +214,10 @@ state and maps input to those calls.
 | Alt+P / Alt+N (the Keyboard page's Emacs navigation bindings) or Alt+K / Alt+J (its Vim Motions), Control instead of Alt on macOS | Previous / next result too, beside Up and Down, while that set is chosen (the default is None). Raycast for Windows puts these sets on Alt as well; its Alt+B / Alt+F and Alt+H / Alt+L move left and right in its grids, and Pane has no left or right selection to give them, so they stay unbound |
 | Moving the pointer over a result | Select it, so the footer's action and Enter act on it; a pointer resting on a result never undoes the keys' selection, and while a layer over the list owns the target (the Actions panel, the Pane menu) the pointer selects nothing. The first pointer event after the window shows only records where the pointer is |
 | A click on a result | The selected result: invoke it, as Enter does. An unselected one (the keys moved the selection away while the pointer rested on it): select it; a second click invokes it |
-| Enter | Invoke the selected result: open the command, explain an unavailable or unreadable one, open Pane's own screen, copy a computed result's text to the clipboard ("Copied 42 to the clipboard"; root search stays as it was), open an application ("Opened Firefox"; root search stays as it was), or send the text to a command that takes a query, through its alias or as a fallback — with nothing else listed, the first fallback is the selected result (ADR 0031) — and show its answer (root search stays as it was) |
+| Enter | Invoke the selected result: open the command, explain an unavailable or unreadable one, open Pane's own screen, copy a computed result's text to the clipboard ("Copied 42 to the clipboard"; root search stays as it was), open an application ("Opened Firefox"; root search stays as it was), or send the text to a command that takes a query, through its alias or as a fallback — with nothing else listed, the first fallback is the selected result (ADR 0031) — and show its answer (root search stays as it was). While the query's list is not yet published, Enter waits for it (see below) |
+| Tab / Shift+Tab | Focus the next / previous field, as forms and the footer's controls take them; on a selected entry of a typed folder, complete the query to its path instead, and Shift+Tab remove the last path component ([understanding the typed query](#understanding-the-typed-query)). Both wait for the query's list as Enter does (see below) |
 | Escape | Clear the query; with an empty query, nothing |
-| Ctrl+K (Cmd+K on macOS; the Keyboard page's Open actions), or the footer's Actions button | Open the selected result's Actions panel, or close it |
+| Ctrl+K (Cmd+K on macOS; the Keyboard page's Open actions), or the footer's Actions button | Open the selected result's Actions panel, or close it — waiting for the query's list as Enter does (see below) |
 
 **The Actions panel** (#95) lists what can be done with the selected
 result, from the core's `Launcher::result_actions`: its primary action
@@ -234,6 +235,23 @@ it closes it and is consumed, so the result it covered is never invoked.
 The panel holds its target: the pointer cannot move the selection while it
 is open, and an entry whose target is no longer selected, or no longer has
 that action, runs nothing. With no result selected it says so.
+
+**Keys that wait** (#203). While the list for the exact query typed is not
+yet published, the keys that act on the selection are held until it is, for
+at most 300 ms, then applied to the selection at that moment: Enter, Tab and
+Shift+Tab, Ctrl+K, Ctrl and a digit, the selected row's action chords and
+shortcuts, and a space typed while the query could still turn into a
+command's alias — it is one word that some active alias starts with; once it
+cannot, a space types as it always did. Characters typed meanwhile are
+applied in order, landing in the field behind the held keys: typing "ec", a
+space and "hello" while a provider answers leaves the field reading
+"ec hello". An action key held once is never held twice: the system's
+repeats of a held Enter run nothing more. The window owns the holding and
+the replay — each held key is dispatched again as a press, through the same
+bindings and handlers — while the launcher only reports whether the current
+query's list is published; a hold is keyed by the query its first key was
+pressed under, and a query that moves on (Escape cleared it, a completion
+replaced it) drops its keys rather than running them on another list.
 
 ### The pinned home
 
@@ -399,7 +417,9 @@ comes from the extension, through the same guest boundary as its command:
   comes first (#201): until then the window keeps showing the previous
   query's list while the search field shows what was typed at once, so a
   slow command holds the list no longer than the budget and never hides
-  the answers of those asked before it. A command that misses the budget
+  the answers of those asked before it, and the keys that act on the
+  selection are held for the publication
+  ([Host behavior](#host-behavior)). A command that misses the budget
   keeps running until its answer or cancellation: the budget bounds the
   wait, not the scheduling. An answer that arrives after the list was
   published is merged into it, coalesced within 16 ms, so answers
@@ -986,7 +1006,19 @@ Enter copying the hex; and since #201, typing on from one answered query
 to another not flickering through the intermediate list — the field
 shows the new query at once, the previous list stays while the calculator
 answers, and the published list shows its answer, the launcher saying
-whether the current query's list is published. The Launcher page's Search sensitivity control is
+whether the current query's list is published. The held keys
+([`crates/pane/tests/held_keys.rs`](../crates/pane/tests/held_keys.rs)):
+Enter pressed at once with typing running the published first row, not the
+previous list's; the Open actions chord, a digit chord and Tab waiting the
+same way; a space typed while the query could still be an alias held, with
+characters typed during the hold landing in order ("ec hello"); a held key
+applied after its 300 ms when a provider never answers (the `faulty`
+fixture, slow on "0 + 0", with the launcher's clock frozen); an Enter
+repeated during the hold running once; and a repeated chord toggling the
+Actions panel once. In
+[`crates/pane/tests/file_actions.rs`](../crates/pane/tests/file_actions.rs),
+Tab and Shift+Tab held for a typed folder's entries completing and stepping
+back once the list is published. The Launcher page's Search sensitivity control is
 driven through the real Settings window in
 [`crates/pane/tests/launcher_settings.rs`](../crates/pane/tests/launcher_settings.rs):
 found through the Settings search, its choice recorded, and applied by the

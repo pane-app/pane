@@ -393,6 +393,68 @@ fn shift_tab_removes_the_last_path_component(cx: &mut TestAppContext) {
     assert!(!hidden(&window, cx));
 }
 
+/// The query root search holds now.
+fn query(window: &Entity<LauncherWindow>, cx: &mut VisualTestContext) -> Option<String> {
+    cx.read_entity(window, |window, _| {
+        window.launcher().view().query().map(str::to_owned)
+    })
+}
+
+/// A Tab pressed while the typed folder's entries are still being listed
+/// is held for them (#203): the completion then runs on the published
+/// list's selected row, as a pressed Tab does (#204). Shift+Tab held the
+/// same way removes the last path component once the list is published.
+#[gpui::test]
+fn tab_and_shift_tab_held_for_the_typed_folders_entries_still_browse(
+    cx: &mut TestAppContext,
+) {
+    let (world, launcher) = World::launcher(cx);
+    cx.update(pane::bind_keys);
+    let (window, cx) = cx.add_window_view(|window, cx| LauncherWindow::new(launcher, window, cx));
+
+    // Typing a path ending in a separator lists the folder it names — but
+    // not at once: the Files provider answers while the field already
+    // shows the path, so a Tab pressed right after typing is held.
+    cx.simulate_input(&typed_query(&world.folder));
+    cx.simulate_keystrokes("tab");
+    assert_eq!(
+        query(&window, cx).as_deref(),
+        Some(typed_query(&world.folder).as_str()),
+        "the completion has not run yet"
+    );
+
+    // The entries published, the held Tab completes the query to the
+    // selected folder's path — "notes", the first entry — which lists
+    // that folder's own entries.
+    let view = until(&window, cx, |view| {
+        view.rows.iter().any(|row| row.title == "todo.md")
+    });
+    assert_eq!(
+        view.query(),
+        Some(typed_query(&world.folder.join("notes")).as_str())
+    );
+
+    // Shift+Tab pressed under the query typed on from there: it is held
+    // too, and removes the last path component once the list is
+    // published, leaving the folder's entries again.
+    cx.simulate_input("more");
+    cx.simulate_keystrokes("shift-tab");
+    assert_eq!(
+        query(&window, cx).as_deref(),
+        Some(typed_query(&world.folder.join("notes").join("more")).as_str()),
+        "the path component is not removed yet"
+    );
+    let view = until(&window, cx, |view| {
+        view.query() == Some(typed_query(&world.folder.join("notes")).as_str())
+    });
+    assert!(view.rows.iter().any(|row| row.title == "todo.md"));
+
+    // Nothing was opened by the keys alone.
+    assert!(world.opener.take().is_empty());
+    assert!(world.system.take().is_empty());
+    assert!(!hidden(&window, cx));
+}
+
 #[gpui::test]
 fn enter_on_a_typed_folder_entry_shows_a_program_and_runs_nothing(cx: &mut TestAppContext) {
     let (world, launcher) = World::launcher(cx);

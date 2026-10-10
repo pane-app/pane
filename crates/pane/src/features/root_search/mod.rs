@@ -90,10 +90,10 @@ pub(crate) struct QueryField {
 impl QueryField {
     /// A query field whose every change searches root, or the opened
     /// command that searches.
-    pub(crate) fn new(cx: &mut Context<LauncherWindow>) -> QueryField {
+    pub(crate) fn new(window: &mut Window, cx: &mut Context<LauncherWindow>) -> QueryField {
         let input = cx.new(|cx| EditableTextState::new(StringStorage::default(), cx));
         input.focus_handle(cx).tab_stop(true);
-        let changes = cx.subscribe(&input, |this, input, _: &TextChanged, cx| {
+        let changes = cx.subscribe_in(&input, window, |this, input, _: &TextChanged, window, cx| {
             // Results computed from the query (the calculator's answer)
             // arrive later, without holding up typing. The announcer waits
             // for them before it says the selected row (#132).
@@ -106,10 +106,14 @@ impl QueryField {
             let computed = this.launcher.set_query(input.read(cx).as_str());
             this.announcer.search_started();
             cx.notify();
-            cx.spawn(async move |this, cx| {
+            cx.spawn_in(window, async move |this, cx| {
                 computed.await;
-                this.update(cx, |this, cx| {
+                this.update_in(cx, |this, window, cx| {
                     this.announcer.search_ended();
+                    // The query's list is published once its search has
+                    // answered: the keys the window held for it are
+                    // applied (#203).
+                    this.replay_held_keys_if_published(window, cx);
                     cx.notify();
                 })
                 .ok();

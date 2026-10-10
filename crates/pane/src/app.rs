@@ -18,16 +18,16 @@ use std::path::Path;
 
 use gpui::{
     App, ClipboardItem, Context, Div, EntityInputHandler, FocusHandle, Focusable, Hsla,
-    KeyDownEvent, MouseMoveEvent, ObjectFit, PathPromptOptions, Pixels, Point, Role, SharedString,
-    Size, Stateful, Window, div, img, prelude::*, px, relative,
+    KeyDownEvent, Keystroke, MouseMoveEvent, ObjectFit, PathPromptOptions, Pixels, Point, Role,
+    SharedString, Size, Stateful, Window, div, img, prelude::*, px, relative,
 };
 use pane_core::changes::Changes;
 use pane_core::feedback::WindowRequest;
 use pane_core::hotkeys::Shortcut;
 use pane_core::tray::TrayAction;
 use pane_core::{
-    ComputedAnswer, Launcher, LauncherView, ListPresentation, NextShowing, Row, RowPresentation,
-    Screen, SelectedAction, SettingsTarget, Status, WindowPresence,
+    ComputedAnswer, KeyboardAction, Launcher, LauncherView, ListPresentation, NextShowing, Row,
+    RowPresentation, Screen, SelectedAction, SettingsTarget, Status, WindowPresence,
 };
 
 use crate::extension_views::{custom_view, form};
@@ -37,6 +37,7 @@ use crate::features::clipboard_history;
 use crate::features::compact_pins;
 use crate::features::confirmation;
 use crate::features::footer_menu;
+use crate::features::held_keys;
 use crate::features::hud;
 use crate::features::number_hints::row_number;
 use crate::features::quick_slots;
@@ -95,6 +96,10 @@ pub struct LauncherWindow {
     /// What the window's live region says of the selection and the
     /// footer's message (#132); see [`features::announcer`].
     pub(crate) announcer: announcer::Announcer,
+    /// The keys the window holds while the current query's list is not
+    /// yet published, and how they are replayed (#203; see
+    /// [`features::held_keys`]).
+    pub(crate) held: held_keys::HeldKeys,
     /// The HUD's window, while one shows; see [`features::hud`].
     pub(crate) hud: hud::HudWindow,
     /// The confirmation a command asks for: its focus and "Don't ask
@@ -168,7 +173,7 @@ struct ScrolledFor {
 impl LauncherWindow {
     pub fn new(launcher: Launcher, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let focus_handle = cx.focus_handle();
-        let query = root_search::QueryField::new(cx);
+        let query = root_search::QueryField::new(window, cx);
         // The launcher starts at root search.
         query.focus(window, cx);
         // The footer menu's button, first of the strip's controls.
@@ -218,6 +223,7 @@ impl LauncherWindow {
             log: None,
             toast: toast::ToastControls::new(cx),
             announcer: announcer::Announcer::default(),
+            held: held_keys::HeldKeys::default(),
             hud: hud::HudWindow::default(),
             confirmation: confirmation::ConfirmationControls::new(cx),
             home: quick_slots::Home::default(),
@@ -336,6 +342,9 @@ impl LauncherWindow {
                         cx.activate(true);
                     }
                     this.sync_screen(window, cx);
+                    // A publication that arrived in the background applies
+                    // the keys the window held for the query's list (#203).
+                    this.replay_held_keys_if_published(window, cx);
                     cx.notify();
                 });
                 if shown.is_err() {
@@ -498,6 +507,16 @@ impl LauncherWindow {
             cx.propagate();
             return;
         }
+        // Enter waits for the current query's list to be published (#203):
+        // the key is held, then replayed through this same path, so it
+        // invokes the row the published list selects — and hands itself on
+        // to the item's actions below as a pressed Enter does. The key is
+        // consumed here, nothing else seeing it.
+        if held_keys::keystroke_of(KeyboardAction::InvokeSelectedAction, cx)
+            .is_some_and(|key| self.hold_key(key, window, cx))
+        {
+            return;
+        }
         // An item of a command's list (or a row of root search with actions
         // of its own, #150) runs its primary action once per press: the key
         // is handed on to [`LauncherWindow::item_action_keys`], which sees
@@ -584,6 +603,12 @@ impl LauncherWindow {
         };
         cx.stop_propagation();
         if event.is_held {
+            return;
+        }
+        // The chord or the shortcut waits for the current query's list to
+        // be published (#203), as Enter does, and is replayed through this
+        // same path — applied to the row the published list selects.
+        if self.hold_key(event.keystroke.clone(), window, cx) {
             return;
         }
         if actions
@@ -1083,6 +1108,17 @@ impl LauncherWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // Tab waits for the current query's list to be published (#203)
+        // and is replayed through this same path, so a Tab held under one
+        // query completes the typed folder the published list selects
+        // (#204) as a pressed Tab does.
+        if self.hold_key(
+            Keystroke::parse("tab").expect("tab is a keystroke"),
+            window,
+            cx,
+        ) {
+            return;
+        }
         // Tab completes the query to a folder of the typed folder's
         // entries when the selected row is one of them (#204), in place
         // of focusing the next field: only a row of that kind takes it,
@@ -1101,6 +1137,16 @@ impl LauncherWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // Shift+Tab waits for the query's list as Tab does (#203), and
+        // removes the last path component of the published query when
+        // replayed (#204).
+        if self.hold_key(
+            Keystroke::parse("shift-tab").expect("shift-tab is a keystroke"),
+            window,
+            cx,
+        ) {
+            return;
+        }
         // Shift+Tab removes the last path component of the typed path the
         // query is (#204), in place of focusing the previous field.
         if let Some(query) = self.launcher.typed_path_parent() {
@@ -2037,6 +2083,7 @@ impl Render for LauncherWindow {
             // said last (#141).
             .capture_key_down(cx.listener(Self::toast_action_keys))
             .capture_key_down(cx.listener(Self::item_action_keys))
+            .capture_key_down(cx.listener(Self::held_typing_keys))
             .on_action(cx.listener(Self::focus_next))
             .on_action(cx.listener(Self::focus_previous))
             .on_modifiers_changed(cx.listener(Self::modifiers_changed))

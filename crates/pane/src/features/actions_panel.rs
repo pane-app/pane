@@ -71,6 +71,7 @@ use pane_core::{
 
 use crate::app::LauncherWindow;
 use crate::features::announcer::{Listing, Noun, Opening, Selected, Target};
+use crate::features::held_keys;
 use crate::features::quick_slots;
 use crate::ui::extension_icon::{self, IconSize, RowIcon};
 use crate::ui::icon::{Glyph, IconTone, TileSize, glyph, tile_at};
@@ -519,6 +520,14 @@ impl LauncherWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // Both wait for the current query's list to be published (#203):
+        // the key is held and replayed through this same path, so the panel
+        // opens on the row the published list selects.
+        if held_keys::keystroke_of(KeyboardAction::OpenActions, cx)
+            .is_some_and(|open| self.hold_key(open, window, cx))
+        {
+            return;
+        }
         if self.actions.is_some() {
             self.close_actions(window, cx);
         } else {

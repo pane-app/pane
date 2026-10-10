@@ -450,9 +450,16 @@ impl LauncherWindow {
             return;
         }
         cx.stop_propagation();
-        if !event.is_held {
-            self.pick_number(digit, window, cx);
+        if event.is_held {
+            return;
         }
+        // The chord waits for the current query's list to be published
+        // (#203), as Enter does, and is replayed through this same path —
+        // applied to the row the published list selects.
+        if self.hold_key(event.keystroke.clone(), window, cx) {
+            return;
+        }
+        self.pick_number(digit, window, cx);
     }
 
     /// `content`, the launcher's root, handling the slots' chords, the pin

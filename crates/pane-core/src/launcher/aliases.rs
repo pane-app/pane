@@ -316,6 +316,28 @@ pub(super) fn first_choice(entries: &[Entry]) -> Option<usize> {
     chosen.or((!entries.is_empty()).then_some(0))
 }
 
+/// Whether `query` is one word that some installed command's active alias
+/// starts with, as [`Launcher::could_still_be_alias`] reads it: the query
+/// folded as the alias is matched, against the alias's first as many
+/// characters. A blank query, or one with a space in it, is never such a
+/// word.
+fn alias_prefix(state: &State, query: &str) -> bool {
+    if query.is_empty() || query.chars().any(char::is_whitespace) {
+        return false;
+    }
+    let length = query.chars().count();
+    targets(state).any(|target| {
+        state
+            .aliases
+            .chosen
+            .active_alias(&target.registration.id)
+            .is_some_and(|alias| {
+                let word: String = alias.chars().take(length).collect();
+                same_text(&word, query)
+            })
+    })
+}
+
 /// An installed command as the extension list lists its alias and fallback.
 struct Configured<'a> {
     id: String,
@@ -672,6 +694,23 @@ impl Launcher {
         }
         let launcher = self.clone();
         Some(move || launcher.save::<AliasChoices>(None))
+    }
+
+    /// Whether the query typed in root search could still turn into a
+    /// command's alias (#203): it is one word that some installed command's
+    /// active alias starts with, compared caselessly as the alias itself
+    /// is matched. While it could — and the current query's list is not
+    /// yet published — the window holds a space typed next; what an alias
+    /// and a space then do is #205's to decide, and until then the space
+    /// lands in the field as text. `false` off root search, and for a
+    /// query that is blank or already holds a space: such a query can no
+    /// longer become an alias's word.
+    pub fn could_still_be_alias(&self) -> bool {
+        let state = self.lock();
+        let Screen::Root { query } = &state.view.screen else {
+            return false;
+        };
+        alias_prefix(&state, query)
     }
 }
 
