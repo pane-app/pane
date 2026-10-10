@@ -12,9 +12,11 @@
 //! recorded for one is forgotten at start, once — the records are written
 //! without it — and a toast names what went: aliases, fallbacks and hotkeys
 //! when the launcher is created ([`Launcher::forget_provider_choices`]),
-//! pins when its quick slots are read (`quick_slots`). Root search learns
-//! nothing yet (ADR 0030 is not implemented), so no learned use is kept to
-//! forget.
+//! pins when its quick slots are read (`quick_slots`). What root search
+//! learned (#199) is kept: a provider's results are still root results a
+//! use is recorded for, while an entry of the command itself, from before
+//! it became a provider, ranks nothing (a provider has no row) and decays
+//! away as any unused entry does.
 
 use super::aliases::AliasChoices;
 use super::choices::Choices;

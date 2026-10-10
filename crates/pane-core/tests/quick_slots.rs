@@ -600,7 +600,7 @@ fn an_application_is_pinned_by_its_identity_and_a_cold_home_resolves_and_opens_i
         waiting.unavailable.as_deref(),
         Some("Waiting for Applications to list it")
     );
-    block_on(launcher.resolve_quick_slots());
+    block_on(launcher.resolve_root_home());
     assert_eq!(launcher.view().query(), Some(""), "nothing was searched");
     let slot = &launcher.quick_slots()[0];
     assert_eq!(slot.title, "Firefox");

@@ -448,11 +448,12 @@ pub(super) fn kind(entry: &Entry) -> Option<RowKind> {
 }
 
 /// Root search's sections for `query`: every row under "Commands" for a
-/// blank query — what root search lists then is its commands, in their
-/// own order, not a suggestion of recent use — and for a query, the rows
-/// it found under "Results" with their count, then the fallbacks the user
-/// chose, under "Fallbacks" (after the window's own notice when nothing
-/// else matched, as the reference's empty board composes them).
+/// blank query — what root search lists then is its commands and its
+/// applications, ordered by what it learned (frecency, then the no-query
+/// order, #199), never a section of suggestions — and for a query, the
+/// rows it found under "Results" with their count, then the fallbacks
+/// the user chose, under "Fallbacks" (after the window's own notice when
+/// nothing else matched, as the reference's empty board composes them).
 ///
 /// `rows` is how many rows are listed and `fallbacks` the index of the
 /// first fallback (`rows` when none is listed).

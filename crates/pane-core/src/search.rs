@@ -45,11 +45,16 @@
 //! 1. the query is the result's alias;
 //! 2. the query is longer than three characters and is exactly the title
 //!    or an alternate title;
+//! 3. the query is exactly one of the result's learned queries (#199);
 //! 4. the query is exactly the subtitle (a keyword counts: keywords rank
 //!    as subtitles);
 //! 5. the alias starts with the query;
+//! 6. a learned query starts with the query (#199);
+//! 7. the query starts with a learned query of at least three characters,
+//!    the longer learned query winning (#199);
 //! 8. the higher of the title, alternate-title and subtitle scores (a
 //!    keyword's counts where the subtitle's does);
+//! 9. higher frecency (#199);
 //! 10. higher title score;
 //! 11. kind priority — commands above links, above applications, above
 //!     files;
@@ -57,13 +62,13 @@
 //! 13. the title, with digits compared by their value ("Item 2" before
 //!     "Item 10").
 //!
-//! Steps 3, 6, 7 and 9 (the learned queries, and the frecency they
-//! weigh) are #199's, filled in beside these: until then every result
-//! compares equal at them, as it does at the no-query order that follows
-//! the comparator. Results the comparator cannot tell apart keep the
-//! order they were given — the provider's own, within one provider — and
-//! an empty query lists every result in that order. No typo tolerance,
-//! frequency or recency.
+//! What follows the last step is the **no-query order** — the blank
+//! query's own order, and the last tiebreak of any query's: frecency,
+//! then having an alias, then kind priority, then the provider's own
+//! order, then the title. Results the comparator cannot tell apart keep
+//! the order they were given — the provider's own, within one provider.
+//! No typo tolerance; what is learned is the launcher's to give
+//! ([`Learned`]).
 //!
 //! A query that is the alias the user gave a result ([`Query::is_alias_of`])
 //! is compared caselessly instead ([`same_text`]), never transliterated,
@@ -85,6 +90,24 @@ use crate::host_settings::SearchSensitivity;
 /// so an alias means exactly what it meant.
 pub(crate) fn same_text(a: &str, b: &str) -> bool {
     UniCase::unicode(normalize(a)) == UniCase::unicode(normalize(b))
+}
+
+/// What root search learned about a result the user has chosen from it
+/// (ADR 0030, #199): its frecency and the queries it was last chosen
+/// with, as the launcher holds them for the search this is. `None` for a
+/// result never chosen, which scores 1 wherever frecency weighs and
+/// holds no queries: it ranks as any other.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct Learned {
+    /// The frecency score of the result's uses, decayed to the moment of
+    /// the search and floored at 1, an unused result's score.
+    pub(crate) frecency: f64,
+    /// The queries the result was last chosen with, newest first, each
+    /// distinct and folded as the query is matched. The launcher leaves
+    /// them empty while they stop counting — the frecency decayed to 1,
+    /// or the result was last opened more than 17 days ago — so ranking
+    /// never weighs them then; it knows the clock, this module does not.
+    pub(crate) queries: Vec<String>,
 }
 
 /// What kind of thing a result is, as the comparator's kind step ranks
@@ -298,6 +321,10 @@ pub(crate) struct Query {
     /// the sensitivity thresholds. Separators are the only characters
     /// the scorer may skip, so they are not counted.
     letters: usize,
+    /// The folded query's length in characters: the bound on how much
+    /// longer than a learned query the query may be and still count as
+    /// starting with it (step 7, #199).
+    length: usize,
 }
 
 impl SearchSensitivity {
@@ -320,9 +347,11 @@ impl Query {
         let plain = normalize(query);
         let long = plain.chars().count() > 3;
         let letters = text.chars().filter(|c| !is_separator(*c)).count();
+        let length = text.chars().count();
         Query {
             long,
             letters,
+            length,
             text,
             plain,
         }
@@ -580,19 +609,32 @@ pub(crate) struct Candidate<'a> {
     /// the title comparison, so one provider's results stay together and
     /// rows of it the title cannot tell apart keep the order it gave.
     pub(crate) provider: usize,
+    /// What root search learned about the result (#199, [`Learned`]);
+    /// `None` for one never chosen, which ranks as any other at every
+    /// step learning weighs.
+    pub(crate) learned: Option<&'a Learned>,
 }
 
 /// The indices of the `candidates` that match `query` at `sensitivity`,
 /// in the comparator's order, the first difference winning; candidates
-/// the comparator cannot tell apart keep the order they were given. An
-/// empty query matches every candidate, in order.
+/// the comparator cannot tell apart keep the order they were given. A
+/// blank query matches every candidate, in the no-query order (see the
+/// module docs).
 pub(crate) fn ranked_matches<'a>(
     query: &Query,
     candidates: impl ExactSizeIterator<Item = Candidate<'a>>,
     sensitivity: SearchSensitivity,
 ) -> Vec<usize> {
     if query.text.is_empty() {
-        return (0..candidates.len()).collect();
+        // The blank query matches everything: the no-query order is its
+        // whole order — frecency, then having an alias, then kind
+        // priority, then the provider's own order, then the title.
+        let mut ranked: Vec<(usize, Ranked)> = candidates
+            .enumerate()
+            .map(|(index, candidate)| (index, Ranked::of(query, &candidate)))
+            .collect();
+        ranked.sort_by(|(_, a), (_, b)| no_query(a, b));
+        return ranked.into_iter().map(|(index, _)| index).collect();
     }
     // A result matches through its alias — the query is it, or starts it
     // — even when no text of it passes the threshold.
@@ -618,21 +660,36 @@ struct Ranked<'a> {
     /// Step 2: the query is longer than three characters and is exactly
     /// the title or an alternate title.
     exact_title: bool,
+    /// Step 3: the query is exactly one of the result's learned queries.
+    learned_query: bool,
     /// Step 4: the query is exactly the subtitle, or a keyword.
     exact_subtitle: bool,
     /// Step 5: the alias starts with the query.
     alias_prefix: bool,
+    /// Step 6: one of the result's learned queries starts with the query.
+    learned_prefix: bool,
+    /// Step 7: the longest learned query of at least three characters the
+    /// query starts with, while the query is at most three characters
+    /// longer than it, by its length (an "overbounds" match); `None`
+    /// when none qualifies.
+    overbounds: Option<usize>,
     /// Step 8: the best score the query places in the title, an
     /// alternate title, the subtitle or a keyword; `None` when none of
     /// them holds the query's letters in order (a match the composites
     /// or the package title found).
     best: Option<i32>,
+    /// Step 9, and the no-query order's first key: the frecency of the
+    /// result's uses, decayed to now and floored at 1.
+    frecency: f64,
     /// Step 10: the best score the query places in the title alone.
     title: Option<i32>,
     /// Step 11.
     kind: Kind,
     /// Step 12.
     provider: usize,
+    /// The no-query order's second key: whether the user gave the result
+    /// an alias.
+    aliased: bool,
     /// The folded title, for the last step's collation.
     folded_title: &'a str,
 }
@@ -641,49 +698,95 @@ impl<'a> Ranked<'a> {
     /// The comparator's keys for `candidate` under `query`.
     fn of(query: &Query, candidate: &Candidate<'a>) -> Ranked<'a> {
         let keys = candidate.keys;
+        // What was learned about the result (#199): a result never chosen
+        // scores 1 wherever frecency weighs, and holds no queries.
+        let learned = candidate.learned;
+        let queries = learned.map(|learned| learned.queries.as_slice()).unwrap_or_default();
         Ranked {
             alias: query.is_alias_of(keys),
             exact_title: query.is_title_of(keys),
+            // A learned query is folded as the query is; an empty one
+            // counts for nothing ("the last three distinct non-empty
+            // queries").
+            learned_query: !query.text.is_empty()
+                && queries.iter().any(|learned| learned == &query.text),
             exact_subtitle: query.is_subtitle_of(keys),
             alias_prefix: query.is_prefix_of_alias_of(keys),
+            learned_prefix: !query.text.is_empty()
+                && queries
+                    .iter()
+                    .any(|learned| learned.starts_with(query.text.as_str())),
+            overbounds: queries
+                .iter()
+                .map(|learned| learned.as_str())
+                // At least three characters, and the query at most three
+                // longer than it: ignored when it is more.
+                .filter(|learned| {
+                    query.text.starts_with(*learned)
+                        && learned.chars().count() >= 3
+                        && query.length <= learned.chars().count() + 3
+                })
+                .map(|learned| learned.chars().count())
+                .max(),
             best: keys
                 .ranked_texts()
                 .filter_map(|text| query.score(text))
                 .max(),
             title: query.score(&keys.title.text),
+            frecency: learned.map_or(1.0, |learned| learned.frecency),
             kind: candidate.kind,
             provider: candidate.provider,
+            aliased: keys.alias.is_some(),
             folded_title: &keys.title.text,
         }
     }
 }
 
 /// How two matching results stand against each other, the first
-/// difference winning — the parent's comparator. Steps 3, 6, 7 and 9
-/// (the learned queries, and the frecency both weigh) are #199's, filled
-/// in between the steps they belong to: until then every result compares
-/// equal at them, as it does at the no-query order that follows the last
-/// step.
+/// difference winning — the parent's comparator, with the steps it left
+/// to learning (#199) filled in.
 fn compare(a: &Ranked, b: &Ranked) -> std::cmp::Ordering {
     // 1. the query is the result's alias; 2. the query is longer than
     // three characters and is exactly the title or an alternate title;
-    // 4. the query is exactly the subtitle; 5. the alias starts with the
-    // query; 8. the higher of the title, alternate-title and subtitle
-    // scores; 10. higher title score.
+    // 3. the query is exactly one of the result's learned queries; 4. the
+    // query is exactly the subtitle; 5. the alias starts with the query;
+    // 6. a learned query starts with the query; 7. the query starts with
+    // a learned query of at least three characters, the longer learned
+    // query winning; 8. the higher of the title, alternate-title and
+    // subtitle scores; 9. higher frecency; 10. higher title score.
     let matched = b
         .alias
         .cmp(&a.alias)
         .then(b.exact_title.cmp(&a.exact_title))
+        .then(b.learned_query.cmp(&a.learned_query))
         .then(b.exact_subtitle.cmp(&a.exact_subtitle))
         .then(b.alias_prefix.cmp(&a.alias_prefix))
+        .then(b.learned_prefix.cmp(&a.learned_prefix))
+        .then(b.overbounds.cmp(&a.overbounds))
         .then(b.best.cmp(&a.best))
+        .then_with(|| b.frecency.total_cmp(&a.frecency))
         .then(b.title.cmp(&a.title));
     // 11. kind priority: commands above links, above applications, above
     // files; 12. the provider's own order; 13. the title, with digits
-    // compared by their value. What follows — the no-query order — is
-    // #199's, so results that compare equal keep the order they were
-    // given.
+    // compared by their value; then the no-query order, the last
+    // tiebreak.
     matched
+        .then(a.kind.cmp(&b.kind))
+        .then(a.provider.cmp(&b.provider))
+        .then_with(|| collate(&a.folded_title, &b.folded_title))
+        .then_with(|| no_query(a, b))
+}
+
+/// The no-query order — the blank query's whole order, and the
+/// comparator's last tiebreak: frecency, then having an alias, then kind
+/// priority, then the provider's own order, then the title. Wherever it
+/// follows the comparator its frecency, kind, provider and title steps
+/// have already compared equal; its alias step is the key that then
+/// tells the results apart.
+fn no_query(a: &Ranked, b: &Ranked) -> std::cmp::Ordering {
+    b.frecency
+        .total_cmp(&a.frecency)
+        .then(b.aliased.cmp(&a.aliased))
         .then(a.kind.cmp(&b.kind))
         .then(a.provider.cmp(&b.provider))
         .then_with(|| collate(&a.folded_title, &b.folded_title))
@@ -912,6 +1015,7 @@ pub fn settings_matches(query: &str, entries: &[SettingsEntry]) -> Vec<usize> {
             keys,
             kind: Kind::Command,
             provider: 0,
+            learned: None,
         })
         .collect::<Vec<_>>();
     let query = Query::new(query);
@@ -929,6 +1033,7 @@ mod alternate_tests {
                 keys,
                 kind: Kind::Command,
                 provider: 0,
+                learned: None,
             })
             .collect::<Vec<_>>();
         ranked_matches(
@@ -1007,6 +1112,7 @@ mod matching_tests {
                 keys,
                 kind: Kind::Command,
                 provider: 0,
+                learned: None,
             })
             .collect::<Vec<_>>();
         ranked_matches(&Query::new(query), candidates.into_iter(), sensitivity)

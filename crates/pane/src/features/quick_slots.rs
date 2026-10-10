@@ -9,8 +9,9 @@
 //! - **The home shows** while root search's trimmed query is blank — the
 //!   "Pinned" label and the pins above the rows — and a query hides it;
 //!   clearing the query brings it back. When root search comes on screen,
-//!   the core is asked for the indexed results the slots pin, if it never
-//!   listed them ([`pane_core::Launcher::resolve_quick_slots`]).
+//!   the core is asked for the indexed results its home lists below the
+//!   pins, if it has not listed them since root search was last shown
+//!   ([`pane_core::Launcher::resolve_root_home`]).
 //! - **The layout** is the Launcher page's choice: a strip of tiles
 //!   (horizontal), five to a row and wrapping onto more, with the pin hint
 //!   after the last pin while its cell is in the last row; or result rows
@@ -187,16 +188,17 @@ fn slot_accessibility(index: usize, slot: &QuickSlot, element: Stateful<Div>) ->
 
 impl LauncherWindow {
     /// Follows the launcher's screen: every pin gets its focus, and when
-    /// root search comes on screen, the indexed results the slots pin are
-    /// asked for if they never were, and the window redraws once they are
-    /// listed.
+    /// root search comes on screen, the results its home lists below the
+    /// pins — the indexed results, asked for if they have not been since
+    /// root search was last shown (#199) — are asked for, and the window
+    /// redraws once they are listed.
     pub(crate) fn sync_home(&mut self, cx: &mut Context<Self>) {
         let pins = self.launcher.quick_slots().len();
         self.ensure_slot_focus(pins, cx);
         let on_root = matches!(self.launcher.screen(), Screen::Root { .. });
         let was = std::mem::replace(&mut self.home.on_root, on_root);
         if on_root && !was {
-            let resolving = self.launcher.resolve_quick_slots();
+            let resolving = self.launcher.resolve_root_home();
             cx.spawn(async move |this, cx| {
                 resolving.await;
                 this.update(cx, |_, cx| cx.notify()).ok();

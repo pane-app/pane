@@ -123,6 +123,18 @@ impl<C: Choices> Record<C> {
         record
     }
 
+    /// Why the record could not be read, if it could not: it is then
+    /// never overwritten.
+    pub(super) fn unreadable(&self) -> Option<&str> {
+        self.unreadable.as_deref()
+    }
+
+    /// Whether the choices are kept anywhere at all; a launcher that
+    /// installs no packages keeps none.
+    pub(super) fn kept(&self) -> bool {
+        self.file.is_some()
+    }
+
     /// The record's text as the choices are now, and where it goes; `Err`
     /// if there is nowhere to write it.
     fn text(&self) -> Result<(PathBuf, String), String> {

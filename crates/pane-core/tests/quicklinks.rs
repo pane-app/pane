@@ -870,7 +870,7 @@ fn a_pinned_quicklink_keeps_its_slot_through_a_restart_and_a_rename() {
         waiting.unavailable.as_deref(),
         Some("Waiting for Search Quicklinks to list it")
     );
-    block_on(launcher.resolve_quick_slots());
+    block_on(launcher.resolve_root_home());
     let slot = &launcher.quick_slots()[0];
     assert_eq!(slot.title, "Manual");
     assert!(slot.ready());

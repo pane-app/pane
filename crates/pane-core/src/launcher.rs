@@ -86,7 +86,7 @@ use crate::runtime::{
     FieldValue, Form, Frame, Item, Point, ResultListing, RootAction, RootResult as ComputedResult,
     Runtime, ScreenForm, View, ViewEvent, ViewId, WallTime, WeakRuntime,
 };
-use crate::search::{self, Keys, Query};
+use crate::search::{self, Candidate, Keys, Query};
 
 mod dependents;
 mod developing;
@@ -94,6 +94,7 @@ mod extensions;
 mod file_search;
 mod files;
 mod install;
+mod learned;
 mod looks;
 mod pausing;
 mod recovery;
@@ -888,6 +889,11 @@ struct State {
     subtitles: Record<subtitles::Subtitles>,
     /// The writes of the subtitles' record still going on.
     subtitle_saves: Arc<launching::InFlight>,
+    /// What root search learned from what the user chooses, and its
+    /// record (see `learned`, #199).
+    learned: Record<learned::LearnedChoices>,
+    /// The writes of the learned record still going on.
+    learned_saves: Arc<launching::InFlight>,
     /// The submenus open in the Actions panel over the selected item (see
     /// `submenus`).
     submenus: submenus::Submenus,
@@ -1483,6 +1489,11 @@ impl Launcher {
             .map_or_else(Record::default, |installation| {
                 Record::open(&installation.dir)
             });
+        let learned = installation
+            .as_ref()
+            .map_or_else(Record::default, |installation| {
+                Record::open(&installation.dir)
+            });
         let confirmations = installation
             .as_ref()
             .map_or_else(Record::default, |installation| {
@@ -1580,6 +1591,8 @@ impl Launcher {
             feedback: feedback::Feedback::default(),
             subtitles,
             subtitle_saves: Arc::default(),
+            learned,
+            learned_saves: Arc::default(),
             submenus: submenus::Submenus::default(),
             system: crate::system::none(),
             confirmations,
@@ -2195,6 +2208,39 @@ impl Launcher {
         state.indexes.begin_asking(commands)
     }
 
+    /// Asks the enabled commands that supply results ahead of the query
+    /// for those results, if they have not been asked since root search
+    /// was last shown (coming back marks them stale): what the blank
+    /// query's list needs below the pins (#199), and what the quick slots
+    /// pinning one of them resolve through — a cold visit of root
+    /// search's home would otherwise list none of them, since the indexed
+    /// results are asked for otherwise only once a query is typed. The
+    /// query stays as it is and nothing is searched; await the returned
+    /// future to list them, which resolves the slots holding them.
+    pub fn resolve_root_home(&self) -> impl Future<Output = ()> + Send + 'static {
+        let mut guard = self.lock();
+        let state = &mut *guard;
+        let commands: Vec<_> = state
+            .packages
+            .iter()
+            .filter(|package| state.runs(package))
+            .flat_map(|package| {
+                let data = self
+                    .installation
+                    .as_ref()
+                    .map(|installation| installation.data.owned_by(&package.identity));
+                package
+                    .indexed_result_commands()
+                    .into_iter()
+                    .map(move |command| (command, data.clone()))
+            })
+            .collect();
+        let asking = state.indexes.begin_asking(commands);
+        drop(guard);
+        let launcher = self.clone();
+        async move { launcher.show_indexed_results(asking).await }
+    }
+
     /// Asks each of `commands` in turn for its results ahead of the query
     /// and keeps them, listing them in root search if it is on screen,
     /// whatever the query is by then. A command disabled or replaced
@@ -2790,6 +2836,10 @@ impl Launcher {
             .view
             .selected
             .and_then(|index| state.entries.get(index).cloned());
+        // A use of the selected root result, recorded once its action
+        // dispatches (#199, see `learned`): read before activation, which
+        // changes the screen.
+        let learned = entry.as_ref().and_then(|entry| learned::use_of(&state, entry));
         // The status line is about this action from now on.
         state.sent_from = None;
         let pending = match entry {
@@ -2798,6 +2848,12 @@ impl Launcher {
         };
         let work = self.pending_work(&state, pending);
         drop(state);
+        // The row's action was dispatched, not refused: the use is
+        // recorded off this thread, and the list on screen is not
+        // re-sorted for it.
+        if let Some((id, query)) = learned {
+            self.record_use(&id, query.as_deref());
+        }
         work
     }
 
@@ -3474,10 +3530,17 @@ impl Launcher {
         state.view = LauncherView {
             rows,
             selected,
-            status: match (&state.store_problem, state.quick_slots.unreadable()) {
-                (Some(problem), _) => Status::Error(problem.clone()),
-                (None, Some(problem)) => Status::Error(quick_slots::unreadable_report(problem)),
-                (None, None) => Status::Idle,
+            status: match (
+                &state.store_problem,
+                state.quick_slots.unreadable(),
+                state.learned.unreadable(),
+            ) {
+                (Some(problem), _, _) => Status::Error(problem.clone()),
+                (None, Some(problem), _) => Status::Error(quick_slots::unreadable_report(problem)),
+                (None, None, Some(problem)) => {
+                    Status::Error(learned::unreadable_report(problem))
+                }
+                (None, None, None) => Status::Idle,
             },
             ..LauncherView::new(
                 Screen::Root {
@@ -4974,17 +5037,6 @@ enum Told {
     Apart,
 }
 
-/// One root result as the search module ranks it: the result's keys,
-/// what kind of thing it is, and the position of the provider that
-/// supplied it among the others.
-fn candidate(result: &RootResult, kind: search::Kind, provider: usize) -> search::Candidate {
-    search::Candidate {
-        keys: &result.keys,
-        kind,
-        provider,
-    }
-}
-
 /// What kind of thing a root result is, as the comparator ranks kinds:
 /// commands above links, above applications, above files. Folders,
 /// fallbacks and the like are never ranked by the comparator — they keep
@@ -5001,16 +5053,18 @@ fn kind(entry: &Entry) -> search::Kind {
 
 /// The rows of root search for `query`, and what activating each does: the
 /// results computed from it, then the root results matching it, in the
-/// comparator's order, with, for a query that is not blank, those supplied
-/// ahead of it, then the rows declared for the address or path the query
-/// is, then the computed results that open a file, then the rows
+/// comparator's order — those supplied ahead of the query ranked with
+/// them, also for the blank query, whose own order is the no-query
+/// order (#199) — then the rows declared for the address or path the
+/// query is, then the computed results that open a file, then the rows
 /// explaining why a command could not supply them.
 fn root_rows(state: &State, query: &str) -> (Vec<Row>, Vec<Entry>) {
     let blank = query.trim().is_empty();
     // What the comparator ranks: the root results — Pane's own rows and
     // every package's commands, one provider in the order root search
     // lists them — then each command that supplies results ahead of the
-    // query, in the order they were first asked.
+    // query, in the order they were first asked. The blank query ranks
+    // them too (#199): what the user opens most rises to the top.
     let candidates: Vec<(&RootResult, search::Kind, usize)> = state
         .root
         .iter()
@@ -5026,11 +5080,19 @@ fn root_rows(state: &State, query: &str) -> (Vec<Row>, Vec<Entry>) {
             state
                 .indexes
                 .grouped_results()
-                .filter(|_| !blank)
                 .map(|(provider, result)| (result, kind(&result.entry), provider + 1)),
         )
         .collect();
-    let keys = |&(result, kind, provider)| candidate(result, kind, provider);
+    // What root search learned about them, as ranking sees it now
+    // (#199): each recorded result's decayed frecency and counting
+    // queries, by its row id — a command's or an indexed result's own.
+    let learned = state.learned.chosen.ranked(state.clock.now());
+    let keys = |&(result, kind, provider)| Candidate {
+        keys: &result.keys,
+        kind,
+        provider,
+        learned: learned.get(&result.row.id),
+    };
     let parsed = Query::new(query);
     let named = |index: &usize| parsed.is_alias_of(&candidates[*index].0.keys);
     let matches: Vec<usize> =
