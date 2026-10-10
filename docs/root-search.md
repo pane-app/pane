@@ -359,8 +359,16 @@ comes from the extension, through the same guest boundary as its command:
 - For every change of a query that is not blank, `Launcher::set_query`
   ranks the metadata at once and returns a future that asks each enabled
   command with `rootResults` for `results-for(query, at)`, one after another
-  in install order, and lists each command's results as soon as it answers,
-  so a slow command does not hide the answers of those asked before it.
+  in install order. The new query's list is **published** once every
+  command asked has answered, or 200 ms after the query changed, whichever
+  comes first (#201): until then the window keeps showing the previous
+  query's list while the search field shows what was typed at once, so a
+  slow command holds the list no longer than the budget and never hides
+  the answers of those asked before it. A command that misses the budget
+  keeps running until its answer or cancellation: the budget bounds the
+  wait, not the scheduling. An answer that arrives after the list was
+  published is merged into it, coalesced within 16 ms, so answers
+  arriving close together become one update.
   `at` is when the query is asked about — the moment the user stopped at
   it, by the clock root search's own dates are shown by, with the local
   time's offset from UTC — so a command can answer about the current date
@@ -391,8 +399,11 @@ comes from the extension, through the same guest boundary as its command:
   the file index's entries (#175), at most 5 per command, followed by a
   row "<command> for “<query>”" when the command searches in its own field
   (Search Files for “plan”), which opens it with the query typed.
-  When each command's results arrive the first row is selected again, unless the user had
-  moved the selection, which stays on its row.
+  When the list is published, and when a late answer merges into it, the
+  selection moves to the new first row when the first row was selected —
+  a preselected fallback gives way to a late result (ADR 0031) — and
+  otherwise stays on its row by id, so a merge never takes the selection
+  from a row the user moved to.
 - A computed result has an id (`<command id>:<result id>`), title, optional
   subtitle and an **action** Pane performs without calling the extension
   again. **copy**: Enter copies the text to the
@@ -802,11 +813,13 @@ completing one answering it; precedence, signs, powers and the number
 format; parentheses 65 deep, a query over 256 characters and 100,000
 leading signs or parentheses listing nothing, without an error row or a
 restart of the calculator; Enter reporting the copy and `selected_copy` giving the text; an
-answer for an older query discarded and none shown before the new one
-arrives, nor one for an earlier search of the same query; the answer listed
-and selected while a command asked after it (the `faulty` fixture, slow on
-"0 + 0") is still answering, its result added below when it answers; a
-selection the user moved kept; the calculator not running until
+answer for an older query discarded, the previous query's list held
+until the new query's is published (#201) and none of the new query's
+answers shown before it arrives, nor one for an earlier search of the
+same query; the answer listed and selected while a command asked after
+it (the `faulty` fixture, slow on "0 + 0") is still answering, the list
+published by its budget and the slow result merged below when it
+answers; a selection the user moved kept; the calculator not running until
 a non-blank query; disabling it removing its answer at once, asking it
 nothing more and keeping other results, and enabling it again; a failing
 and a crashing command (the `faulty` fixture) explained as a row while other
@@ -824,6 +837,22 @@ a manual clock in the tests, east and west of UTC, across a day boundary —
 and the panel's ISO 8601 and Unix timestamp copying their own text. The
 same computed result ("reverse <text>") in Rust, JavaScript and TypeScript
 ([`samples.rs`](../crates/pane-core/tests/samples.rs)).
+
+For publishing a query's list and merging late answers
+([`crates/pane-core/tests/publishing.rs`](../crates/pane-core/tests/publishing.rs)),
+with the `faulty` fixture's slow provider ("0 + 0", about a second of busy
+work) and the real calculator, all timed by a manual clock: a slow
+provider holds the previous query's list up to the 200 ms budget and
+publishes without its answer, which then merges late; the selection
+moving to the new first row when a late answer puts one there, with the
+first row selected, and staying on its row when the user moved it; a
+preselected fallback (ADR 0031) giving way to a late answer; two late
+answers arriving close together coalescing into one update, neither
+listed before it; a query asking no provider published at once; and an
+answer for an older search discarded as before. The slow provider's
+real-clock flow — the budget publishing with the calculator's staged
+answer while the slow call goes on, its answer merging within 16 ms —
+is checked in the calculator's own tests, above.
 
 For root providers
 ([`crates/pane-core/tests/root_providers.rs`](../crates/pane-core/tests/root_providers.rs)),
@@ -856,7 +885,11 @@ expression showing the calculator's answer as the query changes, Enter
 writing it to the clipboard, and an incomplete expression showing no
 results; since #196, a colour answer showing as the card with a swatch
 under "Color", the swatch a colour well named by the colour's value, and
-Enter copying the hex. The Launcher page's Search sensitivity control is
+Enter copying the hex; and since #201, typing on from one answered query
+to another not flickering through the intermediate list — the field
+shows the new query at once, the previous list stays while the calculator
+answers, and the published list shows its answer, the launcher saying
+whether the current query's list is published. The Launcher page's Search sensitivity control is
 driven through the real Settings window in
 [`crates/pane/tests/launcher_settings.rs`](../crates/pane/tests/launcher_settings.rs):
 found through the Settings search, its choice recorded, and applied by the

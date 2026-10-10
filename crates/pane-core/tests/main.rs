@@ -56,6 +56,7 @@ mod paste;
 mod pausing;
 mod preferences;
 mod programs;
+mod publishing;
 mod quick_slots;
 mod quicklinks;
 mod reload;

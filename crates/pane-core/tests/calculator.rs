@@ -378,12 +378,16 @@ fn an_answer_arriving_after_the_query_changed_is_discarded() {
     block_on(earlier);
 
     assert_eq!(titles(&launcher), ["4"]);
-    // Until its answer arrives, a new query lists no answer, never an
-    // earlier query's.
+    // Until the new query's list is published, the previous query's stays
+    // — the field showing the new query — and once it is, the new query
+    // lists no answer until the calculator's arrives, never an earlier
+    // query's (#201).
     let pending = launcher.set_query("3 + 3");
-    assert_eq!(titles(&launcher), Vec::<String>::new());
+    assert_eq!(titles(&launcher), ["4"]);
+    assert!(!launcher.list_published());
     block_on(pending);
     assert_eq!(titles(&launcher), ["6"]);
+    assert!(launcher.list_published());
 
     // Nor is one for an earlier search of the same query.
     let earlier = launcher.set_query("1 + 1");
@@ -399,6 +403,8 @@ fn a_row_the_user_moved_to_stays_selected_when_the_answers_arrive() {
     let dirs = Dirs::new();
     let launcher = dirs.launcher(dirs.runtime());
 
+    // The list is held while the calculator answers (#201): a row the
+    // user moves to on it stays selected when the list is published.
     let pending = launcher.set_query("install");
     launcher.move_selection(1);
     block_on(pending);
@@ -533,6 +539,9 @@ fn the_answer_is_listed_while_a_command_asked_after_it_is_still_answering() {
     launcher.back();
 
     // The faulty fixture answers "0 + 0" after about a second of work.
+    // The query's list is published by its budget (#201), the system's
+    // clock timing it here: the calculator's answer arrives within it,
+    // the slow command's late answer merging afterwards, coalesced.
     let pending = launcher.set_query("0 + 0");
     let (done, answered) = mpsc::channel();
     thread::spawn(move || {
@@ -540,12 +549,11 @@ fn the_answer_is_listed_while_a_command_asked_after_it_is_still_answering() {
         let _ = done.send(());
     });
     let deadline = Instant::now() + Duration::from_secs(30);
-    while titles(&launcher).is_empty() {
-        assert!(Instant::now() < deadline, "the calculator never answered");
+    while titles(&launcher) != ["0"] {
+        assert!(Instant::now() < deadline, "the list was never published");
         thread::sleep(Duration::from_millis(1));
     }
 
-    assert_eq!(titles(&launcher), ["0"]);
     assert_eq!(selected_title(&launcher).as_deref(), Some("0"));
     assert!(
         answered.try_recv().is_err(),
@@ -554,7 +562,12 @@ fn the_answer_is_listed_while_a_command_asked_after_it_is_still_answering() {
     // Generous: alone the slow command answers in seconds, but beside the
     // whole suite its instance and its busy second can take over a minute.
     answered.recv_timeout(Duration::from_secs(240)).unwrap();
-    assert_eq!(titles(&launcher), ["0", "Slow answer"]);
+    // Its late answer merges into the published list within 16 ms.
+    let merged = Instant::now() + Duration::from_secs(30);
+    while titles(&launcher) != ["0", "Slow answer"] {
+        assert!(Instant::now() < merged, "the late answer never merged");
+        thread::sleep(Duration::from_millis(1));
+    }
     assert_eq!(selected_title(&launcher).as_deref(), Some("0"));
 }
 

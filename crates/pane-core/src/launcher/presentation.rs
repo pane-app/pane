@@ -234,9 +234,9 @@ pub(super) fn row_presentation(state: &State, index: usize) -> RowPresentation {
             None => RowPresentation::default(),
         };
     }
-    let Screen::Root { query } = &state.view.screen else {
+    if !matches!(state.view.screen, Screen::Root { .. }) {
         return RowPresentation::default();
-    };
+    }
     let Some(entry) = state.entries.get(index) else {
         return RowPresentation::default();
     };
@@ -250,13 +250,16 @@ pub(super) fn row_presentation(state: &State, index: usize) -> RowPresentation {
         hotkey: command
             .then(|| state.bindings.registered_of(&row.id))
             .flatten(),
+        // The query whose list the rows shown are (#201): the field's own
+        // query runs ahead while the list is held, and the previous list
+        // keeps its matches.
         matched: title_matches(
             &row.title,
             row.subtitle.as_deref(),
-            query,
+            state.published.as_str(),
             state.sensitivity,
         ),
-        answer: answer(state, row, entry, query),
+        answer: answer(state, row, entry),
         needs_setup: matches!(entry, Entry::Open(_)) && state.setup_needed.contains(&row.id),
         icon: icon(state, row, entry),
         ..RowPresentation::default()
@@ -293,9 +296,12 @@ pub(super) fn want_row_icons(state: &State, index: usize) {
 /// Root search's section labels over `state`'s rows; none on another
 /// screen.
 fn sections(state: &State) -> Vec<Section> {
-    let Screen::Root { query } = &state.view.screen else {
+    if !matches!(state.view.screen, Screen::Root { .. }) {
         return Vec::new();
-    };
+    }
+    // The query whose list the rows shown are (#201): the field's own
+    // query runs ahead while the list is held.
+    let query = state.published.as_str();
     let shown = state.view.rows.len().min(state.entries.len());
     let first_fallback = state.entries[..shown]
         .iter()
@@ -341,8 +347,9 @@ fn sections(state: &State) -> Vec<Section> {
 }
 
 /// The computed answer `row` is, when `entry` copies text a command
-/// computed from `query`.
-fn answer(state: &State, row: &Row, entry: &Entry, query: &str) -> Option<ComputedAnswer> {
+/// computed from the query it was asked: the card pairs the query with
+/// its answer (#201), whatever the field shows while the list is held.
+fn answer(state: &State, row: &Row, entry: &Entry) -> Option<ComputedAnswer> {
     let Entry::Copy(text) = entry else {
         return None;
     };
@@ -351,7 +358,7 @@ fn answer(state: &State, row: &Row, entry: &Entry, query: &str) -> Option<Comput
         .iter()
         .find(|computed| computed.row.id == row.id)?;
     Some(ComputedAnswer {
-        query: query.trim().to_owned(),
+        query: computed.query.trim().to_owned(),
         answer: text.clone(),
         command: computed.command_title.clone(),
         swatch: computed

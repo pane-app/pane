@@ -28,7 +28,7 @@ mod settle;
 mod recording;
 
 use recording::{Done, RecordingSystem};
-use settle::settle;
+use settle::{published, settle};
 
 /// A handler that records the files it is asked to open.
 #[derive(Clone, Default)]
@@ -137,7 +137,9 @@ fn search_files<'a>(
     cx.update(pane::bind_keys);
     let (window, cx) = cx.add_window_view(|window, cx| LauncherWindow::new(launcher, window, cx));
     cx.simulate_input("search files");
-    let view = settle(&window, cx);
+    // The query's list is published once its providers answered or its
+    // budget ended (#201).
+    let view = published(&window, cx);
     assert_eq!(
         view.rows.first().map(|row| row.title.as_str()),
         Some("Search Files")

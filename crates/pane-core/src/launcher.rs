@@ -59,6 +59,7 @@ mod own_actions;
 mod presentation;
 mod programs;
 mod providers;
+mod publishing;
 mod quick_slots;
 pub mod search_files;
 mod submenus;
@@ -728,6 +729,21 @@ struct State {
     /// The root results commands computed from the current query, listed
     /// first; each command's results are added when it answers.
     computed: Vec<Computed>,
+    /// The answers that arrived while the current query's list is held
+    /// (#201, see `publishing`): listed when the list is published, in
+    /// place of every answer of an earlier query.
+    staged: Vec<Computed>,
+    /// While the current query's list is not yet published (#201, see
+    /// `publishing`): what still holds it. `None` once it is, and for a
+    /// query that asks no provider.
+    holding: Option<publishing::Holding>,
+    /// When a late answer's merge into the published list happens, by the
+    /// launcher's clock, while one is coalescing (#201): answers arriving
+    /// close together become one update.
+    merge: Option<u64>,
+    /// The query whose list the rows shown are (#201): the field's own
+    /// query once its list is published, the previous query's until then.
+    published: String,
     /// The root results commands supplied ahead of the query, such as the
     /// installed applications, listed for a query that is not blank.
     indexes: indexed::Indexes,
@@ -1000,6 +1016,12 @@ impl State {
     fn next_screen(&mut self) {
         self.screen_epoch += 1;
         self.search_alive = None;
+        // The query's list is neither held nor merged any more (#201): its
+        // providers' calls are cancelled, and whatever is shown next
+        // builds its own list.
+        self.holding = None;
+        self.merge = None;
+        self.staged.clear();
         // A submenu belongs to the screen it opened on; an answer still on
         // its way finds it gone.
         self.submenus.close_all();
@@ -1121,6 +1143,9 @@ struct RootResult {
 struct Computed {
     /// The component of the command that computed it.
     component: PathBuf,
+    /// The query it was computed for, which its card answers (#201): the
+    /// query the field shows may have moved on while the list is held.
+    query: String,
     /// The title of the command that computed it, which labels its
     /// answers in root search ("Calculator").
     command_title: String,
@@ -1501,6 +1526,10 @@ impl Launcher {
             entries: Vec::new(),
             root: Vec::new(),
             computed: Vec::new(),
+            staged: Vec::new(),
+            holding: None,
+            merge: None,
+            published: String::new(),
             indexes: indexed::Indexes::default(),
             typed: None,
             home: home_folder(),
@@ -1671,14 +1700,15 @@ impl Launcher {
         Launcher { sources, ..self }
     }
 
-    /// This launcher telling the time for clipboard history, scheduled work
-    /// and continuing services by `clock` rather than the system's clock,
-    /// for tests and development builds: clipboard items are kept and
-    /// expire by it, scheduled commands run by it, their intervals
-    /// restarting from its now, and services cycle by it, their cadence
-    /// restarting from its now. Items that already expired by the system's
-    /// clock were removed when the launcher started. Release builds have
-    /// no way to replace the system's clock.
+    /// This launcher telling the time for clipboard history, scheduled work,
+    /// continuing services and root search's publishing by `clock` rather
+    /// than the system's clock, for tests and development builds: clipboard
+    /// items are kept and expire by it, scheduled commands run by it, their
+    /// intervals restarting from its now, services cycle by it, their
+    /// cadence restarting from its now, and a query's list is published by
+    /// its budget (#201). Items that already expired by the system's clock
+    /// were removed when the launcher started. Release builds have no way
+    /// to replace the system's clock.
     #[cfg(any(test, debug_assertions))]
     pub fn with_clock(self, clock: Arc<dyn crate::clipboard::Clock>) -> Self {
         // Rows' dates are shown relative to it too (see `looks`).
@@ -1695,8 +1725,17 @@ impl Launcher {
             services.follow(clock.clone());
         }
         if let Some(updates) = &self.updates {
-            updates.follow(clock);
+            updates.follow(clock.clone());
         }
+        // A clock a test advances publishes what is due by it (#201): the
+        // system's clock only moves by time passing, which a thread of the
+        // launcher's own waits out.
+        let publisher = self.downgrade();
+        clock.on_change(Box::new(move || {
+            if let Some(launcher) = publisher.upgrade() {
+                launcher.publish_due();
+            }
+        }));
         self
     }
     /// Waits until Pane's clipboard history expiry thread swept after every
@@ -2032,11 +2071,15 @@ impl Launcher {
     ///
     /// Metadata is searched at once, without running any guest. For a query
     /// that is not blank, the enabled commands that compute root results
-    /// (such as the calculator) are asked too, one after another: await the
-    /// returned future to list each one's results, above the others, as soon
-    /// as it answers. Their answers are discarded if the query has changed
-    /// meanwhile, and a command that fails is listed as a result explaining
-    /// the failure.
+    /// (such as the calculator) are asked too, one after another: the new
+    /// query's list is published once every one of them has answered, or
+    /// 200 ms after the query changed, whichever comes first (#201); until
+    /// then the rows shown stay the previous query's, while the field shows
+    /// this query at once (see `publishing`). An answer arriving after the
+    /// list was published is merged into it, coalesced within 16 ms with
+    /// any that arrives close after. The answers are discarded if the query
+    /// has changed meanwhile, and a command that fails is listed as a
+    /// result explaining the failure.
     ///
     /// The first query that is not blank since root search was shown also
     /// asks the enabled commands that supply results ahead of the query
@@ -2059,13 +2102,9 @@ impl Launcher {
         };
         let (asked, indexing, cancelled) = match &state.view.screen {
             Screen::Root { query: current } if current != query => {
-                let cancelled = self.search(&mut state, query);
+                let (cancelled, asked) = self.search(&mut state, query);
                 let indexing = self.ask_for_indexed_results(&mut state, query);
-                (
-                    self.ask_for_root_results(&state, query),
-                    indexing,
-                    Some(cancelled),
-                )
+                (asked, indexing, Some(cancelled))
             }
             // Searching the same query again changes nothing, not even the
             // selection.
@@ -2193,7 +2232,12 @@ impl Launcher {
                 let carried = applications.is_some_and(|applications| {
                     quick_slots::carry_over(state, &command.id, applications.as_ref())
                 });
-                if let Some(query) = state.view.query().map(str::to_owned) {
+                // While the query's list is held, its publication ranks the
+                // answer with everything else (#201): the rows shown stay
+                // the previous query's.
+                if state.holding.is_none()
+                    && let Some(query) = state.view.query().map(str::to_owned)
+                {
                     relist(state, &query);
                 }
                 carried
@@ -2272,16 +2316,26 @@ impl Launcher {
         };
     }
 
-    /// Shows the root results matching `query` from metadata alone; results
-    /// computed for an earlier query are gone, and the calls still asking
-    /// for them are cancelled. Returns what resolves once this search is
-    /// replaced too, or root search is left.
-    fn search(&self, state: &mut State, query: &str) -> tokio::sync::oneshot::Receiver<()> {
+    /// Begins the search for `query`: the field shows it at once, and the
+    /// query's list is published once every provider asked has answered or
+    /// its budget ended (#201, see `publishing`) — until then the rows
+    /// shown stay the previous query's. Results computed for an earlier
+    /// query are gone once the list is published, and the calls still
+    /// asking for them are cancelled. Returns the commands to ask for what
+    /// they compute, and what resolves once this search is replaced too, or
+    /// root search is left.
+    fn search(
+        &self,
+        state: &mut State,
+        query: &str,
+    ) -> (
+        tokio::sync::oneshot::Receiver<()>,
+        Vec<(CommandRegistration, Option<PackageData>)>,
+    ) {
         state.search_epoch += 1;
         let (alive, cancelled) = tokio::sync::oneshot::channel();
         // Dropping the earlier search's cancels its pending calls.
         state.search_alive = Some(alive);
-        state.computed.clear();
         // A command's answer to the query sent is not an answer to this one.
         if state.sent_from.take().is_some_and(|sent| sent != query) {
             state.view.status = Status::Idle;
@@ -2289,14 +2343,45 @@ impl Launcher {
         // What the query is, beyond its words, is understood once per
         // change of it (#195).
         state.typed = typed_query::analyze(query, state.home.as_deref());
-        let (rows, entries) = root_rows(state, query);
         state.view.screen = Screen::Root {
             query: query.to_owned(),
         };
-        state.view.selected = aliases::first_choice(&entries);
-        state.view.rows = rows;
-        state.entries = entries;
-        cancelled
+        // A merge still coalescing belongs to the query that was; this
+        // query's publication relists whatever it would have.
+        state.merge = None;
+        state.staged.clear();
+        let asked = self.ask_for_root_results(state, query);
+        if asked.is_empty() {
+            // No provider is asked: the list is published at once, the
+            // metadata ranked as it always was (a blank query asks none).
+            state.computed.clear();
+            state.holding = None;
+            let (rows, entries) = root_rows(state, query);
+            state.view.selected = aliases::first_choice(&entries);
+            state.view.rows = rows;
+            state.entries = entries;
+            state.published = query.to_owned();
+        } else {
+            // The query's list is held (#201): the rows shown stay the
+            // previous query's while the field's own query runs ahead of
+            // them.
+            state.holding = Some(publishing::Holding {
+                query: query.to_owned(),
+                awaiting: asked
+                    .iter()
+                    .map(|(command, _)| command.component.clone())
+                    .collect(),
+                deadline: state
+                    .clock
+                    .now()
+                    .saturating_add(publishing::milliseconds(publishing::BUDGET)),
+            });
+            // The system's clock only moves by time passing, so a thread
+            // waits the budget out; a clock a test advances publishes what
+            // is due through `Clock::on_change`.
+            self.wait_for(publishing::BUDGET);
+        }
+        (cancelled, asked)
     }
 
     /// The enabled commands that compute root results, each with its
@@ -2331,16 +2416,17 @@ impl Launcher {
     }
 
     /// Asks each of `commands` in turn for its root results for `query`,
-    /// asked about at `at` (see [`WallTime`]), and lists each one's as
-    /// soon as it answers, unless the query, the search or the screen
-    /// has changed meanwhile.
+    /// asked about at `at` (see [`WallTime`]), unless the query, the
+    /// search or the screen has changed meanwhile.
     ///
     /// Once `cancelled` resolves (the search was replaced, or root search
     /// was left), the pending call is dropped, which cancels it in the
     /// runtime, and no further command is asked. The runtime serves calls one
     /// at a time, so a command that is slow or hangs still delays the
     /// commands asked after it until then (timeouts are #18); it no longer
-    /// hides the answers of those asked before it.
+    /// hides the answers of those asked before it — they are staged for the
+    /// query's list, which the budget publishes without waiting for it
+    /// (#201, see [`Launcher::set_query`]).
     async fn show_root_results(
         &self,
         epoch: u64,
@@ -2371,10 +2457,13 @@ impl Launcher {
     }
 
     /// Asks `command` for its root results for `query`, asked about at
-    /// `at`, and lists them in place of any it gave before, unless the
-    /// query, the search or the screen changed meanwhile (then `None`:
-    /// ask nothing more). Answers what resolves once the granted folder
-    /// its package's answer was still waiting for is listed, if it was.
+    /// `at`, and keeps them for the query's list (#201): staged while the
+    /// list is held, and merged into it once it is published — coalesced,
+    /// within 16 ms, with any answer that arrives close after. Nothing is
+    /// kept if the query, the search or the screen changed meanwhile (then
+    /// `None`: ask nothing more). Answers what resolves once the granted
+    /// folder its package's answer was still waiting for is listed, if it
+    /// was.
     async fn show_one_root_result(
         &self,
         epoch: u64,
@@ -2397,8 +2486,10 @@ impl Launcher {
             return None;
         }
         let state = &mut *state;
-        // A command disabled or replaced meanwhile contributes nothing.
+        // A command disabled or replaced meanwhile contributes nothing; it
+        // has answered all the same, so the list need not wait for it.
         if data.as_ref().and_then(PackageData::stopped).is_some() {
+            publishing::answered(state, &command.component);
             return Some(None);
         }
         let owner = owner(&state.packages, &command.component).map(|p| p.identity.key());
@@ -2409,9 +2500,6 @@ impl Launcher {
             _ => None,
         };
         let component = command.component.clone();
-        state
-            .computed
-            .retain(|computed| computed.component != component);
         let files = state.files.clone();
         let computed = computed_results(command, owner.as_deref(), files.as_ref(), query, answer);
         // The system icons of the files it found (#142), unless the window
@@ -2419,8 +2507,21 @@ impl Launcher {
         if !looks::loads_as_shown(state) {
             file_search::want_icons(state, computed.iter().map(|computed| &computed.entry));
         }
-        state.computed.extend(computed);
-        relist_root(state, query);
+        if state.holding.is_some() {
+            // The query's list is still held (#201): the answer waits for
+            // it, staged, and is listed when the list is published.
+            state.staged.retain(|staged| staged.component != component);
+            state.staged.extend(computed);
+        } else {
+            // The answer is late: it merges into the published list,
+            // coalesced with any that arrives close after (#201).
+            state
+                .computed
+                .retain(|computed| computed.component != component);
+            state.computed.extend(computed);
+            self.merge_soon(state);
+        }
+        publishing::answered(state, &component);
         Some(listed)
     }
 
@@ -3347,8 +3448,14 @@ impl Launcher {
         state.root = self.root_results(state);
         state.sent_from = None;
         state.computed.clear();
+        // What a held query's search had staged is gone with it (#201): the
+        // empty query's list is published at once.
+        state.staged.clear();
+        state.holding = None;
+        state.merge = None;
         state.indexes.stale();
         state.typed = None;
+        state.published = String::new();
         let (rows, entries) = root_rows(state, "");
         let selected = select
             .and_then(|component| {
@@ -3507,8 +3614,16 @@ impl Launcher {
         state
             .computed
             .retain(|computed| computing.contains(&computed.component));
+        state
+            .staged
+            .retain(|staged| computing.contains(&staged.component));
         Launcher::forget_indexes(state);
         let query = state.view.query().unwrap_or_default();
+        // While the query's list is held (#201), the rows shown stay the
+        // previous query's: what changed is ranked when it is published.
+        if state.holding.is_some() {
+            return;
+        }
         let (rows, entries) = root_rows(state, query);
         let selected = selected_id
             .and_then(|id| rows.iter().position(|row| row.id == id))
@@ -4886,7 +5001,8 @@ fn root_rows(state: &State, query: &str) -> (Vec<Row>, Vec<Entry>) {
 
 /// Lists root search's rows for `query` again after results arrived: the
 /// best match stays selected, now that better ones may be first, and a row
-/// the user moved to stays selected.
+/// the user moved to stays selected. The query's list must be published
+/// (#201): while it is held, the rows shown stay the previous query's.
 fn relist_root(state: &mut State, query: &str) {
     let keep = state
         .view
@@ -4916,6 +5032,7 @@ fn computed_results(
 ) -> Vec<Computed> {
     let computed = |row: Row, entry: Entry, detail: Option<ComputedDetail>| Computed {
         component: command.component.clone(),
+        query: query.to_owned(),
         command_title: command.title.clone(),
         answer: detail,
         in_files: matches!(entry, Entry::File(_)),

@@ -1526,6 +1526,55 @@ fn typing_an_expression_shows_its_answer_and_enter_copies_it(cx: &mut TestAppCon
     assert!(cx.debug_bounds("no-results").is_some());
 }
 
+/// Typing a query whose providers answer within the budget does not
+/// flicker the list through intermediate states (#201): while the
+/// calculator answers, the field shows what was typed at once and the
+/// list shown stays the previous query's — the new query's metadata
+/// alone (nothing matches "6*7+1" but the answer) never shows. The
+/// published list takes the answer, and the launcher says it is
+/// published, which the keys the window holds for it read (#203).
+#[gpui::test]
+fn the_list_does_not_flicker_while_providers_answer_within_the_budget(cx: &mut TestAppContext) {
+    let data = tempfile::tempdir().unwrap();
+    let launcher = with_calculator(cx, data.path());
+    let (window, cx) = open_launcher(cx, launcher);
+
+    // A first query's list, published with its answer.
+    cx.simulate_input("6*7");
+    wait_for_rows(&window, cx, &["42"]);
+
+    // Typing on: before the search has even begun asking, the field shows
+    // the new query and the list shown is still the previous one.
+    cx.simulate_input("+1");
+    let typed = cx.read_entity(&window, |window, _| {
+        window.launcher().view().query().map(str::to_owned)
+    });
+    let published = cx.read_entity(&window, |window, _| window.launcher().list_published());
+    assert_eq!(typed.as_deref(), Some("6*7+1"), "the field shows it at once");
+    assert!(!published, "the query's list is held while it is answered");
+    assert_eq!(row_titles(&window, cx), ["42"], "the previous list stays");
+
+    // While the calculator answers, whatever the window has drawn is one
+    // of the two lists — the previous or the published — never the
+    // intermediate of the new query's title matches alone, which is
+    // empty here (no first row to draw).
+    cx.run_until_parked();
+    let drawn = cx.read_entity(&window, |window, _| {
+        window.drawn_view().and_then(|view| view.rows.first().map(|row| row.title.clone()))
+    });
+    assert!(
+        drawn.as_deref() == Some("42") || drawn.as_deref() == Some("43"),
+        "no intermediate list is drawn: {drawn:?}"
+    );
+
+    // The calculator answers within the budget: the published list shows
+    // its answer.
+    wait_for_rows(&window, cx, &["43"]);
+    let published = cx.read_entity(&window, |window, _| window.launcher().list_published());
+    assert!(published, "the query's list is published");
+    assert!(cx.debug_bounds("no-results").is_none());
+}
+
 /// A computed answer is drawn as the answer card (#96): under its
 /// command's title, named for what was typed and its answer, the selected
 /// result, whose primary action copies the answer. An expression with no
