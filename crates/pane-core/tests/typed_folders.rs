@@ -140,10 +140,11 @@ impl Folder {
             fs::create_dir_all(path.parent().unwrap()).unwrap();
             fs::write(path, text).unwrap();
         }
+        let browse = home.join("Browse — ñ");
         Folder {
             _dir: dir,
             home,
-            browse: home.join("Browse — ñ"),
+            browse,
         }
     }
 
@@ -296,7 +297,7 @@ fn a_missing_folder_lists_nothing(fixture: &Package) {
     let pane = Pane::new(fixture);
     let missing = pane.folder.home.join("not there");
     pane.search(&typed(&missing));
-    assert_eq!(pane.entries(), Vec::new());
+    assert!(pane.entries().is_empty());
 }
 
 /// Enter opens a document of the typed folder through the system's
