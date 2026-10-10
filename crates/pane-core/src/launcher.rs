@@ -5174,7 +5174,9 @@ fn root_rows(state: &mut State, query: &str) -> (Vec<Row>, Vec<Entry>) {
     let mut rows: Vec<Row> = Vec::with_capacity(listed.len());
     let mut entries: Vec<Entry> = Vec::with_capacity(listed.len());
     for (listed, shared) in listed.into_iter().zip(shared) {
-        let StaticRow { row, entry, told, .. } = listed;
+        let StaticRow {
+            row, entry, told, ..
+        } = listed;
         let row = match (told, shared) {
             (Told::Source(identity), true) => Row {
                 subtitle: Some(match row.subtitle {
