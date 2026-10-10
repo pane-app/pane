@@ -223,10 +223,9 @@ pub(crate) fn cli_package(out: &Path) -> Result<(), String> {
 /// Checks that the CLI's npm packages match each other, so they cannot
 /// drift apart: `@pane-app/cli`'s `optionalDependencies` name the six
 /// platform packages at its own version, each template matches its target
-/// (its name, `os` and `cpu`, and the four files `cargo xtask cli-package`
-/// puts beside them), and the shim's target table names those target ids
-/// and nothing else — the ids pane-build looks for in a package's own
-/// `node_modules`.
+/// (its name, `os` and `cpu`, and the files it carries), and the shim's
+/// target table names those target ids and nothing else — the ids
+/// pane-build looks for in a package's own `node_modules`.
 pub(crate) fn check(root: &Path) -> Result<(), String> {
     let cli = read_json(&root.join(CLI).join("package.json"))?;
     let Some(version) = cli["version"].as_str() else {
@@ -324,8 +323,9 @@ fn platform_problems(root: &Path, target: pane_target::Target, version: &str) ->
             "{CLI}/{id}/package.json does not name its cpu as {cpu}"
         ));
     }
-    // The four files `cargo xtask cli-package` puts in the folder: the two
-    // programs (a Windows program ends in .exe) and the wasm parts.
+    // The four files `cargo xtask cli-package` puts in the folder — the two
+    // programs (a Windows program ends in .exe) and the wasm parts — and
+    // the two licences the template carries beside them.
     let exe = target.exe_suffix();
     if package["files"]
         != json!([
@@ -333,17 +333,31 @@ fn platform_problems(root: &Path, target: pane_target::Target, version: &str) ->
             format!("componentize-qjs-p3{exe}"),
             "runtime.wasm",
             "libc.so",
+            "LICENSE-GPL",
+            "LICENSE-componentize-qjs",
         ])
     {
         problems.push(format!(
             "{CLI}/{id}/package.json does not list the pane-ext{exe}, \
-             componentize-qjs-p3{exe}, runtime.wasm and libc.so the package carries"
+             componentize-qjs-p3{exe}, runtime.wasm, libc.so and licences the package carries"
         ));
     }
     if !folder.join("README.md").is_file() {
         problems.push(format!("{CLI}/{id} has no README.md"));
     }
     problems
+}
+
+/// Whether `text` is spelled as the shim's target table spells its keys and
+/// values: lowercase letters, digits, `-` and `_`, and nothing else — so
+/// only the table's own lines are read as its entries.
+fn table_spelling(text: &str) -> bool {
+    if text.is_empty() {
+        return false;
+    }
+    text.bytes().all(|byte| {
+        byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-' || byte == b'_'
+    })
 }
 
 /// npm's spelling of `platform`.
@@ -370,7 +384,10 @@ fn shim_problems(root: &Path, targets: &[pane_target::Target]) -> Vec<String> {
     let Ok(shim) = std::fs::read_to_string(root.join(CLI).join("bin/pane-ext.js")) else {
         return vec![format!("{CLI}/bin/pane-ext.js cannot be read")];
     };
-    // The table's lines: `"<platform>-<arch>": "<target>",`.
+    // The table's lines: `"<platform>-<arch>": "<target>",` — taken only
+    // where both sides are spelled as the table spells them
+    // ([`table_spelling`]), so a message string continued on its own line
+    // is not mistaken for one.
     let mut keys: Vec<&str> = Vec::new();
     let mut values: Vec<&str> = Vec::new();
     for line in shim.lines() {
@@ -381,8 +398,12 @@ fn shim_problems(root: &Path, targets: &[pane_target::Target]) -> Vec<String> {
         let Some((key, value)) = line.trim_end_matches(',').split_once("\": \"") else {
             continue;
         };
-        keys.push(key.trim_start_matches('"'));
-        values.push(value.trim_end_matches('"'));
+        let key = key.trim_start_matches('"');
+        let value = value.trim_end_matches('"');
+        if table_spelling(key) && table_spelling(value) {
+            keys.push(key);
+            values.push(value);
+        }
     }
     let mut problems = Vec::new();
     keys.sort();
