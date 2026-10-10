@@ -29,6 +29,8 @@ use pane_core::{
 };
 use tempfile::TempDir;
 
+#[path = "support/feedback.rs"]
+mod feedback;
 #[path = "support/guests.rs"]
 mod guests;
 #[path = "support/platforms.rs"]
@@ -36,6 +38,7 @@ mod platforms;
 #[path = "support/rows.rs"]
 mod rows;
 
+use feedback::shown;
 use guests::guest;
 use rows::titles;
 
@@ -426,6 +429,9 @@ fn frecency_decays_over_simulated_days_and_a_use_re_anchors_it() {
         "half of the score still ranks the result first"
     );
     pane.clock.advance(day(10));
+    // The decayed score reached the floor, so nothing is learned any
+    // more (searching the same query again would change nothing).
+    block_on(launcher.set_query("pyt"));
     block_on(launcher.set_query(""));
     assert!(
         at(launcher, "Python", 0, "#a"),
@@ -465,6 +471,10 @@ fn invoking_a_quick_slot_records_a_use_with_no_query() {
     block_on(launcher.set_query(""));
     block_on(launcher.activate_quick_slot(0));
     assert!(launcher.wait_for_learned_recorded(RECORDED));
+    // Recording the use never re-sorts the list on screen: the next
+    // search ranks with it.
+    block_on(launcher.set_query("pyt"));
+    block_on(launcher.set_query(""));
     assert!(
         at(launcher, "Python", 0, "#b"),
         "the slot's target earned frecency: {:?}",
@@ -504,10 +514,7 @@ fn a_hotkey_a_computed_answer_a_fallback_and_panes_own_rows_record_nothing() {
     let fallback = ids_titled(launcher, "Echo");
     assert_eq!(fallback.len(), 1, "{:?}", titles(launcher));
     block_on(launcher.activate_selected());
-    assert_eq!(
-        launcher.view().status,
-        Status::Result("Echo heard “zzz”".into())
-    );
+    assert_eq!(shown(launcher), Status::Result("Echo heard “zzz”".into()));
     launcher.back();
 
     // A computed answer: Enter copies it, and nothing is learned of a
@@ -618,9 +625,7 @@ fn an_unreadable_record_is_reported_and_never_replaced() {
         fs::create_dir_all(data.path().join("extensions")).unwrap();
         fs::write(data.path().join("extensions/learned.json"), garbage).unwrap();
         let pane = Pane::over(sources, data, cache, ManualClock::at(NOW));
-        pythons(&pane);
         let launcher = &pane.launcher;
-
         assert!(
             launcher.learned_problem().is_some(),
             "{garbage} is reported"
@@ -631,6 +636,8 @@ fn an_unreadable_record_is_reported_and_never_replaced() {
             "{garbage}: {:?}",
             launcher.view().status
         );
+
+        pythons(&pane);
 
         // A use is recorded nowhere, and the ranking learns nothing.
         choose(launcher, "pyt", "#b");
