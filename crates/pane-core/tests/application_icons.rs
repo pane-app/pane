@@ -1,6 +1,6 @@
 //! The installed applications' own icons (#172) through the launcher's
-//! public interface, with the real Applications guest
-//! (`target/guests/packages/applications`), the host's list of applications
+//! public interface, with the JavaScript applications sample
+//! (`target/guests/packages/sample-applications-js`), the host's list of applications
 //! over a fake system, and a fake extraction whose icons, fingerprints and
 //! failures the tests decide: a row shows its application's own icon, and a
 //! neutral placeholder of the same kind until it is extracted; a packaged
@@ -211,13 +211,13 @@ impl Dirs {
 }
 
 /// A launcher whose system has the applications `sources`, with the
-/// Applications package installed.
+/// applications sample installed.
 fn installed(dirs: &Dirs, sources: Vec<Source>, icons: &Arc<FakeIcons>) -> Launcher {
     let system = Arc::new(FakeSystem {
         sources: Mutex::new(sources),
     });
     let launcher = dirs.launcher(&system, icons);
-    install(&launcher, &built("packages/applications"));
+    install(&launcher, &built("packages/sample-applications-js"));
     launcher
 }
 
@@ -306,14 +306,14 @@ fn an_applications_row_shows_its_own_icon_and_a_placeholder_until_it_is_extracte
     search(&launcher, "editor");
 
     // The row keeps its place with the placeholder: no tile, no tooltip.
-    let waiting = row_icon(&launcher, "Editor");
+    let waiting = row_icon(&launcher, "Launch Editor");
     assert!(is_placeholder(&waiting), "{waiting:?}");
     assert!(waiting.is_decorative());
     let (view, presentation) = launcher.presented_view();
     let at = view
         .rows
         .iter()
-        .position(|row| row.title == "Editor")
+        .position(|row| row.title == "Launch Editor")
         .unwrap();
     assert_eq!(
         presentation.rows[at].kind,
@@ -321,11 +321,11 @@ fn an_applications_row_shows_its_own_icon_and_a_placeholder_until_it_is_extracte
     );
 
     icons.open();
-    let (light, dark) = drawn(&launcher, "Editor");
+    let (light, dark) = drawn(&launcher, "Launch Editor");
     assert_eq!(fs::read(&light).unwrap(), blue);
     assert_eq!(light, dark, "one icon for both themes");
     assert!(light.starts_with(dirs.icons()), "{}", light.display());
-    let shown = row_icon(&launcher, "Editor");
+    let shown = row_icon(&launcher, "Launch Editor");
     assert!(shown.is_decorative(), "read by its title and subtitle only");
     // Extracted from the application's primary source, off the window.
     assert_eq!(icons.extracted(), [EDITOR_LINK]);
@@ -360,7 +360,7 @@ fn a_packaged_apps_light_and_dark_icons_are_both_kept() {
 
     search(&launcher, "calculator");
 
-    let (light, dark) = drawn(&launcher, "Calculator");
+    let (light, dark) = drawn(&launcher, "Launch Calculator");
     assert_eq!(fs::read(light).unwrap(), on_light);
     assert_eq!(fs::read(dark).unwrap(), on_dark);
     assert_eq!(icons.extracted(), [calculator]);
@@ -375,7 +375,7 @@ fn after_a_restart_an_unchanged_applications_icon_is_drawn_from_the_cache_and_no
     {
         let launcher = installed(&dirs, vec![shortcut("Editor", EDITOR)], &icons);
         search(&launcher, "editor");
-        drawn(&launcher, "Editor");
+        drawn(&launcher, "Launch Editor");
         settle(&launcher);
     }
     assert_eq!(icons.extracted().len(), 1);
@@ -388,7 +388,7 @@ fn after_a_restart_an_unchanged_applications_icon_is_drawn_from_the_cache_and_no
     });
     let launcher = dirs.launcher(&system, &icons);
     search(&launcher, "editor");
-    let (light, _) = drawn(&launcher, "Editor");
+    let (light, _) = drawn(&launcher, "Launch Editor");
     assert_eq!(fs::read(&light).unwrap(), green);
     assert_eq!(icons.extracted().len(), 1, "drawn without extracting");
 
@@ -401,7 +401,7 @@ fn after_a_restart_an_unchanged_applications_icon_is_drawn_from_the_cache_and_no
     settle(&launcher);
     assert_eq!(icons.extracted().len(), 1, "{:?}", icons.extracted());
     assert_eq!(
-        files(&row_icon(&launcher, "Editor")),
+        files(&row_icon(&launcher, "Launch Editor")),
         Some((light.clone(), light))
     );
 }
@@ -414,7 +414,7 @@ fn a_changed_source_is_extracted_again_at_once() {
     let old = {
         let launcher = installed(&dirs, vec![shortcut("Editor", EDITOR)], &icons);
         search(&launcher, "editor");
-        let (light, _) = drawn(&launcher, "Editor");
+        let (light, _) = drawn(&launcher, "Launch Editor");
         settle(&launcher);
         light
     };
@@ -431,7 +431,7 @@ fn a_changed_source_is_extracted_again_at_once() {
     // Shown on screen: extracted at once, never the old icon.
     let deadline = std::time::Instant::now() + PATIENCE;
     let light = loop {
-        if let Some((light, _)) = files(&row_icon(&launcher, "Editor"))
+        if let Some((light, _)) = files(&row_icon(&launcher, "Launch Editor"))
             && light != old
         {
             break light;
@@ -455,14 +455,14 @@ fn a_failed_extraction_keeps_the_placeholder_and_is_not_tried_again_this_start()
     let launcher = installed(&dirs, vec![shortcut("Editor", EDITOR)], &icons);
 
     search(&launcher, "editor");
-    row_icon(&launcher, "Editor");
+    row_icon(&launcher, "Launch Editor");
     settle(&launcher);
-    assert!(is_placeholder(&row_icon(&launcher, "Editor")));
+    assert!(is_placeholder(&row_icon(&launcher, "Launch Editor")));
     search_again(&launcher, "editor");
-    row_icon(&launcher, "Editor");
+    row_icon(&launcher, "Launch Editor");
     settle(&launcher);
 
-    assert!(is_placeholder(&row_icon(&launcher, "Editor")));
+    assert!(is_placeholder(&row_icon(&launcher, "Launch Editor")));
     assert_eq!(icons.extracted(), [EDITOR_LINK], "tried once this start");
 }
 
@@ -478,7 +478,7 @@ fn an_unreadable_cache_is_deleted_and_rebuilt() {
     let launcher = installed(&dirs, vec![shortcut("Editor", EDITOR)], &icons);
 
     search(&launcher, "editor");
-    let (light, _) = drawn(&launcher, "Editor");
+    let (light, _) = drawn(&launcher, "Launch Editor");
     settle(&launcher);
 
     assert_eq!(fs::read(light).unwrap(), red);
@@ -706,14 +706,14 @@ fn a_pinned_applications_slot_shows_its_icon() {
     icons.draw(EDITOR_LINK, purple.clone(), None);
     let launcher = installed(&dirs, vec![shortcut("Editor", EDITOR)], &icons);
     search(&launcher, "editor");
-    select_title(&launcher, "Editor");
+    select_title(&launcher, "Launch Editor");
     let target = launcher.view().rows[launcher.view().selected.unwrap()]
         .id
         .clone();
     let (change, recorded) = launcher.change_quick_slots(&target, ResultAction::Pin);
     assert!(matches!(change, SlotChange::Changed(_)), "{change:?}");
     block_on(recorded);
-    drawn(&launcher, "Editor");
+    drawn(&launcher, "Launch Editor");
 
     let slot = launcher.quick_slots().remove(0);
     let icon = launcher
@@ -742,7 +742,7 @@ fn disabling_the_applications_extension_stops_refreshing_their_icons() {
     let launcher = installed(&dirs, sources, &icons);
     search(&launcher, "tool");
 
-    let identity = PackageIdentity::local(&built("packages/applications")).unwrap();
+    let identity = PackageIdentity::local(&built("packages/sample-applications-js")).unwrap();
     block_on(launcher.set_enabled(&identity, false));
     icons.open();
     settle(&launcher);

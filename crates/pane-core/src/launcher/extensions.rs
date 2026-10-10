@@ -13,7 +13,8 @@
 //! ([`Launcher::manage_extensions`]).
 //!
 //! Also here: turning one command of a package on or off, checking a
-//! package for an update and the folder its page shows.
+//! package for an update, the folder its page shows, and which of the
+//! installed extensions are Pane's own (#280, ADR 0045).
 
 use std::future::Future;
 use std::path::{Path, PathBuf};
@@ -865,6 +866,34 @@ impl Launcher {
             .is_paused(identity)
             .then(|| ExtensionMark::Paused(crate::packages::paused_reason(&title)))
     }
+
+    /// Whether the installed extension with `identity` is one of Pane's
+    /// own, an official extension (ADR 0045): a default extension, or a
+    /// package whose recorded Git source is a repository in the pane-app
+    /// organization on GitHub — installed by Pane at first setup or by
+    /// the user by hand alike. An extension from any other source, another
+    /// Git host, npm or a folder, is not official, and Settings says
+    /// nothing of it. The mark is read here rather than derived in the
+    /// window, so the rule lives in one place beside the rest the window
+    /// reads about an extension.
+    pub fn extension_is_official(&self, identity: &PackageIdentity) -> bool {
+        identity.default_id().is_some()
+            || identity
+                .git_repository()
+                .is_some_and(in_pane_app_organization)
+    }
+}
+
+/// Whether the repository a Git package's identity records, spelled
+/// `host[:port]/path` ([`crate::git::Repository::name`]), is one of Pane's
+/// own in the pane-app organization on GitHub (ADR 0045): the host
+/// `github.com` and a path under `pane-app/`. Pane's own spelling of the
+/// identity is what is checked, so the path is lowercase however the
+/// user wrote the address (github.com serves a repository at any case of
+/// its path); a host with a port, or the same path on another host, is
+/// not the pane-app organization.
+fn in_pane_app_organization(repository: &str) -> bool {
+    repository.starts_with("github.com/pane-app/")
 }
 
 /// What [`Launcher::begin_command_switch`] left to do.

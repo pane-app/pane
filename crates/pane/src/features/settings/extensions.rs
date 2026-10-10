@@ -7,13 +7,15 @@
 //! **The group.** After Pane's own pages, the sidebar's Extensions entry
 //! heads the group: its + menu installs from a folder, npm or Git, and
 //! under it each installed extension has an entry of its own — its icon,
-//! its title, and a mark in a word while it is paused, broken or updating
+//! its title, the word Official on one of Pane's own (ADR 0045), and a
+//! mark in a word while it is paused, broken or updating
 //! ([`sidebar_entries`]). The entry itself opens the group's page: the
 //! installed extensions as a list, what governs them all (automatic
 //! updates), what belongs to none of them (the runtime's rows, data kept
 //! for an uninstalled extension), and the install sources.
 //!
-//! **An extension's page.** Its large icon, title, description and source
+//! **An extension's page.** Its large icon, its title with Official
+//! beside it on one of Pane's own (ADR 0045), its description and source
 //! at the top, with the mark that needs saying; its enable switch; its
 //! "Actions…" menu — Check for Update, Reload, Clear Cache, Reset
 //! Confirmations, Show Source Folder, Uninstall, and what else the
@@ -95,6 +97,15 @@ pub(crate) const ABOUT: &str = "Install and manage extensions";
 
 /// The group's title: its sidebar entry, and its page's.
 pub(crate) const TITLE: &str = "Extensions";
+
+/// The word the sidebar's entry and an extension's page mark one of
+/// Pane's own extensions with (#280, ADR 0045): an official extension, in
+/// a word.
+const OFFICIAL_WORD: &str = "Official";
+
+/// What the group's list says of one of Pane's own extensions (#280,
+/// ADR 0045), in full.
+const OFFICIAL: &str = "One of Pane's official extensions";
 
 /// The scroll anchor of the preferences of the command `command` (its id
 /// in `pane.json`) on the page of the extension whose identity key is
@@ -639,8 +650,9 @@ fn popover(
 
 /// The sidebar's entries for the installed extensions, under the group's
 /// own entry (`group`, its index among the pages): each its icon, its
-/// title and the mark that needs saying (a word: Paused, Broken,
-/// Updating), selected while its page shows.
+/// title, the word Official on one of Pane's own, and the mark that needs
+/// saying (a word: Paused, Broken, Updating), selected while its page
+/// shows.
 pub(super) fn sidebar_entries(
     this: &SettingsWindow,
     group: usize,
@@ -678,16 +690,23 @@ fn sidebar_entry_of(
     let key = package.identity.key();
     let title = package.title();
     let mark = this.launcher.extension_mark(&package.identity);
+    let official = this.launcher.extension_is_official(&package.identity);
     let icon = crate::features::icons::row_icon_of(&this.launcher, &key, theme);
-    let label = match &mark {
-        Some(mark) => format!("{title}, {}", mark.word()),
-        None => title.clone(),
-    };
+    // What the entry is called for assistive technology: its title, then
+    // that it is one of Pane's own, then the word of what needs saying.
+    let mut label = title.clone();
+    if official {
+        label = format!("{label}, {OFFICIAL_WORD}");
+    }
+    if let Some(mark) = &mark {
+        label = format!("{label}, {}", mark.word());
+    }
     let selector = format!("extension-entry-{title}");
     sidebar_entry(
         ("extension-entry", index),
         &icon,
         &title,
+        official,
         mark.as_ref(),
         selected,
         theme,
@@ -705,12 +724,14 @@ fn sidebar_entry_of(
 
 /// One extension's sidebar entry: the sidebar item's family (#97) — its
 /// height, padding, radius and washes — indented under the group's entry,
-/// with the extension's own icon in place of a glyph and its mark at its
-/// right end, in the warning's tone.
+/// with the extension's own icon in place of a glyph, the word Official
+/// at its right end on one of Pane's own, and the mark that needs saying
+/// beyond it, in the warning's tone.
 fn sidebar_entry(
     id: impl Into<ElementId>,
     icon: &RowIcon,
     title: &str,
+    official: bool,
     mark: Option<&ExtensionMark>,
     selected: bool,
     theme: &Theme,
@@ -724,6 +745,16 @@ fn sidebar_entry(
     };
     let caption = typography.settings_caption_size;
     let scope = format!("extension-entry-{title}");
+    let official = official.then(|| {
+        let selector = format!("extension-entry-official-{title}");
+        div()
+            .id("entry-official")
+            .debug_selector(move || selector)
+            .flex_none()
+            .text_size(caption)
+            .text_color(theme.text_muted)
+            .child(OFFICIAL_WORD)
+    });
     let mark = mark.map(|mark| {
         let selector = format!("extension-entry-mark-{title}");
         div()
@@ -770,6 +801,7 @@ fn sidebar_entry(
                 .truncate()
                 .child(title.to_owned()),
         )
+        .children(official)
         .children(mark)
 }
 
@@ -1008,6 +1040,15 @@ fn group_page(
                 .truncate()
                 .into_any_element(),
         ];
+        // One of Pane's own, said after where it comes from (#280).
+        if this.launcher.extension_is_official(&package.identity) {
+            let selector = format!("extension-item-official-{title}");
+            lines.push(
+                controls::field_description(OFFICIAL, theme.text_muted, theme)
+                    .debug_selector(move || selector)
+                    .into_any_element(),
+            );
+        }
         if !package.enabled {
             lines.push(
                 controls::field_description("Disabled", theme.text_muted, theme).into_any_element(),
@@ -1377,7 +1418,8 @@ fn extension_page(
 }
 
 /// The page's header: the extension's large icon, its title, what it does,
-/// where it comes from, and the mark that needs saying, in full.
+/// where it comes from, and the mark that needs saying, in full. One of
+/// Pane's own carries the word beside its title (#280, ADR 0045).
 fn header(
     this: &SettingsWindow,
     package: &InstalledPackage,
@@ -1387,6 +1429,19 @@ fn header(
     let key = package.identity.key();
     let title = package.title();
     let icon = crate::features::icons::row_icon_of(&this.launcher, &key, theme);
+    let official = this
+        .launcher
+        .extension_is_official(&package.identity)
+        .then(|| {
+            div()
+                .id("extension-page-official")
+                .debug_selector(|| "extension-page-official".into())
+                .flex_none()
+                .text_size(theme.typography.settings_caption_size)
+                .font_weight(theme.typography.medium)
+                .text_color(theme.text_muted)
+                .child(OFFICIAL_WORD)
+        });
     let description = description_of(package).map(|description| {
         controls::field_description(description, theme.text_body, theme)
             .id("extension-page-description")
@@ -1431,14 +1486,24 @@ fn header(
                 .gap(px(2.))
                 .child(
                     div()
-                        .id("extension-page-title")
-                        .debug_selector(move || title_selector)
-                        .text_size(px(18.))
-                        .font_weight(theme.typography.medium)
-                        .text_color(theme.text_title)
-                        .role(Role::Heading)
-                        .aria_label(title.clone())
-                        .child(title.clone()),
+                        .flex()
+                        .items_center()
+                        .gap(px(6.))
+                        .child(
+                            div()
+                                .id("extension-page-title")
+                                .debug_selector(move || title_selector)
+                                .flex_1()
+                                .min_w(px(0.))
+                                .truncate()
+                                .text_size(px(18.))
+                                .font_weight(theme.typography.medium)
+                                .text_color(theme.text_title)
+                                .role(Role::Heading)
+                                .aria_label(title.clone())
+                                .child(title.clone()),
+                        )
+                        .children(official),
                 )
                 .children(description)
                 .child(

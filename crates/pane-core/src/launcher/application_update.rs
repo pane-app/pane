@@ -35,10 +35,11 @@ use crate::launcher::Entry;
 use crate::launcher::Row;
 
 /// This launcher's application: the version of Pane it runs, where its
-/// updates come from (the artifact source the default extensions come
-/// from too) and the program an update replaces. A launcher without one
-/// (another system's updater is not wired yet, or the program could not
-/// be named) checks for nothing and offers nothing.
+/// updates come from (the artifact source, which serves Pane's own
+/// application updates alone) and the program an update replaces. A
+/// launcher without one (another system's updater is not wired yet, or
+/// the program could not be named) checks for nothing and offers
+/// nothing.
 #[derive(Clone)]
 pub(in crate::launcher) struct Application {
     version: String,
@@ -224,12 +225,11 @@ impl Launcher {
     }
 
     /// This launcher checking for Pane application updates: the version
-    /// `version` of Pane it runs, updated from `source` — the same
-    /// artifact source the default extensions are acquired from —
-    /// replacing the program at `program` when the user chooses to
-    /// install. What an earlier update left in the program's folder also
-    /// goes, which a Pane starting does. A path that names no program
-    /// file wires no updater at all.
+    /// `version` of Pane it runs, updated from `source`, replacing the
+    /// program at `program` when the user chooses to install. What an
+    /// earlier update left in the program's folder also goes, which a
+    /// Pane starting does. A path that names no program file wires no
+    /// updater at all.
     pub fn with_application_update(
         self,
         version: &str,

@@ -1,6 +1,8 @@
 //! Search Files like Raycast's (#177), through the launcher's public
-//! interface: Pane's registered Files default extension, acquired from an
-//! artifact source on 127.0.0.1 (`support/artifacts.rs`), over the real file
+//! interface: Pane's registered Files default extension, installed from
+//! its pinned commit in a repository made from the Rust files sample's
+//! component and served over Git's smart HTTP protocol from 127.0.0.1
+//! (`support/repo_server.rs`, `support/defaults.rs`), over the real file
 //! index of a fixture folder standing for the home folder, with a recording
 //! opener and system so that nothing opens or shows. Search Files opens with
 //! no folder to choose on "Recently Used" (the most recently modified
@@ -10,8 +12,15 @@
 //! detail has its Metadata and previews an image; its actions are Pane's,
 //! Copy Name among them, and Enter on a program shows it without running
 //! it; the index's state is said while it is built or stopped. A copy of
-//! Files installed from a folder keeps its own search. The window's side
-//! is `crates/pane/tests/window.rs`'s `search_files_split`.
+//! the Files package installed from a folder keeps its own search. The
+//! window's side is `crates/pane/tests/window.rs`'s `search_files_split`.
+//!
+//! The Files extension's own sources live in their repository (#285),
+//! which the tests cannot read; the repository the pin names here is
+//! made to the default's package shape over the same sample's component
+//! (`sample_files.wasm`, which implements the same contract), with the
+//! manifest the default's own holds: its command's id `files`, which the
+//! host keys the Search Files view on, and `"fileIndex": true`.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -19,24 +28,20 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
 
 use futures::executor::block_on;
-use pane_core::defaults::ArtifactSource;
 use pane_core::file_index::{Category, IndexState, IndexerConfig, WalkOptions};
 use pane_core::search_files::{FileType, PAGE, RECENTLY_USED};
 use pane_core::{DefaultExtension, Launcher, LinkOpener, Runtime, Screen, Status};
-use serde_json::Value;
 use tempfile::TempDir;
 
-#[path = "support/artifacts.rs"]
-mod artifacts;
-#[path = "support/guests.rs"]
-mod guests;
+#[path = "support/defaults.rs"]
+mod defaults;
+#[path = "support/repo_server.rs"]
+mod repo_server;
 #[path = "support/rows.rs"]
 mod rows;
 #[path = "support/system.rs"]
 mod system;
 
-use artifacts::Artifacts;
-use guests::guests;
 use rows::{select_title, titles};
 use system::{Done, RecordingSystem};
 
@@ -73,25 +78,40 @@ fn same_file(reported: &Path, made: &Path) -> bool {
     fs::canonicalize(reported).unwrap() == fs::canonicalize(made).unwrap()
 }
 
-/// The files of the assembled Files package, by their path in the package.
+/// The files of the package the Files pin names: the Rust files sample's
+/// component under the default's own manifest (its command's id `files`,
+/// which the host keys the Search Files view on, `"fileIndex": true`),
+/// as the default's repository holds its release revision.
 fn package_files() -> Vec<(String, Vec<u8>)> {
-    let folder = guests().join("packages/files");
-    assert!(
-        folder.is_dir(),
-        "{} is missing; run `cargo xtask guests`",
-        folder.display()
-    );
-    let mut files: Vec<(String, Vec<u8>)> = fs::read_dir(&folder)
-        .unwrap()
-        .map(|entry| entry.unwrap().path())
-        .filter(|path| path.is_file())
-        .map(|path| {
-            let name = path.file_name().unwrap().to_str().unwrap().to_owned();
-            (name, fs::read(&path).unwrap())
-        })
+    let mut files: Vec<(String, Vec<u8>)> = defaults::package_files("sample-files")
+        .into_iter()
+        .filter(|(path, _)| path != "pane.json")
         .collect();
-    files.sort();
+    files.push(("pane.json".into(), manifest().into_bytes()));
     files
+}
+
+/// The manifest of the Files package: the default's own shape, naming
+/// the sample's component.
+fn manifest() -> String {
+    r#"{
+  "manifestVersion": 1,
+  "title": "Files",
+  "version": "0.1.0",
+  "apiVersion": "0.1",
+  "commands": [
+    {
+      "id": "files",
+      "title": "Search Files",
+      "subtitle": "Finds the files of your home folder: recently used, by name and by type, with a preview",
+      "component": "sample_files.wasm",
+      "search": true,
+      "rootResults": true
+    }
+  ],
+  "fileIndex": true
+}"#
+        .to_owned()
 }
 
 /// `path`'s last modified time set `days` days before now.
@@ -101,12 +121,19 @@ fn modified_days_ago(path: &Path, days: u64) {
         .unwrap();
 }
 
-/// The fixture home folder, Pane's data and cache folders, the artifact
-/// source serving Files, and the fakes Pane acts through.
+/// The fixture home folder, Pane's data and cache folders, the server
+/// serving Files' repository, and the fakes Pane acts through.
 struct Home {
     dir: TempDir,
     home: PathBuf,
-    artifacts: Artifacts,
+    /// Kept, not read: the repository's work tree, which the server serves
+    /// as long as this lives.
+    _repos: TempDir,
+    /// Kept, not read: the server the repository is served from, which
+    /// stops when this is dropped.
+    _server: repo_server::Server,
+    /// The pin that names the served repository.
+    pin: DefaultExtension,
     opener: FakeOpener,
     system: Arc<RecordingSystem>,
 }
@@ -147,25 +174,17 @@ impl Home {
             fs::write(&path, vec![b'x'; 100 + days]).unwrap();
             modified_days_ago(&path, days as u64);
         }
-        let artifacts = Artifacts::start();
+        let server = repo_server::Server::start();
+        let repos = tempfile::tempdir().unwrap();
         let files = package_files();
-        let manifest: Value = serde_json::from_slice(
-            &files
-                .iter()
-                .find(|(path, _)| path == "pane.json")
-                .expect("the package has a pane.json")
-                .1,
-        )
-        .unwrap();
-        let borrowed: Vec<(&str, Vec<u8>)> = files
-            .iter()
-            .map(|(path, contents)| (path.as_str(), contents.clone()))
-            .collect();
-        artifacts.publish("files", manifest["version"].as_str().unwrap(), &borrowed);
+        let tag = format!("v{}", defaults::version_of(&files));
+        let pin = defaults::pinned(&server, repos.path(), "files", "Files", &tag, &files);
         Home {
             dir,
             home,
-            artifacts,
+            _repos: repos,
+            _server: server,
+            pin,
             opener: FakeOpener::default(),
             system: Arc::new(RecordingSystem::default()),
         }
@@ -196,20 +215,14 @@ impl Home {
         }
     }
 
-    /// Pane with Files acquired as its default extension, and its index
+    /// Pane with Files set up as its default extension, and its index
     /// settled unless `deferred`.
     fn start_with(&self, deferred: bool) -> Launcher {
         let runtime = Runtime::start().unwrap();
         runtime.set_applications(self.system.clone());
         let launcher =
             Launcher::with_packages(Ok(runtime), vec![], self.dir.path().join("data/extensions"))
-                .with_defaults(
-                    ArtifactSource::local(self.artifacts.url()).unwrap(),
-                    vec![DefaultExtension {
-                        id: "files".into(),
-                        title: "Files".into(),
-                    }],
-                )
+                .with_defaults(vec![self.pin.clone()])
                 .with_link_opener(Arc::new(self.opener.clone()))
                 .with_system(self.system.clone())
                 .with_file_index(self.config(deferred));

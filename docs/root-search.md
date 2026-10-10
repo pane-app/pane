@@ -424,14 +424,18 @@ recorded choice for a provider takes no effect.
 
 ### The calculator
 
-The calculator ([`guests/calculator`](../guests/calculator)) is a default
-extension in Rust: package `guests/packages/calculator`, a root provider
+The calculator is a default extension in Rust, in
+[its own repository](https://github.com/pane-app/calculator) (a Pane
+release pinning its release commits,
+[`crates/pane/defaults.json`](../crates/pane/defaults.json)): a root
+provider
 whose command, "Calculator", has no row and computes results for root
-search. It is not part of the core and can be disabled like any package. Acquiring it automatically at setup is
-[#51](https://github.com/pane-app/pane/issues/51) to
-[#53](https://github.com/pane-app/pane/issues/53); until then it is
-installed from its folder like any package
-(`pane --install target/guests/packages/calculator`).
+search. It is not part of the core and can be disabled like any package.
+First setup acquires it from the commit this Pane release pins
+([#278](https://github.com/pane-app/pane/issues/278),
+[#53](https://github.com/pane-app/pane/issues/53)); a user can also install
+it by hand from its repository
+(`pane --install git:https://github.com/pane-app/calculator`).
 
 Its expression scope is deliberately small (US06; no symbolic algebra and no
 arbitrary code evaluation):

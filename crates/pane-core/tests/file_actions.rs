@@ -1,7 +1,8 @@
 //! Search Files and the file actions Pane performs itself (#150), over
 //! Pane's file index (#175), through the launcher's public interface, with
-//! the real Files default extension and the Rust, JavaScript and TypeScript
-//! files samples, which give the same answers: the command owns the
+//! the Rust, JavaScript and TypeScript files samples, which give the same
+//! answers the Files default extension does (its own sources live in their
+//! repository, #285): the command owns the
 //! launcher's search field and lists what the index finds as the user
 //! types; a document's actions are Open (Enter), Show in Explorer
 //! (Ctrl+Enter), Open With…, Copy Path, Copy Name, Copy File and Move to Recycle Bin
@@ -66,11 +67,6 @@ struct Package {
     command: &'static str,
 }
 
-const FILES: Package = Package {
-    package: "files",
-    title: "Files",
-    command: "Search Files",
-};
 const RUST: Package = Package {
     package: "sample-files",
     title: "Rust files sample",
@@ -764,9 +760,6 @@ fn a_file_created_while_pane_runs_is_found(fixture: &'static Package) {
 /// Declares one test per check for each language's files package.
 macro_rules! contract {
     ($($check:ident),* $(,)?) => {
-        mod files {
-            $(#[test] fn $check() { super::$check(&super::FILES) })*
-        }
         mod rust {
             $(#[test] fn $check() { super::$check(&super::RUST) })*
         }
@@ -792,19 +785,19 @@ contract!(
 
 #[test]
 fn the_package_keeps_its_identity_across_the_rework() {
-    // The Files command keeps its id, so a hotkey, alias or pin given it
-    // before the rework still finds it.
-    let pane = Pane::new(&FILES);
+    // The sample's command keeps its id, so a hotkey, alias or pin given it
+    // before an update still finds it.
+    let pane = Pane::new(&RUST);
     let identity: PackageIdentity = pane.launcher.packages()[0].identity.clone();
-    let command = format!("{}#files", identity.key());
+    let command = format!("{}#find-files", identity.key());
     pane.launcher.show_root_search();
-    pane.search("search files");
+    pane.search("find files");
     assert!(
         pane.launcher
             .view()
             .rows
             .iter()
-            .any(|row| row.id == command && row.title == "Search Files"),
+            .any(|row| row.id == command && row.title == "Find files (Rust)"),
         "{:?}",
         pane.launcher.view().rows
     );

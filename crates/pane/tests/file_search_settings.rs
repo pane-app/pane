@@ -1,10 +1,12 @@
 //! The File Search page in Settings (#176), on GPUI's test platform, over
-//! the real Files default extension and Pane's file index of a fixture
+//! the Rust files sample (which uses the file index as the Files default
+//! extension does) and Pane's file index of a fixture
 //! folder standing for the home folder: the page says how the index is
 //! doing (its state, its entries, when and how it last caught up) and
 //! Rebuild Index builds it again; its switches, its pattern field and its
-//! folder pickers change what is indexed without a restart; while Files is
-//! off or missing it says file search is off and why; each safety valve —
+//! folder pickers change what is indexed without a restart; while the
+//! files sample is off or missing it says file search is off and why; each
+//! safety valve —
 //! churn quarantine (with Include Again), the ceiling of entries, the
 //! free-space floor and a folder that does not answer — is listed with its
 //! reason and remedy; and the sidebar's search finds the page's controls.
@@ -76,7 +78,8 @@ impl World {
     }
 
     /// Pane over the fixture home with its file index configured as `edit`
-    /// says, Files installed unless `files` is false, and the index settled.
+    /// says, the files sample installed unless `files` is false, and the
+    /// index settled.
     fn launcher(&self, files: bool, edit: impl FnOnce(&mut IndexerConfig)) -> Launcher {
         let runtime = Runtime::start().unwrap();
         let mut config = IndexerConfig {
@@ -96,7 +99,7 @@ impl World {
             Launcher::with_packages(Ok(runtime), vec![], self.records()).with_file_index(config);
         if files {
             let package = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .join("../../target/guests/packages/files");
+                .join("../../target/guests/packages/sample-files");
             assert!(
                 package.exists(),
                 "{} is missing; run `cargo xtask guests`",
@@ -210,8 +213,8 @@ fn until(cx: &mut VisualTestContext, launcher: &Launcher, done: impl Fn(&Launche
     cx.run_until_parked();
 }
 
-/// The names of the entries the index finds for `query`, as Files would
-/// be told.
+/// The names of the entries the index finds for `query`, as the files
+/// sample would be told.
 fn found(launcher: &Launcher, query: &str) -> Vec<String> {
     launcher.show_root_search();
     block_on(launcher.set_query(query));
@@ -459,7 +462,7 @@ fn while_files_is_off_the_page_says_file_search_is_off_and_why(cx: &mut TestAppC
     let files = launcher
         .packages()
         .into_iter()
-        .find(|package| package.title() == "Files")
+        .find(|package| package.title() == "Rust files sample")
         .unwrap()
         .identity;
     block_on(launcher.set_enabled(&files, false));
@@ -471,7 +474,9 @@ fn while_files_is_off_the_page_says_file_search_is_off_and_why(cx: &mut TestAppC
         "{tree}"
     );
     assert!(
-        tree.contains("Files uses file search, but it is turned off: turn it on under Extensions"),
+        tree.contains(
+            "Rust files sample uses file search, but it is turned off: turn it on under Extensions"
+        ),
         "{tree}"
     );
     // The rules can still be changed; they apply when it runs again.

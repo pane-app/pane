@@ -101,42 +101,38 @@ pub const APP_VERSION: &str = match option_env!("PANE_PACKAGE_VERSION") {
     None => env!("CARGO_PKG_VERSION"),
 };
 
-/// The default extensions this build of Pane acquires at first setup, from
-/// Pane's own downloads (see
-/// [`pane_core::defaults`]): the installer carries none of their payloads.
-/// The default extensions are the calculator, applications, quicklinks,
-/// files and clipboard history ([#60](https://github.com/pane-app/pane/issues/60),
-/// the user's recorded choice), in every build: all five enabled by
-/// default and each individually disableable, clipboard history recording
-/// what is copied from the first start (#166, ADR 0042). The samples are no
+/// The pins this build of Pane sets its default extensions up from:
+/// `defaults.json`, committed beside the crate, naming each default
+/// extension's id, title, repository, release tag and that tag's commit
+/// (ADR 0045). The default extensions are the calculator, applications,
+/// quicklinks, files and clipboard history
+/// ([#60](https://github.com/pane-app/pane/issues/60), the user's
+/// recorded choice), in every build: all five set up at first setup and
+/// each individually disableable, clipboard history recording what is
+/// copied from the first start (#166, ADR 0042). The installer carries
+/// none of them: first setup fetches each pinned commit from its
+/// repository with Pane's own Git client (ADR 0021). The samples are no
 /// default extension (#162): a contributor installs one by hand with
 /// `pane --install <folder>`. An install that acquired the helper sample
 /// as a default before keeps it as an ordinary installed package, which
 /// the user can uninstall; Pane does not remove it.
+///
+/// The committed pins name the five repositories under
+/// `https://github.com/pane-app/<id>`, each at the commit of its
+/// repository's initial release revision — v0.5.0 for the calculator,
+/// applications and quicklinks, v0.8.0 for files, v0.6.0 for the
+/// clipboard history (#279, #282). A release's pins are what a fresh
+/// install acquires, so they are moved with the release that tested
+/// them, not between releases. A development build can replace them
+/// with a file of its own through `PANE_DEFAULTS` (see
+/// [`pane_core::defaults::pins_from_dev_env`]).
 pub fn default_extensions() -> Vec<pane_core::DefaultExtension> {
-    vec![
-        pane_core::DefaultExtension {
-            id: "calculator".into(),
-            title: "Calculator".into(),
-        },
-        pane_core::DefaultExtension {
-            id: "applications".into(),
-            title: "Applications".into(),
-        },
-        pane_core::DefaultExtension {
-            id: "quicklinks".into(),
-            title: "Quicklinks".into(),
-        },
-        pane_core::DefaultExtension {
-            id: pane_core::search_files::FILES.into(),
-            title: "Files".into(),
-        },
-        pane_core::DefaultExtension {
-            id: pane_core::clipboard_view::CLIPBOARD_HISTORY.into(),
-            title: "Clipboard History".into(),
-        },
-    ]
+    pane_core::defaults::parse_pins(DEFAULT_EXTENSIONS_PINS)
+        .expect("the committed pins are valid; a test checks them")
 }
+
+/// The committed pins, as this build sets its default extensions up.
+const DEFAULT_EXTENSIONS_PINS: &str = include_str!("../defaults.json");
 
 /// Initializes Pane's host settings — the appearance preferences, the
 /// Open Pane hotkey and the launch-at-login choice recorded in
@@ -374,8 +370,10 @@ fn env_dir(name: &str) -> Option<PathBuf> {
 
 #[cfg(test)]
 mod tests {
-    /// The default set is the five default extensions in every build:
-    /// no sample is acquired at first setup (#162).
+    use super::*;
+
+    /// The committed pins name the five default extensions, each once,
+    /// in every build: no sample is set up at first setup (#162).
     #[test]
     fn the_default_set_is_the_five_default_extensions_without_the_samples() {
         let ids: Vec<String> = super::default_extensions()
@@ -392,5 +390,48 @@ mod tests {
                 pane_core::clipboard_view::CLIPBOARD_HISTORY
             ]
         );
+    }
+
+    /// The committed pins are well-formed: every default extension named
+    /// exactly once, with a title, its own repository in Pane's
+    /// organization, a `v…` release tag and a full commit id that is not
+    /// the placeholder all-zero one: the pins name the repositories'
+    /// initial release revisions (#282), which the placeholders stood in
+    /// for until the repositories released (#279).
+    #[test]
+    fn the_committed_pins_are_well_formed() {
+        let pins = default_extensions();
+        for pin in &pins {
+            assert!(!pin.title.trim().is_empty(), "{pin:?}");
+            assert_eq!(
+                pin.repository,
+                format!("https://github.com/pane-app/{}", pin.id),
+                "{pin:?}"
+            );
+            assert!(pin.tag.starts_with('v'), "{pin:?}");
+            assert!(
+                pin.tag[1..]
+                    .split('.')
+                    .all(|part| !part.is_empty() && part.chars().all(|c| c.is_ascii_digit())),
+                "{pin:?}"
+            );
+            assert_eq!(pin.commit.len(), 40, "{pin:?}");
+            assert!(pin.commit.chars().all(|c| c.is_ascii_hexdigit()), "{pin:?}");
+            // A full id that is not the placeholder: the file's commits
+            // were all zeros until the repositories released (#279);
+            // this build pins their release revisions (#282).
+            assert_ne!(
+                pin.commit, "0000000000000000000000000000000000000000",
+                "the pin still names the placeholder commit"
+            );
+        }
+        // The five ids, each once: `the_default_set_is…` holds the order;
+        // this holds that no id is named twice, which the parse refuses
+        // of a file but a committed list could still drift into by
+        // repeating one under another name.
+        let mut ids: Vec<&str> = pins.iter().map(|pin| pin.id.as_str()).collect();
+        ids.sort();
+        ids.dedup();
+        assert_eq!(ids.len(), 5);
     }
 }

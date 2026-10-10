@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 //
 // Pane's files sample in JavaScript: the same contract as the Files default
-// extension (guests/files, Rust, "Search Files") and the Rust and
+// extension (pane-app/files, "Search Files") and the Rust and
 // TypeScript samples. Its pane.json sets `"fileIndex": true`, so Pane keeps
 // its file index of the home folder current while the sample is enabled;
 // the sample searches it with `pane:extension/file-index` (imported because

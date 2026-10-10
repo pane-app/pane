@@ -14,7 +14,8 @@
 //! 20 ms while it runs must stop growing.
 //!
 //! While a command's call waits on its helper, Pane serves other calls
-//! (#136): the calculator, another package, answers root search meanwhile,
+//! (#136): the Rust sample, another package, answers root search ("reverse
+//! <text>") meanwhile,
 //! and a helper may run for as long as its work takes. A test stands in for
 //! the clock of a long wait by writing the helper's release file rather than
 //! waiting it out.
@@ -245,12 +246,12 @@ impl Installed {
         fs::write(self.helper_folder().join(RELEASE), "").unwrap();
     }
 
-    /// Installs the calculator, another package, which answers root search
+    /// Installs the Rust sample, another package, which answers root search
     /// with its guest.
-    fn install_calculator(&self) {
-        let calculator = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../target/guests/packages/calculator");
-        block_on(self.launcher.install_package(&calculator));
+    fn install_sample(&self) {
+        let sample = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../target/guests/packages/sample-rust");
+        block_on(self.launcher.install_package(&sample));
         assert!(
             matches!(self.launcher.view().status, Status::Result(_)),
             "{:?}",
@@ -258,10 +259,10 @@ impl Installed {
         );
     }
 
-    /// Asks root search for `expression`, which the calculator answers,
+    /// Asks root search for `expression`, which the Rust sample answers,
     /// and checks that it did, with `answer`, while the helper of `pending`
     /// still runs: the call waiting on it held up no other package's.
-    fn calculator_answers_meanwhile(&self, pending: &Pending, expression: &str, answer: &str) {
+    fn sample_answers_meanwhile(&self, pending: &Pending, expression: &str, answer: &str) {
         rows::to_root(&self.launcher);
         block_on(self.launcher.set_query(expression));
         assert_eq!(
@@ -615,14 +616,14 @@ fn repeated_stops_leave_no_helper_running(sample: &Sample) {
     assert_eq!(installed.waiting().as_deref(), Some("started"));
 }
 
-/// While the command waits on its helper, the calculator, another package,
-/// answers root search: waiting holds no other extension's calls.
+/// While the command waits on its helper, the Rust sample, another
+/// package, answers root search: waiting holds no other extension's calls.
 fn other_extensions_answer_while_the_helper_runs(sample: &Sample) {
     let installed = Installed::new(sample);
-    installed.install_calculator();
+    installed.install_sample();
     let pending = installed.start("Echo after waiting");
 
-    installed.calculator_answers_meanwhile(&pending, "1 + 1", "2");
+    installed.sample_answers_meanwhile(&pending, "reverse 21", "12");
 
     block_on(installed.launcher.set_enabled(&installed.identity, false));
     pending.assert_stopped(&installed.runtime);
@@ -636,15 +637,15 @@ fn other_extensions_answer_while_the_helper_runs(sample: &Sample) {
 /// nothing was stopped, blamed or given up on.
 fn a_helper_outlasting_every_runtime_limit_completes(sample: &Sample) {
     let installed = Installed::new(sample);
-    installed.install_calculator();
+    installed.install_sample();
     // Both instances run before the limits shrink: starting one is not what
     // is checked.
     assert_eq!(installed.run("Echo through the helper"), echoed());
     rows::to_root(&installed.launcher);
-    block_on(installed.launcher.set_query("1 + 1"));
+    block_on(installed.launcher.set_query("reverse 21"));
     assert_eq!(
         titles(&installed.launcher).first().map(String::as_str),
-        Some("2")
+        Some("12")
     );
     let limits = Limits {
         compute: Duration::from_millis(500),
@@ -656,7 +657,7 @@ fn a_helper_outlasting_every_runtime_limit_completes(sample: &Sample) {
 
     // Past every limit, the call still waits on its helper.
     thread::sleep(Duration::from_secs(1));
-    installed.calculator_answers_meanwhile(&pending, "2 * 3", "6");
+    installed.sample_answers_meanwhile(&pending, "reverse 456", "654");
     assert_eq!(installed.noted("helper-long-wait"), None);
     installed.release();
 
@@ -738,7 +739,7 @@ contract!(
 #[test]
 fn two_calls_into_one_instance_run_one_after_another() {
     let installed = Installed::new(&RUST);
-    installed.install_calculator();
+    installed.install_sample();
     let first = installed.start("Echo after a long wait");
     select_title(&installed.launcher, "Echo through the helper");
     let second = {
@@ -746,7 +747,7 @@ fn two_calls_into_one_instance_run_one_after_another() {
         thread::spawn(move || block_on(running))
     };
 
-    installed.calculator_answers_meanwhile(&first, "1 + 1", "2");
+    installed.sample_answers_meanwhile(&first, "reverse 21", "12");
     thread::sleep(Duration::from_millis(300));
     assert!(
         !second.is_finished(),

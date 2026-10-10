@@ -7,6 +7,18 @@ Usage:
       `cargo xtask guests` assembles (target/guests/git/greeter): its source
       (everything but dist/) committed on `main`, then the branch `release`
       adding the built component under dist/, tagged `v0.1.0`.
+  repository_server.py clone-defaults <committed-pins> <repositories-folder> <pins-file> <url>
+      Clones the five default extensions' repositories (calculator,
+      applications, quicklinks, files, clipboard-history) at the commits
+      the committed pins file names (crates/pane/defaults.json) into
+      <repositories-folder> — the smoke's own setup, from their real
+      addresses on GitHub; the Pane under test fetches only from <url> —
+      and writes <pins-file>: the pins a development build's PANE_DEFAULTS
+      names, the same ids, titles, tags and commits as the committed pins,
+      pointing each at <url><id>.git. Run it after `serve` has written its
+      port, with <url> the address it serves at. The clones hold the
+      release revisions' built components, so a first setup installs
+      exactly what a release installs.
   repository_server.py commit <repository-folder> <reference>
       Prints the id of the commit <reference> (such as v0.1.0) points to, to
       check the one Pane records.
@@ -25,6 +37,7 @@ Only this script runs `git`, and with none of the user's configuration.
 Pane itself never runs `git`.
 """
 import http.server
+import json
 import os
 import shutil
 import socketserver
@@ -190,9 +203,49 @@ def move_sample(repository, version):
     git("switch", "--quiet", "main")
 
 
+def clone_defaults(committed, repositories, pins_file, url):
+    """Clones the five default extensions' repositories at the commits the
+    committed pins file names (crates/pane/defaults.json) — their real
+    addresses, as the smoke's own setup on the runner; the Pane under test
+    fetches only from the URL it is served at — and writes the pins file
+    naming them: a JSON array of { id, title, repository, tag, commit }
+    pointing each at the URL the smoke serves them from, with the same
+    ids, titles, tags and commits as the committed pins."""
+    with open(committed, encoding="utf-8") as f:
+        committed = json.load(f)
+    pins = []
+    for pin in committed:
+        id = pin["id"]
+        repository = os.path.join(repositories, id)
+        if os.path.exists(repository):
+            shutil.rmtree(repository)
+        home = os.path.join(os.path.dirname(os.path.abspath(repository)), ".home")
+        os.makedirs(home, exist_ok=True)
+        env = git_env(home)
+        # The clone is smoke setup on the runner: it reaches the real
+        # repository. The commit is checked out to prove the clone holds
+        # it; serving needs only the objects.
+        subprocess.run(["git", "clone", "--quiet", pin["repository"], repository],
+                       env=env, check=True)
+        subprocess.run(["git", "checkout", "--quiet", "--detach", pin["commit"]],
+                       cwd=repository, env=env, check=True)
+        pins.append({
+            "id": id,
+            "title": pin["title"],
+            "repository": "%s%s.git" % (url, id),
+            "tag": pin["tag"],
+            "commit": pin["commit"],
+        })
+    with open(pins_file + ".tmp", "w", encoding="utf-8") as f:
+        json.dump(pins, f, indent=2)
+    os.replace(pins_file + ".tmp", pins_file)
+
+
 if __name__ == "__main__":
     if sys.argv[1:2] == ["make-sample"] and len(sys.argv) == 4:
         make_sample(sys.argv[2], sys.argv[3])
+    elif sys.argv[1:2] == ["clone-defaults"] and len(sys.argv) == 6:
+        clone_defaults(sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5])
     elif sys.argv[1:2] == ["commit"] and len(sys.argv) == 4:
         commit(sys.argv[2], sys.argv[3])
     elif sys.argv[1:2] == ["move-sample"] and len(sys.argv) == 4:

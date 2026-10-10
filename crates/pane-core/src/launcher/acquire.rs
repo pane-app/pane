@@ -1,43 +1,42 @@
 //! Acquiring Pane's default extensions at first setup (see `defaults`):
-//! what the status line says while Pane downloads them, and the rows that
-//! try a failed one again.
+//! what the status line says while Pane fetches their pinned revisions,
+//! and the rows that try a failed one again.
 //!
 //! Acquisition goes on in the background: the window, root search, the
 //! install rows and the extension list stay usable while it runs and after
 //! it fails. Each default extension Pane is missing is acquired in turn:
-//! its payload is downloaded from Pane's own downloads with progress and
-//! retries, then installed through the same path a package from a folder
+//! its pinned commit is fetched from its repository with Pane's own Git
+//! client, then installed through the same path a package from a folder
 //! takes — read and checked, planned, claimed and written into a managed
 //! copy — with the identity of its default extension, so the normal
 //! mechanisms (disable, uninstall, extension data) apply to it unchanged.
 //! A default extension the user uninstalled, whose data Pane keeps, is
 //! not acquired again: the user's choice, with disabling the documented
 //! opt-out; one never installed is.
+//!
+//! A default extension's pinned revision is never re-acquired as an
+//! update: the pin is the release's tested revision, and what a later
+//! release does with its repository's newer tags is that release's work
+//! (#269). The Git fields its record keeps say where it came from.
 
 use std::future::Future;
 use std::sync::Arc;
-use std::time::SystemTime;
 
 use super::install::Stopped;
-use super::{ACQUIRED_DIR, DOWNLOADS_DIR, Launcher, Mode, Status, off_thread};
-use crate::defaults::{ArtifactSource, DefaultExtension};
+use super::{DOWNLOADS_DIR, Launcher, Mode, Status, off_thread};
+use crate::defaults::DefaultExtension;
 use crate::packages::{PackageIdentity, SourcePackage};
 
-/// The default extensions this launcher acquires at first setup, and the
-/// artifact source it acquires them from.
+/// The default extensions this launcher acquires at first setup, with the
+/// pins this Pane release names them by.
 #[derive(Clone)]
 pub(in crate::launcher) struct Defaults {
-    source: ArtifactSource,
     extensions: Arc<[DefaultExtension]>,
 }
 
 impl Defaults {
-    pub(in crate::launcher) fn new(
-        source: ArtifactSource,
-        extensions: Vec<DefaultExtension>,
-    ) -> Defaults {
+    pub(in crate::launcher) fn new(extensions: Vec<DefaultExtension>) -> Defaults {
         Defaults {
-            source,
             extensions: extensions.into(),
         }
     }
@@ -45,9 +44,9 @@ impl Defaults {
 
 /// A default extension Pane could not acquire.
 pub(in crate::launcher) struct FailedAcquisition {
-    id: String,
-    title: String,
-    why: String,
+    pub(in crate::launcher) id: String,
+    pub(in crate::launcher) title: String,
+    pub(in crate::launcher) why: String,
 }
 
 /// What the status line says of acquiring Pane's default extensions, and
@@ -101,23 +100,21 @@ impl Acquisitions {
     }
 
     /// The default extensions that can be tried again, while none is being
-    /// acquired: each as (id, title, why).
-    pub(in crate::launcher) fn retryable(&self) -> Vec<(String, String, String)> {
+    /// acquired, each with its id, title and why it failed.
+    pub(in crate::launcher) fn retryable(&self) -> Vec<&FailedAcquisition> {
         if self.in_flight {
             Vec::new()
         } else {
-            self.failed
-                .iter()
-                .map(|failed| (failed.id.clone(), failed.title.clone(), failed.why.clone()))
-                .collect()
+            self.failed.iter().collect()
         }
     }
 }
 
-/// "<n>% of <size>", the progress of a payload, from its bytes so far and
-/// the size its index entry gave; "…" when the size is not known. Used by
-/// acquiring a default extension's payload and downloading a Pane update
-/// alike, so both say progress the same way.
+/// "<n>% of <size>", the progress of a download, from its bytes so far and
+/// the size its source gave; "…" when the size is not known. Used by
+/// downloading a Pane update, so both say progress the same way. (A Git
+/// fetch has no byte progress to follow: the status line says what is
+/// being set up instead.)
 pub(in crate::launcher) fn progress(bytes: u64, total: u64) -> String {
     if total == 0 {
         return "…".into();
@@ -138,15 +135,14 @@ fn of_size(bytes: u64) -> String {
 }
 
 impl Launcher {
-    /// This launcher acquiring the default extensions `extensions` from
-    /// `source` at first setup, into managed copies, as
-    /// [`Launcher::acquire_defaults`] does. Without this, no default
-    /// extension is acquired; the extensions Pane's application build
-    /// acquires are its own choice (a release build takes Pane's published
-    /// downloads, a development build `PANE_ARTIFACTS`, the tests' and
-    /// smokes' own source on this computer).
-    pub fn with_defaults(self, source: ArtifactSource, extensions: Vec<DefaultExtension>) -> Self {
-        let defaults = Defaults::new(source, extensions);
+    /// This launcher acquiring the default extensions `extensions` at
+    /// first setup, each at the commit this Pane release pins it by, into
+    /// managed copies, as [`Launcher::acquire_defaults`] does. Without
+    /// this, no default extension is acquired; the pins the application
+    /// build gives are its own choice (the committed ones, or the ones
+    /// `PANE_DEFAULTS` names in a development build).
+    pub fn with_defaults(self, extensions: Vec<DefaultExtension>) -> Self {
+        let defaults = Defaults::new(extensions);
         Launcher {
             defaults: Some(defaults),
             ..self
@@ -154,7 +150,7 @@ impl Launcher {
     }
 
     /// Acquires each default extension this launcher offers and is
-    /// missing, downloading its payload with progress and retries and
+    /// missing, fetching its pinned commit from its repository and
     /// installing it through the same path a package from a folder takes.
     /// Runs in the background: the launcher stays usable while it runs and
     /// after it fails, the status line says what it is doing, and each
@@ -180,10 +176,7 @@ impl Launcher {
     /// Acquires every missing default extension in turn; the status line
     /// ends showing what was set up, or the last failure.
     async fn acquire_missing(&self) {
-        let (Some(defaults), Some(dir)) = (
-            self.defaults.clone(),
-            self.installation.as_ref().map(|i| i.dir.clone()),
-        ) else {
+        let Some(defaults) = self.defaults.clone() else {
             return;
         };
         // The flow is taken before anything runs, so a second call while
@@ -192,8 +185,6 @@ impl Launcher {
         if !self.lock().acquisitions.begin_flow() {
             return;
         }
-        // A payload a Pane stopped downloading a day ago is abandoned.
-        crate::defaults::remove_abandoned_parts(&dir.join(ACQUIRED_DIR), SystemTime::now());
         let mut set_up: Option<String> = None;
         let mut more_than_one = false;
         let mut failure = None;
@@ -257,16 +248,16 @@ impl Launcher {
         }
     }
 
-    /// Acquires the payload of `extension` and installs it, telling the
-    /// status line what is happening; on failure, why, with the row that
-    /// tries again left in root search.
+    /// Acquires the pinned revision of `extension` and installs it,
+    /// telling the status line what is being set up; on failure, why, with
+    /// the row that tries again left in root search.
     async fn acquire_one(&self, extension: &DefaultExtension) -> Result<(), String> {
-        let (defaults, installation) = match (self.defaults.clone(), self.installation.as_ref()) {
-            (Some(defaults), Some(installation)) => (defaults, installation),
-            _ => return Err("this launcher installs no packages".into()),
+        let installation = match self.installation.as_ref() {
+            Some(installation) => installation,
+            None => return Err("this launcher installs no packages".into()),
         };
         let (id, title) = (extension.id.clone(), extension.title.clone());
-        // Its own copies of both: the download thread below takes the
+        // Its own copies of both: the fetch thread below takes the
         // originals.
         let recording = (id.clone(), title.clone());
         let failed = move |launcher: &Launcher, why: String| {
@@ -291,32 +282,18 @@ impl Launcher {
             state.view.status = Status::Progress(format!("Acquiring the {title}…"));
         }
         self.changed();
-        // The download runs off the thread; the status line follows it.
-        let source = defaults.source.clone();
+        // The fetch runs off the thread. A Git fetch has no byte progress
+        // to follow (its answer is one pack), so the status line says what
+        // is being set up and nothing more until it ends.
+        let pin = extension.clone();
         let downloads = installation.dir.join(DOWNLOADS_DIR);
-        let acquired = installation.dir.join(ACQUIRED_DIR);
-        let (state, changes) = (self.state.clone(), self.developing.changes());
-        let telling = title.clone();
-        let telling = move |bytes: u64, total: u64| {
-            let text = format!("Acquiring the {telling}: {}", progress(bytes, total));
-            let mut state = state.lock().unwrap_or_else(|p| p.into_inner());
-            state.view.status = Status::Progress(text);
-            drop(state);
-            if let Some(changes) = &changes {
-                changes.changed();
-            }
-        };
-        let asked = id.clone();
-        let fetched = off_thread(move || {
-            crate::defaults::fetch(&source, &asked, &downloads, &acquired, &telling)
-        })
-        .await;
+        let fetched = off_thread(move || crate::defaults::fetch(&pin, &downloads)).await;
         let fetched = match fetched {
             Ok(fetched) => fetched,
             Err(why) => return failed(self, why.to_string()),
         };
-        // The payload is installed as a package from a folder is: read and
-        // checked, planned, claimed and written into a managed copy.
+        // The revision is installed as a package from a folder is: read
+        // and checked, planned, claimed and written into a managed copy.
         let mut package = match off_thread(move || SourcePackage::read_default(fetched)).await {
             Ok(package) => package,
             Err(error) => return failed(self, error.to_string()),

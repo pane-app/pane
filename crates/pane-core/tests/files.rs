@@ -944,13 +944,13 @@ impl Applications for OneApplication {
 }
 
 #[test]
-fn a_slow_listing_holds_up_neither_the_calculator_nor_the_applications() {
-    let folders = HeldFolders::new(vec!["report 2 + 2.txt"]);
+fn a_slow_listing_holds_up_neither_the_root_answers_nor_the_applications() {
+    let folders = HeldFolders::new(vec!["report reverse 2.txt"]);
     let mut pane = Pane::with_folders(folders.clone());
     pane.applications = Some(Arc::new(OneApplication));
     let (launcher, _runtime) = pane.with_folder_files();
-    install(&launcher, &built("packages/calculator"));
-    install(&launcher, &built("packages/applications"));
+    install(&launcher, &built("packages/sample-rust"));
+    install(&launcher, &built("packages/sample-applications-js"));
     let folder = granted_folder(&pane);
     let identity = identity(&launcher, "Files");
     block_on(launcher.grant_folder(&identity, &folder));
@@ -959,9 +959,9 @@ fn a_slow_listing_holds_up_neither_the_calculator_nor_the_applications() {
     // The Files command is asked first, and its folder is still listing.
     let pending = search_in_background(&launcher, "report");
     folders.wait_for("the folder is being listed", |held| held.started == 1);
-    wait_for_row(&launcher, "Report Writer");
-    let second = search_in_background(&launcher, "2 + 2");
-    wait_for_row(&launcher, "4");
+    wait_for_row(&launcher, "Launch Report Writer");
+    let second = search_in_background(&launcher, "reverse 2");
+    wait_for_row(&launcher, "2");
     finishes(&pending);
     assert_eq!(folders.started(), 1, "one listing for the visit");
     folders.release();
@@ -969,13 +969,13 @@ fn a_slow_listing_holds_up_neither_the_calculator_nor_the_applications() {
     assert!(
         titles(&launcher)
             .iter()
-            .any(|row| row == "report 2 + 2.txt"),
+            .any(|row| row == "report reverse 2.txt"),
         "{:?}",
         titles(&launcher)
     );
     // Later keystrokes filter the kept listing: nothing is listed again.
-    search(&launcher, "2 + 2.txt");
-    assert_eq!(titles(&launcher), ["report 2 + 2.txt"]);
+    search(&launcher, "report reverse");
+    assert_eq!(titles(&launcher), ["report reverse 2.txt"]);
     assert_eq!(folders.started(), 1);
 }
 
@@ -1010,7 +1010,7 @@ fn leaving_root_search_stops_the_listing_and_the_next_visit_lists_again() {
 
     let pending = search_in_background(&launcher, "report");
     folders.wait_for("the folder is being listed", |held| held.started == 1);
-    block_on(launcher.preview_package(&built("packages/calculator")));
+    block_on(launcher.preview_package(&built("packages/sample-rust")));
     assert!(matches!(launcher.view().screen, Screen::Package { .. }));
     folders.wait_for("the listing is cancelled", |held| held.cancelled == 1);
     finishes(&pending);

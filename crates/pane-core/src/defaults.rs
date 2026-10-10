@@ -1,63 +1,72 @@
-//! Pane's default extensions and the artifacts they are acquired from.
+//! Pane's default extensions and the pins this release sets them up from.
 //!
 //! A default extension ([glossary](../CONTEXT.md): an extension Pane offers
 //! by default, disableable individually) is not carried by the installer:
-//! Pane acquires it over the network at first setup, from Pane's own
-//! artifact source. The source holds an index document,
-//! [`pane-defaults.json`](INDEX_FILE), which names each default
-//! extension's payload: the tarball's file name, its version, its size and
-//! its sha512 integrity. Pane reads the index, downloads the payload with
-//! progress and retries, checks it against that integrity, and unpacks it
-//! with the same checks an npm package's tarball gets
-//! ([`crate::npm::unpack`]) — the extension runtime itself is part of
-//! Pane's process (Wasmtime), so no runtime payload is ever acquired.
+//! Pane acquires it over the network at first setup, fetching exactly the
+//! commit of the release tag this Pane release was tested with, from the
+//! extension's own public repository, with Pane's own Git client
+//! ([`crate::git`], ADR 0021: a commit id pins the bytes, so no index,
+//! integrity file or download host is involved). Each Pane release names
+//! those pins, and a newer Pane release moves them forward (ADR 0045);
+//! between releases a default extension updates from its repository's
+//! newer release tags ([#269](https://github.com/pane-app/pane/issues/269)),
+//! from the Git source its installed record keeps.
 //!
-//! A payload that passes its checks is installed as any package from a
-//! folder is, into a managed copy, with the identity of its default
-//! extension ([`PackageIdentity::default_extension`]), so the normal
-//! mechanisms (disable, uninstall, extension data) apply to it unchanged.
+//! The pins are committed to the build as a JSON array
+//! ([`pane::default_extensions`] reads it): each entry names the default
+//! extension's id, its title, its repository, its release tag and that
+//! tag's commit. Tests and development builds can replace the pins with
+//! a file of their own naming the same (`PANE_DEFAULTS`, whose
+//! repositories must be reachable as a Git address is: HTTPS, or a
+//! loopback address in these builds alone), so the tests and smokes can
+//! serve the repositories on this computer and no check ever reaches a
+//! real Git host; without it, the committed pins are used, in development
+//! and release builds alike, and a release build has no way to replace
+//! them.
 //!
-//! A downloaded payload is kept in a cache of its own under Pane's
-//! `extensions/acquired/` folder, named by its version and the first
-//! bytes of the integrity its index gives: acquiring again finds it there
-//! and reuses it — but only if its bytes still match that integrity, so
-//! an incomplete or damaged cache entry is downloaded again rather than
-//! trusted. Acquiring another version of the same extension removes the
-//! older one's entry.
+//! A fetched revision is installed as any package from a folder is, into a
+//! managed copy, with the identity of its default extension
+//! ([`PackageIdentity::default_extension`]), so the normal mechanisms
+//! (disable, uninstall, extension data) apply to it unchanged, and with
+//! its Git source recorded (repository, tag, commit, pinned) beside the
+//! version its manifest declares — the record a later release's updater
+//! reads. An install that acquired its defaults another way (an older
+//! Pane, from the artifact source) keeps them: their identity and saved
+//! data are unchanged, and they are not acquired again.
 //!
-//! The artifact source is `https://downloads.pane.sh/`. That location is
-//! not deployed yet: it is where Pane's default-extension payloads will
-//! be published, so a Pane installed from today's package cannot complete
-//! its first setup on the real internet, and explains so with a retry.
-//! Tests and development builds can name a source on this computer
-//! instead ([`ArtifactSource::local`], `PANE_ARTIFACTS`), which must be a
-//! literal loopback address, so no check ever reaches the network; a
-//! release build has no way to replace the published source.
+//! What remains of Pane's own artifact source (`https://downloads.pane.sh/`)
+//! serves the index of Pane's *application* updates alone
+//! ([`crate::application_update`]); it no longer serves any default
+//! extension, and a development build can name one on this computer for
+//! those updates alone (`PANE_ARTIFACTS`).
 
-use std::fs;
 use std::path::Path;
 use std::thread;
 use std::time::Duration;
 
 use serde::Deserialize;
 
-use crate::downloads::{Download, check_part};
+use crate::downloads::Download;
+use crate::git::{GitRef, GitRevision};
 use crate::http::{Answer, GetError, Origin};
-use crate::integrity::hex;
-use crate::npm;
 
-/// Where Pane's default extensions' payloads are published: the index and
-/// tarballs a Pane installed from its package downloads at first setup.
-/// Not deployed yet (see the [module](self) documentation); tests and
-/// development builds use a source on this computer instead.
+/// Where Pane's own application updates are published: the index a Pane
+/// installed from its package reads at start for a newer version of
+/// itself. Not deployed yet (see the [module](self) documentation); tests
+/// and development builds use a source on this computer instead.
 pub const PUBLISHED: &str = "https://downloads.pane.sh/";
 
-/// The largest index document Pane reads from an artifact source: it names
-/// a handful of default extensions, so a larger one is a broken source.
+/// The largest index document Pane reads from an artifact source: it
+/// names Pane's own application package, so a larger one is a broken
+/// source.
 pub const MAX_INDEX: u64 = 1 << 20;
 
 /// The name of the index document at an artifact source.
 const INDEX_FILE: &str = "pane-defaults.json";
+
+/// The largest pins file Pane reads: it names a handful of default
+/// extensions, so a larger one is a broken file.
+pub(crate) const MAX_PINS: u64 = 1 << 20;
 
 /// How many times Pane tries to acquire one default extension before it
 /// explains the failure and offers the row that tries again.
@@ -66,7 +75,7 @@ pub(crate) const ATTEMPTS: usize = 3;
 /// How long Pane waits before trying an interrupted acquisition again.
 pub(crate) const RETRY_AFTER: [Duration; 2] = [Duration::from_millis(500), Duration::from_secs(1)];
 
-/// Where Pane's default extensions' payloads are acquired from. Release
+/// Where Pane reads the index of its own application updates. Release
 /// builds use only [`ArtifactSource::published`]; tests and development
 /// builds can use a source on this computer ([`ArtifactSource::local`]).
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -100,9 +109,9 @@ impl ArtifactSource {
     pub fn local(url: &str) -> Result<ArtifactSource, String> {
         let refused = || {
             format!(
-                "the artifact source `{url}` is not on this computer: Pane acquires its default \
-                 extensions from {PUBLISHED}, and only a source on a loopback address such as \
-                 127.0.0.1 or [::1] can replace it, for tests and development"
+                "the artifact source `{url}` is not on this computer: Pane reads its own \
+                 application updates from {PUBLISHED}, and only a source on a loopback address \
+                 such as 127.0.0.1 or [::1] can replace it, for tests and development"
             )
         };
         let origin = Origin::local(url, refused)?;
@@ -111,7 +120,7 @@ impl ArtifactSource {
 
     /// The artifact source named by `PANE_ARTIFACTS`, in development builds
     /// only (see [`ArtifactSource::local`]); `None` when it is not set, in
-    /// which case this development build installs no default extensions.
+    /// which case this development build checks for no application update.
     #[cfg(any(test, debug_assertions))]
     pub fn from_dev_env() -> Option<Result<ArtifactSource, String>> {
         crate::http::dev_env("PANE_ARTIFACTS").map(|url| ArtifactSource::local(&url))
@@ -127,7 +136,7 @@ impl ArtifactSource {
         format!("{}{INDEX_FILE}", self.url())
     }
 
-    /// The address of the payload file `file` of an index entry: `file` is
+    /// The address of the package file `file` of an index entry: `file` is
     /// one plain name (checked when the index was read), so the address
     /// stays on this source.
     pub(crate) fn payload_url(&self, file: &str) -> String {
@@ -150,44 +159,170 @@ impl ArtifactSource {
     }
 }
 
-/// One default extension this build of Pane offers to acquire: its `id`
-/// names it in the artifact source's index, and `title` is its name in
-/// Pane's messages about acquiring it. A package's own manifest is what
-/// its commands are finally listed by.
+/// One default extension this build of Pane sets up at first setup: its
+/// `id` names it everywhere (the identity of the package installed,
+/// `default:<id>`), `title` is its name in Pane's messages about setting
+/// it up, and the rest is its pin — the repository it is fetched from,
+/// the release tag this Pane release was tested with, and that tag's
+/// commit, which Pane fetches exactly ([`crate::git`]: a commit id pins
+/// the bytes). A package's own manifest is what its commands are finally
+/// listed by.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DefaultExtension {
     pub id: String,
     pub title: String,
+    /// The repository the pinned revision is fetched from, as a Git
+    /// address is written (`https://github.com/pane-app/calculator`).
+    pub repository: String,
+    /// The release tag the pin names, `v<semver>` (ADR 0044).
+    pub tag: String,
+    /// The full commit id of that tag, as this Pane release was tested
+    /// with.
+    pub commit: String,
 }
 
-/// A default extension's payload Pane acquired: the unpacked package, and
-/// where it came from.
+impl DefaultExtension {
+    /// The fetch this pin names: the repository, at the pinned commit (a
+    /// commit id pins the bytes, so the tag is recorded but never asked
+    /// for: a tag the repository moved does not move what this release
+    /// installs).
+    pub(crate) fn spec(&self) -> Result<crate::git::GitSpec, String> {
+        let mut spec = crate::git::GitSpec::parse(&self.repository)?;
+        spec.reference = Some(self.commit.clone());
+        Ok(spec)
+    }
+}
+
+/// The pins this build sets its default extensions up from, as the pins
+/// file holds them: a JSON array of `{ "id", "title", "repository",
+/// "tag", "commit" }`. Each id appears once, each repository is a Git
+/// address Pane fetches, each tag is a `v…` release tag and each commit
+/// a full id; the text is at most [`MAX_PINS`] long. An empty array names
+/// no default extension — a pins file a development build takes as its
+/// own when it sets up none (the smokes' phases that install samples by
+/// hand, where first setup must add nothing).
+pub fn parse_pins(text: &str) -> Result<Vec<DefaultExtension>, String> {
+    if text.len() as u64 > MAX_PINS {
+        return Err(format!(
+            "the pins file is larger than the {} KiB Pane reads",
+            MAX_PINS >> 10
+        ));
+    }
+    let pins: Vec<PinJson> = serde_json::from_str(text)
+        .map_err(|error| format!("the pins file is not a list of pins: {error}"))?;
+    pins.into_iter()
+        .enumerate()
+        .map(|(at, pin)| {
+            let named = |field: &str| format!("pin {}: its {field}", at + 1);
+            let id = pin.id.ok_or_else(|| named("id is missing"))?;
+            if !is_extension_id(&id) {
+                return Err(format!("{} is `{id}`, not an extension id", named("id")));
+            }
+            let title = pin.title.ok_or_else(|| named("title is missing"))?;
+            if title.trim().is_empty() {
+                return Err(format!("{} is empty", named("title")));
+            }
+            let repository = pin
+                .repository
+                .ok_or_else(|| named("repository is missing"))?;
+            if let Err(why) = crate::git::GitSpec::parse(&repository) {
+                return Err(format!(
+                    "{} is not a Git repository address: {why}",
+                    named("repository")
+                ));
+            }
+            let tag = pin.tag.ok_or_else(|| named("tag is missing"))?;
+            if !is_release_tag(&tag) {
+                return Err(format!(
+                    "{} is `{tag}`, not a release tag such as v1.0.0",
+                    named("tag")
+                ));
+            }
+            let commit = pin.commit.ok_or_else(|| named("commit is missing"))?;
+            if !crate::git::is_commit_id(&commit) {
+                return Err(format!(
+                    "{} is `{commit}`, not a full commit id",
+                    named("commit")
+                ));
+            }
+            Ok(DefaultExtension {
+                id,
+                title,
+                repository,
+                tag,
+                commit,
+            })
+        })
+        .collect::<Result<Vec<_>, String>>()
+        .and_then(|pins| {
+            for (at, pin) in pins.iter().enumerate() {
+                if pins[..at].iter().any(|other| other.id == pin.id) {
+                    return Err(format!("the pins file names `{}` twice", pin.id));
+                }
+            }
+            Ok(pins)
+        })
+}
+
+/// The pins named by `PANE_DEFAULTS`, in development builds only: a file
+/// of pins that replaces the committed ones, so a development build can
+/// point its default extensions at repositories served on this computer
+/// (the tests' and smokes' own). `None` when it is not set, in which case
+/// the committed pins are used.
+#[cfg(any(test, debug_assertions))]
+pub fn pins_from_dev_env() -> Option<Result<Vec<DefaultExtension>, String>> {
+    let read = |path: String| -> Result<Vec<DefaultExtension>, String> {
+        let text = std::fs::read_to_string(&path)
+            .map_err(|error| format!("the pins file {path} cannot be read: {error}"))?;
+        parse_pins(&text)
+    };
+    crate::http::dev_env("PANE_DEFAULTS").map(read)
+}
+
+/// `true` for an id of an extension: lowercase letters, digits and
+/// hyphens, one or more.
+fn is_extension_id(id: &str) -> bool {
+    !id.is_empty()
+        && id
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+        && !id.starts_with('-')
+        && !id.ends_with('-')
+}
+
+/// `true` for a release tag as ADR 0044 writes one: `v` followed by
+/// dotted numbers, such as `v0.5.0`.
+fn is_release_tag(tag: &str) -> bool {
+    let Some(version) = tag.strip_prefix('v') else {
+        return false;
+    };
+    !version.is_empty()
+        && version
+            .split('.')
+            .all(|part| !part.is_empty() && part.chars().all(|c| c.is_ascii_digit()))
+}
+
+/// A default extension's pinned revision, fetched and written out.
 pub(crate) struct Fetched {
-    /// The unpacked payload: the tarball's top folder, in Pane's downloads
-    /// folder, removed once the package read from it is dropped.
+    /// The revision's files, in Pane's downloads folder, removed once the
+    /// package read from it is dropped.
     pub download: Download,
     pub origin: DefaultOrigin,
 }
 
-/// Where a default extension's payload was acquired from.
+/// Where a default extension's pinned revision was fetched from.
 #[derive(Clone, Debug)]
 pub(crate) struct DefaultOrigin {
     /// The default extension's id (its package identity).
     pub id: String,
-    /// The version its index entry named.
-    pub version: String,
-    /// The sha512 integrity its index entry gave, which the payload
-    /// matched.
-    pub integrity: String,
-}
-
-impl DefaultOrigin {
-    /// What the installed record keeps of it: the version installed (the
-    /// identity is the record's source; the integrity identified the
-    /// download).
-    pub(crate) fn version(&self) -> &str {
-        &self.version
-    }
+    /// The repository the pin named, as Pane fetched it.
+    pub repository: crate::git::Repository,
+    /// The revision installed: the pin's release tag, at the commit that
+    /// was fetched (exactly the pinned one).
+    pub revision: GitRevision,
+    /// Files of the revision that are Git LFS pointers rather than their
+    /// contents, which Pane does not fetch.
+    pub lfs_pointers: Vec<String>,
 }
 
 /// Why acquiring one default extension failed, after Pane's retries.
@@ -200,30 +335,19 @@ impl std::fmt::Display for Failed {
     }
 }
 
-/// Acquires the payload of the default extension `id` from `source`, into
-/// a folder of its own in `downloads`, where
-/// `acquired` is the cache folder (`extensions/acquired`), telling
-/// `progress` of the payload's bytes as they arrive (of the size its index
-/// entry gives). A payload whose bytes still match its index entry's
-/// integrity is taken from the cache without downloading it again; an
-/// incomplete or damaged entry is downloaded again and replaces it. Blocks
-/// on the network and the file system, and tries an interrupted
-/// acquisition again up to [`ATTEMPTS`] times before explaining the
-/// failure.
-pub(crate) fn fetch(
-    source: &ArtifactSource,
-    id: &str,
-    downloads: &Path,
-    acquired: &Path,
-    progress: &(dyn Fn(u64, u64) + Send + Sync),
-) -> Result<Fetched, Failed> {
-    // The failure's own message names the source; the launcher frames
+/// Acquires the default extension `pin` names, fetching its pinned commit
+/// from its repository into a folder of its own in `downloads`. Blocks on
+/// the network and the file system, and tries an interrupted acquisition
+/// again up to [`ATTEMPTS`] times before explaining the failure.
+pub(crate) fn fetch(pin: &DefaultExtension, downloads: &Path) -> Result<Fetched, Failed> {
+    // The failure's own message names the repository; the launcher frames
     // whose set-up failed.
-    with_retries(|| acquire(source, id, downloads, acquired, progress)).map_err(Failed)
+    with_retries(|| acquire(pin, downloads)).map_err(Failed)
 }
 
-/// Why one attempt at acquiring a payload failed, and whether trying again
-/// can help (a connection that failed, not a payload that was refused).
+/// Why one attempt at acquiring a default extension failed, and whether
+/// trying again can help (a connection that failed, not a revision that
+/// was refused).
 pub(crate) struct Failure {
     pub(crate) why: String,
     pub(crate) retry: bool,
@@ -231,8 +355,9 @@ pub(crate) struct Failure {
 
 /// Tries `once` up to [`ATTEMPTS`] times: a failure that says to retry
 /// sleeps [`RETRY_AFTER`] first, and a failure that stays is explained
-/// with how many attempts were made. The three retry loops — a default
-/// extension's payload, an update check, an update's download — share it.
+/// with how many attempts were made. The two retry loops — a default
+/// extension's pinned revision, an update check, an update's download —
+/// share it.
 pub(crate) fn with_retries<T>(mut once: impl FnMut() -> Result<T, Failure>) -> Result<T, String> {
     let mut attempt = 0;
     loop {
@@ -268,103 +393,48 @@ pub(crate) fn interrupted(why: impl Into<String>) -> Failure {
     }
 }
 
-/// One attempt: read the index, find the entry, take the payload from the
-/// cache if it matches, else download it, then unpack it.
-fn acquire(
-    source: &ArtifactSource,
-    id: &str,
-    downloads: &Path,
-    acquired: &Path,
-    progress: &(dyn Fn(u64, u64) + Send + Sync),
-) -> Result<Fetched, Failure> {
-    let index = read_index(source)?;
-    let entry = index.find(id).ok_or_else(|| {
-        failed(format!(
-            "its index names no default extension `{id}`; it names {}",
-            index.described()
-        ))
+/// One attempt: fetch the pinned revision and write it out.
+fn acquire(pin: &DefaultExtension, downloads: &Path) -> Result<Fetched, Failure> {
+    let spec = pin.spec().map_err(failed)?;
+    let fetched = crate::git::fetch(&spec, downloads).map_err(|why| {
+        // A connection that failed, or a server that failed, may work on
+        // another try; a revision the repository refused is explained
+        // once. The Git client says which it was wherever it met one
+        // (crate::git::is_connection_failure).
+        if crate::git::is_connection_failure(&why) {
+            interrupted(why)
+        } else {
+            failed(why)
+        }
     })?;
-    check_part(&entry.file).map_err(|why| {
-        failed(format!(
-            "its index names the payload file `{}`, {}",
-            entry.file, why
-        ))
-    })?;
-    let cache = acquired.join(id);
-    let name = cache_name(&entry.version, &entry.integrity);
-    let payload = cache.join(&name);
-    let mut bytes = match fs::read(&payload) {
-        Ok(cached) => match crate::integrity::check_integrity(&cached, &entry.integrity) {
-            // Only a payload that still matches its integrity is reused.
-            Ok(()) => Some(cached),
-            Err(_) => None,
+    let crate::git::Fetched { download, origin } = fetched;
+    let revision = GitRevision {
+        // The pin names the tag whose commit was fetched; the commit that
+        // was fetched is exactly the pinned one (a commit id pins the
+        // bytes), so the record keeps the tag — what a later release's
+        // updater compares its repository's newer release tags with.
+        reference: GitRef::Tag(pin.tag.clone()),
+        commit: origin.revision.commit.clone(),
+    };
+    Ok(Fetched {
+        download,
+        origin: DefaultOrigin {
+            id: pin.id.clone(),
+            repository: origin.repository,
+            revision,
+            lfs_pointers: origin.lfs_pointers,
         },
-        Err(_) => None,
-    };
-    if bytes.is_none() {
-        bytes = Some(download(source, entry, &cache, &name, progress)?);
-    }
-    let bytes = bytes.expect("downloaded or cached");
-    let origin = DefaultOrigin {
-        id: id.to_owned(),
-        version: entry.version.clone(),
-        integrity: entry.integrity.clone(),
-    };
-    let download =
-        Download::create(downloads, |folder| npm::unpack(&bytes, folder)).map_err(|why| {
-            failed(format!(
-                "its payload cannot be unpacked safely: {why}; Pane installs only the files and \
-                 folders inside the package"
-            ))
-        })?;
-    keep_payload(&cache, &name);
-    Ok(Fetched { download, origin })
+    })
 }
 
 /// The index document an artifact source serves, as Pane read and checked
 /// it.
 pub(crate) struct Index {
-    pub(crate) entries: Vec<Entry>,
     /// What the index says of Pane's own application package, whose
     /// updates Pane offers the user ([`crate::application_update`]): read
-    /// but neither parsed nor validated here, so that an application
-    /// entry this Pane cannot take never keeps it from acquiring its
-    /// default extensions.
+    /// but neither parsed nor validated here, so that an application entry
+    /// this Pane cannot take never keeps it from doing anything else.
     pub(crate) application: Option<serde_json::Value>,
-}
-
-/// One entry of the index: what identifies a default extension's payload.
-#[derive(Clone)]
-pub(crate) struct Entry {
-    id: String,
-    version: String,
-    /// The payload's file name, one plain name.
-    file: String,
-    /// `sha512-<base64>`, which the payload's bytes must match.
-    integrity: String,
-    /// The payload's size in bytes, as the index gives it, for progress.
-    size: u64,
-}
-
-impl Index {
-    /// The entry of the default extension `id`.
-    fn find(&self, id: &str) -> Option<&Entry> {
-        self.entries.iter().find(|entry| entry.id == id)
-    }
-
-    /// How the index names the default extensions it describes, for the
-    /// error that explains a missing one.
-    fn described(&self) -> String {
-        let names: Vec<String> = self
-            .entries
-            .iter()
-            .map(|entry| format!("`{}`", entry.id))
-            .collect();
-        match names.len() {
-            0 => "no default extension".to_owned(),
-            _ => names.join(", "),
-        }
-    }
 }
 
 /// Reads and checks the index document of `source`.
@@ -408,80 +478,13 @@ pub(crate) fn read_index(source: &ArtifactSource) -> Result<Index, Failure> {
             INDEX_FORMAT
         )));
     }
-    let mut entries = Vec::new();
-    for entry in index.defaults {
-        if !crate::integrity::has_sha512(&entry.integrity) {
-            return Err(failed(format!(
-                "Pane's downloads at {} describe `{}` without a sha512 integrity, which Pane \
-                 needs to check its download",
-                source.url(),
-                entry.id
-            )));
-        }
-        if entries.iter().any(|other: &Entry| other.id == entry.id) {
-            return Err(failed(format!(
-                "Pane's downloads at {} describe the default extension `{}` twice",
-                source.url(),
-                entry.id
-            )));
-        }
-        entries.push(Entry {
-            id: entry.id,
-            version: entry.version,
-            file: entry.file,
-            integrity: entry.integrity,
-            size: entry.size,
-        });
-    }
     Ok(Index {
-        entries,
         application: index.application,
     })
 }
 
-/// Downloads the payload `entry` describes into the cache folder `cache`
-/// under the name `name`, checking it against the entry's integrity, and
-/// returns its bytes. A previous incomplete download is replaced.
-fn download(
-    source: &ArtifactSource,
-    entry: &Entry,
-    cache: &Path,
-    name: &str,
-    progress: &(dyn Fn(u64, u64) + Send + Sync),
-) -> Result<Vec<u8>, Failure> {
-    let url = source.payload_url(&entry.file);
-    let (file, size) = (entry.file.clone(), entry.size);
-    let told = move |bytes: u64| progress(bytes, size);
-    let read = source
-        .get(&url, &[], npm::MAX_TARBALL, &told)
-        .map_err(|error| match error {
-            GetError::TooLarge => failed(format!(
-                "the payload `{}` is larger than the {} MiB Pane downloads",
-                file,
-                npm::MAX_TARBALL >> 20
-            )),
-            GetError::Failed(why) => interrupted(format!(
-                "Pane's downloads at {} could not be reached: {why}",
-                source.url()
-            )),
-        })?;
-    if read.status != 200 {
-        let why = match read.status {
-            404 => format!("the payload `{file}` its index names is not there"),
-            status => format!("it answered {status} for the payload `{file}`"),
-        };
-        return Err(answer(read.status, why));
-    }
-    let bytes = read.body;
-    crate::integrity::check_integrity(&bytes, &entry.integrity)
-        .map_err(|why| failed(format!("the downloaded payload `{file}` {why}")))?;
-    write_payload(cache, name, &bytes)
-        .map_err(|error| failed(format!("its payload cannot be kept: {error}")))?;
-    Ok(bytes)
-}
-
-/// Why a status other than 200 was answered for the index or a payload:
-/// trying again may fix a server that failed, never a payload that is
+/// Why a status other than 200 was answered for the index or a package:
+/// trying again may fix a server that failed, never a package that is
 /// simply not there.
 pub(crate) fn answer(status: u16, why: String) -> Failure {
     if matches!(status, 403 | 500 | 502 | 503 | 504) {
@@ -491,99 +494,29 @@ pub(crate) fn answer(status: u16, why: String) -> Failure {
     }
 }
 
-/// Writes the payload `bytes` to `cache/name`, through a `.part` file, so
-/// that a Pane stopped mid-download leaves no half-written payload under
-/// the name a later one looks for.
-fn write_payload(cache: &Path, name: &str, bytes: &[u8]) -> Result<(), String> {
-    fs::create_dir_all(cache).map_err(|error| error.to_string())?;
-    let part = cache.join(format!("{name}.part"));
-    fs::write(&part, bytes).map_err(|error| error.to_string())?;
-    fs::rename(&part, cache.join(name)).map_err(|error| error.to_string())?;
-    Ok(())
-}
-
-/// Keeps only `name` as the payload in `cache`: a version Pane acquired
-/// before, or a damaged entry, goes.
-fn keep_payload(cache: &Path, name: &str) {
-    let Ok(entries) = fs::read_dir(cache) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let file = entry.file_name();
-        let kept = file.to_str() == Some(name);
-        if !kept && file.to_string_lossy().ends_with(".tgz") {
-            let _ = fs::remove_file(entry.path());
-        }
-    }
-}
-
-/// The name of a payload in the cache: `<version>-<integrity's first 16
-/// hex digits>.tgz`, so that another version, or the same version with
-/// another integrity, is another name.
-fn cache_name(version: &str, integrity: &str) -> String {
-    let digest = crate::integrity::sha512_digest(integrity);
-    format!(
-        "{version}-{}.tgz",
-        hex(digest.as_ref().map(|digest| &digest[..8]).unwrap_or(&[]))
-    )
-}
-
-/// Removes what a Pane stopped mid-download left in the cache folders
-/// under `acquired`: `.part` files older than
-/// [`crate::downloads::ABANDONED_AFTER`]. A younger one may belong to a
-/// Pane still running on the same data folder. Best effort.
-pub(crate) fn remove_abandoned_parts(acquired: &Path, now: std::time::SystemTime) {
-    let Ok(folders) = fs::read_dir(acquired) else {
-        return;
-    };
-    for folder in folders.flatten() {
-        let Ok(files) = fs::read_dir(folder.path()) else {
-            continue;
-        };
-        for file in files.flatten() {
-            let name = file.file_name();
-            if !name.to_string_lossy().ends_with(".part") {
-                continue;
-            }
-            let old = file
-                .metadata()
-                .and_then(|metadata| metadata.modified())
-                .is_ok_and(|modified| {
-                    now.duration_since(modified)
-                        .is_ok_and(|age| age > crate::downloads::ABANDONED_AFTER)
-                });
-            if old {
-                let _ = fs::remove_file(file.path());
-            }
-        }
-    }
-}
-
-/// The index document as it is served: `formatVersion`, `defaults` and,
-/// optionally, the `application` entry naming Pane's own package.
+/// The index document as it is served: `formatVersion` and, optionally,
+/// the `application` entry naming Pane's own package.
 #[derive(Deserialize)]
 struct IndexJson {
     #[serde(rename = "formatVersion")]
     format_version: u64,
-    #[serde(default)]
-    defaults: Vec<EntryJson>,
     /// Pane's own application package (see [`crate::application_update`]),
     /// read as it is written: parsed where it is used, so a broken entry
     /// is explained there rather than making the whole index unreadable.
     /// Optional, because a source that serves none (one built before the
-    /// application entry existed) still serves the default extensions.
+    /// application entry existed) still serves the index.
     #[serde(default)]
     application: Option<serde_json::Value>,
 }
 
+/// One pin of the pins file, as it is written.
 #[derive(Deserialize)]
-struct EntryJson {
-    id: String,
-    version: String,
-    file: String,
-    integrity: String,
-    #[serde(default)]
-    size: u64,
+struct PinJson {
+    id: Option<String>,
+    title: Option<String>,
+    repository: Option<String>,
+    tag: Option<String>,
+    commit: Option<String>,
 }
 
 /// The index format this Pane reads.
@@ -592,7 +525,6 @@ const INDEX_FORMAT: u64 = 1;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sha2::{Digest, Sha512};
 
     #[test]
     fn a_source_on_this_computer_is_a_loopback_address_only() {
@@ -622,64 +554,101 @@ mod tests {
     }
 
     #[test]
-    fn a_payload_is_named_by_its_version_and_integrity() {
-        // sha512 of the empty input, in npm's integrity spelling.
-        let empty = format!("sha512-{}", crate::integrity::base64(&Sha512::digest(b"")));
-        assert_eq!(
-            cache_name("0.1.0", &empty),
-            format!("0.1.0-{}.tgz", hex(&Sha512::digest(b"")[..8]))
-        );
-        // Another integrity, or version, is another name.
-        assert_ne!(cache_name("0.1.0", &empty), cache_name("0.1.1", &empty));
-        let other = format!(
-            "sha512-{}",
-            crate::integrity::base64(&Sha512::digest(b"other"))
-        );
-        assert_ne!(cache_name("0.1.0", &empty), cache_name("0.1.0", &other));
-        // An integrity without a digest names nothing: the name says the
-        // version alone.
-        assert_eq!(cache_name("0.1.0", "sha1-abc"), "0.1.0-.tgz");
-    }
-
-    #[test]
-    fn a_source_names_its_index_and_payloads() {
+    fn a_source_names_its_index() {
         let source = ArtifactSource::published();
         assert_eq!(source.url(), PUBLISHED);
         assert_eq!(source.index_url(), format!("{PUBLISHED}{INDEX_FILE}"));
-        assert_eq!(
-            source.payload_url("calculator-0.1.0.tgz"),
-            format!("{PUBLISHED}calculator-0.1.0.tgz")
-        );
     }
 
     #[test]
-    fn a_stopped_downloads_part_file_is_abandoned() {
-        let cache = tempfile::tempdir().unwrap();
-        let young = cache.path().join("calculator");
-        let old = cache.path().join("helper-sample");
-        for folder in [&young, &old] {
-            std::fs::create_dir_all(folder).unwrap();
-            std::fs::write(folder.join("0.1.0-x.tgz.part"), b"partial").unwrap();
-        }
-        std::fs::write(young.join("0.1.0-x.tgz"), b"whole").unwrap();
-        let now = std::time::SystemTime::now();
-        let set = |folder: &Path, age: std::time::Duration| {
-            let file = std::fs::File::options()
-                .write(true)
-                .open(folder.join("0.1.0-x.tgz.part"))
-                .unwrap();
-            file.set_modified(now - age).unwrap();
-        };
-        // A download a Pane stopped a day ago is abandoned; a younger one
-        // may belong to a Pane still running on the same data folder.
-        set(&young, std::time::Duration::from_secs(1));
-        set(
-            &old,
-            crate::downloads::ABANDONED_AFTER + std::time::Duration::from_secs(1),
+    fn a_pin_names_everything_a_fetch_needs() {
+        let pins = parse_pins(
+            r#"[
+                { "id": "calculator", "title": "Calculator",
+                  "repository": "https://github.com/pane-app/calculator",
+                  "tag": "v0.5.0",
+                  "commit": "0123456789012345678901234567890123456789" }
+            ]"#,
+        )
+        .unwrap();
+        assert_eq!(
+            pins,
+            vec![DefaultExtension {
+                id: "calculator".into(),
+                title: "Calculator".into(),
+                repository: "https://github.com/pane-app/calculator".into(),
+                tag: "v0.5.0".into(),
+                commit: "0123456789012345678901234567890123456789".into(),
+            }]
         );
-        remove_abandoned_parts(cache.path(), now);
-        assert!(young.join("0.1.0-x.tgz.part").exists());
-        assert!(young.join("0.1.0-x.tgz").exists());
-        assert!(!old.join("0.1.0-x.tgz.part").exists());
+        // The fetch names the repository at the pinned commit: a commit id
+        // pins the bytes, so the tag is recorded, never asked for.
+        let spec = pins[0].spec().unwrap();
+        assert_eq!(
+            spec.reference.as_deref(),
+            Some("0123456789012345678901234567890123456789")
+        );
+        assert_eq!(spec.repository.name(), "github.com/pane-app/calculator");
+        // An empty file names no default extension: what a development
+        // build sets up when it sets up none.
+        assert_eq!(parse_pins("[]").unwrap(), Vec::new());
+    }
+
+    #[test]
+    fn a_pins_file_that_cannot_be_used_is_explained() {
+        // Not a list, an empty list, a pin missing a field, an id that is
+        // no extension id, a repository that is no Git address, a tag that
+        // is no release tag, a commit that is no full id, and the same id
+        // twice: each explained, naming the pin.
+        for (text, expected) in [
+            (
+                "{ \"formatVersion\": 1 }",
+                "the pins file is not a list of pins",
+            ),
+            (
+                "[{ \"id\": \"calculator\", \"title\": \"Calculator\" }]",
+                "pin 1: its repository is missing",
+            ),
+            (
+                "[{ \"id\": \"Calc\", \"title\": \"\", \"repository\": \
+                  \"https://github.com/pane-app/calculator\", \"tag\": \"v0.5.0\", \
+                  \"commit\": \"0123456789012345678901234567890123456789\" }]",
+                "pin 1: its id is `Calc`, not an extension id",
+            ),
+            (
+                "[{ \"id\": \"calculator\", \"title\": \"Calculator\", \"repository\": \
+                  \"not a repository\", \"tag\": \"v0.5.0\", \
+                  \"commit\": \"0123456789012345678901234567890123456789\" }]",
+                "pin 1: its repository is not a Git repository address",
+            ),
+            (
+                "[{ \"id\": \"calculator\", \"title\": \"Calculator\", \"repository\": \
+                  \"https://github.com/pane-app/calculator\", \"tag\": \"0.5.0\", \
+                  \"commit\": \"0123456789012345678901234567890123456789\" }]",
+                "pin 1: its tag is `0.5.0`, not a release tag such as v1.0.0",
+            ),
+            (
+                "[{ \"id\": \"calculator\", \"title\": \"Calculator\", \"repository\": \
+                  \"https://github.com/pane-app/calculator\", \"tag\": \"v0.5.0\", \
+                  \"commit\": \"01234567890123456\" }]",
+                "pin 1: its commit is `01234567890123456`, not a full commit id",
+            ),
+            (
+                r#"[
+                    { "id": "calculator", "title": "Calculator",
+                      "repository": "https://github.com/pane-app/calculator",
+                      "tag": "v0.5.0",
+                      "commit": "0123456789012345678901234567890123456789" },
+                    { "id": "calculator", "title": "Calculator",
+                      "repository": "https://github.com/pane-app/calculator",
+                      "tag": "v0.5.0",
+                      "commit": "0123456789012345678901234567890123456789" }
+                ]"#,
+                "the pins file names `calculator` twice",
+            ),
+        ] {
+            let why = parse_pins(text).unwrap_err();
+            assert!(why.contains(expected), "{why} does not contain {expected}");
+        }
     }
 }

@@ -9,8 +9,8 @@
 //! Most tests pin commands this build registers (their components are
 //! never opened); the disabled-command test installs the settings sample,
 //! the invocation tests open the Rust sample and the installed
-//! applications of a fake system, through the real guests from
-//! `cargo xtask guests`.
+//! applications of a fake system, through the JavaScript applications
+//! sample from `cargo xtask guests`.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -571,8 +571,8 @@ fn an_application_is_pinned_by_its_identity_and_a_cold_home_resolves_and_opens_i
     let system = Arc::new(FakeApplications::default());
     {
         let launcher = with_applications(data.path(), cache.path(), &system);
-        install(&launcher, &built("packages/applications"));
-        let target = select(&launcher, "fire", "Firefox");
+        install(&launcher, &built("packages/sample-applications-js"));
+        let target = select(&launcher, "fire", "Launch Firefox");
         assert!(
             actions(&launcher).contains(&(ResultAction::Pin, "Pin".into(), true)),
             "{:?}",
@@ -583,10 +583,7 @@ fn an_application_is_pinned_by_its_identity_and_a_cold_home_resolves_and_opens_i
         block_on(recorded);
         let text = fs::read_to_string(record(data.path())).unwrap();
         assert!(text.contains("/apps/Firefox.app"), "{text}");
-        assert!(
-            text.contains("#applications"),
-            "scoped to its command: {text}"
-        );
+        assert!(text.contains("#launch"), "scoped to its command: {text}");
     }
 
     // A restart: the home is cold, nothing was typed.
@@ -595,12 +592,12 @@ fn an_application_is_pinned_by_its_identity_and_a_cold_home_resolves_and_opens_i
     assert!(!waiting.ready());
     assert_eq!(
         waiting.unavailable.as_deref(),
-        Some("Waiting for Applications to list it")
+        Some("Waiting for JavaScript applications sample to list it")
     );
     block_on(launcher.resolve_quick_slots());
     assert_eq!(launcher.view().query(), Some(""), "nothing was searched");
     let slot = &launcher.quick_slots()[0];
-    assert_eq!(slot.title, "Firefox");
+    assert_eq!(slot.title, "Launch Firefox");
     assert!(slot.ready());
 
     // Invoked twice before the first opening answered: it opens once.
@@ -610,6 +607,6 @@ fn an_application_is_pinned_by_its_identity_and_a_cold_home_resolves_and_opens_i
     assert_eq!(*system.opened.lock().unwrap(), ["/apps/Firefox.app"]);
     assert_eq!(
         launcher.view().status,
-        Status::Result("Opened Firefox".into())
+        Status::Result("Opened Launch Firefox".into())
     );
 }

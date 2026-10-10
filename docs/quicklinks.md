@@ -9,11 +9,13 @@ saves a named link, file, folder or application, finds it by typing into
 
 ## The Quicklinks extension
 
-Quicklinks is a default extension in Rust
-([`guests/quicklinks`](../guests/quicklinks), package
-`guests/packages/quicklinks`, version 0.3.0), like
+Quicklinks is a default extension in Rust, in
+[its own repository](https://github.com/pane-app/quicklinks) (a Pane
+release pinning its release commits,
+[`crates/pane/defaults.json`](../crates/pane/defaults.json)), like
 [the calculator](root-search.md#the-calculator): not part of the core,
-disabled like any package, and acquired at first setup (#53). Its four
+disabled like any package, and acquired at first setup from its pinned
+commit (#278, #53). Its four
 commands share one component:
 
 | Command | Id | Mode | Does |

@@ -45,8 +45,10 @@ for expiry [ADR 0023](adr/0023-host-expires-clipboard-history-by-its-own-clock.m
   the clipboard and keeps the history itself, so nothing of the extension
   runs while the clipboard changes, and the history is the package's
   [extension data](extension-data.md) whatever the extension does.
-- **Default extension**, [`guests/clipboard-history`](../guests/clipboard-history)
-  (Rust), package [`guests/packages/clipboard-history`](../guests/packages/clipboard-history):
+- **Default extension**, the
+  [Clipboard History repository](https://github.com/pane-app/clipboard-history)
+  (Rust; a Pane release pinning its release commits,
+  [`crates/pane/defaults.json`](../crates/pane/defaults.json)):
   its command, "Clipboard History", which Pane draws in its own split view
   ([Behavior](#behavior)); its own list (what a copy installed from
   another source shows) is Pause or Resume Recording and the kept items.
@@ -75,10 +77,11 @@ for expiry [ADR 0023](adr/0023-host-expires-clipboard-history-by-its-own-clock.m
   or on any other system one that says clipboard history is unavailable
   there.
 
-Acquiring the package automatically at setup is
-[#51](https://github.com/pane-app/pane/issues/51) to
-[#53](https://github.com/pane-app/pane/issues/53); until then it is
-installed from its folder (`pane --install target/guests/packages/clipboard-history`).
+First setup acquires the extension from the commit this Pane release pins
+([#278](https://github.com/pane-app/pane/issues/278),
+[#53](https://github.com/pane-app/pane/issues/53)); a user can also install
+it by hand from its repository
+(`pane --install git:https://github.com/pane-app/clipboard-history`).
 
 ## Behavior
 
@@ -555,7 +558,10 @@ capture stays local by default all the same.
   still work and a copy or a deletion makes them once more.
 - Pane's own Clipboard History through the launcher
   ([`crates/pane-core/tests/clipboard_view.rs`](../crates/pane-core/tests/clipboard_view.rs),
-  #166), acquired as the default extension over a fake system clipboard:
+  #166), acquired as the default extension from its pinned commit in a
+  repository served on this computer (the JavaScript clipboard sample's
+  component standing in for the extension's own, which lives in its
+  repository), over a fake system clipboard:
   a fresh data folder records the first copy with no turn-on, disabling
   stops it, and paused it stays paused across a restart; concealed copies
   and copies from a disabled application (by its file name or its path)

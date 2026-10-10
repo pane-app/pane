@@ -4,19 +4,22 @@ Added for [#53](https://github.com/pane-app/pane/issues/53) (Linux; US15,
 US16, US18, US42; T23; contributions to G6, not a claim that it passes),
 [#51](https://github.com/pane-app/pane/issues/51) (Windows) and
 [#52](https://github.com/pane-app/pane/issues/52) (macOS): a clean
-machine installs Pane from one package, and Pane acquires its default
-extensions itself over the network — [#60](https://github.com/pane-app/pane/issues/60)'s
-five, with the calculator the feature the installer slices proved —
-with progress, retries and a cache, while the core (the window,
-root search, the install rows, Settings › Extensions) stays usable. This is
+machine installs Pane from one package, and Pane sets its default
+extensions up itself over the network — [#60](https://github.com/pane-app/pane/issues/60)'s
+five, fetched at first setup from the commits of their own repositories'
+release tags that the Pane release pins
+([#278](https://github.com/pane-app/pane/issues/278),
+[ADR 0045](adr/0045-official-extensions-live-in-their-own-repositories.md)) —
+with retries and the rows that try a failed one again, while the core (the
+window, root search, the install rows, Settings › Extensions) stays usable. This is
 the internet-first setup the specification chose
 ([decision 20](launcher-design-interview.md)); the installer carries no
 payloads and installs no runtime, and the user installs no Node, Rust,
 npm, Git or compiler: Pane's extension runtime is part of Pane's own
 process (Wasmtime), so nothing is acquired for it.
 
-[#54](https://github.com/pane-app/pane/issues/54) adds the other half of
-the same source: Pane's own updates. Pane checks the artifact source for a
+[#54](https://github.com/pane-app/pane/issues/54) adds what the artifact
+source serves: Pane's own updates. Pane checks the artifact source for a
 newer version of itself when it starts and tells the user, who alone
 chooses whether to download and install it — Pane never downloads,
 installs or restarts itself unprompted
@@ -42,9 +45,10 @@ runs on and the artifacts an artifact source serves (below):
   install script, a `README.txt` and a `pane.desktop` entry, under `pane/`.
   With `--dev`, the program is the development profile and the name ends
   `-dev`; the native smokes install that one, because only a development
-  build takes its artifact source from `PANE_ARTIFACTS` (a release build
-  uses Pane's published downloads, which no controlled source may
-  replace).
+  build takes its default extensions' pins from `PANE_DEFAULTS` and its
+  artifact source from `PANE_ARTIFACTS` (a release build uses the
+  committed pins and Pane's published downloads, which no controlled source
+  may replace).
 - **`pane-<version>-windows-<arch>.zip`** — the Windows package
   (`cargo xtask package-windows`): the `pane.exe` program (release
   profile), the PowerShell install script and a `README.txt`, under
@@ -62,15 +66,14 @@ runs on and the artifacts an artifact source serves (below):
   else it explains so and stops — the one thing a Windows build alone
   provides.
 - **`artifacts/`** — what an artifact source serves (below): the index
-  `pane-defaults.json` and one tarball per default extension's payload:
-  its `pane.json`, the components it names, the images its package's and
-  commands' icons name (the default extensions' tiles, with any `@light`
-  and `@dark` variants, #163) and, for the helper sample, this system's
-  helper file. A real deployment serves this folder at Pane's published downloads; the
-  tests and smokes serve it from this computer instead. The payloads are
-  built for the system the task ran on, so each system's run of its own
-  task serves its own (`windows-x86_64`'s helper file, for instance, from
-  the Windows task's artifacts).
+  `pane-defaults.json`, naming the application package a Pane application
+  update downloads, and the package itself. Since #278 no
+  default-extension payload is written: the default extensions are
+  fetched from their own repositories, and this folder serves Pane's own
+  updates alone. A real deployment serves this folder at Pane's published downloads; the
+  tests and smokes serve it from this computer instead. The package is
+  built for the system the task ran on, its index entry naming that
+  target, so each system's run of its own task serves its own.
 - **`pane-<version>-<os>-<arch>.<zip|tar.gz>.sha256`** — each package's
   digest.
 
@@ -86,7 +89,8 @@ the `.sha256` file says only what was packed; signing the package, and
 deploying the artifact source, are execution prerequisites recorded
 [below](#limits-and-prerequisites).
 
-The package holds no default extension: first setup downloads them, so
+The package holds no default extension: first setup fetches them from
+their repositories' pinned commits, so
 the installer stays small and every default extension (also the ones
 later slices add) is a normal, individually disableable extension rather
 than something baked into the program.
@@ -193,13 +197,14 @@ prerequisites recorded [below](#limits-and-prerequisites).
 A default extension ([glossary](../CONTEXT.md)) is identified by its id —
 `calculator` — which is also its package identity
 (`default:calculator`, recorded as `"default": "calculator"` in
-`installed.json`, with `"defaultVersion"`), whatever version is
-installed. The release's default extensions are the calculator,
-applications, quicklinks, files and clipboard history
+`installed.json`, with the Git source of the revision it was fetched
+from), whatever version is installed. The release's default extensions
+are the calculator, applications, quicklinks, files and clipboard history
 ([#60](https://github.com/pane-app/pane/issues/60), the user's recorded
-choice): all five enabled by default and each individually disableable,
-with clipboard history's capture still off until the user turns it on.
-Every build acquires the same five: no sample is a default extension
+choice): all five set up at first setup and each individually
+disableable, with clipboard history recording from the first start
+([ADR 0042](adr/0042-clipboard-history-records-from-the-first-start.md)).
+Every build sets up the same five: no sample is a default extension
 ([#162](https://github.com/pane-app/pane/issues/162)). Until #162 a
 development build also acquired the prebuilt-helper sample; an install
 that acquired it keeps it as an ordinary installed package (Pane removes
@@ -207,41 +212,50 @@ nothing it acquired), which the user can uninstall, and no later first
 setup acquires it again. The samples stay installable by hand
 (`pane --install target/guests/packages/<name>`).
 
+Since [#278](https://github.com/pane-app/pane/issues/278) each default is
+fetched from its own repository, at the commit of the release tag this
+Pane release pins
+([ADR 0045](adr/0045-official-extensions-live-in-their-own-repositories.md)):
+the five live in public repositories of their own in the
+[`pane-app`](https://github.com/pane-app) organization
+([#279](https://github.com/pane-app/pane/issues/279)), and the pins are
+committed to the build
+([`crates/pane/defaults.json`](../crates/pane/defaults.json)), each naming
+the default's id, title, repository, release tag and that tag's commit; a
+newer Pane release moves them forward. (Before #278 the defaults were
+acquired from Pane's artifact source as tarballs an index named; that
+machinery is gone, and the artifact source remains for Pane's own
+application updates alone.) A development build can replace the pins
+with a file of its own through `PANE_DEFAULTS` (its repositories must be
+reachable as a Git address is: HTTPS, or a loopback address in these
+builds alone), so the tests and smokes serve the repositories on this
+computer and no check ever reaches a real Git host; a release build has
+no override.
+
 At first setup, and whenever a default extension is missing, Pane
 acquires each in turn in the background:
 
-1. **The index.** `GET https://downloads.pane.sh/pane-defaults.json`:
-   `formatVersion` (this Pane reads 1) and one entry per default
-   extension: its `id`, `version`, `file` (a plain name, so the address
-   stays on the source), `integrity` (`sha512-<base64>`, which the
-   payload's bytes must match) and `size` (for progress). An index with
-   another format version, an entry without a sha512, or a duplicate id
-   is explained, and so is an entry Pane's build does not ask for.
-2. **The payload.** `GET <source>/<file>`, through Pane's own HTTP client
-   (hyper, rustls, the system's certificates, one connection per request,
-   no proxy, no redirect — the one npm and Git packages use), at most
-   64 MiB, with the bytes so far reported as they arrive. An interrupted
-   download — the connection closing partway, or a server error (403,
-   500, 502, 503, 504) — is tried again, up to three times, after 0.5 s
-   and 1 s; a payload that is simply not there, or whose bytes do not
-   match the integrity the index gives, is explained, not retried.
-3. **The cache.** The downloaded payload is kept under
-   `extensions/acquired/<id>/<version>-<integrity's first 16 hex
-   digits>.tgz` (written through a `.part` file, so a Pane stopped
-   mid-download leaves no half-written payload under the name a later one
-   looks for; one a day old is removed as abandoned, as a young one may
-   belong to another Pane on the same data folder). Acquiring again finds
-   it there and reuses it — only if its bytes still match the integrity
-   its index gives: a damaged entry is downloaded again and replaces it,
-   and another version of the same default extension removes the older
-   one's entry. Nothing else of the payload is kept: what is installed is
-   the managed copy.
-4. **The install.** The payload is a gzipped tar of a `package/` folder
-   holding the extension package, unpacked with the same checks an npm
-   package's tarball gets (files and folders only, every path inside,
-   the same limits), then read, checked, planned and installed exactly as
-   a package from a folder is — into a managed copy, with the default
-   extension's identity. Its compatibility is what any package's is: the
+1. **The pin.** The fetch names the repository, at the pinned commit: a
+   commit id pins the bytes
+   ([ADR 0021](adr/0021-pane-fetches-git-packages-itself.md)), so the tag
+   is recorded but never asked for — a tag the repository moved does not
+   move what this release installs.
+2. **The fetch.** Pane's own Git client (ADR 0021: Git's smart HTTP
+   protocol version 2, over the same HTTPS stack npm and Git packages
+   use — no `git` program, library or configuration) fetches exactly the
+   pinned commit, checks every object against its id and writes out only
+   the revision's files and folders, into a download folder of its own
+   under `downloads/`, removed once the package read from it is dropped.
+   An interrupted fetch — the connection failing partway, or a server
+   error (403, 500, 502, 503, 504) — is tried again, up to three times,
+   after 0.5 s and 1 s; a revision the repository refuses, or one whose
+   files fail their checks, is explained, not retried.
+3. **The install.** The fetched revision is read, checked, planned and
+   installed exactly as a package from a folder is — into a managed
+   copy, with the default extension's identity, and its Git source
+   (repository, tag, commit, pinned) recorded for
+   [#269](https://github.com/pane-app/pane/issues/269)'s updates. Its
+   compatibility is what any package's is: the
    manifest version and extension API this Pane reads, the platforms it
    declares, the components it names present, and, where it ships
    helpers, the file for this system a real program for it. A default
@@ -251,14 +265,15 @@ acquires each in turn in the background:
 
 ### What the user sees
 
-The status line says what is happening — "Acquiring the Calculator…" then
-"Acquiring the Calculator: 34% of 116 KiB" — while the window, root
-search, the install rows and Settings › Extensions stay usable: acquisition
-never blocks anything. When every default extension is set up, the status
+The status line says what is happening — "Acquiring the Calculator…" —
+while the window, root search, the install rows and Settings › Extensions
+stay usable: acquisition never blocks anything. (A Git fetch answers with
+one pack, so there is no byte progress to follow and no percentage.)
+When every default extension is set up, the status
 line says "Set up the Calculator" (or "Set up Pane's default extensions").
 A default extension that could not be acquired is explained there ("Could
-not set up the Calculator: Pane's downloads at … could not be reached:
-… (Pane tried 3 times)") and offered as a row in root search after the
+not set up the Calculator: Could not reach the Git repository …
+(Pane tried 3 times)") and offered as a row in root search after the
 install rows, **Set up Calculator**, which tries again; the row goes once
 what it asked for is there. Starting Pane tries again by itself, so a
 Pane stopped mid-setup recovers, and disabling a default extension (in
@@ -267,17 +282,18 @@ installed, so it is never re-acquired or re-enabled.
 
 ## Updating Pane itself
 
-An application update ([glossary](../CONTEXT.md)) is the same source's
-other half: the index holds an `application` entry — the Pane package for
+An application update ([glossary](../CONTEXT.md)) is the artifact
+source's own half: the index holds an `application` entry — the Pane package for
 one target, named by its version, file, sha512 integrity, size and
 `target` (`windows-x86_64`, `macos-aarch64`, written as a [helper
 target](../CONTEXT.md) is) — and the source serves the package the
 entry names. `cargo xtask package-windows`, `-macos` (and `-linux`) put
 the package they built into the artifacts folder beside its index entry,
-so one deployment serves everything from one place; the entry is read
-but not parsed where the default extensions are acquired, so an
-application entry one Pane cannot take never stops a default extension
-from being installed.
+so one deployment serves everything from one place; the index names
+nothing else (no default-extension payload since #278), and the entry is
+parsed only where an update is checked, so an application entry one Pane
+cannot take changes nothing else — a default extension is set up from its
+repository whether the index is readable or not.
 
 1. **The check.** Once, when Pane starts (a cadence that is provisional:
 no interval is checked meanwhile), Pane reads the index in the background
@@ -392,7 +408,10 @@ prerequisite (recorded [below](#limits-and-prerequisites)).
 
 ## The artifact source
 
-Release builds acquire from `https://downloads.pane.sh/` only. Tests and
+The artifact source serves Pane's own application updates alone (since
+#278, nothing about a default extension comes from it: the defaults are
+fetched from their repositories). Release builds read it at
+`https://downloads.pane.sh/` only. Tests and
 development builds can name a source on this computer instead
 (`PANE_ARTIFACTS`, read as [`Registry::local` in
 npm](npm.md#the-registry) is: an `http://` or `https://` address on a
@@ -401,39 +420,49 @@ optional port and path; `localhost` and anything else is refused), so no
 check ever reaches the network. **A release build has no way to replace
 the published source.** The smokes serve `target/dist/artifacts` with
 [scripts/artifact_server.py](../scripts/artifact_server.py) on 127.0.0.1;
-the tests serve their own payloads in process
+the tests serve their own index and application package in process
 (`crates/pane-core/tests/support/artifacts.rs`).
 
-A development build with no `PANE_ARTIFACTS` acquires nothing, so a
-checkout runs nothing over the network by itself.
+A development build with no `PANE_ARTIFACTS` checks for no application
+update, so a checkout runs nothing over the network by itself.
 
 ## Trying a first setup by hand
 
+A development build fetches the default extensions from the repositories
+its pins name. The committed pins point at the real repositories on
+GitHub; to watch a first setup without reaching them, serve clones of the
+pinned revisions on this computer and point `PANE_DEFAULTS` at the pins
+that name them:
+
 ```sh
-cargo xtask package-linux --dev
-python3 scripts/artifact_server.py target/dist/artifacts /tmp/port &
-PANE_ARTIFACTS=http://127.0.0.1:$(cat /tmp/port)/ cargo run -p pane
+mkdir -p /tmp/pane-repositories
+python3 scripts/repository_server.py serve /tmp/pane-repositories /tmp/port &
+while [ ! -s /tmp/port ]; do sleep 0.1; done
+python3 scripts/repository_server.py clone-defaults crates/pane/defaults.json \
+  /tmp/pane-repositories /tmp/pins.json "http://127.0.0.1:$(cat /tmp/port)/"
+PANE_DATA_DIR=/tmp/fresh PANE_DEFAULTS=/tmp/pins.json cargo run -p pane
 ```
 
 A fresh data folder (`PANE_DATA_DIR=/tmp/fresh`) shows the acquisition
-and the calculator's answer to "6*7".
+and the calculator's answer to "6*7". (The clone step reaches GitHub
+once, as the smokes' own setup does; the Pane under test fetches only
+from 127.0.0.1. A development build with no `PANE_ARTIFACTS` checks for
+no application update.)
 
-On Windows, the same with the Windows package (built where it can be):
+On Windows, the same with `python` instead of `python3` (the server in
+another terminal, or started in the background):
 
 ```powershell
-cargo xtask package-windows --dev
-python scripts/artifact_server.py target/dist/artifacts $env:TEMP\port
-$env:PANE_ARTIFACTS = "http://127.0.0.1:$((Get-Content $env:TEMP\port).Trim())/"
+python scripts/repository_server.py serve $env:TEMP\pane-repositories $env:TEMP\port
+python scripts/repository_server.py clone-defaults crates/pane/defaults.json `
+  $env:TEMP\pane-repositories $env:TEMP\pins.json "http://127.0.0.1:$((Get-Content $env:TEMP\port).Trim())"
+$env:PANE_DATA_DIR = "$env:TEMP\fresh"
+$env:PANE_DEFAULTS = "$env:TEMP\pins.json"
 cargo run -p pane
 ```
 
-On macOS, the same with the macOS package (built where it can be):
-
-```sh
-cargo xtask package-macos --dev
-python3 scripts/artifact_server.py target/dist/artifacts /tmp/port &
-PANE_ARTIFACTS=http://127.0.0.1:$(cat /tmp/port)/ cargo run -p pane
-```
+On macOS, the same as on Linux (`python3`, the server backgrounded with
+`&`).
 
 ## Checks
 
@@ -454,28 +483,36 @@ PANE_ARTIFACTS=http://127.0.0.1:$(cat /tmp/port)/ cargo run -p pane
   untouched and the row ready to try again, and the retry that installs
   once the source works; an index whose application entry names another
   system, or an older version, and one whose format version Pane does not
-  read, explained without stopping the default extensions' acquisition
-  from the same index; progress on the status line while the core stays
-  usable; and Pane's data — an acquired extension, its record and cache —
+  read, explained without stopping a default extension being set up from
+  its repository; progress on the status line while the core stays
+  usable; and Pane's data — an extension set up at first setup, its
+  record and cache —
   untouched by an install, still installed and answering after the
   update. The zip Pane unpacks is checked by `pane-core`'s own unit
   tests (both storage methods, and every refusal), and the tarball the
   Linux package is, by the npm tarball reader's own unit tests.
 - `crates/pane-core/tests/installer.rs`: the acquisition through the
-  launcher's public interface, over a default set of its own (the
-  calculator and the helper sample, a payload carrying a native helper)
+  launcher's public interface, over repositories served on 127.0.0.1 by
+  Git's smart HTTP protocol (`support/repo_server.rs`), with a default
+  set of its own (the icons sample and the helper sample, a revision
+  carrying a real helper program)
   — a first setup installing both as managed copies with the default
-  identity and the record in `installed.json`; progress on the status line while the
-  core stays usable; an interrupted download recovered by retry; the
-  cache reused, a damaged entry replaced; an unreachable source leaving
+  identity and the Git source recorded in `installed.json`; what is being
+  set up said on the status line while the
+  core stays usable; an interrupted fetch recovered by retry; an
+  unreachable repository leaving
   the core usable with the row that tries again, and the row setting the
-  extension up once the source works; the helper running from the managed
-  copy with mode 0755; a payload that does not match its integrity, and
-  one for another platform, explained and not installed; a restart
-  fetching nothing; a disabled default extension not re-acquired; a
+  extension up once the repository works; the helper running from the managed
+  copy with mode 0755; a revision without a `pane.json`, a source-only
+  revision, an incompatible package and one without its declared helper
+  file, explained and not installed; a restart
+  fetching nothing; a default with retained data (one the user
+  uninstalled) not re-acquired, and a disabled one not either; a
   default extension that left the build's default set (the helper
   sample, #162) kept installed, fetched for nothing and uninstallable,
-  and not brought back once uninstalled. These
+  and not brought back once uninstalled; and an install that acquired a
+  default from the artifact source (an older Pane) keeping it, its
+  identity and data unchanged. These
   run on every system, so the Windows and macOS acquisitions need no
   test of their own: it is the same code (the one Windows-only piece is
   the `.exe` helper-name rule, checked by the runner's unit tests).
@@ -484,9 +521,11 @@ PANE_ARTIFACTS=http://127.0.0.1:$(cat /tmp/port)/ cargo run -p pane
   and the [macOS smoke](platforms/macos.md#installing-pane-and-acquiring-its-calculator-52):
   the package is built and installed on a clean machine — a fresh home
   folder on Linux and macOS, a fresh user profile on Windows — and the
-  installed Pane, started with a PATH that holds nothing at all, acquires
-  the five default extensions' payloads from the controlled source and
-  answers "6*7" with 42. (A helper running from an acquired payload is
+  installed Pane, started with a PATH that holds nothing at all, fetches
+  the five default extensions' pinned commits from their repositories
+  (cloned at those commits by the smoke's own setup and served on
+  127.0.0.1; the Pane under test reaches no network address) and
+  answers "6*7" with 42. (A helper running from an acquired revision is
   `installer.rs`'s, above; the smokes run the helper sample installed
   with `--install`.) (The install script itself runs
   with `/usr/bin:/bin` on Linux and macOS, so the fresh home stays clean
@@ -508,15 +547,18 @@ PANE_ARTIFACTS=http://127.0.0.1:$(cat /tmp/port)/ cargo run -p pane
 ## Limits and prerequisites
 
 - **The artifact source is not deployed.** `downloads.pane.sh` does not
-  exist, so a Pane installed from today's package cannot complete its
-  first setup on the real internet: it explains that Pane's downloads
-  cannot be reached, keeps everything else working and offers the retry.
-  Deploying the source (serving `artifacts/` above) is an execution
-  prerequisite, like the signing credentials below.
-- **Nothing is signed.** No signing credentials exist, so the package and
-  its payloads are not signed: the package's `.sha256` says only what was
-  packed, and a payload is checked only against the sha512 its index
-  gives, over HTTPS. (The connection trusts the system's certificates.)
+  exist, so a Pane installed from today's package is told its check for
+  an update of its own failed and offered the row that tries again; a
+  development build checks only where `PANE_ARTIFACTS` names a source.
+  First setup is unaffected: it fetches the default extensions' pinned
+  commits from their repositories. Deploying the source (serving
+  `artifacts/` above) is an execution prerequisite, like the signing
+  credentials below.
+- **Nothing is signed.** No signing credentials exist, so the package is
+  not signed: its `.sha256` says only what was packed, and the
+  application package an update downloads is checked only against the
+  sha512 its index entry gives, over HTTPS. (The connection trusts the
+  system's certificates.)
   Signing the package, and serving the index over an authenticated
   channel a release trusts, are prerequisites for a release. On Windows
   this means no Authenticode certificate exists either, so `pane.exe`
@@ -533,14 +575,12 @@ PANE_ARTIFACTS=http://127.0.0.1:$(cat /tmp/port)/ cargo run -p pane
   at once. Acquiring the certificate, signing and notarizing are
   prerequisites for a release, like the others here.
 - **The artifact this build serves is built for the system it ran on.**
-  A payload that carries helpers declares the one helper target its file
-  was built for (`linux-x86_64`, `windows-x86_64` and `macos-aarch64` on
-  CI, `linux-aarch64` on an arm64 checkout; the package's manifest names
-  them all, and the packaging rewrites it to the target whose file the
-  build assembled; none of today's five default extensions carries a
-  helper); a real deployment must build every supported target and
-  serve one payload whose manifest names them all, or serve one payload
-  per system at a per-system index.
+  Its `application` entry names the one target the task built for
+  (`linux-x86_64`, `windows-x86_64` and `macos-aarch64` on CI,
+  `linux-aarch64` on an arm64 checkout; a Pane takes only the entry for
+  its own target, and the index writer names one entry); a real
+  deployment must build every supported target and serve one package per
+  target, an index holding one entry for each.
 - **One package per system**, built where it runs; cross-building and
   packaging for a system this task cannot build on is out of scope (the
   evidence for each is per-system, as the specification requires). On
@@ -583,27 +623,29 @@ PANE_ARTIFACTS=http://127.0.0.1:$(cat /tmp/port)/ cargo run -p pane
   record).
 - **Nothing about an update is signed either**, and the source it comes
   from is the same not-yet-deployed one: a package is checked only
-  against the sha512 its index gives, over HTTPS, as a default
-  extension's payload is. An application package is at most 512 MiB
-  packed and 2 GiB unpacked (the program is large; a development build
-  of it much more), and it is not cached as payloads are: an interrupted
-  download starts over, and only the retries within one install attempt
-  keep it cheap.
+  against the sha512 its index gives, over HTTPS. An application package
+  is at most 512 MiB packed and 2 GiB unpacked (the program is large; a
+  development build of it much more), and it is not cached between
+  attempts: an interrupted download starts over, and only the retries
+  within one install attempt keep it cheap.
 - **Concurrent Panes** on one install folder: both may check and offer;
   two installs race by failing honestly (the swap's renames cannot both
   happen), and a Pane starting removes a staging folder another Pane may
   be installing from — the same small warts the shared data folder
   already records, left as they are.
-- **No default-extension updates.** A default extension is installed once
-  and left alone: a Pane whose default is installed acquires nothing, so
-  a newer payload version is not fetched (uninstalling and restarting
-  acquires the new one). Automatic extension updates are the
+- **No default-extension updates yet
+  ([#269](https://github.com/pane-app/pane/issues/269)).** A default
+  extension's pinned revision is never re-fetched: the pin is the
+  release's tested revision, and what a later Pane release does with its
+  repository's newer release tags is that release's work (uninstalling
+  and restarting fetches the pin again, not a newer tag). Automatic
+  extension updates are the
   [extension update](current-decisions.md) direction, tracked for npm and
   Git sources separately; how a default extension's updates arrive
   (through the same controls) is an open choice recorded for the user.
-- **Concurrent Panes** on one data folder both acquire; each writes its
-  own payload through a `.part` file, and a torn entry fails its
-  integrity check and is downloaded again. One that installs the same
+- **Concurrent Panes** on one data folder both acquire; each fetches its
+  revision into a download folder of its own under `downloads/`, removed
+  once its package is dropped. One that installs the same
   default extension while the other is installing it is told the install's
   own wording, "Already installed …; use Update to replace the installed
   copy" — wording a default extension has no row for (a restarted Pane

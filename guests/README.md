@@ -5,6 +5,27 @@ contract in [`wit/extension.wit`](../wit/extension.wit). Pane registers only
 WASI 0.3 interfaces; a component that imports WASI 0.2 (for example through
 Rust's standard library on `wasm32-wasip2`) is rejected with an explanation.
 
+This tree holds Pane's **samples** — small extensions that exercise the
+whole contract in Rust, JavaScript and TypeScript, which the tests install
+as fixtures and the smokes drive — and the SDKs and fixtures they build
+against. Pane's five **default extensions** (the Calculator, Applications,
+Quicklinks, Files and Clipboard History) are not here: each lives in its
+own repository under the `pane-app` organization
+(`https://github.com/pane-app/<id>`), and a Pane release installs them
+from the release commits this build pins
+([`crates/pane/defaults.json`](../crates/pane/defaults.json); see
+[ADR 0045](../docs/adr/0045-official-extensions-live-in-their-own-repositories.md)).
+To work on one, clone its repository: its own CI builds the component, and
+`cargo xtask guests` here builds the samples only. Until the Rust SDK is
+published to crates.io (#128), build a default extension's repository
+against the SDK by adding a `[patch.crates-io]` entry for `pane-extension`
+pointing at this checkout's `guests/pane-extension`, and build it with
+`cargo build --release --target wasm32-wasip2`; commit the built component
+under the path its `pane.json` names on its release branch and tag
+`v<version>`, as its repository's own workflow does. To try a default
+without building it, install it from its repository:
+`pane --install git:https://github.com/pane-app/calculator@v0.5.0`.
+
 - `pane-extension`: the Rust SDK, bindings for the contract, made to be
   published on crates.io under that name ([its README](pane-extension/README.md));
   its version follows the extension API. `no_std`, so only WASI 0.3 is
@@ -34,25 +55,9 @@ Rust's standard library on `wasm32-wasip2`) is rejected with an explanation.
   ([pausing](../docs/pausing.md), `crates/pane-core/tests/pausing.rs`); their
   **Stop responding** item computes without waiting until Pane stops it
   (`crates/pane-core/tests/unresponsive.rs`).
-- `calculator`: Pane's calculator, a default extension in Rust: an
-  arithmetic expression typed into root search lists its answer, which Enter
-  copies ([Root results](#root-results-computed-from-the-query),
-  [expression scope](../docs/root-search.md#the-calculator)). Its package
-  is `packages/calculator`; held by `crates/pane-core/tests/calculator.rs`.
-- `applications`: Pane's application launcher, a default extension in
-  Rust: the installed applications, which Pane's host finds, are found by
-  name in root search and Enter opens one
-  ([Root results supplied ahead of the query](#root-results-supplied-ahead-of-the-query),
-  [applications](../docs/applications.md)). Its package is
-  `packages/applications`; held by `crates/pane-core/tests/applications.rs`.
-- `files`: Pane's file search, a default extension in Rust: root search
-  and its Search Files command find the files and folders of the home
-  folder in Pane's file index by name, and Enter opens one
-  ([Pane's file index](#panes-file-index), [files](../docs/files.md)).
-  Its package is `packages/files`; held by
-  `crates/pane-core/tests/file_index.rs` and `file_actions.rs`.
 - `sample-files`, `sample-files-js`, `sample-files-ts`: the same host
-  import and `open-file` results in Rust, JavaScript and TypeScript; held by
+  import and `open-file` results in Rust, JavaScript and TypeScript — the
+  same contract the Files default extension holds; held by
   `crates/pane-core/tests/file_actions.rs`.
 - `fixtures/folder-files`: what Files was before #175, over the folder the
   user grants its package ([Files of a granted folder](#files-of-a-granted-folder)),
@@ -234,19 +239,14 @@ Rust's standard library on `wasm32-wasip2`) is rejected with an explanation.
   language), committed so that tests and
   installing a sample need no JavaScript toolchain, with `manifest.json`
   recording their hashes and build inputs.
-- `packages`: the samples', the calculator's and applications' package manifests (`pane.json`). `cargo xtask
+- `packages`: the samples' package manifests (`pane.json`). `cargo xtask
   guests` puts each one with its built component in
-  `target/guests/packages/<name>/`, a ready-to-install package. The
-  default extensions' packages (`calculator`, `applications`, `files`,
-  `clipboard-history`, `quicklinks`) also hold their tile icons (#163):
-  `icon.svg`, the package's, which a command without an icon of its own
-  shows, and the tiles of Search Files (`files/search.svg`) and of
-  Quicklinks' four commands (`quicklinks/search.svg`, `create.svg`,
-  `import.svg`, `export.svg`). Each is a 28 by 28 SVG, a coloured rounded
-  square (radius 7, the row tile's) with a white symbol, one colour per
-  extension; they read on both themes, so none has `@light` or `@dark`
-  variants. The artwork is Pane's own, under this folder's licences, and
-  is held by `crates/pane/tests/default_icons.rs`.
+  `target/guests/packages/<name>/`, a ready-to-install package; the icons
+  sample's hold the tile icons its rows draw (`icon.png`, the package's,
+  which a command without an icon of its own shows, and `command.svg`, its
+  "Icons" command's), held by `crates/pane/tests/default_icons.rs`. The
+  default extensions' own packages, and the tile icons they ship, live in
+  their repositories.
 - `fixtures/faulty`: test fixture whose actions, form, custom view and root
   results return an error or trap, and whose actions grow its memory to
   just under the 128 MiB cap or past it.
@@ -754,7 +754,9 @@ items are the runnable example, and
 ## Root results computed from the query
 
 A command can answer what the user types into root search, as the
-[calculator](calculator) does: its results are listed above the results
+Rust [sample](sample-rust) does with "reverse <text>" and the
+[Calculator](https://github.com/pane-app/calculator) default extension does
+with arithmetic: its results are listed above the results
 root search finds by title, and Enter on one performs its action:
 copying a text to the clipboard (`copy`) or opening an `http://` or
 `https://` address with the system's handler for web links, normally the
@@ -883,7 +885,8 @@ return search(query, { sort: "relevance", limit: 20, offset: 0 }).map((entry) =>
 }));
 ```
 
-The [Files](files) default extension works this way (its command, Search
+The [Files](https://github.com/pane-app/files) default extension works
+this way (its command, Search
 Files, answers both root search and its own field);
 [`sample-files`](sample-files), [`sample-files-js`](sample-files-js) and
 [`sample-files-ts`](sample-files-ts) do the same in Rust, JavaScript and
@@ -973,7 +976,8 @@ return state.val.files
 ## Root results supplied ahead of the query
 
 A command can also give root search results that do not depend on the
-query, as the [applications](applications) extension gives the installed
+query, as the [Applications](https://github.com/pane-app/applications)
+default extension gives the installed
 applications: Pane asks once root search is used, keeps them, and matches
 and ranks them by title like commands, for a query that is not blank. Set
 `"indexedResults": true` on the command in `pane.json` and export
@@ -1064,8 +1068,9 @@ packages in [`packages/`](packages) set `indexedResults`.
 ## Root providers
 
 A command whose only job is to answer root search, as the
-[calculator](calculator) and [applications](applications) extensions'
-are, declares `"mode": "provider"` in `pane.json` (#164). A **root
+[Calculator](https://github.com/pane-app/calculator) and
+[Applications](https://github.com/pane-app/applications) default
+extensions' are, declares `"mode": "provider"` in `pane.json` (#164). A **root
 provider** has no row of its own: it is never launched, so it cannot be
 pinned, has no alias, fallback or hotkey, and neither the Actions panel nor
 the Shortcuts page offers it; root search learns nothing about it. Its
@@ -1246,8 +1251,9 @@ while the package is disabled. Each item is kept for the retention after
 it was copied (7 days unless `set-retention(seconds)` chose 1 minute to
 365 days), and Pane deletes it then itself, whether the command runs or
 not: `entries()` never lists an expired item, so a command needs no expiry
-of its own. The [Clipboard History](clipboard-history)
-default extension is the example; see [clipboard history](../docs/clipboard-history.md).
+of its own. The [Clipboard
+History](https://github.com/pane-app/clipboard-history) default extension is
+the example; see [clipboard history](../docs/clipboard-history.md).
 It is the one package whose history records from the first start, without
 calling `set-capture` (ADR 0042), and Pane draws its command in a view of
 its own, whose controls (pause, retention, disabled applications, clearing)

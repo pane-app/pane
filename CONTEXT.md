@@ -17,20 +17,20 @@ An installable addition that contributes functionality to the launcher.
 _Avoid_: Plugin, add-on
 
 **Default extension**:
-An official extension provided by default to supply an everyday feature: offered ticked at first setup and acquired then rather than shipped inside the installer, at the revision the Pane release names. The user can leave it out at first setup or disable it individually.
+An official extension provided by default to supply an everyday feature: installed at first setup, from the commit of its repository's release tag that the Pane release pins, rather than shipped inside the installer. The choice screen is deferred (#283): every default is installed, and disabling one is the opt-out — one the user uninstalled is not installed again.
 _Avoid_: Mandatory feature, core feature
 
 **Official extension**:
-An extension Pane's maintainers publish, each from a repository of its own that anyone may contribute to, and which Pane marks as its own. The default extensions are official extensions.
+An extension Pane's maintainers publish, each from a repository of its own that anyone may contribute to, and which Settings marks as Pane's own wherever it lists extensions, by its default identity or its repository in the pane-app organization. The default extensions are official extensions.
 _Avoid_: Built-in extension, core extension, first-party plugin
 
 **Artifact source**:
-Where Pane reads the index of its default extensions and downloads their payloads from: Pane's own downloads, distinct from npm and the Git hosts. A development build can name one on this computer instead, for tests and smokes; a release build cannot.
-_Avoid_: Registry (npm's), repository (Git's), update server (Pane's application updates)
+Where Pane reads the index of its own application updates: Pane's own downloads, distinct from npm and the Git hosts. Nothing about a default extension is acquired from it — a default is fetched from the commit of its repository's release tag that the Pane release pins. A development build can name an artifact source on this computer instead, for tests and smokes; a release build cannot.
+_Avoid_: Registry (npm's), repository (Git's)
 
 **Acquired artifact**:
-A default extension's payload Pane downloads itself at first setup: a tarball its index names by version, file, size and sha512 integrity, unpacked and checked as an npm package's tarball is and installed through the same path into a managed copy, whose identity is the default extension's own. Pane keeps what it downloaded in its payload cache only while it still matches that integrity.
-_Avoid_: Installer payload (the installer carries none), bundled feature, runtime download (the extension runtime is part of Pane)
+Pane's own application-update package, downloaded only when the user chooses the update: the zip or tarball the artifact source's index names by version, file, size, target and sha512 integrity, checked against that integrity and unpacked by the same strict readers an npm package's tarball is, then swapped for the running program, so the new version is used the next start. It is not cached between attempts.
+_Avoid_: Installer payload (the installer carries none), bundled feature, default extension's payload (a default is fetched from its pinned commit)
 
 **Disabled extension**:
 An installed extension whose execution and contributed functionality are switched off, while its settings and unexpired saved data are retained.

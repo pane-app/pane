@@ -15,10 +15,13 @@
 //! extension's Settings page (its preferences and its Clear History row)
 //! reach the same history.
 //!
-//! The package is the one `cargo xtask guests` assembles in
-//! `target/guests/packages/clipboard-history`, acquired as Pane's default
-//! extension from an artifact source on 127.0.0.1 (`support/artifacts.rs`);
-//! the system's clipboard is a fake that never touches the real one.
+//! The package is made to the default's package shape over the JavaScript
+//! clipboard sample's component, which implements the same host import:
+//! its repository, made with `git` and served over Git's smart HTTP
+//! protocol from 127.0.0.1 (`support/repo_server.rs`,
+//! `support/defaults.rs`); the system's clipboard is a fake that never
+//! touches the real one. The Clipboard History extension's own sources
+//! live in their repository (#285), which the tests cannot read.
 
 use std::fs;
 use std::path::PathBuf;
@@ -34,27 +37,25 @@ use pane_core::clipboard_view::{
     ClipboardRecord, capture_summary, copied_at_label, copied_line, day_of, information,
     time_label,
 };
-use pane_core::defaults::ArtifactSource;
 use pane_core::{
     ConfirmAnswer, DefaultExtension, Launcher, PackageIdentity, Runtime, Screen, Status,
 };
 use serde_json::Value;
 use tempfile::TempDir;
 
-#[path = "support/artifacts.rs"]
-mod artifacts;
+#[path = "support/defaults.rs"]
+mod defaults;
+#[path = "support/repo_server.rs"]
+mod repo_server;
 
-use artifacts::Artifacts;
+use defaults::pinned;
 
 #[path = "support/feedback.rs"]
 mod feedback;
-#[path = "support/guests.rs"]
-mod guests;
 #[path = "support/system.rs"]
 mod system;
 
 use feedback::RecordingWindow;
-use guests::guests;
 use system::{Done, RecordingSystem};
 
 const HOUR: i64 = 3_600_000;
@@ -553,34 +554,86 @@ impl ClipboardSystem for FakeClipboard {
     }
 }
 
-/// The files of the assembled Clipboard History package, by their path in
-/// the package.
+/// The files of the package the Clipboard History pin names: the
+/// JavaScript clipboard sample's component under the default's own
+/// manifest, whose command keeps the default's id `clipboard-history`
+/// (which the host keys the split view on) and whose preferences are the
+/// history's own state, as `clipboard_settings` overlays them.
 fn package_files() -> Vec<(String, Vec<u8>)> {
-    let folder = guests().join("packages/clipboard-history");
-    assert!(
-        folder.is_dir(),
-        "{} is missing; run `cargo xtask guests`",
-        folder.display()
-    );
-    let mut files: Vec<(String, Vec<u8>)> = fs::read_dir(&folder)
-        .unwrap()
-        .map(|entry| entry.unwrap().path())
-        .filter(|path| path.is_file())
-        .map(|path| {
-            let name = path.file_name().unwrap().to_str().unwrap().to_owned();
-            (name, fs::read(&path).unwrap())
-        })
+    let mut files: Vec<(String, Vec<u8>)> = defaults::package_files("sample-clipboard-js")
+        .into_iter()
+        .filter(|(path, _)| path != "pane.json")
         .collect();
-    files.sort();
+    files.push(("pane.json".into(), manifest().into_bytes()));
     files
 }
 
-/// Pane's data location, artifact source, clock and clipboard for one test.
+/// The manifest of the Clipboard History package: the default's own
+/// shape, naming the sample's component.
+fn manifest() -> String {
+    r#"{
+  "manifestVersion": 1,
+  "title": "Clipboard History",
+  "version": "0.1.0",
+  "apiVersion": "0.1",
+  "preferences": [
+    {
+      "name": "keepHistoryFor",
+      "type": "dropdown",
+      "title": "Keep History For",
+      "description": "Older items are deleted, also while Pane is stopped or the extension is disabled",
+      "options": [
+        { "value": "3600", "title": "1 Hour" },
+        { "value": "86400", "title": "1 Day" },
+        { "value": "604800", "title": "7 Days" },
+        { "value": "2592000", "title": "30 Days" },
+        { "value": "7776000", "title": "90 Days" }
+      ],
+      "default": "604800"
+    },
+    {
+      "name": "pauseRecording",
+      "type": "checkbox",
+      "title": "Recording",
+      "label": "Pause Recording",
+      "description": "While paused, nothing you copy is kept",
+      "default": false
+    },
+    {
+      "name": "disabledApplications",
+      "type": "applications",
+      "title": "Disabled Applications",
+      "description": "What you copy in these applications is never kept. Copies an application marks as concealed, as password managers do, are never kept either",
+      "placeholder": "KeePass.exe"
+    }
+  ],
+  "commands": [
+    {
+      "id": "clipboard-history",
+      "title": "Clipboard History",
+      "subtitle": "What you copied, kept on this computer",
+      "component": "sample_clipboard_js.wasm",
+      "platforms": ["windows", "macos", "linux"]
+    }
+  ]
+}"#
+        .to_owned()
+}
+
+/// Pane's data location, the server the default extension's repository
+/// is served from, clock and clipboard for one test.
 struct Pane {
     data: TempDir,
-    artifacts: Artifacts,
+    /// Kept, not read: the repository's work tree, which the server serves
+    /// as long as this lives.
+    _repos: TempDir,
     clipboard: FakeClipboard,
     clock: Arc<ManualClock>,
+    /// Kept, not read: the server the repository is served from, which
+    /// stops when this is dropped.
+    _server: repo_server::Server,
+    /// The pin that names the served repository.
+    pin: DefaultExtension,
 }
 
 impl Pane {
@@ -599,49 +652,31 @@ impl Pane {
     /// so fixed-date records would be swept once the system's date passed
     /// them by a retention.
     fn with_at(clipboard: FakeClipboard, now: u64) -> Pane {
-        let pane = Pane {
+        let server = repo_server::Server::start();
+        let repos = tempfile::tempdir().unwrap();
+        let files = package_files();
+        let tag = format!("v{}", defaults::version_of(&files));
+        let pin = pinned(
+            &server,
+            repos.path(),
+            "clipboard-history",
+            "Clipboard History",
+            &tag,
+            &files,
+        );
+        Pane {
             data: tempfile::tempdir().unwrap(),
-            artifacts: Artifacts::start(),
+            _repos: repos,
             clipboard,
             clock: ManualClock::at(now),
-        };
-        let files = package_files();
-        let manifest: Value = serde_json::from_slice(
-            &files
-                .iter()
-                .find(|(path, _)| path == "pane.json")
-                .expect("the package has a pane.json")
-                .1,
-        )
-        .unwrap();
-        let borrowed: Vec<(&str, Vec<u8>)> = files
-            .iter()
-            .map(|(path, contents)| (path.as_str(), contents.clone()))
-            .collect();
-        pane.artifacts.publish(
-            "clipboard-history",
-            manifest["version"].as_str().unwrap(),
-            &borrowed,
-        );
-        pane
+            _server: server,
+            pin,
+        }
     }
 
-    /// Pane with Clipboard History acquired as its default extension.
+    /// Pane with Clipboard History set up as its default extension.
     fn start(&self) -> Launcher {
-        let launcher = Launcher::with_packages(
-            Runtime::start(),
-            vec![],
-            self.data.path().join("extensions"),
-        )
-        .with_defaults(
-            ArtifactSource::local(self.artifacts.url()).unwrap(),
-            vec![DefaultExtension {
-                id: "clipboard-history".into(),
-                title: "Clipboard History".into(),
-            }],
-        )
-        .with_clock(self.clock.clone())
-        .with_clipboard(Arc::new(self.clipboard.clone()));
+        let launcher = self.launcher();
         block_on(launcher.acquire_defaults());
         assert!(
             matches!(launcher.view().status, Status::Result(_)),
@@ -651,21 +686,15 @@ impl Pane {
         launcher
     }
 
-    /// Pane started again on the same data folder, Clipboard History
-    /// already installed.
-    fn restart(&self) -> Launcher {
+    /// A launcher on this data folder, setting Clipboard History up as
+    /// its default extension; a new one is a restart of Pane.
+    fn launcher(&self) -> Launcher {
         Launcher::with_packages(
             Runtime::start(),
             vec![],
             self.data.path().join("extensions"),
         )
-        .with_defaults(
-            ArtifactSource::local(self.artifacts.url()).unwrap(),
-            vec![DefaultExtension {
-                id: "clipboard-history".into(),
-                title: "Clipboard History".into(),
-            }],
-        )
+        .with_defaults(vec![self.pin.clone()])
         .with_clock(self.clock.clone())
         .with_clipboard(Arc::new(self.clipboard.clone()))
     }
@@ -767,14 +796,15 @@ fn only_the_registered_default_extension_on_its_own_screen_is_projected() {
     let local = PackageIdentity::local(copy.path()).unwrap();
     open(&launcher, &format!("{}#clipboard-history", local.key()));
     assert!(launcher.clipboard_history().is_none());
-    // Its generic list: a copy does not record until it is resumed, as
-    // only Pane's own Clipboard History records from the first start.
+    // Its generic list: a copy does not record until the user turns it on
+    // (the sample's row), as only Pane's own Clipboard History records
+    // from the first start.
     assert!(
         launcher
             .view()
             .rows
             .iter()
-            .any(|row| row.title == "Resume Recording"),
+            .any(|row| row.title == "Turn on clipboard history"),
         "its generic list is its own"
     );
 }
@@ -817,7 +847,7 @@ fn a_fresh_data_folder_records_the_first_copy_with_no_turn_on() {
         .set_clipboard_capture(&view, CaptureState::Paused)
         .unwrap();
     drop(launcher);
-    let launcher = pane.restart();
+    let launcher = pane.launcher();
     pane.clipboard.copy("after the restart", None);
     open(&launcher, COMMAND);
     assert_eq!(
@@ -1418,7 +1448,7 @@ fn several_copies_within_the_delay_are_written_once_and_read_back_after_a_restar
 
     launcher.quit_cleanly();
     drop(launcher);
-    let launcher = pane.restart();
+    let launcher = pane.launcher();
     open(&launcher, COMMAND);
     assert_eq!(listed(&launcher), ["three", "two", "one"]);
 }
@@ -1452,7 +1482,7 @@ fn a_clean_quit_writes_the_copies_that_wait() {
     }
 
     drop(launcher);
-    let launcher = pane.restart();
+    let launcher = pane.launcher();
     open(&launcher, COMMAND);
     assert_eq!(listed(&launcher), ["copied just before quitting"]);
 }
@@ -1550,7 +1580,7 @@ fn kept_items_stay_protected_and_are_encrypted_once() {
     // Read back after a clean quit and a restart, which encrypts nothing.
     launcher.quit_cleanly();
     drop(launcher);
-    let launcher = pane.restart();
+    let launcher = pane.launcher();
     open(&launcher, COMMAND);
     assert_eq!(listed(&launcher), ["second secret", "first secret"]);
     assert_eq!(launcher.clipboard_items_protected(), 0);

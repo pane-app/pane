@@ -1,5 +1,5 @@
-//! Building Pane's packages and the artifacts its default extensions
-//! are acquired from (#53 for Linux, #51 for Windows, #52 for macOS).
+//! Building Pane's packages and the artifacts its own updates are
+//! downloaded from (#53 for Linux, #51 for Windows, #52 for macOS).
 //!
 //! `package-linux`, `package-windows` and `package-macos` each produce,
 //! under `target/dist/`:
@@ -9,23 +9,25 @@
 //!   installs from: the `pane` program, the install script and a README
 //!   (and, on Linux, a desktop entry, on macOS the `Info.plist` of the
 //!   `Pane.app` bundle the install script makes), and none of the default
-//!   extensions' payloads (internet-first: Pane downloads them at first
-//!   setup). A `.sha256` file beside it names its digest; nothing is
-//!   signed, since no signing credentials exist yet.
+//!   extensions (internet-first: Pane fetches them at first setup, from
+//!   the commits this release pins). A `.sha256` file beside it names its
+//!   digest; nothing is signed, since no signing credentials exist yet.
 //! - `artifacts/` — what an artifact source serves: the index document
-//!   `pane-defaults.json` and one tarball per default extension's payload,
-//!   built for the system this ran on. A real deployment serves this
-//!   folder at Pane's published downloads; the tests and smokes serve it
-//!   from this computer (`scripts/artifact_server.py`) instead, so no
-//!   check reaches the network.
+//!   `pane-defaults.json`, naming the application package a Pane
+//!   application update downloads, and the package itself. A real
+//!   deployment serves this folder at Pane's published downloads; the
+//!   tests and smokes serve it from this computer
+//!   (`scripts/artifact_server.py`) instead, so no check reaches the
+//!   network.
 //!
 //! `--dev` builds the package's program in the development profile: the
 //! native smokes install that one, because only a development build takes
-//! its artifact source from `PANE_ARTIFACTS` (a release build uses Pane's
-//! published downloads, which no controlled source may replace). Without
-//! it, the release profile is built.
+//! its artifact source from `PANE_ARTIFACTS` and its default extensions'
+//! pins from `PANE_DEFAULTS` (a release build uses Pane's published
+//! downloads and the committed pins, which no controlled source may
+//! replace). Without it, the release profile is built.
 //!
-//! The index the artifacts hold also names the application package a Pane
+//! The index the artifacts hold names the application package a Pane
 //! application update downloads (#54): its `application` entry, with the
 //! package's version, file name, sha512 integrity, size and target.
 //! `--package-version <version>` builds the program reporting that
@@ -50,25 +52,9 @@ use std::process::Command;
 
 use super::PACKED_MTIME;
 
-use serde_json::{Value, json};
 use sha2::{Digest, Sha256, Sha512};
 
 use crate::zip;
-
-/// The default extensions whose payloads the artifacts describe, and the
-/// assembled package each is packed from: the default set (#60, the
-/// user's recorded choice — the calculator, applications, quicklinks,
-/// files and clipboard history), the same in every build. The helper
-/// sample is no default extension (#162): it is installed by hand, with
-/// `pane --install target/guests/packages/sample-helper`. The ids are the
-/// ones Pane's application build acquires (`pane::default_extensions`).
-const DEFAULTS: [(&str, &str); 5] = [
-    ("calculator", "calculator"),
-    ("applications", "applications"),
-    ("quicklinks", "quicklinks"),
-    ("files", "files"),
-    ("clipboard-history", "clipboard-history"),
-];
 
 /// The pane program's version, as the package names it: this workspace's
 /// version, which every crate of it shares.
@@ -128,13 +114,13 @@ impl System {
 }
 
 /// Builds the Linux package and the artifacts an artifact source serves:
-/// the default extensions' payloads, and the index naming them and the
-/// application package this task also built.
+/// the index naming the application package this task also built, and
+/// the package itself.
 pub fn linux(dev: bool, version: Option<String>) -> Result<(), String> {
     let root = root();
     let out = root.join("target/dist");
     fs::create_dir_all(&out).map_err(|error| error.to_string())?;
-    let (artifacts, entries) = assemble_payloads(&root, &out)?;
+    let artifacts = artifacts_folder(&out)?;
     build_program(&root, dev, version.as_deref())?;
     let (package, packed) = assemble_package(&root, &out, dev, System::Linux, version.as_deref())?;
     let target = target_id()?;
@@ -144,7 +130,7 @@ pub fn linux(dev: bool, version: Option<String>) -> Result<(), String> {
         &packed,
         &target,
     );
-    write_index(&artifacts, &entries, Some(&application))?;
+    write_index(&artifacts, Some(&application))?;
     serve_package(&artifacts, &package)?;
     println!("package built into {}", package.display());
     println!("artifacts built into {}", artifacts.display());
@@ -156,7 +142,7 @@ pub fn windows(dev: bool, version: Option<String>) -> Result<(), String> {
     let root = root();
     let out = root.join("target/dist");
     fs::create_dir_all(&out).map_err(|error| error.to_string())?;
-    let (artifacts, entries) = assemble_payloads(&root, &out)?;
+    let artifacts = artifacts_folder(&out)?;
     // The program comes last, so everything else the task builds is built
     // wherever it runs; but pane.exe can only be built by a Windows
     // checkout (no cross toolchain is set up: a Windows program needs a
@@ -164,9 +150,8 @@ pub fn windows(dev: bool, version: Option<String>) -> Result<(), String> {
     // Windows package's name would be worse than explaining so. CI's
     // `windows-2025` runner builds the package itself.
     if !cfg!(target_os = "windows") {
-        // No package was built, so the index names no application package:
-        // a source that serves none still serves the default extensions.
-        write_index(&artifacts, &entries, None)?;
+        // No package was built, so the index names no application package.
+        write_index(&artifacts, None)?;
         return Err(format!(
             "package-windows builds the pane program for Windows, which only a Windows checkout \
              can build; this one runs on {}. The artifacts under {} are assembled for this \
@@ -185,29 +170,28 @@ pub fn windows(dev: bool, version: Option<String>) -> Result<(), String> {
         &packed,
         &target,
     );
-    write_index(&artifacts, &entries, Some(&application))?;
+    write_index(&artifacts, Some(&application))?;
     serve_package(&artifacts, &package)?;
     println!("package built into {}", package.display());
     println!("artifacts built into {}", artifacts.display());
     Ok(())
 }
 
-/// Builds the macOS package and the default extensions' artifacts.
+/// Builds the macOS package and the same artifacts.
 pub fn macos(dev: bool, version: Option<String>) -> Result<(), String> {
     let root = root();
     let out = root.join("target/dist");
     fs::create_dir_all(&out).map_err(|error| error.to_string())?;
-    let (artifacts, entries) = assemble_payloads(&root, &out)?;
+    let artifacts = artifacts_folder(&out)?;
     // As on Windows, the program comes last, so everything else the task
     // builds is built wherever it runs; but the `pane` program for macOS
-    // can only be built by a macOS checkout (no cross toolchain is set up:
-    // a macOS program needs a macOS build), and packing another system's
-    // program under a macOS package's name would be worse than explaining
-    // so. CI's `macos-15` runner builds the package itself.
+    // can only be built by a macOS checkout (no cross toolchain is set
+    // up: a macOS program needs a macOS build), and packing another
+    // system's program under a macOS package's name would be worse than
+    // explaining so. CI's `macos-15` runner builds the package itself.
     if !cfg!(target_os = "macos") {
-        // No package was built, so the index names no application package:
-        // a source that serves none still serves the default extensions.
-        write_index(&artifacts, &entries, None)?;
+        // No package was built, so the index names no application package.
+        write_index(&artifacts, None)?;
         return Err(format!(
             "package-macos builds the pane program for macOS, which only a macOS checkout can \
              build; this one runs on {}. The artifacts under {} are assembled for this system, \
@@ -225,7 +209,7 @@ pub fn macos(dev: bool, version: Option<String>) -> Result<(), String> {
         &packed,
         &target,
     );
-    write_index(&artifacts, &entries, Some(&application))?;
+    write_index(&artifacts, Some(&application))?;
     serve_package(&artifacts, &package)?;
     println!("package built into {}", package.display());
     println!("artifacts built into {}", artifacts.display());
@@ -233,8 +217,8 @@ pub fn macos(dev: bool, version: Option<String>) -> Result<(), String> {
 }
 
 /// Keeps the package in the artifacts an artifact source serves, under the
-/// file name its index entry names: a Pane application update downloads it
-/// from the same source the default extensions' payloads come from.
+/// file name its index entry names: a Pane application update downloads
+/// it from that source.
 fn serve_package(artifacts: &Path, package: &Path) -> Result<(), String> {
     let served = artifacts.join(package.file_name().expect("the package is named"));
     fs::copy(package, &served)
@@ -298,58 +282,23 @@ fn target_id() -> Result<String, String> {
         .ok_or_else(|| "Pane names no target for this system".to_owned())
 }
 
-/// Assembles the payloads an artifact source serves into
-/// `target/dist/artifacts`: one tarball per default extension's payload,
-/// packed from the package `cargo xtask guests` assembled, and the line
-/// each takes in the index (written by [`write_index`], once the
-/// application package is also known). The payload's manifest names the
-/// helper targets whose files it carries: the build serves the helper
-/// built for the system it ran on, so the manifest is rewritten to name
-/// that target alone (a real deployment builds every supported target and
-/// serves one payload whose manifest names them all).
-fn assemble_payloads(root: &Path, out: &Path) -> Result<(PathBuf, Vec<String>), String> {
+/// The empty `artifacts` folder under `out`, replacing whatever an
+/// earlier build left there: the index of Pane's own application updates
+/// and the package it names.
+fn artifacts_folder(out: &Path) -> Result<PathBuf, String> {
     let artifacts = out.join("artifacts");
     let _ = fs::remove_dir_all(&artifacts);
     fs::create_dir_all(&artifacts).map_err(|error| error.to_string())?;
-    let mut entries: Vec<String> = Vec::new();
-    for (id, package) in DEFAULTS {
-        let source = root.join("target/guests/packages").join(package);
-        if !source.is_dir() {
-            return Err(format!(
-                "{} is missing; run `cargo xtask guests` first",
-                source.display()
-            ));
-        }
-        let files = payload_files(&source, id)?;
-        let version = manifest_version(&files)?;
-        let file = format!("{id}-{version}.tgz");
-        let tarball = pack(&files);
-        let integrity = format!("sha512-{}", base64(&Sha512::digest(&tarball)));
-        fs::write(artifacts.join(&file), &tarball).map_err(|error| {
-            format!("write {} failed: {error}", artifacts.join(&file).display())
-        })?;
-        entries.push(format!(
-            "  {{ \"id\": \"{id}\", \"version\": \"{version}\", \"file\": \"{file}\", \"integrity\": \"{integrity}\", \"size\": {} }}",
-            tarball.len()
-        ));
-    }
-    Ok((artifacts, entries))
+    Ok(artifacts)
 }
 
-/// Writes the index `pane-defaults.json` into `artifacts`: the default
-/// extensions' entries, and the `application` entry naming the package an
-/// application update downloads (its version, file name, sha512
-/// integrity, size and target) when the task built one. A source that
-/// serves no application package still serves the default extensions.
-fn write_index(
-    artifacts: &Path,
-    entries: &[String],
-    application: Option<&str>,
-) -> Result<(), String> {
-    let mut index = format!(
-        "{{\n  \"formatVersion\": 1,\n  \"defaults\": [\n{}\n  ]",
-        entries.join(",\n")
-    );
+/// Writes the index `pane-defaults.json` into `artifacts`: the
+/// `application` entry naming the package a Pane application update
+/// downloads (its version, file name, sha512 integrity, size and target)
+/// when the task built one. A source that serves no application package
+/// serves the index alone.
+fn write_index(artifacts: &Path, application: Option<&str>) -> Result<(), String> {
+    let mut index = "{\n  \"formatVersion\": 1".to_owned();
     if let Some(application) = application {
         index.push_str(",\n");
         index.push_str(application);
@@ -375,146 +324,6 @@ fn application_entry(version: &str, package: &Path, packed: &[u8], target: &str)
          \"integrity\": \"{integrity}\", \"size\": {}, \"target\": \"{target}\" }}",
         packed.len()
     )
-}
-
-/// The files of the payload packed from `source`: the manifest, and the
-/// files it names — the components of its commands, the packaged images
-/// its package's and commands' icons name with the `@light` and `@dark`
-/// variants the package has (#163, the default extensions' tiles), and
-/// the helper file for this system — exactly what Pane installs from it. A
-/// manifest that declares helpers is rewritten to name this system's helper
-/// target
-/// alone, since the build assembles the helper for the system it runs on;
-/// nothing else in the assembled folder is packed, so a file a helper run
-/// left beside its program never travels.
-fn payload_files(source: &Path, _id: &str) -> Result<Vec<(String, Vec<u8>)>, String> {
-    let assembled = read_files(source, "")?;
-    let read = |path: &str| {
-        assembled
-            .iter()
-            .find(|(name, _)| name == path)
-            .map(|(_, contents)| contents.clone())
-            .ok_or_else(|| {
-                format!(
-                    "{path} is missing from the assembled package {}",
-                    source.display()
-                )
-            })
-    };
-    let mut manifest: Value = serde_json::from_slice(&read("pane.json")?)
-        .map_err(|error| format!("the payload's pane.json cannot be read: {error}"))?;
-    // The files the manifest names, which Pane installs from the payload.
-    // Commands can share a component (Quicklinks' four do), and Pane refuses
-    // a tarball that holds a file twice, so each is named once.
-    let mut named: Vec<String> = Vec::new();
-    if let Some(commands) = manifest["commands"].as_array() {
-        for command in commands {
-            let component = command["component"].as_str().expect("a component");
-            if !named.iter().any(|name| name == component) {
-                named.push(component.to_owned());
-            }
-        }
-    }
-    // The images the icons name: Pane refuses a package whose icon names
-    // an image it does not ship, so a payload without them would not
-    // install.
-    for image in manifest_images(&manifest) {
-        let present = variants(&image)
-            .into_iter()
-            .filter(|variant| assembled.iter().any(|(name, _)| name == variant));
-        for path in std::iter::once(image.clone()).chain(present) {
-            if !named.contains(&path) {
-                named.push(path);
-            }
-        }
-    }
-    let target = target_id()?;
-    // `get_mut`, not indexing: indexing a Value for a missing key inserts
-    // a null for it, and a written-out `"helpers": null` is a manifest
-    // Pane refuses (its helpers are a sequence).
-    if let Some(Value::Array(helpers)) = manifest.get_mut("helpers") {
-        // The build assembles the helper for the system it runs on, so the
-        // payload names that target alone.
-        let file = format!("helpers/{target}/pane-echo{}", exe_suffix());
-        if read(&file).is_err() {
-            return Err(format!(
-                "the payload ships no {file}; `cargo xtask guests` builds its helper for the \
-                 system it runs on"
-            ));
-        }
-        for helper in helpers {
-            helper["targets"] = json!({ target.clone(): file.clone() });
-        }
-        named.push(file);
-    }
-    let manifest_text = serde_json::to_vec_pretty(&manifest)
-        .map_err(|error| format!("the rewritten pane.json cannot be written: {error}"))?;
-    let mut payload = vec![("pane.json".to_owned(), manifest_text)];
-    payload.extend(
-        named
-            .into_iter()
-            .map(|path| Ok((path.clone(), read(&path)?)))
-            .collect::<Result<Vec<_>, String>>()?,
-    );
-    Ok(payload)
-}
-
-/// The packaged images the package's and its commands' icons in
-/// `manifest` name, in order.
-fn manifest_images(manifest: &Value) -> Vec<String> {
-    std::iter::once(&manifest["icon"])
-        .chain(
-            manifest["commands"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .map(|command| &command["icon"]),
-        )
-        .flat_map(icon_images)
-        .collect()
-}
-
-/// The packaged images an `icon` of `pane.json` names (`docs/list-tree.md`,
-/// Icons): a text ending in `.png` or `.svg`, an object's `path`, `light`
-/// and `dark`, and its `fallback`'s, in that order. A built-in icon's
-/// name, a URL and a system icon name none.
-fn icon_images(icon: &Value) -> Vec<String> {
-    match icon {
-        Value::String(text) => {
-            let lower = text.to_ascii_lowercase();
-            if lower.ends_with(".png") || lower.ends_with(".svg") {
-                vec![text.clone()]
-            } else {
-                Vec::new()
-            }
-        }
-        Value::Object(fields) => {
-            let mut images: Vec<String> = ["path", "light", "dark"]
-                .into_iter()
-                .filter_map(|field| fields.get(field)?.as_str().map(str::to_owned))
-                .collect();
-            if let Some(fallback) = fields.get("fallback") {
-                images.extend(icon_images(fallback));
-            }
-            images
-        }
-        _ => Vec::new(),
-    }
-}
-
-/// The `@light` and `@dark` variants of the image at `path`, which Pane
-/// draws in place of it in those themes when the package has them:
-/// `logo@light.png` and `logo@dark.png` beside `logo.png`.
-fn variants(path: &str) -> [String; 2] {
-    let (stem, extension) = match path.rfind('.') {
-        Some(dot) if !path[dot..].contains('/') => (&path[..dot], &path[dot..]),
-        _ => (path, ""),
-    };
-    ["light", "dark"].map(|theme| format!("{stem}@{theme}{extension}"))
-}
-
-fn exe_suffix() -> &'static str {
-    if cfg!(windows) { ".exe" } else { "" }
 }
 
 /// Every file under `folder`, by its path relative to it, in name order.
@@ -546,29 +355,6 @@ fn read_files(folder: &Path, prefix: &str) -> Result<Vec<(String, Vec<u8>)>, Str
         }
     }
     Ok(files)
-}
-
-/// The version a payload's `pane.json` declares.
-fn manifest_version(files: &[(String, Vec<u8>)]) -> Result<String, String> {
-    let manifest = files
-        .iter()
-        .find(|(path, _)| path == "pane.json")
-        .map(|(_, contents)| contents.clone())
-        .ok_or("the payload has no pane.json")?;
-    let manifest: Value = serde_json::from_slice(&manifest)
-        .map_err(|error| format!("the payload's pane.json cannot be read: {error}"))?;
-    manifest["version"]
-        .as_str()
-        .map(str::to_owned)
-        .ok_or_else(|| "the payload's pane.json declares no version".to_owned())
-}
-
-/// Packs `files` (path in the package, contents) as Pane's own downloads
-/// pack a payload: a gzip of a tar holding them under `package/`, every
-/// file a regular file without execute permission, with the fixed time,
-/// owner and mode that make the tarball the same on every system.
-fn pack(files: &[(String, Vec<u8>)]) -> Vec<u8> {
-    pack_tgz(files, "package", None).expect("packing into memory")
 }
 
 /// Packs `files` (path in the archive, contents) as the tarballs this
@@ -694,8 +480,9 @@ WHAT THIS IS
 
   Pane, a desktop launcher. This package holds the pane program and
   installs it for one user; it holds none of Pane's default extensions:
-  Pane downloads them itself the first time it runs, from Pane's own
-  downloads (https://downloads.pane.sh/).
+  Pane fetches them itself the first time it runs, from the commits of
+  their own repositories' release tags that this release pins, with its
+  own Git client.
 
 PREREQUISITES
 
@@ -724,11 +511,12 @@ UNINSTALL
 
 FIRST RUN
 
-  The first run downloads Pane's default extensions (the calculator) from
-  https://downloads.pane.sh/ and shows their progress; Pane stays usable
-  if the download fails, and offers to try again. That location is not
-  deployed yet, so today a first run on the real internet explains that
-  it cannot reach it and keeps everything else working.
+  The first run fetches Pane's default extensions (the calculator,
+  applications, quicklinks, files and clipboard history) from the
+  commits of their repositories' release tags that this release pins,
+  and says what it is setting up; Pane stays usable if a fetch fails,
+  and offers to try again. All five are installed, the first-setup
+  choice screen being not built yet; each can be disabled in Settings.
 
   NOTHING IS SIGNED
 
@@ -748,8 +536,9 @@ WHAT THIS IS
 
   Pane, a desktop launcher. This package holds the pane.exe program and
   installs it for one user; it holds none of Pane's default extensions:
-  Pane downloads them itself the first time it runs, from Pane's own
-  downloads (https://downloads.pane.sh/).
+  Pane fetches them itself the first time it runs, from the commits of
+  their own repositories' release tags that this release pins, with its
+  own Git client.
 
 PREREQUISITES
 
@@ -786,11 +575,12 @@ UNINSTALL
 
 FIRST RUN
 
-  The first run downloads Pane's default extensions (the calculator) from
-  https://downloads.pane.sh/ and shows their progress; Pane stays usable
-  if the download fails, and offers to try again. That location is not
-  deployed yet, so today a first run on the real internet explains that
-  it cannot reach it and keeps everything else working.
+  The first run fetches Pane's default extensions (the calculator,
+  applications, quicklinks, files and clipboard history) from the
+  commits of their repositories' release tags that this release pins,
+  and says what it is setting up; Pane stays usable if a fetch fails,
+  and offers to try again. All five are installed, the first-setup
+  choice screen being not built yet; each can be disabled in Settings.
 
   NOTHING IS SIGNED
 
@@ -811,8 +601,9 @@ WHAT THIS IS
 
   Pane, a desktop launcher. This package holds the pane program and
   installs it, as a Pane.app bundle, for one user; it holds none of
-  Pane's default extensions: Pane downloads them itself the first time
-  it runs, from Pane's own downloads (https://downloads.pane.sh/).
+  Pane's default extensions: Pane fetches them itself the first time
+  it runs, from the commits of their own repositories' release tags
+  that this release pins, with its own Git client.
 
 PREREQUISITES
 
@@ -855,11 +646,12 @@ UNINSTALL
 
 FIRST RUN
 
-  The first run downloads Pane's default extensions (the calculator)
-  from https://downloads.pane.sh/ and shows their progress; Pane stays
-  usable if the download fails, and offers to try again. That location
-  is not deployed yet, so today a first run on the real internet
-  explains that it cannot reach it and keeps everything else working.
+  The first run fetches Pane's default extensions (the calculator,
+  applications, quicklinks, files and clipboard history) from the
+  commits of their repositories' release tags that this release pins,
+  and says what it is setting up; Pane stays usable if a fetch fails,
+  and offers to try again. All five are installed, the first-setup
+  choice screen being not built yet; each can be disabled in Settings.
 
   NOTHING IS SIGNED
 
@@ -923,159 +715,4 @@ fn base64(bytes: &[u8]) -> String {
         }
     }
     text
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// A package with no helpers keeps a manifest with no helpers: indexing
-    /// a Value for the key would write `"helpers": null` into the payload,
-    /// which Pane refuses to install (CI run 36676779827 found it in the
-    /// smoke, the only consumer of the assembled payloads).
-    #[test]
-    fn a_payload_without_helpers_writes_no_helpers_field() {
-        let folder = std::env::temp_dir().join("pane-xtask-payload-test");
-        let _ = fs::remove_dir_all(&folder);
-        fs::create_dir_all(&folder).unwrap();
-        fs::write(
-            folder.join("pane.json"),
-            br#"{"manifestVersion": 1, "title": "T", "version": "0.1.0", "apiVersion": "0.1",
-                "commands": [{"id": "c", "title": "C", "component": "c.wasm"}]}"#,
-        )
-        .unwrap();
-        fs::write(folder.join("c.wasm"), b"the component").unwrap();
-        let files = payload_files(&folder, "t").expect("the payload assembles");
-        let manifest = files
-            .iter()
-            .find(|(path, _)| path == "pane.json")
-            .map(|(_, contents)| contents.clone())
-            .expect("the payload holds the manifest");
-        let manifest: Value = serde_json::from_slice(&manifest).unwrap();
-        assert!(
-            manifest.get("helpers").is_none(),
-            "the manifest gained a helpers field: {manifest}"
-        );
-    }
-
-    /// The artifacts describe the default set alone: the five default
-    /// extensions, and no sample (#162), whose payload a first setup
-    /// would otherwise acquire.
-    #[test]
-    fn the_artifacts_describe_the_default_set_without_the_samples() {
-        let ids: Vec<&str> = DEFAULTS.iter().map(|(id, _)| *id).collect();
-        assert_eq!(
-            ids,
-            [
-                "calculator",
-                "applications",
-                "quicklinks",
-                "files",
-                "clipboard-history"
-            ]
-        );
-        assert!(
-            DEFAULTS
-                .iter()
-                .all(|(_, package)| !package.starts_with("sample-")),
-            "a sample is packed as a default extension: {DEFAULTS:?}"
-        );
-    }
-
-    /// Commands that share a component pack it once: Pane refuses a payload
-    /// whose tarball holds a file twice, and refused Quicklinks, whose four
-    /// commands share one, until this held.
-    #[test]
-    fn a_component_commands_share_is_packed_once() {
-        let folder = std::env::temp_dir().join("pane-xtask-shared-component-test");
-        let _ = fs::remove_dir_all(&folder);
-        fs::create_dir_all(&folder).unwrap();
-        fs::write(
-            folder.join("pane.json"),
-            br#"{"manifestVersion": 1, "title": "T", "version": "0.1.0", "apiVersion": "0.1",
-                "commands": [{"id": "a", "title": "A", "component": "c.wasm"},
-                             {"id": "b", "title": "B", "component": "c.wasm"}]}"#,
-        )
-        .unwrap();
-        fs::write(folder.join("c.wasm"), b"the component").unwrap();
-        let files = payload_files(&folder, "t").expect("the payload assembles");
-        let paths: Vec<&str> = files.iter().map(|(path, _)| path.as_str()).collect();
-        assert_eq!(paths, ["pane.json", "c.wasm"]);
-    }
-
-    /// The images the package's and commands' icons name travel in the
-    /// payload, each once, with the `@light` and `@dark` variants the
-    /// package has (#163): Pane refuses to install a package whose icon
-    /// names an image it does not ship, so the default extensions' tiles
-    /// must be in their payloads. Built-in icons name no file, and a file
-    /// no icon names stays behind.
-    #[test]
-    fn the_images_the_icons_name_are_packed_with_their_variants() {
-        let folder = std::env::temp_dir().join("pane-xtask-icon-images-test");
-        let _ = fs::remove_dir_all(&folder);
-        fs::create_dir_all(folder.join("assets")).unwrap();
-        fs::write(
-            folder.join("pane.json"),
-            br#"{"manifestVersion": 1, "title": "T", "version": "0.1.0", "apiVersion": "0.1",
-                "icon": "icon.svg",
-                "commands": [
-                    {"id": "a", "title": "A", "component": "c.wasm", "icon": "assets/a.png"},
-                    {"id": "b", "title": "B", "component": "c.wasm", "icon": "icon.svg"},
-                    {"id": "c", "title": "C", "component": "c.wasm",
-                     "icon": {"light": "assets/sun.svg", "dark": "assets/moon.svg",
-                              "fallback": {"builtin": "star"}}},
-                    {"id": "d", "title": "D", "component": "c.wasm", "icon": "star"}
-                ]}"#,
-        )
-        .unwrap();
-        for file in [
-            "c.wasm",
-            "icon.svg",
-            "assets/a.png",
-            "assets/a@dark.png",
-            "assets/sun.svg",
-            "assets/moon.svg",
-            "assets/unused.svg",
-        ] {
-            fs::write(folder.join(file), file.as_bytes()).unwrap();
-        }
-        let files = payload_files(&folder, "t").expect("the payload assembles");
-        let paths: Vec<&str> = files.iter().map(|(path, _)| path.as_str()).collect();
-        assert_eq!(
-            paths,
-            [
-                "pane.json",
-                "c.wasm",
-                "icon.svg",
-                "assets/a.png",
-                "assets/a@dark.png",
-                "assets/sun.svg",
-                "assets/moon.svg",
-            ]
-        );
-        let image = files
-            .iter()
-            .find(|(path, _)| path == "assets/a@dark.png")
-            .map(|(_, contents)| contents.as_slice());
-        assert_eq!(image, Some(b"assets/a@dark.png".as_slice()));
-    }
-
-    /// The default extensions' own manifests: every image their icons
-    /// name is in the repository's package folder, so their payloads carry
-    /// their tiles (#163).
-    #[test]
-    fn the_default_extensions_ship_the_images_their_icons_name() {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
-        for (id, package) in DEFAULTS {
-            let folder = root.join("guests/packages").join(package);
-            let manifest: Value =
-                serde_json::from_slice(&fs::read(folder.join("pane.json")).unwrap()).unwrap();
-            for image in manifest_images(&manifest) {
-                assert!(
-                    folder.join(&image).is_file(),
-                    "{id}'s icon names {image}, which its package does not ship"
-                );
-            }
-        }
-    }
 }

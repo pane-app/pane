@@ -19,10 +19,19 @@ cleanup() {
 trap cleanup EXIT
 { sw_vers; uname -m; printf '%s\n' 'theme/material unset: default startup (not blur evidence)'; } >"$out/system.txt"
 
+# A development build takes its default extensions' pins from PANE_DEFAULTS;
+# without it, the committed pins point at the real repositories, which no
+# check may reach. This smoke checks native startup, not first setup, so
+# the file names none: first setup adds nothing, and Pane reaches no
+# address.
+no_default_pins=$out/no-default-pins.json
+printf '[]\n' >"$no_default_pins"
+
 # env -i is deliberate: appearance defaults must work without the behavior
 # smoke's PANE_MATERIAL=opaque hiding a crash in the blurred-view callback.
 env -i HOME="$smoke_home" PATH=/usr/bin:/bin PANE_DATA_DIR="$smoke_home/data" \
-  XDG_CACHE_HOME="$smoke_home/cache" "$pane" >"$out/stdout.log" 2>"$out/stderr.log" &
+  PANE_DEFAULTS="$no_default_pins" XDG_CACHE_HOME="$smoke_home/cache" \
+  "$pane" >"$out/stdout.log" 2>"$out/stderr.log" &
 pid=$!
 assert_alive() {
   if ! kill -0 "$pid" 2>/dev/null; then

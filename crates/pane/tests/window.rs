@@ -10,6 +10,11 @@ use pane_core::{CommandRegistration, Launcher, Runtime, Screen, Status};
 
 #[path = "../../pane-core/tests/support/platforms.rs"]
 mod platforms;
+// The default extensions' repositories, pane-core's test support.
+#[path = "../../pane-core/tests/support/defaults.rs"]
+mod defaults;
+#[path = "../../pane-core/tests/support/repo_server.rs"]
+mod repo_server;
 #[path = "support/settle.rs"]
 mod settle;
 
@@ -20,9 +25,6 @@ mod samples;
 
 #[path = "support/paint.rs"]
 mod paint;
-
-#[path = "../../pane-core/tests/support/artifacts.rs"]
-mod artifacts;
 
 use settle::{enter_flow, settle, settle_shown, until};
 
@@ -1457,11 +1459,12 @@ fn assistive_technology_sees_the_search_field_and_the_selected_result(cx: &mut T
     until_announced(cx, "No results");
 }
 
-/// A launcher with the calculator package from `cargo xtask guests`
-/// installed in `data`.
-fn with_calculator(cx: &mut TestAppContext, data: &std::path::Path) -> Launcher {
+/// A launcher with the Rust sample package from `cargo xtask guests`
+/// installed in `data`, computing root results ("reverse <text>") as the
+/// calculator does its arithmetic.
+fn with_rust_sample(cx: &mut TestAppContext, data: &std::path::Path) -> Launcher {
     let folder =
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/guests/packages/calculator");
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/guests/packages/sample-rust");
     let launcher = Launcher::with_packages(Runtime::start(), vec![], data.join("extensions"));
     // The install's guest check answers from the runtime thread.
     cx.executor().allow_parking();
@@ -1488,38 +1491,60 @@ fn wait_for_rows(window: &Entity<LauncherWindow>, cx: &mut VisualTestContext, ex
 }
 
 #[gpui::test]
-fn typing_an_expression_shows_its_answer_and_enter_copies_it(cx: &mut TestAppContext) {
+fn typing_a_root_query_shows_its_answer_and_enter_copies_it(cx: &mut TestAppContext) {
     let data = tempfile::tempdir().unwrap();
-    let launcher = with_calculator(cx, data.path());
+    let launcher = with_rust_sample(cx, data.path());
     let (window, cx) = open_launcher(cx, launcher);
 
-    cx.simulate_input("6*7");
-    wait_for_rows(&window, cx, &["42"]);
+    cx.simulate_input("reverse 42");
+    wait_for_rows(&window, cx, &["24"]);
     assert!(
-        cx.debug_bounds("row-42").is_some(),
+        cx.debug_bounds("row-24").is_some(),
         "the answer is rendered"
     );
     assert!(query_has_focus(&window, cx), "typing goes on in the field");
     // Typing on: the answer follows the query.
     cx.simulate_input("+1");
-    wait_for_rows(&window, cx, &["43"]);
+    wait_for_rows(&window, cx, &["1+24"]);
 
     cx.simulate_keystrokes("enter");
     let view = settle(&window, cx);
     assert_eq!(
         view.status,
-        Status::Result("Copied 43 to the clipboard".into())
+        Status::Result("Copied 1+24 to the clipboard".into())
     );
     assert_eq!(
         cx.read_from_clipboard().and_then(|item| item.text()),
-        Some("43".into())
+        Some("1+24".into())
     );
-    assert_eq!(view.query(), Some("6*7+1"), "root search stays as it was");
+    assert_eq!(
+        view.query(),
+        Some("reverse 42+1"),
+        "root search stays as it was"
+    );
 
-    // An incomplete expression has no answer and nothing failed.
-    cx.simulate_input("*");
+    // A query the command does not answer has no row and nothing failed.
+    replace_query(&window, cx, "42");
     wait_for_rows(&window, cx, &[]);
     assert!(cx.debug_bounds("no-results").is_some());
+}
+
+/// Replaces the search field's text with `query`.
+fn replace_query(window: &Entity<LauncherWindow>, cx: &mut VisualTestContext, query: &str) {
+    let typed = cx.read_entity(window, |window, _| {
+        window
+            .launcher()
+            .view()
+            .query()
+            .map_or(0, |typed| typed.chars().count())
+    });
+    if typed > 0 {
+        cx.simulate_keystrokes(&vec!["backspace"; typed].join(" "));
+    }
+    if !query.is_empty() {
+        cx.simulate_input(query);
+    }
+    settle(window, cx);
 }
 
 /// A computed answer is drawn as the answer card (#96): under its
@@ -1530,15 +1555,15 @@ fn typing_an_expression_shows_its_answer_and_enter_copies_it(cx: &mut TestAppCon
 #[gpui::test]
 fn a_computed_answer_shows_as_the_card_under_its_commands_title(cx: &mut TestAppContext) {
     let data = tempfile::tempdir().unwrap();
-    let launcher = with_calculator(cx, data.path());
+    let launcher = with_rust_sample(cx, data.path());
     let (window, cx) = open_launcher(cx, launcher);
 
-    cx.simulate_input("6*7");
-    wait_for_rows(&window, cx, &["42"]);
+    cx.simulate_input("reverse 42");
+    wait_for_rows(&window, cx, &["24"]);
     let label = cx
-        .debug_bounds("section-Calculator")
+        .debug_bounds("section-Rust sample")
         .expect("the card is labelled with its command's title");
-    let card = cx.debug_bounds("row-42").expect("the answer is drawn");
+    let card = cx.debug_bounds("row-24").expect("the answer is drawn");
     assert!(cx.debug_bounds("answer-value").is_some(), "as the card");
     assert_eq!(
         card.top(),
@@ -1547,45 +1572,45 @@ fn a_computed_answer_shows_as_the_card_under_its_commands_title(cx: &mut TestApp
     );
     assert_eq!(card.size.height, px(20. + 44. + 16.));
     let nodes = accessible_nodes(cx);
-    node(&nodes, "ListBoxOption", "6*7 = 42");
+    node(&nodes, "ListBoxOption", "reverse 42 = 24");
     // The footer's primary button gives way to the install's status
-    // ("Installed Calculator") here; Enter below is the primary action.
+    // ("Installed Rust sample") here; Enter below is the primary action.
     // The field keeps the focus, and the announcer says the card as it is
     // named once typing has settled (#132).
     assert_eq!(focused_label(cx).as_deref(), Some("Search"));
     assert!(no_row_has_focus(&a11y::a11y(cx)));
     assert!(query_has_focus(&window, cx));
     typing_settles(cx);
-    until_announced(cx, "6*7 = 42, 1 of 1");
+    until_announced(cx, "reverse 42 = 24, 1 of 1");
 
     cx.simulate_keystrokes("enter");
     let view = settle(&window, cx);
     assert_eq!(
         view.status,
-        Status::Result("Copied 42 to the clipboard".into())
+        Status::Result("Copied 24 to the clipboard".into())
     );
     assert_eq!(
         cx.read_from_clipboard().and_then(|item| item.text()),
-        Some("42".into())
+        Some("24".into())
     );
 
     // No answer: the notice for the query, no card, the field focused.
-    cx.simulate_input("*");
+    replace_query(&window, cx, "42");
     wait_for_rows(&window, cx, &[]);
     assert!(cx.debug_bounds("no-results").is_some());
     assert!(cx.debug_bounds("answer-value").is_none());
     assert!(query_has_focus(&window, cx));
-    node(&accessible_nodes(cx), "Note", "Nothing matches “6*7*”");
+    node(&accessible_nodes(cx), "Note", "Nothing matches “42”");
     typing_settles(cx);
     until_announced(cx, "No results");
 
     // Completed, the card is back, selected.
-    cx.simulate_input("2");
-    wait_for_rows(&window, cx, &["84"]);
+    replace_query(&window, cx, "reverse 42");
+    wait_for_rows(&window, cx, &["24"]);
     assert!(cx.debug_bounds("no-results").is_none());
     assert_eq!(focused_label(cx).as_deref(), Some("Search"));
     typing_settles(cx);
-    until_announced(cx, "6*7*2 = 84, 1 of 1");
+    until_announced(cx, "reverse 42 = 24, 1 of 1");
 }
 
 /// A system with two applications, recording which one Pane opens.
@@ -1618,8 +1643,8 @@ fn typing_an_applications_name_shows_it_and_enter_opens_it(cx: &mut TestAppConte
     let system = std::sync::Arc::new(TwoApplications::default());
     let runtime = Runtime::start().unwrap();
     runtime.set_applications(system.clone());
-    let folder =
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/guests/packages/applications");
+    let folder = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../target/guests/packages/sample-applications-js");
     let launcher = Launcher::with_packages(Ok(runtime), vec![], data.path().join("extensions"));
     cx.executor().allow_parking();
     cx.foreground_executor()
@@ -1628,23 +1653,23 @@ fn typing_an_applications_name_shows_it_and_enter_opens_it(cx: &mut TestAppConte
     let (window, cx) = open_launcher(cx, launcher);
 
     cx.simulate_input("fire");
-    wait_for_rows(&window, cx, &["Firefox"]);
+    wait_for_rows(&window, cx, &["Launch Firefox"]);
     assert!(
-        cx.debug_bounds("row-Firefox").is_some(),
+        cx.debug_bounds("row-Launch Firefox").is_some(),
         "the application is rendered"
     );
     let (nodes, focused) = accessibility_tree(cx);
-    assert!(has(&nodes, "ListBoxOption", "Firefox"), "{nodes:?}");
+    assert!(has(&nodes, "ListBoxOption", "Launch Firefox"), "{nodes:?}");
     // The field keeps the focus; the announcer says the selected result
     // once the applications have been listed and typing has settled
     // (#132).
     assert_eq!(focused.as_deref(), Some("Search"), "the field");
     typing_settles(cx);
-    until_announced(cx, "Firefox, 1 of 1");
+    until_announced(cx, "Launch Firefox, 1 of 1");
 
     cx.simulate_keystrokes("enter");
     let view = settle(&window, cx);
-    assert_eq!(view.status, Status::Result("Opened Firefox".into()));
+    assert_eq!(view.status, Status::Result("Opened Launch Firefox".into()));
     assert_eq!(*system.opened.lock().unwrap(), ["/apps/Firefox.desktop"]);
     assert!(query_has_focus(&window, cx), "typing goes on in the field");
 }
@@ -1671,29 +1696,30 @@ impl pane_core::applications::Applications for TwoPythons {
     }
 }
 
-/// A pinned application sharing its name with another says what tells it
-/// apart: as its tile's tooltip, and with its name to assistive
-/// technology.
+/// A pinned application sharing its name with another says what its row
+/// said — its subtitle, the applications sample's own — as its tile's
+/// tooltip, and beside its name to assistive technology.
 #[gpui::test]
-fn a_pin_sharing_its_title_says_what_tells_it_apart(cx: &mut TestAppContext) {
+fn a_pin_sharing_its_title_says_its_rows_subtitle(cx: &mut TestAppContext) {
     let data = tempfile::tempdir().unwrap();
     let runtime = Runtime::start().unwrap();
     runtime.set_applications(std::sync::Arc::new(TwoPythons));
-    let folder =
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/guests/packages/applications");
+    let folder = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../target/guests/packages/sample-applications-js");
     let launcher = Launcher::with_packages(Ok(runtime), vec![], data.path().join("extensions"))
         .with_quick_slots(data.path());
     cx.executor().allow_parking();
     cx.foreground_executor()
         .block_on(launcher.install_package(&folder));
     launcher.back();
-    // Pin the second Python, found by its name.
+    // Pin the second Python, found by its name (the sample titles both
+    // "Launch Python"; only their ids tell them apart).
     cx.foreground_executor()
         .block_on(launcher.set_query("python"));
     let rows = launcher.view().rows;
     let index = rows
         .iter()
-        .position(|row| row.subtitle.as_deref() == Some("Python312"))
+        .rposition(|row| row.title == "Launch Python")
         .unwrap_or_else(|| panic!("no second Python in {rows:?}"));
     launcher.select(index);
     let (change, recorded) =
@@ -1708,15 +1734,19 @@ fn a_pin_sharing_its_title_says_what_tells_it_apart(cx: &mut TestAppContext) {
     settle(&window, cx);
 
     let nodes = accessible_nodes(cx);
-    let pin = node(&nodes, "Button", "Pinned 1: Python");
-    assert_eq!(pin["description"], "Python312", "{pin:#}");
+    let pin = node(&nodes, "Button", "Pinned 1: Launch Python");
+    assert_eq!(
+        pin["description"], "JavaScript applications sample",
+        "{pin:#}"
+    );
 
     let tile = cx.debug_bounds("slot-1").expect("the pin's tile");
     cx.simulate_mouse_move(tile.center(), None::<MouseButton>, Modifiers::none());
     cx.executor().advance_clock(Duration::from_millis(700));
     cx.run_until_parked();
     assert!(
-        cx.debug_bounds("tooltip-Python312").is_some(),
+        cx.debug_bounds("tooltip-JavaScript applications sample")
+            .is_some(),
         "the tile's tooltip"
     );
 }
@@ -2055,21 +2085,20 @@ fn a_running_action_cannot_be_dispatched_again_through_the_footer_button(cx: &mu
     let system = std::sync::Arc::new(TwoApplications::default());
     let runtime = Runtime::start().unwrap();
     runtime.set_applications(system.clone());
-    let folder =
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/guests/packages/applications");
+    let folder = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../target/guests/packages/sample-applications-js");
     let launcher = Launcher::with_packages(Ok(runtime), vec![], data.path().join("extensions"));
     cx.executor().allow_parking();
     cx.foreground_executor()
         .block_on(launcher.install_package(&folder));
     launcher.back();
     // The install's result owns the strip; showing root search afresh
-    // leaves the launcher idle, so the strip is the action. (Applications
-    // is a root provider, with no command row to open and leave, #164.)
+    // leaves the launcher idle, so the strip is the action.
     launcher.show_root_search();
     let (window, cx) = open_launcher(cx, launcher);
 
     cx.simulate_input("fire");
-    wait_for_rows(&window, cx, &["Firefox"]);
+    wait_for_rows(&window, cx, &["Launch Firefox"]);
     let nodes = accessible_nodes(cx);
     node(&nodes, "Button", "Open application");
     let button = cx
@@ -2079,7 +2108,7 @@ fn a_running_action_cannot_be_dispatched_again_through_the_footer_button(cx: &mu
     cx.simulate_click(button.center(), Modifiers::none());
 
     let view = settle(&window, cx);
-    assert_eq!(view.status, Status::Result("Opened Firefox".into()));
+    assert_eq!(view.status, Status::Result("Opened Launch Firefox".into()));
     assert_eq!(
         *system.opened.lock().unwrap(),
         ["/apps/Firefox.desktop"],
@@ -3186,8 +3215,11 @@ fn a_window_that_stops_drawing_settles_its_arrival_on_the_next_frame_it_draws(
 }
 
 /// Pane's Clipboard History in the split view (#102, #166), through the
-/// window: the real default extension from `cargo xtask guests`, acquired
-/// from an artifact source on 127.0.0.1, over a fake system clipboard that
+/// window: the registered default extension, installed from its pinned
+/// commit in a repository served over Git's smart HTTP protocol from
+/// 127.0.0.1 — made to the default's package shape over the JavaScript
+/// clipboard sample's component, the extension's own sources living in
+/// their repository (#285) — over a fake system clipboard that
 /// never touches the real one. It records from the first start; the search
 /// field has no badge and no tabs follow it, a type dropdown at its right
 /// filters by kind, rows are grouped by day, the detail shows the record's
@@ -3202,12 +3234,11 @@ mod clipboard_split {
     use pane_core::clipboard::{
         CaptureState, ClipboardSystem, Content, ManualClock, Markers, Observation, Sink, Watch,
     };
-    use pane_core::defaults::ArtifactSource;
     use pane_core::tray::TrayAction;
     use pane_core::{DefaultExtension, Launcher, PackageIdentity, Runtime, Screen};
     use tempfile::TempDir;
 
-    use super::artifacts::Artifacts;
+    use super::defaults::pinned;
     use super::{open_launcher, settle, until};
 
     #[derive(Default)]
@@ -3308,66 +3339,115 @@ mod clipboard_split {
         }
     }
 
-    /// The assembled Clipboard History package's files.
+    /// The files of the package the Clipboard History pin names: the
+    /// JavaScript clipboard sample's component under the default's own
+    /// manifest, whose command keeps the default's id `clipboard-history`
+    /// (which the host keys the split view on) and whose preferences are
+    /// the history's own state, as `clipboard_settings` overlays them.
+    /// The extension's own sources live in their repository (#285).
     fn package_files() -> Vec<(String, Vec<u8>)> {
-        let folder = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../target/guests/packages/clipboard-history");
-        assert!(
-            folder.is_dir(),
-            "{} is missing; run `cargo xtask guests`",
-            folder.display()
-        );
-        let mut files: Vec<(String, Vec<u8>)> = fs::read_dir(&folder)
-            .unwrap()
-            .map(|entry| entry.unwrap().path())
-            .filter(|path| path.is_file())
-            .map(|path| {
-                let name = path.file_name().unwrap().to_str().unwrap().to_owned();
-                (name, fs::read(&path).unwrap())
-            })
-            .collect();
-        files.sort();
+        let mut files: Vec<(String, Vec<u8>)> =
+            super::defaults::package_files("sample-clipboard-js")
+                .into_iter()
+                .filter(|(path, _)| path != "pane.json")
+                .collect();
+        files.push(("pane.json".into(), manifest().into_bytes()));
         files
     }
 
-    /// One test's Pane: its data, artifact source, clock and clipboard.
+    /// The manifest of the Clipboard History package: the default's own
+    /// shape, naming the sample's component.
+    fn manifest() -> String {
+        r#"{
+  "manifestVersion": 1,
+  "title": "Clipboard History",
+  "version": "0.1.0",
+  "apiVersion": "0.1",
+  "preferences": [
+    {
+      "name": "keepHistoryFor",
+      "type": "dropdown",
+      "title": "Keep History For",
+      "description": "Older items are deleted, also while Pane is stopped or the extension is disabled",
+      "options": [
+        { "value": "3600", "title": "1 Hour" },
+        { "value": "86400", "title": "1 Day" },
+        { "value": "604800", "title": "7 Days" },
+        { "value": "2592000", "title": "30 Days" },
+        { "value": "7776000", "title": "90 Days" }
+      ],
+      "default": "604800"
+    },
+    {
+      "name": "pauseRecording",
+      "type": "checkbox",
+      "title": "Recording",
+      "label": "Pause Recording",
+      "description": "While paused, nothing you copy is kept",
+      "default": false
+    },
+    {
+      "name": "disabledApplications",
+      "type": "applications",
+      "title": "Disabled Applications",
+      "description": "What you copy in these applications is never kept. Copies an application marks as concealed, as password managers do, are never kept either",
+      "placeholder": "KeePass.exe"
+    }
+  ],
+  "commands": [
+    {
+      "id": "clipboard-history",
+      "title": "Clipboard History",
+      "subtitle": "What you copied, kept on this computer",
+      "component": "sample_clipboard_js.wasm",
+      "platforms": ["windows", "macos", "linux"]
+    }
+  ]
+}"#
+            .to_owned()
+    }
+
+    /// One test's Pane: its data, the server its default extension's
+    /// repository is served from, clock and clipboard.
     struct World {
         data: TempDir,
-        artifacts: Artifacts,
+        /// Kept, not read: the repository's work tree, which the server
+        /// serves as long as this lives.
+        _repos: TempDir,
         clipboard: FakeClipboard,
         clock: Arc<ManualClock>,
+        /// Kept, not read: the server the repository is served from, which
+        /// stops when this is dropped.
+        _server: super::repo_server::Server,
+        /// The pin that names the served repository.
+        pin: DefaultExtension,
     }
 
     impl World {
         fn new() -> World {
-            let world = World {
+            let server = super::repo_server::Server::start();
+            let repos = tempfile::tempdir().unwrap();
+            let files = package_files();
+            let tag = format!("v{}", super::defaults::version_of(&files));
+            let pin = pinned(
+                &server,
+                repos.path(),
+                "clipboard-history",
+                "Clipboard History",
+                &tag,
+                &files,
+            );
+            World {
                 data: tempfile::tempdir().unwrap(),
-                artifacts: Artifacts::start(),
+                _repos: repos,
                 clipboard: FakeClipboard::default(),
                 clock: ManualClock::at(1_791_208_920_000),
-            };
-            let files = package_files();
-            let manifest: serde_json::Value = serde_json::from_slice(
-                &files
-                    .iter()
-                    .find(|(path, _)| path == "pane.json")
-                    .expect("the package has a pane.json")
-                    .1,
-            )
-            .unwrap();
-            let borrowed: Vec<(&str, Vec<u8>)> = files
-                .iter()
-                .map(|(path, contents)| (path.as_str(), contents.clone()))
-                .collect();
-            world.artifacts.publish(
-                "clipboard-history",
-                manifest["version"].as_str().unwrap(),
-                &borrowed,
-            );
-            world
+                _server: server,
+                pin,
+            }
         }
 
-        /// Pane with Clipboard History acquired as its default extension,
+        /// Pane with Clipboard History set up as its default extension,
         /// recording from the first start, and `texts` copied in order (the
         /// last newest), a minute apart.
         fn launcher(&self, cx: &mut TestAppContext, texts: &[&str]) -> Launcher {
@@ -3377,13 +3457,7 @@ mod clipboard_split {
                 vec![],
                 self.data.path().join("extensions"),
             )
-            .with_defaults(
-                ArtifactSource::local(self.artifacts.url()).unwrap(),
-                vec![DefaultExtension {
-                    id: "clipboard-history".into(),
-                    title: "Clipboard History".into(),
-                }],
-            )
+            .with_defaults(vec![self.pin.clone()])
             .with_clock(self.clock.clone())
             .with_clipboard(Arc::new(self.clipboard.clone()));
             cx.foreground_executor()
@@ -3953,7 +4027,11 @@ mod clipboard_split {
         let (window, cx) = open_launcher(cx, launcher);
         settle(&window, cx);
         assert!(!split_shown(&window, cx));
-        assert!(cx.debug_bounds("row-Resume Recording").is_some());
+        // A copy's generic list (the sample's own) shows instead.
+        assert!(
+            cx.debug_bounds("row-Turn on clipboard history").is_some(),
+            "the copy's list"
+        );
         assert!(cx.debug_bounds("clipboard-list").is_none());
     }
 

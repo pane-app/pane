@@ -554,7 +554,7 @@ fn shown_bytes(bytes: &[u8]) -> String {
 }
 
 /// Whether `text` is a full SHA-1 commit id.
-fn is_commit_id(text: &str) -> bool {
+pub fn is_commit_id(text: &str) -> bool {
     text.len() == 40 && text.chars().all(|c| c.is_ascii_hexdigit())
 }
 
@@ -1200,6 +1200,18 @@ fn unreachable(repository: &Repository, error: GetError) -> String {
             shown(&why)
         ),
     }
+}
+
+/// Whether `why` is the text of a connection failure this client met —
+/// connecting, listing the references or fetching the pack — wherever it
+/// wrapped one: `unreachable` builds the wording, and the fetch wraps it
+/// again as "Could not fetch commit … of …". Acquiring a default
+/// extension retries one of these where a revision the repository
+/// refused is explained once (crate::defaults), so the classification
+/// lives here, beside the wordings it reads: a reword of either changes
+/// this with them, and the test below pins both forms.
+pub(crate) fn is_connection_failure(why: &str) -> bool {
+    why.contains("Could not reach the Git repository")
 }
 
 fn get(
@@ -2410,6 +2422,28 @@ mod tests {
             "{text}"
         );
         assert!(text.ends_with("x…"), "{text}");
+    }
+
+    #[test]
+    fn connection_failures_are_recognized_wherever_the_client_wrapped_one() {
+        // Where the client met it, the wording is the same.
+        assert!(is_connection_failure(
+            "Could not reach the Git repository github.com/owner/repo: reset by peer"
+        ));
+        // The fetch wraps it again in the commit it was fetching.
+        assert!(is_connection_failure(
+            "Could not fetch commit 0123456789abcdef0123456789abcdef01234567 of \
+             github.com/owner/repo: Could not reach the Git repository \
+             github.com/owner/repo: reset by peer"
+        ));
+        // A repository that answered, or a reference it refused, is not
+        // one: those are explained, not retried.
+        assert!(!is_connection_failure(
+            "The Git repository github.com/owner/repo answered 404 for the reference"
+        ));
+        assert!(!is_connection_failure(
+            "The Git repository github.com/owner/repo has no branch or tag named v1.0.0"
+        ));
     }
 
     #[test]

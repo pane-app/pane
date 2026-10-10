@@ -215,25 +215,24 @@ only by the window tests. The macOS and Windows smokes run the same phase
 
 ### Calculator (#27)
 
-The calculator phase installs the calculator package
-(`--install target/guests/packages/calculator`), types "6*7" with real X11
-key events and checks the selected answer row's color; Enter copies the
-answer. Ctrl+A and typing "42+1" gives screenshot 29; Ctrl+A, Ctrl+V (the
-copied "42") and typing "+1" must give exactly the same screen (`--same`),
-which holds only if the X11 clipboard held "42"; screens 27 to 29 must
-differ. Run locally on 2026-09-28 (Ubuntu 26.04.1 LTS, kernel
-7.0.0-31-generic, x86_64, same Xvfb/lavapipe setup): all checks of the
-whole smoke passed.
+The installer phase (screenshots 501 and 502) covers the calculator: the
+extension is set up on a clean machine from the commit this release pins
+(its repository cloned at that commit and served on 127.0.0.1), typing
+"6*7" with real X11 key events checks the selected answer row's color, and
+Enter copies the answer — with no developer tool anywhere. (A by-hand
+calculator phase, which installed the package from this repository's
+guests tree and also checked the X11 clipboard round-trip, left with the
+extension's sources, #285: the arithmetic is the extension's repository's
+to test; screenshots 27 to 30 below were that phase's, of the run on
+2026-09-28, Ubuntu 26.04.1 LTS, kernel 7.0.0-31-generic, x86_64, same
+Xvfb/lavapipe setup.) Disabling the
+calculator is covered by the launcher tests, not natively.
 
 | Step | Evidence |
 | --- | --- |
 | "6*7" typed: the answer 42, first and selected, computed by the calculator's guest | [27-answer.png](evidence/linux-x11/27-answer.png) |
 | Enter: "Copied 42 to the clipboard", root search unchanged | [28-copied.png](evidence/linux-x11/28-copied.png) |
 | Pasted "42", typed "+1": the answer 43, the same screen as typing "42+1" | [30-pasted.png](evidence/linux-x11/30-pasted.png) |
-
-The macOS and Windows smokes run the same phase (screenshots 27 to 30, with
-Cmd and Ctrl respectively); it has not run there yet. Disabling the
-calculator is covered by the launcher tests, not natively.
 
 ### Operations (#22)
 
@@ -320,10 +319,12 @@ has not run there yet.
 
 The applications phase adds a desktop entry "Pane Smoke App" whose `Exec` writes a
 marker file, in an `XDG_DATA_HOME` given to Pane only (the system's
-`XDG_DATA_DIRS` entries are searched too), installs the
-[applications](../applications.md) package, types "pane smoke" with real
+`XDG_DATA_DIRS` entries are searched too), installs the JavaScript
+applications sample (which supplies the host's applications to root search
+as the [Applications](../applications.md) default extension does), types
+"pane smoke" with real
 X11 key events, checks the selected row, presses Return and checks "Opened
-Pane Smoke App" and that the marker was written. Run locally on 2026-09-28
+Launch Pane Smoke App" and that the marker was written. Run locally on 2026-09-28
 (Ubuntu 26.04.1 LTS, kernel 7.0.0-31-generic, x86_64, same Xvfb/lavapipe
 setup): all checks of the whole smoke passed. The adapter tests also run a
 desktop entry's program natively and explain a missing program and a
@@ -338,33 +339,28 @@ Only X11 (Xvfb, no desktop session) ran; Wayland and real desktops'
 `XDG_CURRENT_DESKTOP`, Flatpak and Snap folders are untested. Disabling is
 covered by the launcher tests, not natively.
 
-### Quicklinks (#28)
+### Opening a web link (#28)
 
-The quicklinks phase, after the applications phase, installs the Quicklinks package
-(`--install target/guests/packages/quicklinks`), opens its command, and in
-"Create quicklink" types "Pane issues", Tab and
-"https://example.com/pane-issues" with real X11 key events, then Return.
-After a restart it types "pane iss" (the selected row's color must appear)
-and presses Return: `xdg-open` runs with no desktop session variables, every
+The web-link phase, after the applications phase, installs the actions
+sample, opens its "Actions" command, selects its "System" item, opens the
+Actions panel (Ctrl+K) and runs "Open Website", which opens
+https://example.com through Pane's link handler: `xdg-open` runs with no
+desktop session variables, every
 XDG configuration and data location in the smoke's output folder and
 `BROWSER` set to a script that records its argument, so no real browser
-starts; the script must have received the URL. Run locally on 2026-09-28
+starts; the script must have received the URL. (The Quicklinks extension
+that carried this left with its sources for its own repository, #285, its
+quicklinks being its repository's to test; screenshots 46 to 48 were its
+phase's.) Run locally on 2026-09-28
 (Ubuntu 26.04.1 LTS, kernel 7.0.0-31-generic, x86_64, same Xvfb/lavapipe
 setup): all checks of the whole smoke passed.
 
-| Step | Evidence |
-| --- | --- |
-| Form submitted: "Saved quicklink “Pane issues”" | [46-quicklink-saved.png](evidence/linux-x11/46-quicklink-saved.png) |
-| Restarted, "pane iss" typed: the quicklink, first and selected | [47-quicklink-found.png](evidence/linux-x11/47-quicklink-found.png) |
-| Return: "Opened https://example.com/pane-issues", the URL received by the handler | [48-quicklink-opened.png](evidence/linux-x11/48-quicklink-opened.png) |
-
 A real desktop's handler (GNOME's `gio open`, a browser chosen in the
-desktop settings) was not run. The macOS and Windows smokes run the phase up
-to screenshot 47; it has not run there yet.
+desktop settings) was not run.
 
 ### Uninstalling an extension (#40)
 
-The last phase, after the quicklinks phase, restarts Pane, chooses
+The last phase, after the web-link phase, restarts Pane, chooses
 Uninstall in the Actions menu of the settings sample's page in Settings
 (since #168; "Uninstall Settings sample" in **Manage extensions…** in the
 run below) and the first choice, "Uninstall and keep saved
@@ -911,8 +907,8 @@ serving window are unverified natively.
 The smoke's clipboard phase (screenshots 280 to 287, [clipboard
 history](../clipboard-history.md#checks)), with a data folder of its own,
 runs after the #53 phase: since #166 only Pane's registered Clipboard
-History records from the first start, so the phase acquires the default
-set from the artifacts that phase built, served on 127.0.0.1, with the
+History records from the first start, so the phase sets the default set
+up from the pinned repositories the installer phase serves, with the
 smoke's own build (Files' index on an empty folder,
 `PANE_TEST_FILE_INDEX_HOME`). It checks `clipboard-history.json` at each
 step: the smoke's own copies are kept with nothing turned on, newest
@@ -981,25 +977,31 @@ next green Linux run is its evidence.
 A final phase, after the clipboard-expiry one, proves the whole outcome of
 [#53](https://github.com/pane-app/pane/issues/53)
 ([installer](../installer.md)). `cargo xtask package-linux --dev` builds the
-Linux package (the development profile, so its program accepts the
-controlled artifact source) and the default extensions' payloads; the
-smoke serves `target/dist/artifacts` from 127.0.0.1 with
-`scripts/artifact_server.py` (nothing reaches the network or Pane's
-published downloads). The package is unpacked into a folder of its own and
+Linux package (the development profile, so its program takes its pins from
+`PANE_DEFAULTS`) and the application-update artifacts; no
+default-extension payload is written — first setup fetches the five
+defaults from the commits this release pins. The smoke clones their
+repositories at those commits from their real addresses on GitHub (its own
+setup, on the runner) and serves the clones on 127.0.0.1 over Git's smart
+HTTP protocol (`scripts/repository_server.py`; nothing the Pane under
+test does reaches the network or Pane's published downloads), named by
+the pins file the development build reads through `PANE_DEFAULTS`. The package is unpacked into a folder of its own and
 its install script runs with a **clean machine's** environment: a fresh
 home folder and `PATH=/usr/bin:/bin`, so the home holds no data and no
 development tool is configured. The installed Pane
 (`~/.local/bin/pane` of that home) then starts with a PATH that holds
 nothing at all (an empty folder, checked by `command -v` of cargo, rustc,
 node, npm, git, cc, clang and make, and by reading the running process's
-`PATH`), pointed at the controlled source with `PANE_ARTIFACTS`. It
-acquires the five default extensions by itself (`installed.json` must
-record each under `"default"`, and no sample: the helper sample left the
-default set with #162, and a helper running from an acquired payload is
+`PATH`), taking its pins from the override and its artifact source from
+the local server the smoke serves the update index on. It
+fetches the five default extensions by itself, with Pane's own Git client
+(`installed.json` must record each under `"default"`, with the repository,
+release tag, commit and pinned state of its pin — checked by
+`scripts/check_git_record.py` — and no sample: the helper sample left the
+default set with #162, and a helper running from an acquired revision is
 `crates/pane-core/tests/installer.rs`'s), root search lists their
 commands, "6*7" answers 42 and Enter copies it, with no developer tool
-reachable. The acquired payloads must be cached and the downloads folder
-empty. The program files are removed again at the phase's end, so the
+reachable. The downloads folder the fetches used must end empty. The program files are removed again at the phase's end, so the
 uploaded evidence is the screenshots and records (frames 500 to 502),
 not the program.
 
@@ -1009,7 +1011,7 @@ packaging task in both profiles, the install script into a temporary home
 with a scrubbed PATH (`pane --version` answered), and the acquisition and
 its recovery through the launcher's public interface
 (`crates/pane-core/tests/installer.rs`, ten checks, all passing, including
-the helper running from the managed copy — this machine's payload names
+the helper running from the managed copy — this machine's helper file names
 `linux-aarch64`, which CI's x86_64 runner builds as `linux-x86_64`). The
 smoke phase itself, and the release-profile package on x86_64, are
 **pending CI**: they need the Xvfb smoke and the x86_64 build only CI's
@@ -1038,11 +1040,12 @@ on another clean home (its install script, its empty PATH, its own data
 under `~/.local/share/pane`), and the smoke serves the 99.0.0 artifacts
 from 127.0.0.1 with `scripts/artifact_server.py` (nothing reaches the
 network or Pane's published downloads). The installed 0.1.0 Pane,
-started with `PANE_ARTIFACTS`, acquires its default extensions and, in
-the same background, checks the index for a newer version of itself: the
-offer appears as **Update Pane to 99.0.0** in root search (frame 601;
-the status line tells what was found, frame 600). The artifact server's
-log must hold **no request for the package** until the row is chosen —
+started with `PANE_ARTIFACTS` and the same pinned repositories, fetches
+its default extensions and, in the same
+background, checks the index for a newer version of itself: the offer
+appears as **Update Pane to 99.0.0** in root search (frame 601;
+the status line tells what was found, frame 600). The artifact server's log
+must hold **no request for the package** until the row is chosen —
 nothing is downloaded, installed or restarted automatically. Clipboard
 History is disabled first (the Helper sample was, until #162 took it out
 of the default set), so an extension the user disabled before the update
@@ -1057,7 +1060,8 @@ and swaps the running program — the old `~/.local/bin/pane` renamed
 (frame 603, and byte comparisons of both programs against the two
 packages' own files). The next start runs the new version: it reports
 `Pane 99.0.0`, removes `pane.old` at start, the calculator still
-answers "6*7" with 42 from the old version's acquired payload (frames
+answers "6*7" with 42 from the old version's install (the calculator
+set up at first setup, from the pinned repositories; frames
 604 and 605), and the disabled Clipboard History stays disabled — Pane's
 data was never touched. The desktop entry the install script put in
 `~/.local/share/applications` keeps naming the same program file, which

@@ -112,10 +112,15 @@ exactly like step 4, then types "zzz" and presses Enter on no results. In run [3
 
 ## Calculator (#27)
 
-The smoke's calculator phase (screenshots 27 to 30) installs the calculator
-package, types "6*7", checks the selected answer row, presses Enter to copy
-it, then compares typing "42+1" with pasting the copy (Ctrl+A, Ctrl+V through `SendKeys`) and typing
-"+1", which must look the same. In run [36423871204](https://github.com/wasimysaid/pane/actions/runs/36423871204) (commit `ab91081`) every step passed: "6*7" answered 42, Enter copied it, and pasting then typing "+1" matched typing "42+1", so the system clipboard held "42" ([27-answer.png](evidence/windows/27-answer.png), [30-pasted.png](evidence/windows/30-pasted.png)).
+The smoke's installer phase (screenshots 501 and 502) covers the
+calculator: set up on a clean machine from the commit this release pins
+(its repository cloned at that commit and served on 127.0.0.1), typing
+"6*7" checks the selected answer row and Enter copies the answer, with
+no developer tool anywhere. (A by-hand calculator phase, whose
+screenshots 27 to 30 below are from, installed the package from this
+repository's guests tree and also checked the clipboard round-trip; it
+left with the extension's sources, #285, its arithmetic being its
+repository's to test.) In that phase's run [36423871204](https://github.com/wasimysaid/pane/actions/runs/36423871204) (commit `ab91081`) every step passed: "6*7" answered 42, Enter copied it, and pasting then typing "+1" matched typing "42+1", so the system clipboard held "42" ([27-answer.png](evidence/windows/27-answer.png), [30-pasted.png](evidence/windows/30-pasted.png)).
 
 ## Applications (#24)
 
@@ -127,20 +132,24 @@ AppUserModelID; a native test requires an inbox packaged app (Calculator or
 Settings) to be found. The smoke's
 last phase (screenshots 44 and 45) makes a shortcut "Pane Smoke App" to
 `cmd.exe` writing a marker file (with `WScript.Shell`, minimized) under an
-APPDATA given to Pane only, installs the package, types "pane smoke",
-checks the selected row, presses Enter and checks "Opened Pane Smoke App"
+APPDATA given to Pane only, installs the JavaScript applications sample
+(which supplies the host's applications to root search as the
+[Applications](../applications.md) default extension does), types "pane
+smoke", checks the selected row, presses Enter and checks "Opened Launch
+Pane Smoke App"
 and the marker; the adapter tests open such a shortcut too. **Not run on
 Windows yet**: this branch was not pushed, so the phase, the native tests
 and the `ShellExecuteEx` path are unverified here (the Windows code was
 only type-checked and linted for `x86_64-pc-windows-gnu`).
 
-## Quicklinks (#28)
+## Opening a web link (#28)
 
-The smoke's last phase (screenshots 46 and 47) installs the Quicklinks
-package, creates "Pane issues" (https://example.com/pane-issues) in its
-form, restarts Pane and types "pane iss", which must list it selected. It
-stops before Enter, which would open the default browser; opening a link
-here is checked only through the tests' recording opener. Not run yet.
+The smoke's quicklinks phase, which installed the Quicklinks package and
+created a quicklink in its form, left with the extension's sources
+(#285, its quicklinks being its repository's to test); the host's link
+opening is the Linux smoke's web-link phase, which runs the actions
+sample's Open Website through the system's handler. Opening a link on
+Windows is checked only through the tests' recording opener.
 
 ## Global hotkeys (#32)
 
@@ -426,8 +435,8 @@ do. The fix was checked by reading only (no PowerShell or Windows here).
 The smoke's clipboard phase (screenshots 280 to 285, [clipboard history](../clipboard-history.md#checks)),
 with a data folder of its own, runs after the #51 phase: since #166 only
 Pane's registered Clipboard History records from the first start, so the
-phase acquires the default set from the artifacts that phase built, served
-on 127.0.0.1, with the smoke's own build (Files' index on an empty folder,
+phase sets the default set up from the pinned repositories that phase
+serves, with the smoke's own build (Files' index on an empty folder,
 `PANE_TEST_FILE_INDEX_HOME`). It checks `clipboard-history.json` at each
 step: plain text copied with nothing turned on is kept, while text
 carrying `ExcludeClipboardContentFromMonitorProcessing`,
@@ -520,7 +529,7 @@ Screenshots from run [36371205770](https://github.com/wasimysaid/pane/actions/ru
   (commit `1848494`) every step passed: the Rust guest's call into the
   JavaScript package answered "Hello, Rust, from JavaScript"
   ([32-operation-answer.png](evidence/windows/32-operation-answer.png)).
-- **Reload (#11):** after the calculator and operations phases, the smoke installs a package from
+- **Reload (#11):** after the operations phase, the smoke installs a package from
   `<output-dir>\dev`, replaces its component with the JavaScript sample and
   reloads it in Manage extensions, then reloads it without its component (the
   checks fail and the old code keeps answering) and with the `failing-start`
@@ -607,10 +616,15 @@ A final phase, after the clipboard-expiry one, proves the whole outcome of
 Linux. `cargo xtask package-windows --dev` builds the Windows package — a
 zip, because a Windows user unzips with whatever is at hand — holding
 `pane.exe`, `install.ps1` and a README (the development profile, so its
-program accepts the controlled artifact source) and the default
-extensions' payloads; the smoke serves `target/dist/artifacts` from
-127.0.0.1 with `scripts/artifact_server.py` (nothing reaches the network
-or Pane's published downloads). The package is unzipped into a folder of
+program takes its pins from `PANE_DEFAULTS`) and the application-update
+artifacts; no default-extension payload is written — first setup fetches
+the five defaults from the commits this release pins. The smoke clones
+their repositories at those commits from their real addresses on GitHub
+(its own setup, on the runner) and serves the clones on 127.0.0.1 over
+Git's smart HTTP protocol (`scripts/repository_server.py`; nothing the
+Pane under test does reaches the network
+or Pane's published downloads), named by the pins file the development
+build reads through `PANE_DEFAULTS`. The package is unzipped into a folder of
 its own and its install script runs with a **clean machine's**
 environment: a fresh user profile (`LOCALAPPDATA` and `APPDATA` pointing
 into the smoke's output folder, so the install, Pane's data and the
@@ -622,14 +636,17 @@ Pane then starts with a PATH that holds nothing at all (an empty folder,
 checked with `Get-Command` of cargo, rustc, node, npm, git, cc, clang and
 make; a running process's own environment cannot be read on Windows, so
 what is checked is the environment `Start-Process` hands the child),
-pointed at the controlled source with `PANE_ARTIFACTS`. It acquires the
-five default extensions by itself (`installed.json` must record each under
-`"default"`, and no sample: the helper sample left the default set with
-#162, and a helper running from an acquired payload is
+taking its pins from the override and its artifact source from the local
+server the smoke serves the update index on. It fetches the
+five default extensions by itself, with Pane's own Git client
+(`installed.json` must record each under
+`"default"`, with the repository, release tag, commit and pinned state of
+its pin — checked by `scripts/check_git_record.py` — and no sample: the
+helper sample left the default set with
+#162, and a helper running from an acquired revision is
 `crates/pane-core/tests/installer.rs`'s), root search lists their
 commands, "6*7" answers 42 and Enter copies it, with no developer tool
-reachable. The acquired payloads must be cached and the downloads folder
-empty. The program files are removed again at the phase's end, so the
+reachable. The downloads folder the fetches used must end empty. The program files are removed again at the phase's end, so the
 uploaded evidence is the screenshots and records (frames 500 to 502), not
 the program. CI builds the
 release-profile package after the smoke and uploads it with the artifacts
@@ -649,7 +666,7 @@ its install script run into a temporary home with a scrubbed PATH:
 `pane --version` answered). The acquisition the installed Pane
 does is the same platform-independent code `crates/pane-core/tests/installer.rs`
 checks (rerun here, all passing, including the prebuilt helper running
-from the managed copy — this machine's payload names `linux-aarch64`,
+from the managed copy — this machine's helper file names `linux-aarch64`,
 which CI's Windows run assembles as `windows-x86_64`). The PowerShell
 install script, the smoke phase, the zip package itself and the
 release-profile package are **pending CI**: they need the Windows build
@@ -681,7 +698,8 @@ its empty PATH, its own data under `%LOCALAPPDATA%\Pane\data`), and the
 smoke serves the 99.0.0 artifacts from 127.0.0.1 with
 `scripts/artifact_server.py` (nothing reaches the network or Pane's
 published downloads). The installed 0.1.0 Pane, started with
-`PANE_ARTIFACTS`, acquires its default extensions and, in the same
+`PANE_ARTIFACTS` and the same pinned repositories, fetches
+its default extensions and, in the same
 background, checks the index for a newer version of itself: the offer
 appears as **Update Pane to 99.0.0** in root search (frame 601; the
 status line tells what was found, frame 600). The artifact server's log
@@ -698,8 +716,9 @@ old program renamed `pane.exe.old`, the new one in its place, the
 staging folder gone (frame 603, and hash checks of both programs against
 the two packages' own files). The next start runs the new version: it
 reports `Pane 99.0.0`, removes `pane.exe.old` at start, the calculator
-still answers "6*7" with 42 from the old version's acquired payload
-(frames 604 and 605), and the disabled Clipboard History stays disabled —
+still answers "6*7" with 42 from the old version's install (the
+calculator set up at first setup, from the pinned repositories;
+frames 604 and 605), and the disabled Clipboard History stays disabled —
 Pane's data was never touched. Pane itself was never restarted by the
 update: the smoke stops the old process and starts the new program
 itself, exactly as the user would.

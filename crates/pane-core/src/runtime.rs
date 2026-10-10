@@ -4978,12 +4978,15 @@ mod tests {
     /// Clipboard history's host calls (#35) are marked like every other
     /// host call: the slow host call computes inside the view's first one,
     /// so the view takes at least that long, yet the guest is never stopped
-    /// or blamed and the thread is never given up on.
+    /// or blamed and the thread is never given up on. The JavaScript
+    /// clipboard sample's view is the component: its render asks the
+    /// clipboard history's status first (the default extension's own
+    /// component lives in its repository, #285).
     #[test]
     fn a_guest_whose_clipboard_host_calls_are_slow_is_never_stopped_or_blamed() {
         let data = tempfile::tempdir().unwrap();
         let (packages, identity) = settings_package(&data);
-        let component = guest("clipboard_history.wasm");
+        let component = guest("sample_clipboard_js.wasm");
         let (runtime, reported) = watched_runtime();
         let slow = short_limits().compute * 3;
         assert!(slow > short_limits().unresponsive);
@@ -4992,7 +4995,10 @@ mod tests {
         let started = std::time::Instant::now();
         let view = block_on(runtime.render_with(&component, Some(packages.owned_by(&identity))));
 
-        assert_eq!(view.expect("the view is shown").title, "Clipboard History");
+        assert_eq!(
+            view.expect("the view is shown").title,
+            "Clipboard history (JavaScript)"
+        );
         assert!(
             started.elapsed() >= slow,
             "the slow host call was not one of clipboard history's: {:?}",

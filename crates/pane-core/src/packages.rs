@@ -178,15 +178,16 @@ impl PackageIdentity {
     }
 
     /// The identity of the default extension `id` (checked by
-    /// [`crate::defaults::fetch`]), whatever its version: the extension Pane
-    /// acquired for this feature, from Pane's own downloads.
+    /// [`crate::defaults::parse_pins`]), whatever its version: the
+    /// extension Pane acquires for this feature, from the commit its
+    /// release pins.
     pub fn default_extension(id: &str) -> PackageIdentity {
         PackageIdentity(Source::Default {
             default: id.to_owned(),
         })
     }
 
-    /// The id of a default extension acquired from Pane's own downloads.
+    /// The id of a default extension Pane acquires at first setup.
     pub fn default_id(&self) -> Option<&str> {
         match &self.0 {
             Source::Default { default } => Some(default),
@@ -1387,8 +1388,8 @@ pub enum PackageError {
     /// A package from Git cannot be fetched, written out or installed; the
     /// message says why.
     Git(String),
-    /// A default extension's payload cannot be acquired or installed; the
-    /// message says why.
+    /// A default extension's pinned revision cannot be fetched or
+    /// installed; the message says why.
     Defaults(String),
 }
 
@@ -1471,8 +1472,8 @@ pub(crate) struct SourcePackage {
     pub npm: Option<NpmOrigin>,
     /// Where a package from Git was fetched from; `None` otherwise.
     pub git: Option<GitOrigin>,
-    /// Where a default extension's payload was acquired from; `None`
-    /// otherwise.
+    /// Where a default extension's pinned revision was fetched from;
+    /// `None` otherwise.
     pub default: Option<crate::defaults::DefaultOrigin>,
     /// For a package from npm or Git, its download, removed from the
     /// downloads folder once the last copy of this package is dropped.
@@ -1607,29 +1608,57 @@ impl SourcePackage {
         })
     }
 
-    /// Reads the payload of the default extension Pane acquired from its
-    /// own downloads, as the package with the default extension's
-    /// identity. A payload is unpacked and checked as an npm package's
-    /// tarball is, so a payload without `pane.json` or without its built
-    /// components is explained like one.
+    /// Reads the pinned revision of a default extension that Pane fetched
+    /// and wrote out, as the package with the default extension's
+    /// identity, with its Git source recorded. A revision is read and
+    /// checked as a package from a folder is, so one without `pane.json`
+    /// at the repository's root or without its built components (a
+    /// source-only revision) is explained as the Git package's is.
     pub(crate) fn read_default(
         fetched: crate::defaults::Fetched,
     ) -> Result<SourcePackage, PackageError> {
         let crate::defaults::Fetched { download, origin } = fetched;
         let folder = download.folder().to_path_buf();
-        let id = origin.id.clone();
+        let revision = format!(
+            "{} (commit {}) of the Git repository {}",
+            origin.revision.describe(),
+            origin.revision.short_commit(),
+            origin.repository.name()
+        );
+        let revision = capitalized(&revision);
         let (manifest, manifest_text) = match Manifest::read_text(&folder) {
             Ok(read) => read,
             Err(PackageError::NoManifest(_)) => {
                 return Err(PackageError::Defaults(format!(
-                    "the payload of Pane's default extension {id} is not a Pane extension: it \
-                     has no {MANIFEST_FILE}, and Pane does not install what does not hold one"
+                    "{revision} is not a Pane extension: it has no {MANIFEST_FILE} at the \
+                     repository's root. Pane installs a repository whose root holds a \
+                     {MANIFEST_FILE} and the built WebAssembly components it names"
+                )));
+            }
+            Err(PackageError::MissingComponent { command, component }) => {
+                return Err(PackageError::Defaults(format!(
+                    "{revision} holds only the source of \"{command}\": its built component {} \
+                     is not in it. Pane does not build packages from Git or run anything in a \
+                     repository; the release this Pane pins was tested with must include the \
+                     built components, and until its repository releases one, Pane cannot set \
+                     this default extension up",
+                    component.display()
                 )));
             }
             Err(error) => return Err(error),
         };
+        for (_, component) in manifest.components() {
+            let path = component.to_string_lossy().replace('\\', "/");
+            if origin.lfs_pointers.contains(&path) {
+                return Err(PackageError::Defaults(format!(
+                    "{revision} stores its component {path} with Git LFS, which Pane does not \
+                     fetch: its repository must commit the built component itself in the \
+                     release this Pane pins"
+                )));
+            }
+        }
         Ok(SourcePackage {
-            identity: PackageIdentity::default_extension(&id),
+            identity: PackageIdentity::default_extension(&origin.id),
             folder,
             manifest,
             manifest_text,
@@ -1643,14 +1672,14 @@ impl SourcePackage {
     }
 
     /// What identifies the download this package was read from, when it
-    /// was downloaded: its npm tarball's integrity, its Git commit, or its
-    /// default payload's integrity. A new download with the same
-    /// `pane.json` is another plan.
+    /// was downloaded: its npm tarball's integrity, its Git commit, or
+    /// the default extension's pinned commit. A new download with the
+    /// same `pane.json` is another plan.
     pub(crate) fn fingerprint(&self) -> Option<String> {
         match (&self.npm, &self.git, &self.default) {
             (Some(npm), _, _) => Some(npm.integrity.clone()),
             (None, Some(git), _) => Some(git.revision.commit.clone()),
-            (None, None, Some(default)) => Some(default.integrity.clone()),
+            (None, None, Some(default)) => Some(default.revision.commit.clone()),
             (None, None, None) => None,
         }
     }
@@ -2196,7 +2225,8 @@ struct RecordJson {
     /// installed.
     #[serde(flatten, default, skip_serializing_if = "Option::is_none")]
     git: Option<GitRecordJson>,
-    /// For a default extension Pane acquired, the version installed.
+    /// For a default extension Pane set up, the version its manifest
+    /// declares and the Git source it was fetched from.
     #[serde(flatten, default, skip_serializing_if = "Option::is_none")]
     default: Option<DefaultRecordJson>,
     /// The managed folder under `packages/`.
@@ -2300,15 +2330,33 @@ impl GitRecordJson {
     }
 }
 
-/// The version of an acquired default extension as its record writes it,
-/// beside the default extension its source records: `"default":
-/// "calculator", "defaultVersion": "0.1.0"`. The payload's integrity
-/// identified the download and is not kept: what is kept is what was
-/// installed.
+/// An acquired default extension as its record writes it, beside the
+/// default extension its source records: `"default": "calculator",
+/// "defaultVersion": "0.5.0", "gitUrl": "https://github.com/…",
+/// "gitRef": "refs/tags/v0.5.0", "gitCommit": "<id>", "pinned": true`.
+/// The Git fields say where the pinned revision was fetched from, and
+/// are what a later release's updater reads to find the repository's
+/// newer release tags (#269); an older Pane, which acquired the default
+/// from its own downloads, wrote `defaultVersion` alone, and such a
+/// record is still read as it is.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 struct DefaultRecordJson {
-    #[serde(rename = "defaultVersion")]
-    version: String,
+    /// The version the installed manifest declares, when it declares one.
+    #[serde(
+        rename = "defaultVersion",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    version: Option<String>,
+    #[serde(rename = "gitUrl", default, skip_serializing_if = "Option::is_none")]
+    url: Option<String>,
+    /// `refs/tags/<tag>`; `None` for a record no Git source was kept of.
+    #[serde(rename = "gitRef", default, skip_serializing_if = "Option::is_none")]
+    reference: Option<String>,
+    #[serde(rename = "gitCommit", default, skip_serializing_if = "Option::is_none")]
+    commit: Option<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pinned: bool,
 }
 
 /// A dependency id and the source it resolved to.
@@ -2845,8 +2893,15 @@ impl Store {
             .as_ref()
             .map(|origin| NpmRecordJson::of(&origin.package));
         let git = package.git.as_ref().map(GitRecordJson::of);
-        let default = package.default.as_ref().map(|origin| DefaultRecordJson {
-            version: origin.version().to_owned(),
+        let default = package.default.as_ref().map(|origin| {
+            let revision = &origin.revision;
+            DefaultRecordJson {
+                version: package.manifest.version.clone(),
+                url: Some(origin.repository.url().to_owned()),
+                reference: revision.ref_name(),
+                commit: Some(revision.commit.clone()),
+                pinned: revision.pinned(),
+            }
         });
         // An update keeps the record, so a disabled package stays disabled.
         let enabled = match updated.packages.iter_mut().find(|r| &r.source == local) {

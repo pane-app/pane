@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 //
 // Pane's clipboard history sample in TypeScript: the same contract as the
-// Clipboard History default extension (guests/clipboard-history, Rust) and
+// Clipboard History default extension (pane-app/clipboard-history) and
 // the JavaScript sample. Pane's host watches the clipboard and keeps the
 // text the user copies for this package once they turn it on here, through
 // `pane:extension/clipboard-history` (imported because package.json sets

@@ -40,23 +40,27 @@ preopened folders) nor start a program. So the split, recorded in
   for it runs, and an [icon](#icons) cache. ADR 0038 ("The host keeps a
   live application list and an icon cache") amends ADR 0015's stateless
   adapter for this. Nothing is looked for until a guest asks.
-- **Default extension**, [`guests/applications`](../guests/applications)
-  (Rust), package [`guests/packages/applications`](../guests/packages/applications):
+- **Default extension**, the
+  [Applications repository](https://github.com/pane-app/applications)
+  (Rust), a Pane release pinning its release commits
+  ([`crates/pane/defaults.json`](../crates/pane/defaults.json)):
   its command, "Applications", is a
   [root provider](root-search.md#root-providers) (#164): it has no row of
   its own and supplies the applications to root search as
   [indexed results](root-search.md#results-supplied-ahead-of-the-query),
-  each found by its name and opened by Enter.
+  each found by its name and opened by Enter. The
+  [applications samples](../guests/packages) exercise the same host import
+  and indexed results from this repository's tree.
 - **Not a native helper** ([ADR 0014](adr/0014-optional-native-extension-helpers.md), #15): listing folders and asking the
   system to open a file are what the host process already does for every
   system; a separately packaged per-OS helper binary would add distribution
   and lifecycle work (#15 is not built) for no capability the host lacks.
 
-Acquiring the package automatically at setup is
-[#51](https://github.com/pane-app/pane/issues/51) to
-[#53](https://github.com/pane-app/pane/issues/53); until then it is
-installed from its folder like the calculator
-(`pane --install target/guests/packages/applications`).
+First setup acquires the extension from the commit this Pane release pins
+([#278](https://github.com/pane-app/pane/issues/278),
+[#53](https://github.com/pane-app/pane/issues/53)); a user can also install
+it by hand from its repository
+(`pane --install git:https://github.com/pane-app/applications`).
 
 ## Behavior
 

@@ -33,7 +33,6 @@ mod no_view;
 mod npm;
 mod open_pane;
 mod preferences;
-mod quicklinks;
 mod repositories;
 mod runtime_crash;
 mod search_files;

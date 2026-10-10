@@ -26,8 +26,8 @@
 //!   passes `--partition hash:1/3` to run one shard of the tests, `-E
 //!   <filter>` to run only some, `--no-run` to build them only.
 //! - `package-linux`: build Pane's Linux package and the artifacts its
-//!   default extensions are acquired from, under `target/dist/` (with
-//!   `--dev`, the package's program is the development profile; see
+//!   own application updates are downloaded from, under `target/dist/`
+//!   (with `--dev`, the package's program is the development profile; see
 //!   `package.rs`).
 //! - `package-windows`: build Pane's Windows package and the same
 //!   artifacts, under `target/dist/` (`--dev` as for `package-linux`;
@@ -59,9 +59,8 @@ use std::process::{Command, ExitCode};
 const GUEST_TARGET: &str = "wasm32-wasip2";
 
 /// npm's own fixed time for packed files, 1985-10-26T08:15:00Z: the
-/// tarballs this repository packs (the npm sample, the default
-/// extensions' payloads, the Linux package) are the same on every system,
-/// so a source serves one integrity everywhere.
+/// tarballs this repository packs (the npm sample, the Linux package) are
+/// the same on every system, so a source serves one integrity everywhere.
 pub(crate) const PACKED_MTIME: u64 = 499_162_500;
 
 /// Components built by `js-guests` and committed, so that normal builds and
@@ -203,11 +202,6 @@ fn guests() -> Result<(), String> {
             &[
                 "sample_rust",
                 "sample_settings",
-                "calculator",
-                "applications",
-                "quicklinks",
-                "files",
-                "clipboard_history",
                 "sample_operations",
                 "sample_dependencies",
                 "sample_query",
@@ -417,21 +411,17 @@ fn git_sample(root: &Path, out: &Path) -> Result<(), String> {
     Ok(())
 }
 
-/// (package folder in `guests/packages`, component) of each sample package,
-/// and of the default extensions (the calculator, applications and
-/// quicklinks).
-const SAMPLE_PACKAGES: [(&str, &str); 59] = [
+/// (package folder in `guests/packages`, component) of each sample package.
+/// The default extensions' packages are not here: their sources left this
+/// repository for their own (#285), and a Pane release installs them from
+/// the commits its pins name (`crates/pane/defaults.json`).
+const SAMPLE_PACKAGES: [(&str, &str); 54] = [
     ("sample-rust", "sample_rust"),
     ("sample-settings", "sample_settings"),
     ("sample-js", "sample_js"),
     ("sample-ts", "sample_ts"),
     ("sample-settings-js", "sample_settings_js"),
     ("sample-settings-ts", "sample_settings_ts"),
-    ("calculator", "calculator"),
-    ("applications", "applications"),
-    ("quicklinks", "quicklinks"),
-    ("files", "files"),
-    ("clipboard-history", "clipboard_history"),
     ("sample-operations", "sample_operations"),
     ("sample-operations-js", "sample_operations_js"),
     ("sample-operations-ts", "sample_operations_ts"),

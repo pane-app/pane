@@ -1,6 +1,7 @@
 //! Search Files and the file actions Pane performs itself (#150) in the
-//! launcher's window, with real key events, the Files default extension,
-//! a recording handler of files and a recording system: typing in the
+//! launcher's window, with real key events, the Rust files sample (the
+//! same contract the Files default extension holds, over Pane's file
+//! index), a recording handler of files and a recording system: typing in the
 //! command's own field lists the files Pane's file index found (#175, over
 //! a fixture folder standing for the home folder); on a document,
 //! Enter opens it and Ctrl+Enter reveals it, each closing the window; on a
@@ -70,11 +71,11 @@ struct World {
 }
 
 impl World {
-    /// Pane with Files installed and its file index of a folder holding
-    /// `plan.txt` and `run plan.bat` settled.
+    /// Pane with the files sample installed and its file index of a folder
+    /// holding `plan.txt` and `run plan.bat` settled.
     fn launcher(cx: &mut TestAppContext) -> (World, Launcher) {
-        let package =
-            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/guests/packages/files");
+        let package = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../target/guests/packages/sample-files");
         assert!(
             package.exists(),
             "{} is missing; run `cargo xtask guests`",
@@ -127,8 +128,8 @@ impl World {
     }
 }
 
-/// Opens the window over `launcher`, then Search Files in it as a user
-/// does, and types `query` in its field.
+/// Opens the window over `launcher`, then the sample's Find files command
+/// in it as a user does, and types `query` in its field.
 fn search_files<'a>(
     cx: &'a mut TestAppContext,
     launcher: Launcher,
@@ -136,11 +137,11 @@ fn search_files<'a>(
 ) -> (Entity<LauncherWindow>, &'a mut VisualTestContext) {
     cx.update(pane::bind_keys);
     let (window, cx) = cx.add_window_view(|window, cx| LauncherWindow::new(launcher, window, cx));
-    cx.simulate_input("search files");
+    cx.simulate_input("find files");
     let view = settle(&window, cx);
     assert_eq!(
         view.rows.first().map(|row| row.title.as_str()),
-        Some("Search Files")
+        Some("Find files (Rust)")
     );
     cx.simulate_keystrokes("enter");
     let view = settle(&window, cx);

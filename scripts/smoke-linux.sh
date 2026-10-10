@@ -8,8 +8,10 @@
 # (dbus-x11), at-spi2-core, python3-gi and gir1.2-atspi-2.0 (see `a11y`).
 # Set PANE_XVFB / PANE_XDOTOOL to use binaries outside PATH. Pane keeps
 # installed packages in <output-dir>/data, not the user's data folder.
-# The clipboard phases serve the artifacts the #53 phase's package build
-# leaves in target/dist/artifacts, so they run after it.
+# The phases that set the default extensions up serve their repositories
+# (made from the packages `cargo xtask guests` assembles) on 127.0.0.1, so
+# they run after it. The update phases serve the artifacts the #53 phase's
+# package build leaves in target/dist/artifacts, so they run after it too.
 # Usage: scripts/smoke-linux.sh <output-dir> [pane-binary]
 set -euo pipefail
 # Behavior captures use a fixed palette without desktop-dependent glass.
@@ -21,6 +23,15 @@ xdotool=${PANE_XDOTOOL:-xdotool}
 mkdir -p "$out"
 rm -rf "$out/data"
 export PANE_DATA_DIR=$out/data
+# A development build takes its default extensions' pins from PANE_DEFAULTS;
+# without it, the committed pins point at the real repositories, which no
+# check may reach. Until a phase names its own pins, the file names none:
+# first setup adds nothing, which the phases that install samples by hand
+# need (the phase that checks first setup points it at the repositories it
+# serves).
+no_default_pins=$out/no-default-pins.json
+printf '[]\n' >"$no_default_pins"
+export PANE_DEFAULTS=$no_default_pins
 { grep PRETTY_NAME /etc/os-release; uname -srm; } >"$out/system.txt"   # the tested OS and architecture
 
 printf "%s\n" "theme=dark material=opaque (behavior smoke; not blur evidence)" >>"$out/system.txt"
@@ -33,6 +44,7 @@ xvfb_pid=
 pane_pid=
 npm_registry_pid=
 repository_server_pid=
+defaults_server_pid=
 artifact_server_pid=
 a11y_bus_pid=
 dbus_pid=
@@ -40,6 +52,7 @@ cleanup() {
   [ -n "$pane_pid" ] && kill "$pane_pid" 2>/dev/null || true
   [ -n "$npm_registry_pid" ] && kill "$npm_registry_pid" 2>/dev/null || true
   [ -n "$repository_server_pid" ] && kill "$repository_server_pid" 2>/dev/null || true
+  [ -n "$defaults_server_pid" ] && kill "$defaults_server_pid" 2>/dev/null || true
   [ -n "$artifact_server_pid" ] && kill "$artifact_server_pid" 2>/dev/null || true
   [ -n "$a11y_bus_pid" ] && kill "$a11y_bus_pid" 2>/dev/null || true
   [ -n "$dbus_pid" ] && kill "$dbus_pid" 2>/dev/null || true
@@ -574,26 +587,6 @@ check 23-color-click.png 1b5e20 3000   # dark green
 "$xdotool" key Escape key Escape; sleep 1
 stop_pane
 
-# The calculator, a default extension: an expression typed into root search
-# lists its answer first, selected, and Enter copies it. Pasting the copy
-# over the query and typing on shows exactly the screen typing the whole
-# expression shows, so the clipboard held the answer.
-start_pane --install target/guests/packages/calculator
-focus_launcher
-"$xdotool" key Return; sleep 2   # Install
-"$xdotool" type --delay 50 '6*7'; sleep 2
-capture 27-answer.png
-check 27-answer.png answer   # the selected answer card
-"$xdotool" key Return; sleep 1
-capture 28-copied.png   # "Copied 42 to the clipboard"
-"$xdotool" key ctrl+a; "$xdotool" type --delay 50 '42+1'; sleep 2
-capture 29-typed.png
-"$xdotool" key ctrl+a ctrl+v; "$xdotool" type --delay 50 '+1'; sleep 2
-capture 30-pasted.png
-python3 "$(dirname "$0")/check_screenshot.py" --distinct "$out"/{27-answer,28-copied,29-typed}.png
-python3 "$(dirname "$0")/check_screenshot.py" --same "$out/29-typed.png" "$out/30-pasted.png"
-stop_pane
-
 # Operations: install the JavaScript operations sample, then the Rust one,
 # whose command (Call from Rust, selected once installed) opens its form,
 # takes the JavaScript package's identity (local: and the folder's resolved
@@ -732,11 +725,12 @@ grep -q '"greeting-style": "formal"' "$out/data/extensions/settings.json" || { e
 grep -q '"note": "Water the plants"' "$out/data/extensions/content.json" || { echo "note lost"; exit 1; }
 grep -q '"token": "sample-token"' "$out/data/extensions/credentials.json" || { echo "credential lost"; exit 1; }
 
-# Applications, a default extension: an installed application is found by
-# name in root search and Enter opens it. The application is a desktop entry
-# the smoke adds in an XDG_DATA_HOME of its own (for Pane only), whose
-# program writes a marker file, so nothing else is started; Pane still
-# searches the system's applications too.
+# Applications: an installed application is found by name in root search
+# and Enter opens it, through the JavaScript applications sample (the same
+# host import and results the Applications default extension holds). The
+# application is a desktop entry the smoke adds in an XDG_DATA_HOME of its
+# own (for Pane only), whose program writes a marker file, so nothing else
+# is started; Pane still searches the system's applications too.
 apps=$(cd "$out" && pwd)/apps
 rm -rf "$apps"
 mkdir -p "$apps/data/applications"
@@ -746,7 +740,7 @@ Type=Application
 Name=Pane Smoke App
 Exec=sh -c "echo launched > '$apps/launched'"
 EOF
-XDG_DATA_HOME=$apps/data start_pane --install target/guests/packages/applications
+XDG_DATA_HOME=$apps/data start_pane --install target/guests/packages/sample-applications-js
 focus_launcher
 "$xdotool" key Return; sleep 2   # Install
 "$xdotool" type --delay 50 'pane smoke'; sleep 3
@@ -754,30 +748,19 @@ capture 44-application.png
 check 44-application.png selected 3000   # the selected application row
 "$xdotool" key Return; sleep 3
 capture 45-opened.png
-check 45-opened.png success   # "Opened Pane Smoke App"
+check 45-opened.png success   # "Opened Launch Pane Smoke App"
 for _ in $(seq 50); do [ -f "$apps/launched" ] && break; sleep 0.2; done
 [ -f "$apps/launched" ] || { echo "the application did not run"; exit 1; }
 python3 "$(dirname "$0")/check_screenshot.py" --distinct "$out"/{44-application,45-opened}.png
 stop_pane
 
-# Quicklinks, a default extension: installed, its Create Quicklink command,
-# found by typing its name, opens its form, which saves a quicklink and
-# returns to root search. After a restart, typing part of its name lists it,
-# selected, and Enter opens its address with the system's link handler:
-# xdg-open, with no desktop session and a script that records the address,
-# instead of starting a browser, as the only handler for web links.
-start_pane --install target/guests/packages/quicklinks
-focus_launcher
-"$xdotool" key Return; sleep 2   # Install
-"$xdotool" type --delay 50 'create quicklink'; sleep 2
-"$xdotool" key Return; sleep 3   # open Create Quicklink's form
-"$xdotool" type --delay 50 'Pane issues'
-"$xdotool" key Tab
-"$xdotool" type --delay 50 'https://example.com/pane-issues'
-"$xdotool" key Return; sleep 2
-capture 46-quicklink-saved.png
-check 46-quicklink-saved.png success   # "Created “Pane issues”"
-stop_pane
+# A web address an extension opens reaches the system's link handler:
+# the actions sample's "Open Website" action opens https://example.com
+# with xdg-open, with no desktop session and a script that records the
+# address, instead of starting a browser, as the only handler for web
+# links. (The Quicklinks extension that carried this before had its
+# sources leave for their repository, #285; the host's link opening is
+# the same through any package.)
 printf '#!/bin/sh\necho "$1" >"%s/opened-link.txt"\n' "$out" >"$out/browser.sh"
 chmod +x "$out/browser.sh"
 rm -f "$out/opened-link.txt"
@@ -810,16 +793,17 @@ if command -v xdg-mime >/dev/null; then
   handler=$(xdg-mime query default x-scheme-handler/https)
   [ "$handler" = pane-smoke-browser.desktop ] || { echo "web links would open with $handler, not the smoke's script"; exit 1; }
 fi
-start_pane
+start_pane --install target/guests/packages/sample-actions
 focus_launcher
-"$xdotool" type --delay 50 'pane iss'; sleep 2
-capture 47-quicklink-found.png
-check 47-quicklink-found.png selected 3000   # the selected quicklink row
-"$xdotool" key Return; sleep 3
-capture 48-quicklink-opened.png
-check 48-quicklink-opened.png success   # "Opened Pane issues"
-[ "$(cat "$out/opened-link.txt")" = https://example.com/pane-issues ] || { echo "the link handler was not asked to open the quicklink"; exit 1; }
-python3 "$(dirname "$0")/check_screenshot.py" --distinct "$out"/{46-quicklink-saved,47-quicklink-found,48-quicklink-opened}.png
+"$xdotool" key Return; sleep 2   # Install
+"$xdotool" type --delay 50 'actions'; sleep 2
+"$xdotool" key Return; sleep 2   # open the Actions command
+for _ in 1 2 3 4 5 6 7; do "$xdotool" key Down; done; sleep 1   # its "System" item, selected
+"$xdotool" key ctrl+k; sleep 1   # its actions panel
+"$xdotool" type --delay 50 'open website'; sleep 1
+"$xdotool" key Return; sleep 3   # Open Website: the handler is asked for the address
+capture 46-website-opened.png   # evidence only: the action's toast
+[ "$(cat "$out/opened-link.txt")" = https://example.com ] || { echo "the link handler was not asked to open the address"; exit 1; }
 stop_pane
 # The smoke's session bus again, for Settings' accessibility tree (see
 # `a11y`): the phases below open no link until file search, which takes
@@ -1750,11 +1734,12 @@ moved=$(python3 "$(dirname "$0")/repository_server.py" commit "$out/git-reposito
 python3 "$(dirname "$0")/check_git_record.py" --ref refs/heads/release --unpinned "$PANE_DATA_DIR/extensions/installed.json" "$moved" || { echo "the tracked Git package was not recorded at its moved branch"; exit 1; }
 [ -z "$(ls -A "$PANE_DATA_DIR/extensions/downloads" 2>/dev/null)" ] || { echo "a Git download was left"; exit 1; }
 
-# File search (#29, #175): Files, a default extension (its data folder is
+# File search (#29, #175): the Rust files sample (the same contract the
+# Files default extension holds; its data folder is
 # this phase's own), answers from Pane's file index, which covers the home
 # folder; the smoke names a fixture folder for it to cover instead in
 # PANE_TEST_FILE_INDEX_HOME (a debug build's hook, which also keeps the index
-# in the data folder). Installing Files starts the index, and showing the
+# in the data folder). Installing it starts the index, and showing the
 # window lets its first walk start. The fixture folder's
 # path has spaces, and a file in it has non-ASCII letters too; typing "plan"
 # lists that file under "Files", selected, and Enter opens it with the system's handler for
@@ -1800,11 +1785,11 @@ if command -v xdg-mime >/dev/null; then
   [ "$handler" = pane-smoke-file-opener.desktop ] || { echo "text files would open with $handler, not the smoke's script"; exit 1; }
 fi
 export PANE_TEST_FILE_INDEX_HOME=$files_folder
-start_pane --install target/guests/packages/files
+start_pane --install target/guests/packages/sample-files
 focus_launcher
 "$xdotool" key Return; sleep 3   # Install; the index walks the fixture
 capture 220-files-installed.png
-check 220-files-installed.png success   # "Installed Files"
+check 220-files-installed.png success   # "Installed Rust files sample"
 # The install lands on a blank root search, where Escape hides the
 # launcher (release run 37698693722's Windows frame 221 was the desktop):
 # the return to root key keeps it.
@@ -1922,24 +1907,47 @@ python3 "$(dirname "$0")/check_screenshot.py" --distinct "$out"/{161-root-typed,
 stop_pane
 stop_service
 
-# Installing Pane and acquiring its calculator (#53): the package
-# `cargo xtask package-linux --dev` builds is installed on a clean machine
-# — a fresh home folder, a PATH that holds nothing at all, so no Rust,
-# Node, npm, Git or compiler can be reached — and Pane, started from what
-# the install script installed, acquires its default extensions (the
-# five of #60; no sample is one, #162) from the artifact source this
-# smoke serves on 127.0.0.1 (scripts/artifact_server.py, the payloads
-# `cargo xtask package-linux` assembled; nothing reaches the network or
-# Pane's published downloads). The calculator answers "6*7" with 42, with
-# no developer tool anywhere. The package is
-# the development profile, because only a development build takes its
-# artifact source from PANE_ARTIFACTS; a release build uses Pane's
-# published downloads, which no controlled source may replace.
-# (The binaries are removed again at the end of the phase: the uploaded
-# evidence is the screenshots and records, not the program.)
+# Installing Pane and setting its default extensions up (#53, #278): the
+# package `cargo xtask package-linux --dev` builds is installed on a clean
+# machine — a fresh home folder, a PATH that holds nothing at all, so no
+# Rust, Node, npm, Git or compiler can be reached — and Pane, started
+# from what the install script installed, fetches its default extensions
+# (the five of #60; no sample is one, #162) from the commits this release
+# pins: their repositories, cloned at those commits from their real
+# addresses on GitHub (the smoke's own setup on the runner) and served on
+# 127.0.0.1 over Git's smart HTTP protocol
+# (scripts/repository_server.py; the Pane under test reaches no network
+# address and no real Git host), named by the pins file the development
+# build reads through PANE_DEFAULTS (a release build uses the committed
+# pins, which no controlled source may replace). The clones hold the
+# release revisions' built components, so the first setup installs
+# exactly what a release installs; the calculator answers "6*7" with 42,
+# with no developer tool anywhere. The package is the development
+# profile because only a development build takes its pins from
+# PANE_DEFAULTS. (The binaries are removed again at the end of the phase:
+# the uploaded evidence is the screenshots and records, not the program.)
 cargo xtask package-linux --dev >/dev/null
 package=$(ls target/dist/pane-*-linux-*-dev.tar.gz | head -1)
 [ -n "$package" ] || { echo "the package was not built"; exit 1; }
+# The default extensions' repositories, cloned at the commits the
+# committed pins name and served from this computer for the rest of the
+# smoke: the phases that check first setup point PANE_DEFAULTS at the
+# pins naming them.
+default_repositories=$PWD/$out/default-repositories
+default_pins=$out/default-pins.json
+rm -rf "$default_repositories"
+mkdir -p "$default_repositories"
+rm -f "$out/default-repository-server.port"
+python3 "$(dirname "$0")/repository_server.py" serve "$default_repositories" \
+  "$out/default-repository-server.port" 2>>"$out/default-repository-server.log" &
+defaults_server_pid=$!
+for _ in $(seq 600); do [ -s "$out/default-repository-server.port" ] && break; kill -0 "$defaults_server_pid" 2>/dev/null || break; sleep 0.1; done
+[ -s "$out/default-repository-server.port" ] \
+  || { echo "the default extensions' repository server did not start (see $out/default-repository-server.log)"; exit 1; }
+default_pins=$PWD/$out/default-pins.json
+python3 "$(dirname "$0")/repository_server.py" clone-defaults crates/pane/defaults.json \
+  "$default_repositories" "$default_pins" \
+  "http://127.0.0.1:$(cat "$out/default-repository-server.port")/"
 # The clean home and unpacked package are absolute: Pane's HOME lands in
 # its compile cache's directory, which Wasmtime needs absolute, and the
 # smoke runs from the repository with a relative $out.
@@ -1967,6 +1975,7 @@ start_installed() {
   env -i HOME="$home" PATH="$clean_bin" DISPLAY="$display" \
     PANE_THEME=dark PANE_MATERIAL=opaque \
     PANE_ARTIFACTS="http://127.0.0.1:$(cat "$out/artifact-server.port")/" \
+    PANE_DEFAULTS="$default_pins" \
     "$home/.local/bin/pane" "$@" 2>>"$out/installed-stderr.log" &
   pane_pid=$!
   window=
@@ -1983,7 +1992,7 @@ start_installed
   || { echo "the installed Pane did not run with the clean PATH"; exit 1; }
 focus_launcher
 installed=$home/.local/share/pane/extensions
-# Generous: a slow runner may take a while to check both payloads'
+# Generous: a slow runner may take a while to check the five revisions'
 # components (300 s each). A wait that fails records the screen and the
 # clean home's files — the artifact upload skips hidden folders, so the
 # records are copied out where it can see them.
@@ -1991,10 +2000,10 @@ record_setup_state() {
   rm -rf "$out/clean-home-records"
   mkdir -p "$out/clean-home-records"
   cp -f "$installed/installed.json" "$out/clean-home-records/" 2>/dev/null || true
-  cp -r "$installed/acquired" "$out/clean-home-records/" 2>/dev/null || true
   cp -r "$installed/downloads" "$out/clean-home-records/" 2>/dev/null || true
   cp -f "$out/installed-stderr.log" "$out/clean-home-records/" 2>/dev/null || true
   cp -f "$out/artifact-server.log" "$out/clean-home-records/" 2>/dev/null || true
+  cp -f "$out/default-repository-server.log" "$out/clean-home-records/" 2>/dev/null || true
 }
 record_setup_problem() {
   capture 499-setup-problem.png
@@ -2011,7 +2020,7 @@ wait_recorded() {
 }
 kill -0 "$pane_pid" 2>/dev/null || { echo "the installed Pane exited during setup"; exit 1; }
 # The default set (#60): all five, in every build; no sample is
-# acquired (#162).
+# set up (#162).
 for default_ in calculator applications quicklinks files clipboard-history; do
   wait_recorded "\"default\": \"$default_\""
 done
@@ -2025,13 +2034,12 @@ check 501-calculator-answer.png answer   # "42", the calculator's selected answe
 capture 502-calculator-copied.png
 check 502-calculator-copied.png success   # "Copied 42 to the clipboard"
 if grep -q '"default": "helper-sample"' "$installed/installed.json"; then
-  echo "a sample was acquired as a default extension"; exit 1
+  echo "a sample was set up as a default extension"; exit 1
 fi
-# The payload the calculator acquired is kept, exactly its one current
-# entry. GNU wc prints a bare count, but the padding is trimmed anyway,
-# as the macOS smoke's does: one wording, and no platform's wc formatting
-# can fail it.
-[ "$(ls "$installed/acquired/calculator" | wc -l | tr -d ' ')" = 1 ] || { echo "the calculator's payload is not cached"; exit 1; }
+# Each default's record keeps the Git source it was fetched from: the
+# repository, the pin's release tag, its commit and that it is pinned.
+python3 "$(dirname "$0")/check_git_record.py" --defaults "$default_pins" "$installed/installed.json" \
+  || { echo "a default's record does not keep its Git source"; exit 1; }
 [ -z "$(ls -A "$installed/downloads" 2>/dev/null)" ] || { echo "downloads were left behind"; exit 1; }
 python3 "$(dirname "$0")/check_screenshot.py" --distinct "$out"/{500-installed-root,501-calculator-answer}.png
 stop_pane
@@ -2044,9 +2052,9 @@ rm -f "$home/.local/bin/pane" "$unpack/pane/pane"
 # Clipboard history (#35, #166): Pane's own Clipboard History records what
 # is copied from the first start, with nothing to turn on. Only the
 # registered default extension does (a copy installed from its folder
-# starts off and shows the generic list), so this phase acquires the
-# default set from the artifact source the #53 phase built, served on
-# 127.0.0.1 as there, with the smoke's own build; Files' index covers an
+# starts off and shows the generic list), so this phase sets the default
+# set up from the pinned repositories the #53 phase serves, with the
+# smoke's own build; Files' index covers an
 # empty folder of the smoke's (PANE_TEST_FILE_INDEX_HOME), not the
 # runner's home. The text this smoke copies is kept; nothing is kept
 # while recording is paused (Pause Recording and Resume Recording, in the
@@ -2073,17 +2081,10 @@ export PANE_DATA_DIR=$out/clipboard-data
 rm -rf "$PANE_DATA_DIR" "$out/clipboard-home"
 mkdir -p "$out/clipboard-home"
 export PANE_TEST_FILE_INDEX_HOME=$(cd "$out/clipboard-home" && pwd)
+export PANE_DEFAULTS=$default_pins
 
 extensions=$PANE_DATA_DIR/extensions
 history=$extensions/clipboard-history.json
-rm -f "$out/clipboard-artifact-server.port"
-python3 "$(dirname "$0")/artifact_server.py" target/dist/artifacts "$out/clipboard-artifact-server.port" \
-  2>>"$out/clipboard-artifact-server.log" &
-artifact_server_pid=$!
-for _ in $(seq 600); do [ -s "$out/clipboard-artifact-server.port" ] && break; kill -0 "$artifact_server_pid" 2>/dev/null || break; sleep 0.1; done
-[ -s "$out/clipboard-artifact-server.port" ] \
-  || { echo "the clipboard phase's artifact source did not start (see $out/clipboard-artifact-server.log)"; exit 1; }
-export PANE_ARTIFACTS="http://127.0.0.1:$(cat "$out/clipboard-artifact-server.port")/"
 # The kept texts, newest first, joined by commas.
 kept_texts() { python3 "$(dirname "$0")/clipboard_history.py" texts "$extensions"; }
 # The newest kept text.
@@ -2117,7 +2118,7 @@ history_action() {
 }
 start_pane
 focus_launcher
-# The default set (#60), acquired at this first start.
+# The default set (#60), set up at this first start.
 for default_ in calculator applications quicklinks files clipboard-history; do
   wait_for "$extensions/installed.json" "\"default\": \"$default_\"" present 1200
 done
@@ -2250,8 +2251,8 @@ python3 "$(dirname "$0")/check_screenshot.py" --distinct "$out"/{400-clipboard-e
 stop_pane
 [ "$(kept_texts)" = pane-smoke-after-clear ] || { echo "kept: $(kept_texts)"; exit 1; }
 [ "$(field retentionSeconds)" = 3600 ] || { echo "retention: $(field retentionSeconds)"; exit 1; }
-kill "$artifact_server_pid"; wait "$artifact_server_pid" 2>/dev/null || true; artifact_server_pid=
-unset PANE_ARTIFACTS PANE_TEST_FILE_INDEX_HOME
+unset PANE_TEST_FILE_INDEX_HOME
+export PANE_DEFAULTS=$no_default_pins
 
 # Installing a Pane application update by the user's choice (#56): a
 # second package is built with --package-version 99.0.0, whose program
@@ -2269,9 +2270,9 @@ unset PANE_ARTIFACTS PANE_TEST_FILE_INDEX_HOME
 # one renamed pane.old, removed on a later start — so the new version is
 # used the next time Pane starts (Pane never restarts itself). The new
 # Pane, started again, reports 99.0.0, with the old version's data (the
-# calculator acquired at first setup) and the extension the user
-# disabled (Clipboard History) kept, and with nothing of the update left
-# in the bin folder.
+# calculator set up at first setup, from the pinned repositories) and
+# the extension the user disabled (Clipboard History) kept, and with
+# nothing of the update left in the bin folder.
 cargo xtask package-linux --dev --package-version 99.0.0 >/dev/null
 newer=$(ls target/dist/pane-99.0.0-linux-*-dev.tar.gz | head -1)
 older=$(ls target/dist/pane-0.1.0-linux-*-dev.tar.gz | head -1)
@@ -2310,6 +2311,7 @@ start_update_pane() {
     DBUS_SESSION_BUS_ADDRESS="$a11y_session" \
     PANE_THEME=dark PANE_MATERIAL=opaque \
     PANE_ARTIFACTS="http://127.0.0.1:$(cat "$out/update-artifact-server.port")/" \
+    PANE_DEFAULTS="$default_pins" \
     "$update_program" "$@" 2>>"$out/update-stderr.log" &
   pane_pid=$!
   window=
@@ -2322,14 +2324,15 @@ start_update_pane() {
 }
 start_update_pane
 focus_launcher
-# First setup: the default extensions are acquired (2 index reads), and
-# Pane's own check reads the index once more — its request is the third.
+# First setup fetches the pinned commits from the repositories (no
+# request reaches the artifact source for them), and Pane's own check
+# reads the index once — its request is the first.
 for _ in $(seq 2000); do
-  [ "$(grep -c pane-defaults.json "$update_log" 2>/dev/null || true)" -ge 3 ] && break
+  [ "$(grep -c pane-defaults.json "$update_log" 2>/dev/null || true)" -ge 1 ] && break
   kill -0 "$pane_pid" 2>/dev/null || { echo "the installed Pane exited during setup"; exit 1; }
   sleep 0.1
 done
-[ "$(grep -c pane-defaults.json "$update_log" 2>/dev/null || true)" -ge 3 ] \
+[ "$(grep -c pane-defaults.json "$update_log" 2>/dev/null || true)" -ge 1 ] \
   || { echo "Pane never checked for its own update"; exit 1; }
 wait_for "$update_registry" '"default": "calculator"' present 6000
 wait_for "$update_registry" '"default": "clipboard-history"' present 6000

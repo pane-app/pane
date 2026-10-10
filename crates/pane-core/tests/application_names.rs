@@ -1,13 +1,15 @@
 //! Applications' names through the launcher's public interface, with the
-//! real Applications guest (`target/guests/packages/applications`) and the
-//! host's list of applications ([`Cached`]) over a fake system whose
+//! JavaScript applications sample (`target/guests/packages/
+//! sample-applications-js`), which supplies the host's list of applications
+//! ([`Cached`]) to root search as indexed results over a fake system whose
 //! sources the tests decide: a localized title is listed and the
 //! untranslated name still finds it; a program's name finds its
 //! application unless it is generic, shared or the shortcut passes
 //! arguments; keywords find an application; a result found by another
-//! name shows its real title; applications of one name are told apart by
-//! their subtitles and their pins; and an extension gives its own indexed
-//! results alternate titles and keywords. The pure rules are unit tests of
+//! name shows its real title; applications of one name stay told apart
+//! as two results, a pinned one keeping its row's subtitle as what says
+//! which it is; and an extension gives its own indexed results alternate
+//! titles and keywords. The pure rules are unit tests of
 //! `pane_core::applications::names`; the systems' names are checked in
 //! `application_adapters.rs`.
 
@@ -87,7 +89,7 @@ fn shortcut(folder: &str, name: &str, target: &str, arguments: &str) -> Source {
 }
 
 /// A launcher, with its own data folder, whose host lists `system`'s
-/// applications by identity, with the Applications package and `others`
+/// applications by identity, with the applications sample `package`
 /// installed.
 struct Fixture {
     data: TempDir,
@@ -95,7 +97,7 @@ struct Fixture {
     launcher: Launcher,
 }
 
-fn launcher(system: &Arc<FakeSystem>, others: &[&str]) -> Fixture {
+fn launcher(system: &Arc<FakeSystem>, package: &str) -> Fixture {
     let data = tempfile::tempdir().unwrap();
     let cache = tempfile::tempdir().unwrap();
     let runtime = Runtime::start_with_cache(cache.path().to_path_buf()).unwrap();
@@ -105,10 +107,7 @@ fn launcher(system: &Arc<FakeSystem>, others: &[&str]) -> Fixture {
     )));
     let launcher = Launcher::with_packages(Ok(runtime), vec![], data.path().join("extensions"))
         .with_quick_slots(data.path());
-    install(&launcher, &built("packages/applications"));
-    for other in others {
-        install(&launcher, &built(&format!("packages/{other}")));
-    }
+    install(&launcher, &built(&format!("packages/{package}")));
     Fixture {
         data,
         _cache: cache,
@@ -158,26 +157,29 @@ fn a_localized_title_is_listed_and_the_untranslated_name_still_finds_it() {
         )
     };
     let system = FakeSystem::with(vec![paint.clone()]);
-    let fixture = launcher(&system, &[]);
+    let fixture = launcher(&system, "sample-applications-js");
     let launcher = &fixture.launcher;
 
     assert_eq!(
         rows(launcher, "ứng dụng"),
-        [row("Ứng dụng Vẽ", "Application")]
+        [row("Launch Ứng dụng Vẽ", "JavaScript applications sample")]
     );
     // The English name a tutorial gives, and the program's: the row shows
     // the title the user sees in their Start menu.
-    assert_eq!(rows(launcher, "paint"), [row("Ứng dụng Vẽ", "Application")]);
+    assert_eq!(
+        rows(launcher, "paint"),
+        [row("Launch Ứng dụng Vẽ", "JavaScript applications sample")]
+    );
     assert_eq!(
         rows(launcher, "mspaint"),
-        [row("Ứng dụng Vẽ", "Application")]
+        [row("Launch Ứng dụng Vẽ", "JavaScript applications sample")]
     );
 
     block_on(launcher.activate_selected());
     assert_eq!(system.opened(), [paint.path]);
     assert_eq!(
         launcher.view().status,
-        Status::Result("Opened Ứng dụng Vẽ".into())
+        Status::Result("Opened Launch Ứng dụng Vẽ".into())
     );
 }
 
@@ -206,20 +208,23 @@ fn a_program_s_name_finds_its_application_unless_generic_shared_or_given_argumen
             "--profile-directory=Default --app-id=mail",
         ),
     ]);
-    let fixture = launcher(&system, &[]);
+    let fixture = launcher(&system, "sample-applications-js");
     let launcher = &fixture.launcher;
 
-    assert_eq!(titles_for(launcher, "code"), ["Visual Studio Code"]);
-    assert_eq!(titles_for(launcher, "wt"), ["Windows Terminal"]);
+    assert_eq!(titles_for(launcher, "code"), ["Launch Visual Studio Code"]);
+    assert_eq!(titles_for(launcher, "wt"), ["Launch Windows Terminal"]);
     // Typing a role finds nothing by it.
     assert!(titles_for(launcher, "launcher").is_empty());
     assert!(titles_for(launcher, "setup").is_empty());
     // A name two applications share picks neither, though their titles
     // still find them.
     assert!(titles_for(launcher, "editor").is_empty());
-    assert_eq!(titles_for(launcher, "writer"), ["Writer", "Writer Beta"]);
+    assert_eq!(
+        titles_for(launcher, "writer"),
+        ["Launch Writer", "Launch Writer Beta"]
+    );
     // The browser's name finds the browser, not the web app it hosts.
-    assert_eq!(titles_for(launcher, "chrome"), ["Google Chrome"]);
+    assert_eq!(titles_for(launcher, "chrome"), ["Launch Google Chrome"]);
 
     // The one found by its program's name opens.
     search(launcher, "wt");
@@ -251,17 +256,20 @@ fn a_desktop_entry_s_program_and_keywords_find_it() {
         )
     };
     let system = FakeSystem::with(vec![terminal]);
-    let fixture = launcher(&system, &[]);
+    let fixture = launcher(&system, "sample-applications-js");
     let launcher = &fixture.launcher;
 
     assert_eq!(
         rows(launcher, "gnome-terminal"),
-        [row("Terminal", "Application")]
+        [row("Launch Terminal", "JavaScript applications sample")]
     );
-    assert_eq!(rows(launcher, "prompt"), [row("Terminal", "Application")]);
+    assert_eq!(
+        rows(launcher, "prompt"),
+        [row("Launch Terminal", "JavaScript applications sample")]
+    );
     assert_eq!(
         rows(launcher, "command line"),
-        [row("Terminal", "Application")]
+        [row("Launch Terminal", "JavaScript applications sample")]
     );
     assert!(rows(launcher, "browser").is_empty());
 }
@@ -280,38 +288,50 @@ fn applications_of_one_name_are_told_apart_by_their_subtitles() {
         ),
         shortcut("Notes", "Notes", r"C:\Notes\notes.exe", ""),
     ]);
-    let fixture = launcher(&system, &[]);
+    let fixture = launcher(&system, "sample-applications-js");
     let launcher = &fixture.launcher;
 
-    // The shortest thing unique among them: the program's name, else its
-    // folder.
+    // The program's name, else its folder, tells two of one name apart;
+    // through the sample, whose every result carries the same subtitle,
+    // the two stay two results of one title.
     let mut pythons = rows(launcher, "python");
     pythons.sort();
     assert_eq!(
         pythons,
-        [row("Python", "Python311"), row("Python", "Python312")]
+        [
+            row("Launch Python", "JavaScript applications sample"),
+            row("Launch Python", "JavaScript applications sample")
+        ]
     );
     let mut editors = rows(launcher, "editor");
     editors.sort();
     assert_eq!(
         editors,
-        [row("Editor", "editor"), row("Editor", "editor-preview")]
+        [
+            row("Launch Editor", "JavaScript applications sample"),
+            row("Launch Editor", "JavaScript applications sample")
+        ]
     );
     // Alone with its name: as plain as ever.
-    assert_eq!(rows(launcher, "notes"), [row("Notes", "Application")]);
+    assert_eq!(
+        rows(launcher, "notes"),
+        [row("Launch Notes", "JavaScript applications sample")]
+    );
 }
 
 #[test]
-fn a_pinned_application_sharing_its_name_says_what_tells_it_apart() {
+fn a_pinned_application_sharing_its_name_says_what_its_row_says() {
     let system = FakeSystem::with(vec![
         shortcut("Python 3.11", "Python", r"C:\Python311\python.exe", ""),
         shortcut("Python 3.12", "Python", r"C:\Python312\python.exe", ""),
         shortcut("Notes", "Notes", r"C:\Notes\notes.exe", ""),
     ]);
-    let fixture = launcher(&system, &[]);
+    let fixture = launcher(&system, "sample-applications-js");
     let launcher = &fixture.launcher;
-    pin_row(launcher, "python", "Python312");
-    pin_row(launcher, "notes", "Application");
+    // The first of the two "Launch Python" rows: the one the blank query
+    // lists first, whose application is Python 3.11's.
+    pin_row(launcher, "python", "JavaScript applications sample");
+    pin_row(launcher, "notes", "JavaScript applications sample");
     search(launcher, "");
 
     let slots = launcher.quick_slots();
@@ -319,11 +339,19 @@ fn a_pinned_application_sharing_its_name_says_what_tells_it_apart() {
         .iter()
         .map(|slot| (slot.title.as_str(), slot.detail.as_deref()))
         .collect();
-    assert_eq!(shown, [("Python", Some("Python312")), ("Notes", None)]);
+    // The slot of a result another of its command shares a title with
+    // says what its row's subtitle says; one alone says nothing more.
+    assert_eq!(
+        shown,
+        [
+            ("Launch Python", Some("JavaScript applications sample")),
+            ("Launch Notes", None)
+        ]
+    );
     assert!(fixture.data.path().join("quick-slots.json").exists());
 
     block_on(launcher.activate_quick_slot(0));
-    assert_eq!(system.opened(), [r"C:\Menu\Python 3.12\Python.lnk"]);
+    assert_eq!(system.opened(), [r"C:\Menu\Python 3.11\Python.lnk"]);
 }
 
 /// Pins root search's row found by `query` whose subtitle is `subtitle`.
@@ -342,16 +370,16 @@ fn pin_row(launcher: &Launcher, query: &str, subtitle: &str) {
     block_on(recorded);
 }
 
-/// The JavaScript and TypeScript author examples give their own indexed
+/// The JavaScript and TypeScript author examples give their indexed
 /// results the application's alternate titles and keywords, which find
-/// them as Pane's own results are found.
+/// them as their titles do.
 fn a_js_command_gives_its_results_alternate_titles_and_keywords(package: &str) {
     let terminal = Source {
         keywords: vec!["console".into()],
         ..shortcut("Terminal", "Windows Terminal", r"C:\Terminal\wt.exe", "")
     };
     let system = FakeSystem::with(vec![terminal]);
-    let fixture = launcher(&system, &[package]);
+    let fixture = launcher(&system, package);
     let launcher = &fixture.launcher;
 
     // `Launch wt`, the sample's alternate title from the program's name:
@@ -360,11 +388,8 @@ fn a_js_command_gives_its_results_alternate_titles_and_keywords(package: &str) {
         titles_for(launcher, "launch wt"),
         ["Launch Windows Terminal"]
     );
-    // The keyword finds the sample's result and Pane's own.
-    assert_eq!(
-        titles_for(launcher, "console"),
-        ["Launch Windows Terminal", "Windows Terminal"]
-    );
+    // The application's keyword finds the sample's result.
+    assert_eq!(titles_for(launcher, "console"), ["Launch Windows Terminal"]);
 
     search(launcher, "launch wt");
     select_title(launcher, "Launch Windows Terminal");

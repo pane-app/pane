@@ -99,8 +99,8 @@ impl IconExtractor for HeldIcons {
 }
 
 fn applications_package() -> PathBuf {
-    let path =
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/guests/packages/applications");
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../target/guests/packages/sample-applications-js");
     assert!(
         path.exists(),
         "{} is missing; run `cargo xtask guests`",
@@ -110,7 +110,7 @@ fn applications_package() -> PathBuf {
 }
 
 /// The launcher window in `theme`, told of background changes as Pane's
-/// is, with the Applications package installed over Firefox alone, whose
+/// is, with the applications sample installed over Firefox alone, whose
 /// icon `icons` holds back; and the folders it keeps.
 fn window<'a>(
     cx: &'a mut TestAppContext,
@@ -183,7 +183,7 @@ fn launcher(window: &Entity<LauncherWindow>, cx: &mut VisualTestContext) -> Laun
 }
 
 /// Types `query` and runs the window until it drew Firefox's row: the
-/// Applications provider lists it after the query's own results, so the
+/// applications sample lists it after the query's own results, so the
 /// window may first settle on a frame without it.
 fn search_firefox(
     window: &Entity<LauncherWindow>,
@@ -192,7 +192,7 @@ fn search_firefox(
 ) -> pane_core::LauncherView {
     cx.simulate_input(query);
     until(window, cx, |view| {
-        view.rows.iter().any(|row| row.title == "Firefox")
+        view.rows.iter().any(|row| row.title == "Launch Firefox")
     })
 }
 
@@ -201,7 +201,10 @@ fn icon_files(launcher: &Launcher) -> (String, String) {
     let deadline = Instant::now() + LOADED;
     loop {
         let (view, presentation) = launcher.presented_view();
-        let at = view.rows.iter().position(|row| row.title == "Firefox");
+        let at = view
+            .rows
+            .iter()
+            .position(|row| row.title == "Launch Firefox");
         if let Some(at) = at
             && let Some(icon) = &presentation.rows[at].icon
             && let IconSource::Image { light, dark } = &icon.source
@@ -223,23 +226,23 @@ fn an_applications_row_draws_its_own_icon_bare_where_its_placeholder_was(cx: &mu
     let (window, cx, _folders) = window(cx, "dark", &icons);
     search_firefox(&window, cx, "fire");
 
-    assert!(drawn(cx, "row-Firefox"));
+    assert!(drawn(cx, "row-Launch Firefox"));
     assert!(
-        drawn(cx, "icon-Firefox-glyph-category"),
+        drawn(cx, "icon-Launch Firefox-glyph-category"),
         "the placeholder, drawn bare"
     );
-    let waiting = bounds(cx, "icon-Firefox").expect("the icon's box");
-    let row = bounds(cx, "row-Firefox").unwrap();
+    let waiting = bounds(cx, "icon-Launch Firefox").expect("the icon's box");
+    let row = bounds(cx, "row-Launch Firefox").unwrap();
 
     icons.open();
     let (light, dark) = icon_files(&launcher(&window, cx));
     assert_ne!(light, dark);
-    until_drawn(cx, &format!("icon-Firefox-image-{dark}"));
-    assert!(!drawn(cx, format!("icon-Firefox-image-{light}")));
-    assert!(!drawn(cx, "icon-Firefox-glyph-category"));
+    until_drawn(cx, &format!("icon-Launch Firefox-image-{dark}"));
+    assert!(!drawn(cx, format!("icon-Launch Firefox-image-{light}")));
+    assert!(!drawn(cx, "icon-Launch Firefox-glyph-category"));
     // Nothing moved: the icon is where the placeholder was, the row as tall.
-    assert_eq!(bounds(cx, "icon-Firefox").unwrap(), waiting);
-    assert_eq!(bounds(cx, "row-Firefox").unwrap().size, row.size);
+    assert_eq!(bounds(cx, "icon-Launch Firefox").unwrap(), waiting);
+    assert_eq!(bounds(cx, "row-Launch Firefox").unwrap().size, row.size);
 
     // Pane's own row: its tile, no icon drawn bare.
     for _ in 0.."fire".len() {
@@ -260,8 +263,8 @@ fn an_applications_row_draws_its_light_icon_in_the_light_theme(cx: &mut TestAppC
     search_firefox(&window, cx, "fire");
     icons.open();
     let (light, dark) = icon_files(&launcher(&window, cx));
-    until_drawn(cx, &format!("icon-Firefox-image-{light}"));
-    assert!(!drawn(cx, format!("icon-Firefox-image-{dark}")));
+    until_drawn(cx, &format!("icon-Launch Firefox-image-{light}"));
+    assert!(!drawn(cx, format!("icon-Launch Firefox-image-{dark}")));
 }
 
 /// A pinned application's slot draws its own icon, bare.
@@ -275,7 +278,7 @@ fn a_pinned_applications_slot_draws_its_icon(cx: &mut TestAppContext) {
     let at = view
         .rows
         .iter()
-        .position(|row| row.title == "Firefox")
+        .position(|row| row.title == "Launch Firefox")
         .expect("Firefox's row");
     let (change, recorded) = launcher.change_quick_slots(&view.rows[at].id, ResultAction::Pin);
     assert!(matches!(change, SlotChange::Changed(_)), "{change:?}");
@@ -298,7 +301,7 @@ fn an_applications_icon_is_decorative_to_assistive_technology(cx: &mut TestAppCo
     let (window, cx, _folders) = window(cx, "dark", &icons);
     search_firefox(&window, cx, "fire");
     let (_, dark) = icon_files(&launcher(&window, cx));
-    until_drawn(cx, &format!("icon-Firefox-image-{dark}"));
+    until_drawn(cx, &format!("icon-Launch Firefox-image-{dark}"));
 
     cx.update(|window, _| window.set_a11y_forced(true));
     cx.run_until_parked();
@@ -314,10 +317,10 @@ fn an_applications_icon_is_decorative_to_assistive_technology(cx: &mut TestAppCo
         .collect();
     let option = nodes
         .iter()
-        .find(|node| node["role"] == "ListBoxOption" && node["label"] == "Firefox")
+        .find(|node| node["role"] == "ListBoxOption" && node["label"] == "Launch Firefox")
         .unwrap_or_else(|| panic!("no Firefox option in {nodes:?}"));
     let description = option["description"].as_str().unwrap_or_default();
-    assert_eq!(description, "Application", "{option}");
+    assert_eq!(description, "JavaScript applications sample", "{option}");
     assert!(
         !nodes.iter().any(|node| node["role"] == "Image"
             && node["label"]

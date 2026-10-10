@@ -1,7 +1,9 @@
 //! Applications' stable identity through the launcher's public interface,
-//! with the real Applications guest (`target/guests/packages/applications`)
-//! and the host's list of applications ([`Cached`]) over a fake system whose
-//! sources the tests decide: an application keeps its id, and so its pin,
+//! with the JavaScript applications sample (`target/guests/packages/
+//! sample-applications-js`), which supplies the host's applications to root
+//! search as indexed results, and the host's list of applications
+//! ([`Cached`]) over a fake system whose sources the tests decide: an
+//! application keeps its id, and so its pin,
 //! when its program moves to a new version folder; shortcuts to one program
 //! are one result, opened by the preferred one; arguments keep two programs
 //! apart; and a pin made before applications had stable identities, which
@@ -198,17 +200,17 @@ fn two_shortcuts_to_one_program_are_one_result_opened_by_the_preferred_one() {
         shortcut("My Editor", DESKTOP, editor, ""),
     ]);
     let launcher = dirs.hosting(&system);
-    install(&launcher, &built("packages/applications"));
+    install(&launcher, &built("packages/sample-applications-js"));
 
     search(&launcher, "editor");
 
     // One result, named and opened by the user's own Desktop shortcut.
-    assert_eq!(titles(&launcher), ["My Editor"]);
+    assert_eq!(titles(&launcher), ["Launch My Editor"]);
     block_on(launcher.activate_selected());
     assert_eq!(system.opened(), [r"C:\Places\0\My Editor.lnk"]);
     assert_eq!(
         launcher.view().status,
-        Status::Result("Opened My Editor".into())
+        Status::Result("Opened Launch My Editor".into())
     );
 }
 
@@ -227,15 +229,19 @@ fn shortcuts_to_one_program_with_different_arguments_stay_two_results() {
         ),
     ]);
     let launcher = dirs.hosting(&system);
-    install(&launcher, &built("packages/applications"));
+    install(&launcher, &built("packages/sample-applications-js"));
 
     search(&launcher, "browser");
 
     assert_eq!(
         titles(&launcher),
-        ["Browser", "Browser Mail", "Browser Work"]
+        [
+            "Launch Browser",
+            "Launch Browser Mail",
+            "Launch Browser Work"
+        ]
     );
-    select_title(&launcher, "Browser Work");
+    select_title(&launcher, "Launch Browser Work");
     block_on(launcher.activate_selected());
     assert_eq!(system.opened(), [r"C:\Places\2\Browser Work.lnk"]);
 }
@@ -251,8 +257,8 @@ fn an_application_updated_into_a_new_version_folder_keeps_its_id_and_its_pin() {
     )]);
     let pinned = {
         let launcher = dirs.hosting(&system);
-        install(&launcher, &built("packages/applications"));
-        pin(&launcher, "discord", "Discord");
+        install(&launcher, &built("packages/sample-applications-js"));
+        pin(&launcher, "discord", "Launch Discord");
         pinned_result(&launcher)
     };
     assert_eq!(pinned, Key::program(&discord("app-1.0.9003"), "").id());
@@ -270,13 +276,13 @@ fn an_application_updated_into_a_new_version_folder_keeps_its_id_and_its_pin() {
 
     let slot = &launcher.quick_slots()[0];
     assert!(slot.ready(), "{slot:?}");
-    assert_eq!(slot.title, "Discord");
+    assert_eq!(slot.title, "Launch Discord");
     assert_eq!(pinned_result(&launcher), pinned);
     block_on(launcher.activate_quick_slot(0));
     assert_eq!(system.opened(), [r"C:\Places\2\Discord.lnk"]);
     // The same result is found by typing, with the same id.
     search(&launcher, "disc");
-    assert_eq!(titles(&launcher), ["Discord"]);
+    assert_eq!(titles(&launcher), ["Launch Discord"]);
 }
 
 /// The installed applications as Pane listed them before applications had
@@ -313,10 +319,10 @@ fn pins_made_before_identities_resolve_keep_their_slots_and_are_rewritten() {
     {
         let before = BeforeIdentities(vec![firefox.clone(), mail.clone(), notes.clone()]);
         let launcher = dirs.launcher(Arc::new(before));
-        install(&launcher, &built("packages/applications"));
-        pin(&launcher, "fire", "Firefox");
-        pin(&launcher, "mail", "Mail");
-        pin(&launcher, "notes", "Notes");
+        install(&launcher, &built("packages/sample-applications-js"));
+        pin(&launcher, "fire", "Launch Firefox");
+        pin(&launcher, "mail", "Launch Mail");
+        pin(&launcher, "notes", "Launch Notes");
     }
     let record = dirs.record();
     assert!(record.contains(r"C:\\Places\\2\\Firefox.lnk"), "{record}");
@@ -330,7 +336,14 @@ fn pins_made_before_identities_resolve_keep_their_slots_and_are_rewritten() {
 
     let slots = launcher.quick_slots();
     let titles: Vec<&str> = slots.iter().map(|slot| slot.title.as_str()).collect();
-    assert_eq!(titles, ["Firefox", "Mail", "Applications"]);
+    assert_eq!(
+        titles,
+        [
+            "Launch Firefox",
+            "Launch Mail",
+            "JavaScript applications sample"
+        ]
+    );
     assert!(slots[0].ready() && slots[1].ready(), "{slots:?}");
     let results: Vec<String> = slots
         .iter()
@@ -345,7 +358,7 @@ fn pins_made_before_identities_resolve_keep_their_slots_and_are_rewritten() {
     assert_eq!(results[2], notes.path);
     assert_eq!(
         slots[2].unavailable.as_deref(),
-        Some("Applications no longer lists it")
+        Some("JavaScript applications sample no longer lists it")
     );
     // The record holds the new ids, so the next start needs no carrying.
     let record = dirs.record();
@@ -356,7 +369,10 @@ fn pins_made_before_identities_resolve_keep_their_slots_and_are_rewritten() {
     // Invoked, the carried pin opens the application's preferred source.
     block_on(launcher.activate_quick_slot(1));
     assert_eq!(system.opened(), std::slice::from_ref(&mine.path));
-    assert_eq!(shown(&launcher), Status::Result("Opened Mail".into()));
+    assert_eq!(
+        shown(&launcher),
+        Status::Result("Opened Launch Mail".into())
+    );
 }
 
 #[test]
@@ -383,10 +399,9 @@ fn a_js_command_opens_an_application_by_its_stable_id(package: &str, language: &
         shortcut("Firefox", START_MENU, firefox, ""),
     ]);
     let launcher = dirs.hosting(&system);
-    install(&launcher, &built("packages/applications"));
     install(&launcher, &built(&format!("packages/{package}")));
 
-    pin(&launcher, "launch fire", "Launch Firefox");
+    pin(&launcher, "fire", "Launch Firefox");
     assert_eq!(
         pinned_result(&launcher),
         Key::program(firefox, "").id(),

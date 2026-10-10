@@ -12,7 +12,7 @@
 //! the window, Copy and Move to Recycle Bin with a HUD, or keep it open
 //! with a toast. A launcher given no system answers each function clearly,
 //! and that is never a reason to pause the package. Prior art:
-//! `quicklinks.rs` (a recording opener) and `feedback.rs` (the window).
+//! `paste.rs` (a recording system) and `feedback.rs` (the window).
 
 use std::fs;
 use std::path::{Path, PathBuf};

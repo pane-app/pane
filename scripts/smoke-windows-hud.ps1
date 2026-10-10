@@ -15,6 +15,13 @@ New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
 $data = Join-Path $OutDir "data"
 if (Test-Path $data) { Remove-Item -Recurse -Force $data }
 $env:PANE_DATA_DIR = $data
+# A development build takes its default extensions' pins from PANE_DEFAULTS;
+# without it, the committed pins point at the real repositories, which no
+# check may reach. This smoke checks the HUD, not first setup, so the file
+# names none: first setup adds nothing, and Pane reaches no address.
+$NoDefaultPins = Join-Path $OutDir "no-default-pins.json"
+Set-Content -Path $NoDefaultPins -Value "[]"
+$env:PANE_DEFAULTS = $NoDefaultPins
 $env:PANE_THEME = "dark"
 $env:PANE_MATERIAL = "opaque"
 Add-Type -AssemblyName System.Windows.Forms, System.Drawing

@@ -5,13 +5,13 @@
 //! machinery to its own program).
 //!
 //! Pane never updates itself on its own: it checks the artifact source
-//! ([`crate::defaults`], the same one the default extensions come from)
-//! when it starts, reading the index's `application` entry, and tells the
-//! user what it found — a row in root search and a word on the status
-//! line. Only the user's choice downloads the package (with progress and
-//! retries, checked against the sha512 integrity the index gives, exactly
-//! as a default extension's payload is) and installs it; nothing is ever
-//! downloaded, installed or restarted automatically
+//! ([`crate::defaults`], which now serves Pane's own application updates
+//! alone) when it starts, reading the index's `application` entry, and
+//! tells the user what it found — a row in root search and a word on the
+//! status line. Only the user's choice downloads the package (with
+//! progress and retries, checked against the sha512 integrity the index
+//! gives) and installs it; nothing is ever downloaded, installed or
+//! restarted automatically
 //! ([decision](https://github.com/pane-app/pane/issues/1): US76).
 //!
 //! Installing works around the program running from the very file it
@@ -36,8 +36,9 @@ use std::path::PathBuf;
 use crate::defaults::{ArtifactSource, Failure, answer, failed, interrupted, with_retries};
 
 /// The largest application package Pane downloads, packed: the package
-/// holds the whole program, so it is far larger than a default extension's
-/// payload (and it unpacks to [`crate::zip`]'s own, larger, bound).
+/// holds the whole program, so it is far larger than any other package
+/// Pane downloads for itself (and it unpacks to [`crate::zip`]'s own,
+/// larger, bound).
 pub(crate) const MAX_PACKAGE: u64 = 512 << 20;
 
 /// The name of the folder a package's files are staged in, inside the

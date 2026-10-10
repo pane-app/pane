@@ -173,49 +173,61 @@ fn main() {
             }
             None => launcher,
         };
-        // Pane's default extensions are acquired at first setup from Pane's
-        // own downloads, which the installer carries none of. A release
-        // build acquires them from Pane's published downloads; a development
-        // build only where PANE_ARTIFACTS names a source on this computer
-        // (the tests' and smokes' own), so that a development checkout
-        // installs nothing over the network by itself.
+        // Pane's default extensions are set up at first setup from the
+        // commits this release pins, each fetched from its own repository
+        // with Pane's own Git client (ADR 0021, ADR 0045); the installer
+        // carries none of them. The committed pins name them; a development
+        // build can replace them with a file of its own through
+        // PANE_DEFAULTS (the tests' and smokes' own, pointing at
+        // repositories served on this computer), so that a development
+        // checkout reaches no real Git host unless it chooses to. A
+        // release build has no override.
         #[cfg(debug_assertions)]
-        let artifact_source = pane_core::defaults::ArtifactSource::from_dev_env();
-        #[cfg(not(debug_assertions))]
-        let artifact_source: Option<Result<pane_core::defaults::ArtifactSource, String>> =
-            Some(Ok(pane_core::defaults::ArtifactSource::published()));
-        let launcher = match artifact_source.as_ref() {
-            Some(Ok(source)) => launcher.with_defaults(source.clone(), pane::default_extensions()),
+        let pins = match pane_core::defaults::pins_from_dev_env() {
+            Some(Ok(pins)) => pins,
             Some(Err(why)) => {
-                pane_core::diagnostic!("PANE_ARTIFACTS: {why}");
-                launcher.show_error(format!("PANE_ARTIFACTS: {why}"));
-                launcher
+                pane_core::diagnostic!("PANE_DEFAULTS: {why}");
+                launcher.show_error(format!("PANE_DEFAULTS: {why}"));
+                pane::default_extensions()
             }
-            None => launcher,
+            None => pane::default_extensions(),
         };
+        #[cfg(not(debug_assertions))]
+        let pins = pane::default_extensions();
+        let launcher = launcher.with_defaults(pins);
         // Pane's own update (#54 wired the Windows half, #55 the macOS
         // one, #56 the Linux one): the program this Pane runs from is the
         // one an update replaces - pane.exe in the install folder on
         // Windows, the Pane.app bundle's own binary (Contents/MacOS/pane)
         // on macOS, pane in ~/.local/bin on Linux - and the artifact
-        // source the default extensions come from names the newer package
-        // in its index, the package built for this system (a zip on
-        // Windows and macOS, a gzipped tarball on Linux), unpacked by the
-        // same platform-independent machinery. Pane checks once, at
-        // start, and only the user's choice downloads and installs
-        // anything.
+        // source names the newer package in its index, the package built
+        // for this system (a zip on Windows and macOS, a gzipped tarball
+        // on Linux), unpacked by the same platform-independent machinery.
+        // Pane checks once, at start, and only the user's choice downloads
+        // and installs anything. A release build reads Pane's published
+        // downloads; a development build only where PANE_ARTIFACTS names a
+        // source on this computer (the tests' and smokes' own), so that a
+        // development checkout checks nothing over the network by itself.
         #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
-        let launcher = match (std::env::current_exe(), artifact_source.as_ref()) {
-            (Ok(exe), Some(Ok(source))) => {
-                launcher.with_application_update(pane::APP_VERSION, source.clone(), exe)
+        let launcher = {
+            #[cfg(debug_assertions)]
+            let artifact_source = pane_core::defaults::ArtifactSource::from_dev_env();
+            #[cfg(not(debug_assertions))]
+            let artifact_source: Option<
+                Result<pane_core::defaults::ArtifactSource, String>,
+            > = Some(Ok(pane_core::defaults::ArtifactSource::published()));
+            match (std::env::current_exe(), artifact_source.as_ref()) {
+                (Ok(exe), Some(Ok(source))) => {
+                    launcher.with_application_update(pane::APP_VERSION, source.clone(), exe)
+                }
+                (Err(why), _) => {
+                    pane_core::diagnostic!(
+                        "Pane's own program could not be found, so it checks for no update: {why}"
+                    );
+                    launcher
+                }
+                _ => launcher,
             }
-            (Err(why), _) => {
-                pane_core::diagnostic!(
-                    "Pane's own program could not be found, so it checks for no update: {why}"
-                );
-                launcher
-            }
-            _ => launcher,
         };
         // Global hotkeys: the system's adapter is made on the main thread,
         // whose run loop receives the presses on macOS.

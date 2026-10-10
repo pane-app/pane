@@ -586,9 +586,9 @@ fn reset_confirmations_on_the_card_and_uninstalling_forget_the_answers(fixture: 
 
 fn another_packages_call_completes_while_a_confirmation_waits(fixture: &Fixture) {
     let pane = Pane::with(fixture);
-    let calculator =
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/guests/packages/calculator");
-    block_on(pane.launcher.install_package(&calculator));
+    let sample =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/guests/packages/sample-rust");
+    block_on(pane.launcher.install_package(&sample));
     assert!(
         matches!(pane.launcher.view().status, Status::Result(_)),
         "{:?}",
@@ -598,12 +598,13 @@ fn another_packages_call_completes_while_a_confirmation_waits(fixture: &Fixture)
     let running = act(&pane.launcher, ASK);
     let ask = asked(&pane.launcher);
 
-    // The calculator, another package, answers root search meanwhile.
+    // The Rust sample, another package, answers root search ("reverse
+    // <text>") meanwhile.
     to_root(&pane.launcher);
-    block_on(pane.launcher.set_query("1 + 1"));
+    block_on(pane.launcher.set_query("reverse 21"));
     assert_eq!(
         titles(&pane.launcher).first().map(String::as_str),
-        Some("2"),
+        Some("12"),
         "{}: {:?}",
         fixture.title,
         pane.launcher.view()

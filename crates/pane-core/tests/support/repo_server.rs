@@ -221,12 +221,18 @@ pub enum Mode {
     /// as a repository with very many tags might answer; the rest as
     /// `Normal`.
     LongListing,
+    /// Every answer comes `wait` later: a slow repository, whose fetch is
+    /// in flight long enough to watch the status line while it runs.
+    Slow(std::time::Duration),
 }
 
 struct Served {
     repositories: BTreeMap<String, PathBuf>,
     requests: Vec<String>,
     mode: Mode,
+    /// Answer the next fetch (`command=fetch`) by closing the connection
+    /// partway through its answer: a fetch interrupted.
+    drop_next: bool,
 }
 
 /// A smart HTTP server for the repositories a test adds, on a free port of
@@ -248,6 +254,7 @@ impl Server {
             repositories: BTreeMap::new(),
             requests: Vec::new(),
             mode: Mode::Normal,
+            drop_next: false,
         }));
         let stop = Arc::new(AtomicBool::new(false));
         let thread = {
@@ -301,6 +308,13 @@ impl Server {
         self.served.lock().unwrap().mode = mode;
     }
 
+    /// Answers the next fetch (`command=fetch`) by sending part of its
+    /// answer and closing the connection: a fetch interrupted partway,
+    /// which Pane tries again.
+    pub fn drop_once(&self) {
+        self.served.lock().unwrap().drop_next = true;
+    }
+
     /// Every request received, as `METHOD /path?query`.
     pub fn requests(&self) -> Vec<String> {
         self.served.lock().unwrap().requests.clone()
@@ -348,30 +362,35 @@ fn answer(stream: TcpStream, served: &Mutex<Served>, home: &Path) {
     if reader.read_exact(&mut body).is_err() {
         return;
     }
-    let (mode, repositories) = {
+    // Whether this request is a fetch (`command=fetch` in its body): a
+    // fetch `drop_once` armed is answered by cutting the connection
+    // partway through, and the arming lasts until a fetch asks, so other
+    // requests leave it armed. Decided here, because the body is moved
+    // into the server below.
+    let is_fetch = body.windows(13).any(|part| part == b"command=fetch");
+    let (mode, repositories, interrupt) = {
         let mut served = served.lock().unwrap();
         served.requests.push(format!("{method} {target}"));
-        (served.mode, served.repositories.clone())
+        (
+            served.mode,
+            served.repositories.clone(),
+            is_fetch && std::mem::take(&mut served.drop_next),
+        )
     };
+    if let Mode::Slow(wait) = mode {
+        std::thread::sleep(wait);
+    }
     let mut stream = stream;
-    let mut respond = |status: &str, headers: &[(&str, String)], body: &[u8]| {
-        let mut head = format!("HTTP/1.1 {status}\r\nContent-Length: {}\r\n", body.len());
-        for (name, value) in headers {
-            head.push_str(&format!("{name}: {value}\r\n"));
-        }
-        head.push_str("Connection: close\r\n\r\n");
-        let _ = stream.write_all(head.as_bytes());
-        let _ = stream.write_all(body);
-    };
     match mode {
         Mode::Redirect => {
             return respond(
+                stream,
                 "301 Moved Permanently",
                 &[("Location", "https://elsewhere.invalid/".into())],
                 b"",
             );
         }
-        Mode::SignIn => return respond("401 Unauthorized", &[], b"sign in"),
+        Mode::SignIn => return respond(stream, "401 Unauthorized", &[], b"sign in"),
         _ => {}
     }
     let (path, query) = target.split_once('?').unwrap_or((&target, ""));
@@ -384,11 +403,11 @@ fn answer(stream: TcpStream, served: &Mutex<Served>, home: &Path) {
             (name, "advertise")
         }
         (_, Some(name)) if method == "POST" => (name, "upload-pack"),
-        _ => return respond("404 Not Found", &[], b""),
+        _ => return respond(stream, "404 Not Found", &[], b""),
     };
     let name = name.strip_suffix(".git").unwrap_or(name);
     let Some(dir) = repositories.get(name) else {
-        return respond("404 Not Found", &[], b"");
+        return respond(stream, "404 Not Found", &[], b"");
     };
     if mode == Mode::LongListing
         && service == "upload-pack"
@@ -402,6 +421,7 @@ fn answer(stream: TcpStream, served: &Mutex<Served>, home: &Path) {
         }
         out.extend(b"0000");
         return respond(
+            stream,
             "200 OK",
             &[(
                 "Content-Type",
@@ -443,7 +463,37 @@ fn answer(stream: TcpStream, served: &Mutex<Served>, home: &Path) {
     };
     out.extend(output.stdout);
     if !output.status.success() && out.is_empty() {
-        return respond("500 Internal Server Error", &[], &output.stderr);
+        return respond(stream, "500 Internal Server Error", &[], &output.stderr);
     }
-    respond("200 OK", &[("Content-Type", content_type.into())], &out);
+    // A fetch interrupted partway: the answer announces its whole length
+    // but the connection ends partway through it.
+    if interrupt {
+        let head = format!(
+            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: application/x-git-upload-pack-result\r\nConnection: close\r\n\r\n",
+            out.len()
+        );
+        let _ = stream.write_all(head.as_bytes());
+        let _ = stream.write_all(&out[..out.len() / 2]);
+        let _ = stream.flush();
+        let _ = stream.shutdown(std::net::Shutdown::Write);
+        return;
+    }
+    respond(
+        stream,
+        "200 OK",
+        &[("Content-Type", content_type.into())],
+        &out,
+    );
+}
+
+/// Writes one answer to `stream`: the status, headers and body, then the
+/// connection ends.
+fn respond(mut stream: TcpStream, status: &str, headers: &[(&str, String)], body: &[u8]) {
+    let mut head = format!("HTTP/1.1 {status}\r\nContent-Length: {}\r\n", body.len());
+    for (name, value) in headers {
+        head.push_str(&format!("{name}: {value}\r\n"));
+    }
+    head.push_str("Connection: close\r\n\r\n");
+    let _ = stream.write_all(head.as_bytes());
+    let _ = stream.write_all(body);
 }

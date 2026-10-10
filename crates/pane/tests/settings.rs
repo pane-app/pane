@@ -43,6 +43,12 @@ mod artifacts;
 
 use artifacts::Artifacts;
 
+// The default extensions' repositories, pane-core's test support.
+#[path = "../../pane-core/tests/support/defaults.rs"]
+mod defaults;
+#[path = "../../pane-core/tests/support/repo_server.rs"]
+mod repo_server;
+
 use paint::paints_fill_at;
 use settle::settle;
 
@@ -1933,6 +1939,116 @@ fn a_paused_extension_is_marked_in_the_sidebar_and_on_its_page(cx: &mut TestAppC
         settings_cx.debug_bounds("extension-page-mark").is_some(),
         "the page says why"
     );
+}
+
+#[gpui::test]
+fn an_official_extension_is_marked_as_panes_own_wherever_settings_lists_it(
+    cx: &mut TestAppContext,
+) {
+    let (sources, data) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    // Three extensions: the Rust sample, pinned as a default extension
+    // Pane installs at first setup from a repository served over Git's
+    // smart HTTP protocol from 127.0.0.1 (pane-core's test support; a
+    // stand-in for a default's own repository, which lives outside this
+    // one, #285 — nothing reaches the network or a real Git host); the
+    // settings sample, its package given the record an install by hand
+    // from a repository under pane-app writes, as a restart of Pane
+    // reads it; and the Hello sample, installed from a folder. The first
+    // two are Pane's own; the last is not (ADR 0045).
+    let server = repo_server::Server::start();
+    let repos = tempfile::tempdir().unwrap();
+    let sample = defaults::from_sample(
+        &server,
+        repos.path(),
+        "sample-rust",
+        "Rust sample",
+        "sample-rust",
+    );
+    let from_pane_app = settings_package(&sources.path().join("sample"));
+    let from_folder = hello_package(&sources.path().join("hello"));
+    cx.executor().allow_parking();
+    let installing =
+        Launcher::with_packages(Runtime::start(), vec![], data.path().join("extensions"))
+            .with_defaults(vec![sample]);
+    cx.foreground_executor()
+        .block_on(installing.acquire_defaults());
+    install(&installing, &from_pane_app);
+    install(&installing, &from_folder);
+    drop(installing);
+    installed_from_pane_app(&data, &from_pane_app, "sample-settings");
+    let launcher =
+        Launcher::with_packages(Runtime::start(), vec![], data.path().join("extensions"));
+    cx.update(pane::bind_keys);
+    let (_window, cx) = cx.add_window_view(|window, cx| LauncherWindow::new(launcher, window, cx));
+    let (_settings, mut settings_cx) = open_extensions(cx);
+
+    // The group's list and the sidebar's entries mark Pane's own — the
+    // acquired default and the package from pane-app — in the word; only
+    // those.
+    for drawn in [
+        "extension-entry-official-Rust sample",
+        "extension-entry-official-Settings sample",
+        "extension-item-official-Rust sample",
+        "extension-item-official-Settings sample",
+    ] {
+        assert!(
+            settings_cx.debug_bounds(drawn).is_some(),
+            "{drawn} is drawn"
+        );
+    }
+    assert!(
+        settings_cx
+            .debug_bounds("extension-entry-official-Hello")
+            .is_none()
+    );
+    for label in ["Rust sample, Official", "Settings sample, Official"] {
+        assert!(has_node(&mut settings_cx, "ListBoxOption", label));
+    }
+
+    // Their pages carry the mark beside their titles; a folder's page
+    // carries none.
+    for title in ["Rust sample", "Settings sample"] {
+        open_page(&mut settings_cx, title);
+        assert!(
+            settings_cx
+                .debug_bounds("extension-page-official")
+                .is_some(),
+            "{title}'s page marks it as Pane's own"
+        );
+    }
+    open_page(&mut settings_cx, "Hello");
+    assert!(
+        settings_cx
+            .debug_bounds("extension-page-official")
+            .is_none()
+    );
+}
+
+/// Gives the record of the package installed from the local `folder` the
+/// source `github.com/pane-app/<name>`, the record an install of that
+/// repository by hand at its release tag writes, so a restart of Pane
+/// reads the package as one from the pane-app organization (ADR 0045).
+fn installed_from_pane_app(data: &TempDir, folder: &Path, name: &str) {
+    let path = data.path().join("extensions").join("installed.json");
+    let mut registry: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+    let local = PackageIdentity::local(folder)
+        .expect("a local package")
+        .key();
+    let local = local.strip_prefix("local:").expect("the local identity");
+    let record = registry["packages"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|record| record["local"] == local)
+        .expect("the package's record");
+    record.as_object_mut().unwrap().remove("local");
+    record["git"] = serde_json::json!(format!("github.com/pane-app/{name}"));
+    record["gitUrl"] = serde_json::json!(format!("https://github.com/pane-app/{name}"));
+    record["gitRef"] = serde_json::json!("refs/tags/v1.0.0");
+    record["gitCommit"] = serde_json::json!("0000000000000000000000000000000000000000");
+    record["pinned"] = serde_json::json!(true);
+    fs::write(&path, registry.to_string()).unwrap();
 }
 
 #[gpui::test]

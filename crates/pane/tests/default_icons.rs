@@ -1,16 +1,16 @@
-//! The default extensions' own tile icons (#163) in the launcher's window,
-//! with Calculator, Applications, Files, Clipboard History and Quicklinks
-//! installed from the packages `cargo xtask guests` assembles: each
-//! command's row in root search draws its package's tile, or the tile of
-//! its own, in the light and the dark theme, as the image it is (Pane adds
-//! no tile behind it, ADR 0035), in the box of Pane's own command tiles,
-//! so its title starts where a Pane row's does. The tiles are drawn at the
-//! row tile's size, so GPUI's rasterization (twice an SVG's own size)
-//! gives them the device pixels of a 2x display, and more than enough for
-//! 1x and 1.5x. That an extension's bare symbol is still drawn bare is
-//! `icons.rs`'s.
-
-use std::path::{Path, PathBuf};
+//! Packaged extensions' own tile icons (#163) in the launcher's window,
+//! with the icons samples in Rust, JavaScript and TypeScript installed
+//! from the packages `cargo xtask guests` assembles: each command's row in
+//! root search draws its package's tile, or the tile of its own, in the
+//! light and the dark theme, as the image it is (Pane adds no tile behind
+//! it, ADR 0035), in the box of Pane's own command tiles, so its title
+//! starts where a Pane row's does. The tiles are drawn at the row tile's
+//! size, so GPUI's rasterization (twice an SVG's own size) gives them the
+//! device pixels of a 2x display, and more than enough for 1x and 1.5x.
+//! The default extensions' own tiles live in their repositories now
+//! (#285), whose packages these tests cannot read; the tile machinery is
+//! the same for every package's, so the samples carry it. That an
+//! extension's bare symbol is still drawn bare is `icons.rs`'s.
 
 use gpui::{Bounds, Entity, Pixels, TestAppContext, VisualTestContext, prelude::*, px};
 use pane::LauncherWindow;
@@ -24,35 +24,40 @@ mod settle;
 
 use settle::settle;
 
-/// A default package: its name, its title, and its rows' tiles (the row's
+/// A sample package: its name, its title, and its rows' tiles (the row's
 /// title, the image file it draws).
-type DefaultPackage = (
+type SamplePackage = (
     &'static str,
     &'static str,
     &'static [(&'static str, &'static str)],
 );
 
-/// Each default package, its title, and the tiles its commands' rows
-/// draw: (the row's title, the image file it draws), for the commands that
-/// have a row. Calculator and Applications answer root search; their
-/// package icon is checked through the launcher.
-const DEFAULTS: [DefaultPackage; 5] = [
-    ("calculator", "Calculator", &[]),
-    ("applications", "Applications", &[]),
-    ("files", "Files", &[("Search Files", "search.svg")]),
+/// Each icons sample, its title, and the tiles its commands' rows draw:
+/// (the row's title, the image file it draws) — the command's own tile,
+/// and the package's, which a command without one of its own shows.
+const SAMPLES: [SamplePackage; 3] = [
     (
-        "clipboard-history",
-        "Clipboard History",
-        &[("Clipboard History", "icon.svg")],
+        "sample-icons",
+        "Icons sample",
+        &[
+            ("Icons", "command.svg"),
+            ("Icons (package icon)", "icon.png"),
+        ],
     ),
     (
-        "quicklinks",
-        "Quicklinks",
+        "sample-icons-js",
+        "JavaScript icons sample",
         &[
-            ("Search Quicklinks", "search.svg"),
-            ("Create Quicklink", "create.svg"),
-            ("Import Quicklinks", "import.svg"),
-            ("Export Quicklinks", "export.svg"),
+            ("Icons (JavaScript)", "command.svg"),
+            ("Icons (JavaScript, package icon)", "icon.png"),
+        ],
+    ),
+    (
+        "sample-icons-ts",
+        "TypeScript icons sample",
+        &[
+            ("Icons (TypeScript)", "command.svg"),
+            ("Icons (TypeScript, package icon)", "icon.png"),
         ],
     ),
 ];
@@ -90,7 +95,7 @@ fn window<'a>(
         Launcher::with_packages(Runtime::start(), vec![], data.path().join("extensions"));
     cx.executor().allow_parking();
     cx.update(pane::bind_keys);
-    for (package, title, _) in DEFAULTS {
+    for (package, title, _) in SAMPLES {
         let folder = packages::assembled_package(package, &sources.path().join(package));
         cx.foreground_executor()
             .block_on(launcher.install_package(&folder));
@@ -157,7 +162,7 @@ fn the_tiles_draw_in(theme: &str, cx: &mut TestAppContext) {
     assert!(!drawn(cx, "icon-Settings…"), "Pane keeps its own tile");
     let pane_title = title_offset(cx, "Settings…");
 
-    for (_, _, rows) in DEFAULTS {
+    for (_, _, rows) in SAMPLES {
         for (title, file) in rows {
             search(&window, cx, title);
             assert!(
@@ -191,36 +196,36 @@ fn the_tiles_draw_in(theme: &str, cx: &mut TestAppContext) {
     // The packages' own icons, which their commands without one show:
     // their tiles, the same file in both themes.
     let launcher = cx.read_entity(&window, |window, _| window.launcher().clone());
-    assert_eq!(launcher.packages().len(), DEFAULTS.len());
+    assert_eq!(launcher.packages().len(), SAMPLES.len());
     for package in launcher.packages() {
         let key = package.identity.key();
         let icon = launcher.icon_of(&key).expect("a package's icon");
         let IconSource::Image { light, dark } = &icon.source else {
             panic!("{key}'s icon is not its tile: {icon:?}");
         };
-        assert_eq!(light.file_name().unwrap(), "icon.svg", "{key}");
+        assert_eq!(light.file_name().unwrap(), "icon.png", "{key}");
         assert_eq!(light, dark, "{key}");
         assert!(light.starts_with(&package.location), "{light:?}");
     }
 }
 
 #[gpui::test]
-fn the_default_extensions_draw_their_tiles_in_the_dark_theme(cx: &mut TestAppContext) {
+fn the_samples_draw_their_tiles_in_the_dark_theme(cx: &mut TestAppContext) {
     the_tiles_draw_in("dark", cx);
 }
 
 #[gpui::test]
-fn the_default_extensions_draw_their_tiles_in_the_light_theme(cx: &mut TestAppContext) {
+fn the_samples_draw_their_tiles_in_the_light_theme(cx: &mut TestAppContext) {
     the_tiles_draw_in("light", cx);
 }
 
 /// The Actions panel's header draws the selected row's own tile, as the
-/// row does: each default extension command's, not Pane's command tile;
-/// Pane's own row keeps its tile.
+/// row does: each sample command's, not Pane's command tile; Pane's own
+/// row keeps its tile.
 #[gpui::test]
-fn the_actions_panel_names_a_default_command_with_its_tile(cx: &mut TestAppContext) {
+fn the_actions_panel_names_a_sample_command_with_its_tile(cx: &mut TestAppContext) {
     let (window, cx, _folders) = window(cx, "dark");
-    for (_, _, rows) in DEFAULTS {
+    for (_, _, rows) in SAMPLES {
         for (title, file) in rows {
             search(&window, cx, title);
             cx.simulate_keystrokes(OPEN_ACTIONS);
@@ -253,40 +258,4 @@ fn the_actions_panel_names_a_default_command_with_its_tile(cx: &mut TestAppConte
         !drawn(cx, "icon-actions-header"),
         "Pane's own row keeps its tile in the header"
     );
-}
-
-/// The repository's package folders: every default extension's tile is an
-/// SVG of the row tile's own size (28 by 28, its viewBox too) with the
-/// row tile's corner radius (7), so it lines up with Pane's tiles and GPUI
-/// rasterizes it at twice that, a 2x display's device pixels.
-#[test]
-fn every_default_tile_has_the_row_tiles_size_and_radius() {
-    let packages = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../guests/packages");
-    let mut tiles = 0;
-    for (package, _, _) in DEFAULTS {
-        let folder = packages.join(package);
-        for entry in std::fs::read_dir(&folder).unwrap() {
-            let path = entry.unwrap().path();
-            if path.extension().is_none_or(|extension| extension != "svg") {
-                continue;
-            }
-            let svg = std::fs::read_to_string(&path).unwrap();
-            let head = svg.split('>').next().unwrap();
-            for attribute in [r#"width="28""#, r#"height="28""#, r#"viewBox="0 0 28 28""#] {
-                assert!(head.contains(attribute), "{}: {attribute}", shown(&path));
-            }
-            assert!(
-                svg.contains(r#"<rect width="28" height="28" rx="7""#),
-                "{}: the tile's square",
-                shown(&path)
-            );
-            tiles += 1;
-        }
-    }
-    // One per package, and Files' and Quicklinks' commands' own.
-    assert_eq!(tiles, 5 + 1 + 4);
-}
-
-fn shown(path: &Path) -> String {
-    path.display().to_string()
 }

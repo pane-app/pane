@@ -1,5 +1,5 @@
 //! Pane's files sample in Rust: the same contract as the Files default
-//! extension (guests/files, "Search Files") and the JavaScript and
+//! extension (pane-app/files, "Search Files") and the JavaScript and
 //! TypeScript samples. Its package's `pane.json` sets `"fileIndex": true`,
 //! so Pane keeps its file index of the home folder current while the
 //! sample is enabled, and the sample searches it with

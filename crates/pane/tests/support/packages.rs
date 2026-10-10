@@ -32,20 +32,30 @@ pub fn package(folder: &Path) -> PathBuf {
 }
 
 /// Copies the assembled sample package `sample` (a folder of
-/// `target/guests/packages`) to `folder`.
+/// `target/guests/packages`) to `folder`, folders and all.
 pub fn assembled_package(sample: &str, folder: &Path) -> PathBuf {
     let assembled = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../target/guests/packages")
         .join(sample);
     assert!(
-        assembled.exists(),
+        assembled.is_dir(),
         "{} is missing; run `cargo xtask guests`",
         assembled.display()
     );
-    fs::create_dir_all(folder).unwrap();
-    for entry in fs::read_dir(&assembled).unwrap() {
-        let entry = entry.unwrap();
-        fs::copy(entry.path(), folder.join(entry.file_name())).unwrap();
-    }
+    copy_folder(&assembled, folder);
     folder.to_path_buf()
+}
+
+/// Copies `from` to `to`, folders and all.
+fn copy_folder(from: &Path, to: &Path) {
+    fs::create_dir_all(to).unwrap();
+    for entry in fs::read_dir(from).unwrap() {
+        let entry = entry.unwrap();
+        let path = entry.path();
+        if path.is_dir() {
+            copy_folder(&path, &to.join(entry.file_name()));
+        } else {
+            fs::copy(&path, to.join(entry.file_name())).unwrap();
+        }
+    }
 }

@@ -1,5 +1,6 @@
 //! File search over Pane's file index (#126, #175), through the launcher's
-//! public interface: the real Files default extension, the real index and
+//! public interface: the Rust files sample (the same contract the Files
+//! default extension holds, over the real index and
 //! the system's own change source, over a fixture folder standing for the
 //! home folder (named by the test) and a cache folder of the test's own,
 //! with a recording opener and system so that nothing opens or shows. The
@@ -194,7 +195,7 @@ impl Home {
     /// Starts Pane with Files installed and its index settled.
     fn with_files(&self) -> (Launcher, Runtime) {
         let (launcher, runtime) = self.start();
-        install(&launcher, &built("packages/files"));
+        install(&launcher, &built("packages/sample-files"));
         settle(&launcher);
         (launcher, runtime)
     }
@@ -236,8 +237,8 @@ fn files_identity(launcher: &Launcher) -> PackageIdentity {
     launcher
         .packages()
         .into_iter()
-        .find(|package| package.title() == "Files")
-        .expect("Files is installed")
+        .find(|package| package.title() == "Rust files sample")
+        .expect("the files sample is installed")
         .identity
 }
 
@@ -270,7 +271,7 @@ fn typing_a_files_name_lists_it_under_files_and_enter_opens_it() {
     // them all.
     assert_eq!(rows[0], "plan.txt", "{rows:?}");
     assert!(rows.len() <= 6, "{rows:?}");
-    assert_eq!(rows.last().unwrap(), "Search Files for “plan”");
+    assert_eq!(rows.last().unwrap(), "Find files (Rust) for “plan”");
     // Hidden, ignored, node_modules and cache-tagged entries are absent.
     for absent in [
         "hidden plan.txt",
@@ -335,15 +336,15 @@ fn case_accents_and_folder_words_find_files() {
 #[test]
 fn file_rows_come_after_commands_found_by_title() {
     let home = Home::new();
-    fs::write(home.file("Documents/search notes.txt"), "x").unwrap();
+    fs::write(home.file("Documents/find notes.txt"), "x").unwrap();
     let (launcher, _runtime) = home.with_files();
-    search(&launcher, "search");
+    search(&launcher, "find");
     let rows = titles(&launcher);
-    let command = rows.iter().position(|row| row == "Search Files").unwrap();
-    let file = rows
+    let command = rows
         .iter()
-        .position(|row| row == "search notes.txt")
+        .position(|row| row == "Find files (Rust)")
         .unwrap();
+    let file = rows.iter().position(|row| row == "find notes.txt").unwrap();
     assert!(command < file, "{rows:?}");
 }
 
@@ -392,7 +393,7 @@ fn an_entry_replaced_since_it_was_found_is_explained_not_opened() {
 fn the_first_walk_waits_until_the_launcher_is_shown() {
     let home = Home::new();
     let (launcher, _runtime) = home.start_in("data", true);
-    install(&launcher, &built("packages/files"));
+    install(&launcher, &built("packages/sample-files"));
     let deadline = std::time::Instant::now() + LIMIT;
     while !launcher.file_index_status().waiting {
         assert!(std::time::Instant::now() < deadline);
@@ -496,7 +497,7 @@ fn a_second_pane_on_the_same_cache_folder_says_file_search_is_in_use() {
     let home = Home::new();
     let (_first, _first_runtime) = home.with_files();
     let (second, _second_runtime) = home.start_in("other data", false);
-    install(&second, &built("packages/files"));
+    install(&second, &built("packages/sample-files"));
     settle(&second);
     let status = second.file_index_status();
     assert_eq!(status.state, IndexState::Stopped);
@@ -608,7 +609,7 @@ fn the_status_says_what_is_indexed_and_how_and_when_it_last_caught_up() {
     assert!(launcher.file_search_problems().is_empty());
     assert_eq!(
         launcher.file_search_packages(),
-        [("Files".to_owned(), None)]
+        [("Rust files sample".to_owned(), None)]
     );
     let (effective, rules) = launcher.file_search_rules().unwrap();
     assert_eq!(effective.roots, std::slice::from_ref(&home.home));
@@ -639,12 +640,12 @@ fn turning_off_search_files_stops_the_index_as_disabling_files_does() {
     let command = launcher
         .packages()
         .into_iter()
-        .find(|package| package.title() == "Files")
+        .find(|package| package.title() == "Rust files sample")
         .unwrap()
         .listed_commands()
         .into_iter()
         .next()
-        .expect("Search Files")
+        .expect("Find files (Rust)")
         .registration
         .id;
     block_on(launcher.set_command_enabled(&command, false)).unwrap();
@@ -657,7 +658,7 @@ fn turning_off_search_files_stops_the_index_as_disabling_files_does() {
     assert_eq!(
         launcher.file_search_packages(),
         [(
-            "Files".to_owned(),
+            "Rust files sample".to_owned(),
             Some("its commands are turned off".to_owned())
         )]
     );
@@ -672,7 +673,10 @@ fn turning_off_search_files_stops_the_index_as_disabling_files_does() {
     block_on(launcher.set_enabled(&files, false));
     assert_eq!(
         launcher.file_search_packages(),
-        [("Files".to_owned(), Some("it is turned off".to_owned()))]
+        [(
+            "Rust files sample".to_owned(),
+            Some("it is turned off".to_owned())
+        )]
     );
 }
 

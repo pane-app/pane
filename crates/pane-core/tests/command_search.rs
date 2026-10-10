@@ -8,7 +8,7 @@
 //! beyond this computer.
 //!
 //! While a command's call waits on the service, Pane serves other calls
-//! (#136): the calculator, another package, answers root search meanwhile.
+//! (#136): the Rust sample, another package, answers root search meanwhile.
 
 #[path = "support/feedback.rs"]
 mod feedback;
@@ -888,7 +888,8 @@ fn waiting_on_the_service(pane: &Pane, service: &Service) -> std::thread::JoinHa
 }
 
 /// While a command's call waits on a slow web request, another package's
-/// calls are served: the calculator answers root search. What the waiting
+/// calls are served: the Rust sample answers root search ("reverse <text>").
+/// What the waiting
 /// call set up is on its generation's undo list, and disabling the package
 /// runs the list: the request is dropped (the service sees Pane hang up)
 /// and the list is empty.
@@ -897,7 +898,7 @@ fn other_extensions_answer_while_a_call_waits_on_the_network() {
     for fixture in &ALL {
         let service = Service::start();
         let pane = Pane::with(fixture);
-        pane.install("calculator");
+        pane.install("sample-rust");
         let identity = pane.identity_of(fixture.title);
         let waiting = waiting_on_the_service(&pane, &service);
         #[cfg(debug_assertions)]
@@ -911,11 +912,11 @@ fn other_extensions_answer_while_a_call_waits_on_the_network() {
         }
 
         pane.to_root();
-        pane.search("1 + 1");
+        pane.search("reverse 21");
 
         assert_eq!(
             pane.titles().first().map(String::as_str),
-            Some("2"),
+            Some("12"),
             "{}",
             fixture.package
         );

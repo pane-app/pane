@@ -758,20 +758,21 @@ contract!(
     a_no_view_command_reports_a_program_s_progress,
 );
 
-/// While a command waits on its program, the calculator, another package,
-/// answers root search: waiting holds no other extension's calls (#136).
+/// While a command waits on its program, the Rust sample, another package,
+/// answers root search ("reverse <text>"): waiting holds no other
+/// extension's calls (#136).
 #[test]
 fn other_extensions_answer_while_a_program_runs() {
     let installed = Installed::new(&RUST);
-    let calculator = packages().join("calculator");
-    block_on(installed.launcher.install_package(&calculator));
+    let sample = packages().join("sample-rust");
+    block_on(installed.launcher.install_package(&sample));
     let pending = installed.start("Run until stopped");
 
     rows::to_root(&installed.launcher);
-    block_on(installed.launcher.set_query("1 + 1"));
+    block_on(installed.launcher.set_query("reverse 21"));
     assert_eq!(
         titles(&installed.launcher).first().map(String::as_str),
-        Some("2"),
+        Some("12"),
         "{:?}",
         installed.launcher.view()
     );
@@ -825,8 +826,8 @@ const PREVIEW_NOTE: &str = "Runs system programs: its code imports pane:extensio
 #[test]
 fn installing_notes_the_program_import_and_the_list_shows_the_programs_run() {
     let installed = Installed::new(&RUST);
-    let calculator = packages().join("calculator");
-    block_on(installed.launcher.install_package(&calculator));
+    let sample = packages().join("sample-rust");
+    block_on(installed.launcher.install_package(&sample));
 
     block_on(installed.launcher.preview_package(&installed.folder));
     assert!(
@@ -846,9 +847,13 @@ fn installing_notes_the_program_import_and_the_list_shows_the_programs_run() {
         "{}",
         row_subtitle(&installed.launcher, "Programs sample")
     );
-    assert!(!row_subtitle(&installed.launcher, "Calculator").contains("Runs system programs"));
     assert!(
-        !titles(&installed.launcher).contains(&"Programs run by Calculator".to_owned()),
+        !row_subtitle(&installed.launcher, "Rust sample").contains("Runs system programs"),
+        "{}",
+        row_subtitle(&installed.launcher, "Rust sample")
+    );
+    assert!(
+        !titles(&installed.launcher).contains(&"Programs run by Rust sample".to_owned()),
         "{:?}",
         titles(&installed.launcher)
     );

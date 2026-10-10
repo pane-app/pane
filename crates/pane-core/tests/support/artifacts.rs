@@ -1,11 +1,10 @@
 //! A local artifact source for tests: it serves, on 127.0.0.1 only, the
-//! index document and payload tarballs of Pane's default extensions a
-//! test publishes to it, as Pane's own downloads do. Nothing reaches the
-//! network or Pane's published downloads.
+//! index document of Pane's own application updates and the package the
+//! index's `application` entry names, as Pane's own downloads do. Nothing
+//! reaches the network or Pane's published downloads.
 
 #![allow(dead_code)]
 
-use std::collections::BTreeMap;
 use std::io::{BufRead, BufReader, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::Arc;
@@ -20,15 +19,7 @@ use sha2::{Digest, Sha512};
 /// The index document's name, as Pane reads it.
 const INDEX_FILE: &str = "pane-defaults.json";
 
-/// What a published payload is served as: its tarball and the entry the
-/// index gives for it.
-#[derive(Clone)]
-struct Published {
-    tarball: Vec<u8>,
-    entry: Value,
-}
-
-/// How one request for a path is answered, instead of the payload, a
+/// How one request for a path is answered, instead of the package, a
 /// number of times.
 #[derive(Clone)]
 enum Behavior {
@@ -42,7 +33,7 @@ enum Behavior {
         wait: Option<Duration>,
     },
     /// Send the first piece of the body, wait `wait`, then the rest: a
-    /// slow payload, whose bytes arrive one at a time.
+    /// slow package, whose bytes arrive one at a time.
     Stall { after: usize, wait: Duration },
 }
 
@@ -55,13 +46,11 @@ struct Planned {
 
 #[derive(Default)]
 struct Served {
-    /// By default extension id: (version, file, published).
-    payloads: BTreeMap<String, Published>,
     /// The application package the index's `application` entry names, and
     /// its bytes, served as the entry's `file`.
     application: Option<(Value, Vec<u8>)>,
     /// The index document itself, served as written; `None` for the one
-    /// the payloads describe.
+    /// the application package describes.
     index: Option<String>,
     /// Every path asked for, in order.
     requests: Vec<String>,
@@ -115,24 +104,6 @@ impl Artifacts {
         self.served.lock().unwrap()
     }
 
-    /// Publishes the payload `files` (path in the package, contents) as
-    /// `version` of the default extension `id`, in the index with its
-    /// sha512 integrity and size, tagged as Pane's own downloads do.
-    pub fn publish(&self, id: &str, version: &str, files: &[(&str, Vec<u8>)]) {
-        let tarball = pack(files);
-        let file = format!("{id}-{version}.tgz");
-        let entry = json!({
-            "id": id,
-            "version": version,
-            "file": file,
-            "integrity": integrity(&tarball),
-            "size": tarball.len(),
-        });
-        self.served()
-            .payloads
-            .insert(id.to_owned(), Published { tarball, entry });
-    }
-
     /// Publishes the application package `zip` as `version` of Pane for
     /// `target` (such as `windows-x86_64`), in the index's `application`
     /// entry with its sha512 integrity and size, tagged as Pane's own
@@ -170,8 +141,8 @@ impl Artifacts {
         self.served().index = Some(index);
     }
 
-    /// Serves the index the payloads and the application package describe
-    /// again, after one was served as written.
+    /// Serves the index the application package describes again, after
+    /// one was served as written.
     pub fn derived_index(&self) {
         self.served().index = None;
     }
@@ -182,30 +153,16 @@ impl Artifacts {
         self.plan(path, Behavior::Status(status), times);
     }
 
-    /// Sends `after` bytes of the payload a path ending in `path` asks
+    /// Sends `after` bytes of the package a path ending in `path` asks
     /// for, then closes the connection, the next `times` times: a
     /// download interrupted partway.
     pub fn drop_after(&self, path: &str, after: usize, times: usize) {
         self.plan(path, Behavior::Drop { after, wait: None }, times);
     }
 
-    /// As [`Artifacts::drop_after`], but the bytes arrive, `wait` passes,
-    /// and only then the connection closes: an interruption slow enough
-    /// that the core is seen still working while it happens.
-    pub fn drop_after_waiting(&self, path: &str, after: usize, wait: Duration, times: usize) {
-        self.plan(
-            path,
-            Behavior::Drop {
-                after,
-                wait: Some(wait),
-            },
-            times,
-        );
-    }
-
-    /// Sends the first `after` bytes of the payload a path ending in
+    /// Sends the first `after` bytes of the package a path ending in
     /// `path` asks for, waits `wait`, then the rest, every time: a slow
-    /// payload whose bytes arrive separately.
+    /// package whose bytes arrive separately.
     pub fn stall(&self, path: &str, after: usize, wait: Duration) {
         self.plan(path, Behavior::Stall { after, wait }, usize::MAX);
     }
@@ -219,24 +176,11 @@ impl Artifacts {
     }
 
     /// Stops answering a path ending in `path` other than with its
-    /// payload: a source that works again.
+    /// package: a source that works again.
     pub fn stop_failing(&self, path: &str) {
         self.served()
             .behaviors
             .retain(|planned| planned.path != path);
-    }
-
-    /// Damages the stored payload of the default extension `id`: its
-    /// bytes no longer match the integrity its index entry gives.
-    pub fn corrupt(&self, id: &str) {
-        let mut served = self.served();
-        let Some(published) = served.payloads.get_mut(id) else {
-            panic!("no payload of {id} published");
-        };
-        let mut damaged = published.tarball.clone();
-        let at = damaged.len() / 2;
-        damaged[at] = damaged[at].wrapping_add(1);
-        published.tarball = damaged;
     }
 
     /// Damages the stored application package: its bytes no longer match
@@ -257,16 +201,8 @@ impl Artifacts {
         self.served().requests.clone()
     }
 
-    /// The payload tarballs asked for so far.
-    pub fn payload_requests(&self) -> Vec<String> {
-        self.requests()
-            .into_iter()
-            .filter(|path| path.ends_with(".tgz"))
-            .collect()
-    }
-
-    /// The index document the payloads describe, for writing a broken one
-    /// from a working one.
+    /// The index document the application package describes, for writing
+    /// a broken one from a working one.
     pub fn index(&self) -> String {
         index_of(&self.served())
     }
@@ -283,14 +219,9 @@ impl Drop for Artifacts {
     }
 }
 
-/// The index document `served`'s payloads describe.
+/// The index document `served`'s application package describes.
 fn index_of(served: &Served) -> String {
-    let defaults: Vec<&Value> = served
-        .payloads
-        .values()
-        .map(|published| &published.entry)
-        .collect();
-    let mut index = json!({ "formatVersion": 1, "defaults": defaults });
+    let mut index = json!({ "formatVersion": 1 });
     if let Some((entry, _)) = &served.application {
         index["application"] = entry.clone();
     }
@@ -392,8 +323,8 @@ fn answer_behavior(served: &Served, path: &str, behavior: &Behavior) -> (&'stati
     }
 }
 
-/// What `path` asks for: the index document, a published payload, or the
-/// application package the index names.
+/// What `path` asks for: the index document, or the application package
+/// the index names.
 fn answer_payload(served: &Served, path: &str) -> (&'static str, Vec<u8>) {
     let path = path.trim_start_matches('/');
     if path == INDEX_FILE {
@@ -405,14 +336,7 @@ fn answer_payload(served: &Served, path: &str) -> (&'static str, Vec<u8>) {
     {
         return ("200 OK", zip.clone());
     }
-    let found = served
-        .payloads
-        .values()
-        .find(|published| published.entry["file"] == path);
-    match found {
-        Some(published) => ("200 OK", published.tarball.clone()),
-        None => ("404 Not Found", Vec::new()),
-    }
+    ("404 Not Found", Vec::new())
 }
 
 /// `sha512-<base64>` of `bytes`, as the index names integrity.
@@ -437,12 +361,6 @@ fn base64(bytes: &[u8]) -> String {
         }
     }
     text
-}
-
-/// A gzipped tarball holding `files` (path in the package, contents)
-/// under `package/`, as Pane's own downloads pack a payload.
-pub fn pack(files: &[(&str, Vec<u8>)]) -> Vec<u8> {
-    pack_under("package", files)
 }
 
 /// A gzipped tarball holding `files` (path in the package, contents)

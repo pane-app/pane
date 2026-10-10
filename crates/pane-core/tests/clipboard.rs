@@ -82,12 +82,6 @@ struct Fixture {
     command: &'static str,
 }
 
-const RUST: Fixture = Fixture {
-    package: "clipboard-history",
-    component: "clipboard_history.wasm",
-    title: "Clipboard History",
-    command: "Clipboard History",
-};
 const JAVASCRIPT: Fixture = Fixture {
     package: "sample-clipboard-js",
     component: "sample_clipboard_js.wasm",
@@ -1249,47 +1243,6 @@ fn retained_history_expires_without_the_extension(fixture: &'static Fixture) {
         retained.contains("clipboard history settings") && !retained.contains("item"),
         "{retained}"
     );
-}
-
-/// The Clipboard History default extension's own list (#166), which a copy
-/// installed from a folder shows (Pane draws its split view only for the
-/// registered default extension): a copy's recording is off until resumed
-/// — only Pane's own Clipboard History records from the first start — then
-/// its items, newest first, under Pause Recording. Its retention, disabled
-/// applications and clearing are Pane's own controls now (the Actions panel
-/// and the extension's Settings page), not rows of its list.
-#[test]
-fn the_rust_package_lists_its_items_under_pause_and_resume_recording() {
-    let pane = Pane::new(&RUST);
-    let launcher = pane.installed();
-    assert!(!pane.clipboard.watching());
-    pane.open(&launcher);
-    assert_eq!(titles(&launcher), ["Resume Recording"]);
-    assert!(!pane.clipboard.copy("before", Some("notepad.exe")));
-
-    assert_eq!(
-        run(&launcher, "Resume Recording"),
-        result("Recording resumed")
-    );
-    assert!(pane.clipboard.watching());
-    assert!(pane.clipboard.copy("hello", Some("notepad.exe")));
-    assert_eq!(pane.listed(&launcher), ["hello"]);
-    assert_eq!(titles(&launcher), ["Pause Recording", "hello"]);
-    assert_eq!(
-        subtitle(&launcher, "hello"),
-        "just now · from notepad.exe · Enter pastes it"
-    );
-    assert_eq!(
-        subtitle(&launcher, "Pause Recording"),
-        "Recording · 1 item kept · Text you copy is kept on this computer"
-    );
-
-    assert_eq!(
-        run(&launcher, "Pause Recording"),
-        result("Recording paused")
-    );
-    assert!(!pane.clipboard.watching());
-    assert_eq!(pane.kept_on_disk(&launcher), ["hello"]);
 }
 
 /// #130, Windows: a kept item reads back while the history file holds no

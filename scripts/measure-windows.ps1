@@ -5,10 +5,18 @@
 # default) on a scratch profile in the temporary folder - PANE_DATA_DIR and
 # LOCALAPPDATA (where Pane keeps its cache) point there for that one
 # process - so Pane acquires its default extensions there, and nothing
-# else, from the artifact source this script serves on 127.0.0.1
-# (scripts/artifact_server.py over target/dist/artifacts, which
-# `cargo xtask package-windows --dev` assembles; only a development build
-# takes its artifact source from PANE_ARTIFACTS). Files' index covers an
+# else, from their repositories, which this script clones at the commits
+# the committed pins name (crates/pane/defaults.json) from their real
+# addresses on GitHub (the script's own setup on this computer) and
+# serves on 127.0.0.1 over Git's smart HTTP protocol
+# (scripts/repository_server.py, as the smoke's first-setup phases serve
+# them); the clones hold the release revisions' built components, so the
+# hidden phase measures what a release installs. Only a development build
+# takes its pins from PANE_DEFAULTS,
+# which this script points at those repositories; the Pane under test
+# fetches only from 127.0.0.1, exactly the pins it is given, so nothing
+# reaches the network. No application update source is named, so the
+# measured Pane is offered no update of its own. Files' index covers an
 # empty folder of the scratch profile (PANE_TEST_FILE_INDEX_HOME, read by
 # development builds only), not the home folder. The launcher's window is
 # shown once, as every start shows it, and hidden at once with Escape at
@@ -40,19 +48,23 @@
 # docs/research/resource-measurements.md).
 #
 # It runs only with the user's consent: the measured machine is the user's
-# own. Requires 64-bit PowerShell (5.1 or 7), Python 3 on PATH, the Pane
-# build, and target/dist/artifacts.
+# own. Requires 64-bit PowerShell (5.1 or 7), Python 3 and git on PATH
+# (the repository server runs git, and the clones need the network; Pane
+# itself never does), the Pane
+# build, and the guests built (`cargo xtask guests`); without them the
+# hidden phase skips and reports so, as the Linux workload's does, and
+# nothing is measured.
 #
 # Usage: scripts/measure-windows.ps1 [-OutDir measure-windows]
-#   [-Binary target/debug/pane.exe] [-Artifacts target/dist/artifacts]
+#   [-Binary target/debug/pane.exe]
 #   [-HiddenSeconds 60] [-SettleSeconds 30] [-SampleSeconds 1]
 #   [-SetupSeconds 600] [-KeepScratch]
 # The record is written to <OutDir>: samples.jsonl, events.jsonl,
-# record.json, summary.json and the scratch Pane's stderr.log.
+# record.json, summary.json, the repository server's log and the scratch
+# Pane's stderr.log.
 param(
     [string]$OutDir = "measure-windows",
     [string]$Binary = "target/debug/pane.exe",
-    [string]$Artifacts = "target/dist/artifacts",
     [int]$HiddenSeconds = 60,
     [int]$SettleSeconds = 30,
     [double]$SampleSeconds = 1,
@@ -64,14 +76,20 @@ $ErrorActionPreference = "Stop"
 # The system's process records are read at their 64-bit layout below.
 if ([IntPtr]::Size -ne 8) { throw "run this script in 64-bit PowerShell" }
 if (-not (Test-Path -LiteralPath $Binary -PathType Leaf)) { throw "no pane binary at $Binary (cargo build -p pane)" }
-if (-not (Test-Path -LiteralPath (Join-Path $Artifacts "pane-defaults.json"))) {
-    throw "$Artifacts holds no default extensions (cargo xtask package-windows --dev)"
-}
 if (-not (Get-Command python -ErrorAction SilentlyContinue)) { throw "python is not on PATH" }
+if (-not (Get-Command git -ErrorAction SilentlyContinue)) { throw "git is not on PATH (the repository server runs it)" }
 $Binary = (Resolve-Path -LiteralPath $Binary).Path
-$Artifacts = (Resolve-Path -LiteralPath $Artifacts).Path
 New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
 $OutDir = (Resolve-Path -LiteralPath $OutDir).Path
+# The hidden phase clones the default extensions' repositories at the
+# commits the committed pins name; without the guests it skips and
+# reports so, as the Linux workload's hidden phase does, and nothing is
+# measured.
+$skipped = @()
+if (-not (Test-Path -LiteralPath "target/guests/packages/sample-rust/pane.json")) {
+    Write-Warning "SKIPPED the hidden phase (#189): the guests are not built (cargo xtask guests); nothing was measured"
+    $skipped = @("hidden-idle")
+}
 # Pane's default extensions (#60), the set the workload waits for.
 $defaults = @("calculator", "applications", "quicklinks", "files", "clipboard-history")
 $utf8 = New-Object System.Text.UTF8Encoding $false   # proc_tree.py reads JSON without a BOM
@@ -424,6 +442,9 @@ function Login-Command {
 $record = [ordered]@{
     format = 1
     script = "measure-windows.ps1"
+    # The phase the workload skipped, its inputs absent: `proc_tree.py
+    # check` reports it as skipped rather than as not measured.
+    skipped = $skipped
     date = (Get-Date).ToString("o")
     os = [System.Environment]::OSVersion.VersionString
     windowsBuild = (Get-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion" -ErrorAction SilentlyContinue | Select-Object DisplayVersion, CurrentBuild, UBR)
@@ -473,13 +494,28 @@ $script:window = [IntPtr]::Zero
 $server = $null
 $failure = $null
 try {
-    $portFile = Join-Path $OutDir "artifact-server.port"
+    # The hidden phase, skipped without the guests (see above); its lines
+    # are left unindented, as the Linux workload's are.
+    if (-not $skipped) {
+    # The default extensions' repositories, cloned at the commits the
+    # committed pins name and served on 127.0.0.1 over Git's smart HTTP
+    # protocol, as the smoke's first-setup phases serve them: the pins
+    # PANE_DEFAULTS names point at them, and the Pane under test reaches
+    # only this computer (the clone reaches the real repositories, as the
+    # smoke's own setup on the runner).
+    $repositories = Join-Path $OutDir "hidden-repositories"
+    if (Test-Path -LiteralPath $repositories) { Remove-Item -Recurse -Force $repositories }
+    New-Item -ItemType Directory -Force -Path $repositories | Out-Null
+    $portFile = Join-Path $OutDir "hidden-repository-server.port"
     if (Test-Path -LiteralPath $portFile) { Remove-Item -LiteralPath $portFile }
     $server = Start-Process python -PassThru -NoNewWindow `
-        -ArgumentList @("`"$PSScriptRoot/artifact_server.py`"", "`"$Artifacts`"", "`"$portFile`"") `
-        -RedirectStandardError (Join-Path $OutDir "artifact-server.log")
+        -ArgumentList @("`"$PSScriptRoot/repository_server.py`"", "serve", "`"$repositories`"", "`"$portFile`"") `
+        -RedirectStandardError (Join-Path $OutDir "hidden-repository-server.log")
     for ($i = 0; $i -lt 600 -and -not (Test-Path -LiteralPath $portFile) -and -not $server.HasExited; $i++) { Start-Sleep -Milliseconds 100 }
-    if (-not (Test-Path -LiteralPath $portFile)) { throw "the local artifact source did not start (see artifact-server.log)" }
+    if (-not (Test-Path -LiteralPath $portFile)) { throw "the default extensions' repository server did not start (see hidden-repository-server.log)" }
+    $pins = Join-Path $OutDir "hidden-pins.json"
+    python "$PSScriptRoot/repository_server.py" clone-defaults "crates/pane/defaults.json" "$repositories" "$pins" "http://127.0.0.1:$((Get-Content -LiteralPath $portFile).Trim())/"
+    if ($LASTEXITCODE -ne 0) { throw "the default extensions' repositories were not cloned (see hidden-repository-server.log)" }
 
     # The scratch Pane's environment, for its start only: every PANE_
     # variable of this shell is left out, the scratch ones are set, and
@@ -493,11 +529,11 @@ try {
         $env:PANE_DATA_DIR = $scratchData
         $env:LOCALAPPDATA = $scratchLocal
         $env:PANE_TEST_FILE_INDEX_HOME = $scratchHome
-        $env:PANE_ARTIFACTS = "http://127.0.0.1:$((Get-Content -LiteralPath $portFile).Trim())/"
+        $env:PANE_DEFAULTS = $pins
         $started = [System.Diagnostics.Stopwatch]::StartNew()
         $script:pane = Start-Process -FilePath $Binary -PassThru -RedirectStandardError $stderrLog
     } finally {
-        foreach ($name in "PANE_DATA_DIR", "LOCALAPPDATA", "PANE_TEST_FILE_INDEX_HOME", "PANE_ARTIFACTS") {
+        foreach ($name in "PANE_DATA_DIR", "LOCALAPPDATA", "PANE_TEST_FILE_INDEX_HOME", "PANE_DEFAULTS") {
             Remove-Item "Env:$name" -ErrorAction SilentlyContinue
         }
         foreach ($name in $saved.Keys) { Set-Item "Env:$name" $saved[$name] }
@@ -516,11 +552,14 @@ try {
     $record.hiddenBy = Hide-Launcher
 
     # The setup: the defaults acquired and recorded, then the settling.
+    # Generous, as the smoke's: a slow runner may take a while to check
+    # every revision's components.
     $recorded = Sample-For "hidden-setup" $SetupSeconds { Defaults-Recorded } -Hidden
     if (-not $recorded) { throw "the default extensions were not recorded within $SetupSeconds s (see stderr.log)" }
     Sample-For "hidden-setup" $SettleSeconds $null -Hidden | Out-Null
     Write-Event "hidden-idle" "default_extensions" $defaults.Count
     Sample-For "hidden-idle" $HiddenSeconds $null -Hidden | Out-Null
+    }   # the hidden phase
 } catch {
     $failure = $_
 } finally {
@@ -554,11 +593,13 @@ if ($failure) { throw $failure }
 
 python "$PSScriptRoot/proc_tree.py" summary $samples $events $summaryPath $recordPath
 if ($LASTEXITCODE -ne 0) { throw "proc_tree.py could not summarize the samples" }
-# The phase at a glance; summary.json holds every thread.
-$hidden = (Get-Content -Raw -Encoding UTF8 -LiteralPath $summaryPath | ConvertFrom-Json).phases."hidden-idle"
-"hidden-idle: CPU share {0}, {1} wake-ups a second, working set max {2} KiB" -f $hidden.cpu_share, $hidden.wakeups.per_second, $hidden.rss_kb.max
-$hidden.wakeups.by_thread.PSObject.Properties |
-    Sort-Object { $_.Value.count } -Descending |
-    Select-Object -First 10 |
-    ForEach-Object { "  {0,-28} {1,4} threads {2,9} a second" -f $_.Name, $_.Value.threads, $_.Value.per_second }
+if (-not $skipped) {
+    # The phase at a glance; summary.json holds every thread.
+    $hidden = (Get-Content -Raw -Encoding UTF8 -LiteralPath $summaryPath | ConvertFrom-Json).phases."hidden-idle"
+    "hidden-idle: CPU share {0}, {1} wake-ups a second, working set max {2} KiB" -f $hidden.cpu_share, $hidden.wakeups.per_second, $hidden.rss_kb.max
+    $hidden.wakeups.by_thread.PSObject.Properties |
+        Sort-Object { $_.Value.count } -Descending |
+        Select-Object -First 10 |
+        ForEach-Object { "  {0,-28} {1,4} threads {2,9} a second" -f $_.Name, $_.Value.threads, $_.Value.per_second }
+}
 "record in $OutDir"
