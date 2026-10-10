@@ -86,10 +86,10 @@ impl Build for TemplateBuild {
 
 /// A window over a launcher that builds with the stand-in, following the
 /// changes channel so background work redraws it.
-fn open(
-    cx: &mut TestAppContext,
+fn open<'a>(
+    cx: &'a mut TestAppContext,
     data: &tempfile::TempDir,
-) -> (Entity<LauncherWindow>, &mut VisualTestContext) {
+) -> (Entity<LauncherWindow>, &'a mut VisualTestContext) {
     cx.executor().allow_parking();
     cx.update(pane::bind_keys);
     let (sender, changes) = pane_core::changes::channel();
