@@ -1,5 +1,6 @@
-//! Root search's publishing of a query's list (#201): when the rows shown
-//! become the query typed, and what a late answer does to them.
+//! Root search's timing of a query's list (#201, #202): when the query
+//! is asked of the commands that compute results for it, when the rows
+//! shown become the query typed, and what a late answer does to them.
 //!
 //! Ranking command metadata and the results kept ahead of the query is
 //! synchronous, as it always was. For the results computed from the query
@@ -12,6 +13,13 @@
 //! budget keeps running until its answer or cancellation: the budget
 //! bounds the wait, not the scheduling, and the runtime still serves one
 //! call at a time.
+//!
+//! The commands that compute results are not asked the moment the query
+//! changes: the search waits out a short quiet period first (#202), so a
+//! burst of keystrokes asks once, and a call a query replaced is
+//! cancelled only when the newer query needs the runtime — as its quiet
+//! period ends — keeping the instance of a call that answers within it
+//! (see [`Launcher::set_query`]).
 //!
 //! An answer that arrives after the list was published is merged into it,
 //! coalesced within 16 ms: answers arriving close together become one
@@ -38,6 +46,13 @@ use super::{Launcher, State, relist_root};
 /// How long a query's list waits for its providers before it is published
 /// anyway (#201).
 pub(super) const BUDGET: Duration = Duration::from_millis(200);
+
+/// How long the search waits after the last keystroke before it asks the
+/// commands that compute results for the query (#202): a burst of
+/// keystrokes asks once, well within the budget. It is waited out in real
+/// time rather than by the launcher's clock: a clock a test holds still
+/// would never let a query be asked.
+pub(super) const QUIET: Duration = Duration::from_millis(40);
 
 /// How close together late answers merge into one update of the published
 /// list (#201).

@@ -392,9 +392,14 @@ comes from the extension, through the same guest boundary as its command:
   ([author guide](../guests/README.md#root-results-computed-from-the-query),
   in Rust, JavaScript and TypeScript).
 - For every change of a query that is not blank, `Launcher::set_query`
-  ranks the metadata at once and returns a future that asks each enabled
-  command with `rootResults` for `results-for(query, at)`, one after another
-  in install order. The new query's list is **published** once every
+  ranks the metadata at once — once per query, so that an answer
+  merging into the list later splices its section in without ranking
+  the rows again (#202) — and returns a future that asks each enabled
+  command with `rootResults` for `results-for(query, at)`, one after
+  another in install order, once the query has been quiet for a short
+  while (40 ms after the last keystroke, #202): a burst of keystrokes
+  asks once, and nothing is asked for a query the field has already
+  moved on from. The new query's list is **published** once every
   command asked has answered, or 200 ms after the query changed, whichever
   comes first (#201): until then the window keeps showing the previous
   query's list while the search field shows what was typed at once, so a
@@ -414,11 +419,15 @@ comes from the extension, through the same guest boundary as its command:
   query (or after leaving root search) are discarded; until a command
   answers, the new query lists none of its results, never an older
   query's. Since [#29](https://github.com/pane-app/pane/issues/29) the
-  search owns these calls: once the query changes or root search is left,
-  a call still pending is cancelled, never started if it was queued, and
-  dropped with the command's instance if it was waiting inside the guest
-  (on an async import); that is not a failure
-  for [pausing](pausing.md), and the next query starts a fresh instance
+  search owns these calls: a call still pending is cancelled when the
+  query changes — only once the newer query needs the runtime, as its
+  quiet period ends (#202), so a call that answers within it keeps its
+  instance for the queries after it — or when root search is left; it
+  is never started if it was queued, and is dropped with the command's
+  instance if it was waiting inside the guest (on an async import); that
+  is not a failure
+  for [pausing](pausing.md), and the query after a cancelled call
+  starts a fresh instance
   ([cancelling](files.md#cancelling-a-pending-search)). Calls still run one
   at a time on the runtime thread; since
   [#18](https://github.com/pane-app/pane/issues/18) every guest yields at
@@ -482,10 +491,12 @@ extension, through the same guest boundary as its command:
   the answer and ranks it with the other root results on every later query,
   so typing never waits for it; until it answers, the results kept from an
   earlier visit are listed. They are asked again after each return to root
-  search, and when the host's list of installed applications changes by
-  itself for a command that asked for it: at once while root search shows
-  a query, listed in place with the selected row kept on its result,
-  otherwise at the next query ([applications](applications.md#live-list)).
+  search — except a command that asked for the host's list of installed
+  applications: that list changes by itself, and such a command is asked
+  for its results then, at once while root search shows a query, listed in
+  place with the selected row kept on its result, otherwise at the next
+  query ([applications](applications.md#live-list)), so a return that
+  changed nothing asks it for nothing (#202).
   The guest's work is not cancelled; calls run one at a time (#29).
 - They are listed only for a query that is not blank, ranked by title,
   subtitle and rank exactly as commands are; on the same rank they come
@@ -917,7 +928,10 @@ same query; the answer listed and selected while a command asked after
 it (the `faulty` fixture, slow on "0 + 0") is still answering, the list
 published by its budget and the slow result merged below when it
 answers; a selection the user moved kept; the calculator not running until
-a non-blank query; disabling it removing its answer at once, asking it
+a non-blank query; a ten-character query typed one key at a time at typing
+speed asking the calculator once — its component instantiated at most
+twice, the final list the same as a query typed at once gives (#202);
+disabling it removing its answer at once, asking it
 nothing more and keeping other results, and enabling it again; a failing
 and a crashing command (the `faulty` fixture) explained as a row while other
 results stay, and a fresh instance afterwards; and a package declaring
@@ -946,7 +960,9 @@ first row selected, and staying on its row when the user moved it; a
 preselected fallback (ADR 0031) giving way to a late answer; two late
 answers arriving close together coalescing into one update, neither
 listed before it; a query asking no provider published at once; and an
-answer for an older search discarded as before. The slow provider's
+answer for an older search discarded as before. A late answer also
+merges without ranking the static rows again — the spliced list the
+same as a full re-rank gives (#202). The slow provider's
 real-clock flow — the budget publishing with the calculator's staged
 answer while the slow call goes on, its answer merging within 16 ms —
 is checked in the calculator's own tests, above.

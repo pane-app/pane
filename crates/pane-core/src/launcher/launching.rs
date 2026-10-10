@@ -185,8 +185,9 @@ impl Launcher {
         self.clear_animated_toast(state, &component);
         // The run may have changed what its package supplies ahead of the
         // query (Import Quicklinks adds quicklinks): the next query asks
-        // for it again.
-        state.indexes.stale();
+        // for it again. A command that ran is itself a change nothing
+        // tells of, so every command's results are marked stale (#202).
+        state.indexes.stale(&[]);
         let ended = stopped(state, &component, &data);
         // A toast is not about a screen: an error the command answered with
         // is shown wherever the user is now, unless it ran in the

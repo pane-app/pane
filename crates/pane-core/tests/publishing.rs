@@ -355,6 +355,37 @@ fn a_query_that_asks_no_provider_is_published_at_once() {
 }
 
 #[test]
+fn a_late_answer_merges_without_ranking_the_static_rows_again() {
+    let dirs = Dirs::new();
+    let (merged, clock) = slow_launcher(&dirs, &[sums(&dirs), drills(&dirs)]);
+
+    // The budget publishes the query's metadata list without the slow
+    // provider's answer, ranking the static rows once for the query.
+    let answered = search_in_background(&merged, "0 + 0");
+    clock.advance(Duration::from_millis(200));
+    assert_eq!(titles(&merged), ["Sum 0 + 0", "Drill 0 + 0"]);
+    let ranked = merged.root_rankings();
+
+    // The late answer merges into the published list without ranking the
+    // rows that did not change (#202): the computed section is spliced
+    // into the rows ranked for the query.
+    answered.recv_timeout(Duration::from_secs(240)).unwrap();
+    clock.advance(Duration::from_millis(16));
+    assert_eq!(merged.root_rankings(), ranked, "the merge ranked nothing");
+    assert_eq!(titles(&merged), ["Slow answer", "Sum 0 + 0", "Drill 0 + 0"]);
+    assert_eq!(selected_title(&merged).as_deref(), Some("Slow answer"));
+
+    // The list is what a full re-rank of the same rows gives: a second
+    // launcher, asked the same way, has the slow provider answer while
+    // its list is held, so its publication ranks everything together.
+    let other = Dirs::new();
+    let (full, _clock) = slow_launcher(&other, &[sums(&other), drills(&other)]);
+    search(&full, "0 + 0");
+    assert_eq!(titles(&full), ["Slow answer", "Sum 0 + 0", "Drill 0 + 0"]);
+    assert_eq!(selected_title(&full).as_deref(), Some("Slow answer"));
+}
+
+#[test]
 fn an_answer_for_an_older_search_is_discarded_as_before() {
     let dirs = Dirs::new();
     let (launcher, clock) = slow_launcher(&dirs, &[sums(&dirs)]);

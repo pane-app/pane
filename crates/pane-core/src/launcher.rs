@@ -763,9 +763,29 @@ struct State {
     /// earlier search, even of the same query, is discarded.
     search_epoch: u64,
     /// Kept while the current search's calls for computed results may run:
-    /// dropping it, when the query changes or root search is left, cancels
-    /// those still pending (see [`State::next_screen`]).
+    /// dropping it, when root search is left, cancels those still pending
+    /// (see [`State::next_screen`]).
     search_alive: Option<tokio::sync::oneshot::Sender<()>>,
+    /// The calls of the search the current one replaced (#202): kept
+    /// until this search needs the runtime — it is about to ask — so a
+    /// call that answers within the quiet period keeps its instance for
+    /// the queries after it, and one that has not is cancelled then, not
+    /// at each keystroke. Dropped with [`State::search_alive`] when root
+    /// search is left.
+    superseded: Option<tokio::sync::oneshot::Sender<()>>,
+    /// The rows of root search that are not the query's computed results,
+    /// ranked once per query and spliced around them (#202): `None`
+    /// until a query's list is first built. Kept while the query and what
+    /// they were ranked from (see [`State::statics`]) stand still.
+    ranked: Option<Ranked>,
+    /// The generation of what root search's static rows are ranked from —
+    /// the commands, the results supplied ahead of the query, the aliases,
+    /// the sensitivity — bumped wherever any of them changes, so the rows
+    /// kept for a query are ranked again then (#202).
+    statics: u64,
+    /// How many times root search has ranked its static rows: a diagnostic
+    /// for tests (#202), read through [`Launcher::root_rankings`].
+    rankings: u64,
     /// The folders granted to packages and their listings, shared with the
     /// runtime; `None` without a runtime.
     files: Option<FileAccess>,
@@ -1021,6 +1041,9 @@ impl State {
     fn next_screen(&mut self) {
         self.screen_epoch += 1;
         self.search_alive = None;
+        // The search the current one had replaced is cancelled with it:
+        // leaving root search, nothing needs the runtime any more (#202).
+        self.superseded = None;
         // The query's list is neither held nor merged any more (#201): its
         // providers' calls are cancelled, and whatever is shown next
         // builds its own list.
@@ -1540,6 +1563,10 @@ impl Launcher {
             home: home_folder(),
             search_epoch: 0,
             search_alive: None,
+            superseded: None,
+            ranked: None,
+            statics: 0,
+            rankings: 0,
             files: runtime.as_ref().ok().map(Runtime::file_access),
             open: None,
             launch: LaunchRecord::default(),
@@ -2076,7 +2103,9 @@ impl Launcher {
     ///
     /// Metadata is searched at once, without running any guest. For a query
     /// that is not blank, the enabled commands that compute root results
-    /// (such as the calculator) are asked too, one after another: the new
+    /// (such as the calculator) are asked too, one after another, once the
+    /// query has been quiet for a short while (#202, see `publishing`): a
+    /// burst of keystrokes asks once. The new
     /// query's list is published once every one of them has answered, or
     /// 200 ms after the query changed, whichever comes first (#201); until
     /// then the rows shown stay the previous query's, while the field shows
@@ -2084,7 +2113,10 @@ impl Launcher {
     /// list was published is merged into it, coalesced within 16 ms with
     /// any that arrives close after. The answers are discarded if the query
     /// has changed meanwhile, and a command that fails is listed as a
-    /// result explaining the failure.
+    /// result explaining the failure. A call still pending is cancelled
+    /// when a newer query needs the runtime — as its quiet period ends —
+    /// or root search is left (#202), not at each keystroke, so a call
+    /// that answers within the quiet period keeps its instance.
     ///
     /// The first query that is not blank since root search was shown also
     /// asks the enabled commands that supply results ahead of the query
@@ -2131,6 +2163,25 @@ impl Launcher {
                 launcher.show_indexed_results(indexing).await;
                 return;
             };
+            // A burst of keystrokes asks the commands that compute results
+            // once (#202): the search waits out the quiet period — real
+            // time, off the calling thread — and a newer query that arrives
+            // before it ends replaces this one without asking anything,
+            // its own quiet period to wait out.
+            let quiet = off_thread(|| std::thread::sleep(publishing::QUIET));
+            if until_cancelled(quiet, &mut cancelled).await.is_none() {
+                // A newer query replaced this one: what it was going to ask
+                // is that query's to ask, but the results supplied ahead of
+                // the query were marked asked for by this search, so it
+                // finishes asking for them.
+                launcher.show_indexed_results(indexing).await;
+                return;
+            }
+            // The query needs the runtime: the search it replaced has its
+            // pending call cancelled now (#202), not when its query
+            // changed, so one that answered within the quiet period kept
+            // its instance for this query to reuse.
+            launcher.cancel_superseded(search);
             let listing = launcher
                 .show_root_results(epoch, search, &query, at, asked, &mut cancelled)
                 .await;
@@ -2161,6 +2212,10 @@ impl Launcher {
         let mut state = self.lock();
         if state.sensitivity != sensitivity {
             state.sensitivity = sensitivity;
+            // The rows kept for the current query were ranked by the
+            // sensitivity before (#202): a late answer's merge re-ranks
+            // them with the choice now in force.
+            state.statics += 1;
         }
     }
 
@@ -2230,6 +2285,9 @@ impl Launcher {
                     continue;
                 }
                 state.indexes.answer(&command, answer);
+                // Their results changed what the static rows are ranked
+                // from (#202): they are ranked again with them.
+                state.statics += 1;
                 // Their applications' icons are refreshed (#172).
                 application_icons::listed(state);
                 // Pins made before applications had stable identities
@@ -2266,6 +2324,9 @@ impl Launcher {
         state
             .indexes
             .retain(|component| indexing.iter().any(|kept| kept == component));
+        // What the static rows are ranked from changed (#202): a command
+        // forgotten supplied results ahead of the query no longer.
+        state.statics += 1;
         application_icons::listed(state);
     }
 
@@ -2327,8 +2388,10 @@ impl Launcher {
     /// shown stay the previous query's. Results computed for an earlier
     /// query are gone once the list is published, and the calls still
     /// asking for them are cancelled. Returns the commands to ask for what
-    /// they compute, and what resolves once this search is replaced too, or
-    /// root search is left.
+    /// they compute — after the quiet period, in the future `set_query`
+    /// returns (#202) — and what resolves once this search's calls are
+    /// cancelled: when a newer search needs the runtime, or root search is
+    /// left.
     fn search(
         &self,
         state: &mut State,
@@ -2339,7 +2402,11 @@ impl Launcher {
     ) {
         state.search_epoch += 1;
         let (alive, cancelled) = tokio::sync::oneshot::channel();
-        // Dropping the earlier search's cancels its pending calls.
+        // The search this one replaces keeps its calls running (#202):
+        // they are cancelled only when this search needs the runtime, so a
+        // call that answers within the quiet period keeps its instance for
+        // the queries after it.
+        state.superseded = state.search_alive.take();
         state.search_alive = Some(alive);
         // A command's answer to the query sent is not an answer to this one.
         if state.sent_from.take().is_some_and(|sent| sent != query) {
@@ -2387,6 +2454,18 @@ impl Launcher {
             self.wait_for(publishing::BUDGET);
         }
         (cancelled, asked)
+    }
+
+    /// Cancels the calls of the search `search` replaced (#202): they were
+    /// left running — an answer that arrived within the quiet period was
+    /// kept, its instance with it — and are stopped now that the newer
+    /// query needs the runtime. A search that was itself replaced asks
+    /// nothing, so cancels nothing: the search that replaced it does.
+    fn cancel_superseded(&self, search: u64) {
+        let mut state = self.lock();
+        if state.search_epoch == search {
+            state.superseded = None;
+        }
     }
 
     /// The enabled commands that compute root results, each with its
@@ -2479,6 +2558,16 @@ impl Launcher {
         data: Option<PackageData>,
         cancelled: &mut tokio::sync::oneshot::Receiver<()>,
     ) -> Option<Option<ListedFuture>> {
+        // The search was replaced while it waited out its quiet period
+        // (#202): nothing is asked for a query the field has moved on
+        // from. The search that replaced it asks when its own quiet period
+        // ends.
+        {
+            let state = self.lock_if_current(epoch)?;
+            if state.search_epoch != search || state.view.query() != Some(query) {
+                return None;
+            }
+        }
         let answer = match self.runtime() {
             Ok(runtime) => {
                 let call = runtime.root_results_with(&command.component, query, at, data.clone());
@@ -2554,6 +2643,17 @@ impl Launcher {
     pub fn presented_list(&self) -> (LauncherView, ListPresentation) {
         let state = self.lock();
         (state.view.clone(), presentation::list_presentation(&state))
+    }
+
+    /// How many times root search has ranked its static rows — every row
+    /// but the results computed for the query — since the launcher started:
+    /// a diagnostic for tests and logs (#202). A query pays one ranking,
+    /// when its list is made at once or published; a provider's answer
+    /// that merges into it splices its section in without another, and
+    /// the ranking is made again only when the query or what the rows are
+    /// ranked from changed.
+    pub fn root_rankings(&self) -> u64 {
+        self.lock().rankings
     }
 
     /// The presentation of the row at `index` as the window draws it now
@@ -3451,6 +3551,9 @@ impl Launcher {
         state.list_entered = false;
         self.note_setup_needed(state);
         state.root = self.root_results(state);
+        // What the static rows are ranked from changed with the root
+        // results of this visit (#202): they are ranked again below.
+        state.statics += 1;
         state.sent_from = None;
         state.computed.clear();
         // What a held query's search had staged is gone with it (#201): the
@@ -3458,7 +3561,12 @@ impl Launcher {
         state.staged.clear();
         state.holding = None;
         state.merge = None;
-        state.indexes.stale();
+        // The results supplied ahead of the query are asked for again with
+        // the next query — except a command whose data tells of its own
+        // changes: one that asked for the installed applications is asked
+        // when they change (see `application_changes`), not for a show of
+        // root search that changed nothing (#202).
+        state.indexes.stale(&self.applications_askers());
         state.typed = None;
         state.published = String::new();
         let (rows, entries) = root_rows(state, "");
@@ -3497,6 +3605,17 @@ impl Launcher {
     pub fn show_root_search(&self) {
         let mut state = self.lock();
         self.show_root(&mut state, None);
+    }
+
+    /// The components that asked for the installed applications and may
+    /// still run: what they supply ahead of the query may have changed
+    /// when the applications did, and is asked for again then (see
+    /// `application_changes`), so a show of root search that changed
+    /// nothing asks them for nothing (#202).
+    fn applications_askers(&self) -> Vec<PathBuf> {
+        self.runtime()
+            .map(|runtime| runtime.applications_askers())
+            .unwrap_or_default()
     }
 
     /// Whether the view on screen can be restored by a reopened launcher:
@@ -3606,6 +3725,10 @@ impl Launcher {
             .map(|row| row.id.clone());
         self.note_setup_needed(state);
         state.root = self.root_results(state);
+        // What the static rows are ranked from changed with the root
+        // results (#202): they are ranked again, held list or not — a
+        // held query's publication ranks them for it.
+        state.statics += 1;
         // A command that was disabled, paused or replaced contributes
         // nothing more; one enabled again answers from the next change of the
         // query.
@@ -4967,6 +5090,7 @@ fn asked_at(state: &State) -> WallTime {
 /// apart (an application's distinction, a quicklink's target), a
 /// computed result's section names the command that computed it, and a
 /// file row shows its folder, so none of them adds anything.
+#[derive(Clone)]
 enum Told {
     /// The package the command was installed from.
     Source(PackageIdentity),
@@ -5005,7 +5129,122 @@ fn kind(entry: &Entry) -> search::Kind {
 /// ahead of it, then the rows declared for the address or path the query
 /// is, then the computed results that open a file, then the rows
 /// explaining why a command could not supply them.
-fn root_rows(state: &State, query: &str) -> (Vec<Row>, Vec<Entry>) {
+///
+/// The rows that are not the query's computed results are ranked once per
+/// query and kept in the state (#202, see [`Ranked`]): a provider's answer
+/// that merges into the list splices its section into them without
+/// ranking again, so a query pays its ranking once, whatever merges into
+/// the list later.
+fn root_rows(state: &mut State, query: &str) -> (Vec<Row>, Vec<Entry>) {
+    if !kept_ranking(state, query) {
+        state.rankings += 1;
+        let ranked = rank_statics(state, query);
+        state.ranked = Some(ranked);
+    }
+    let ranked = state.ranked.as_ref().expect("ranked above");
+    // The computed results sit between the static rows: those that are not
+    // files above what is found by title, the files below it, since a
+    // folder can hold many.
+    let (files, computed): (Vec<&Computed>, Vec<&Computed>) = state
+        .computed
+        .iter()
+        .partition(|computed| computed.in_files);
+    let computed_row = |computed: &Computed| StaticRow {
+        row: computed.row.clone(),
+        entry: computed.entry.clone(),
+        told: Told::Apart,
+        folded: search::fold(&computed.row.title),
+    };
+    let listed: Vec<StaticRow> = ranked
+        .before
+        .iter()
+        .cloned()
+        .chain(computed.into_iter().map(computed_row))
+        .chain(ranked.middle.iter().cloned())
+        .chain(files.into_iter().map(computed_row))
+        .chain(ranked.after.iter().cloned())
+        .collect();
+    // Rows that share a folded title each show what tells them apart.
+    let shared: Vec<bool> = {
+        let folded: Vec<&str> = listed.iter().map(|row| row.folded.as_str()).collect();
+        (0..folded.len())
+            .map(|at| folded.iter().filter(|other| *other == folded[at]).count() > 1)
+            .collect()
+    };
+    let mut rows: Vec<Row> = Vec::with_capacity(listed.len());
+    let mut entries: Vec<Entry> = Vec::with_capacity(listed.len());
+    for (listed, shared) in listed.into_iter().zip(shared) {
+        let StaticRow {
+            row,
+            entry,
+            told,
+            ..
+        } = listed;
+        let row = match (told, shared) {
+            (Told::Source(identity), true) => Row {
+                subtitle: Some(match row.subtitle {
+                    Some(subtitle) => format!("{subtitle} · {identity}"),
+                    None => identity.to_string(),
+                }),
+                ..row
+            },
+            _ => row,
+        };
+        rows.push(row);
+        entries.push(entry);
+    }
+    (rows, entries)
+}
+
+/// The rows of root search that are not the query's computed results,
+/// ranked once per query (#202, see [`root_rows`]) and spliced around
+/// them: `before` comes ahead of the results that are not files, `middle`
+/// between those and the files, `after` the files.
+struct Ranked {
+    /// The query they were ranked for.
+    query: String,
+    /// The generation of the static inputs they were ranked from (see
+    /// [`State::statics`]).
+    statics: u64,
+    /// The rows that come ahead of the computed results that are not
+    /// files: what the user's alias sends, then the commands the query
+    /// names by their alias, hoisted above every other row.
+    before: Vec<StaticRow>,
+    /// The rows that come after those and before the computed file
+    /// results: the root results matching the query in the comparator's
+    /// order, then the rows declared for the address or path the query
+    /// is.
+    middle: Vec<StaticRow>,
+    /// The rows that come after the computed file results: the rows
+    /// explaining why a command could not supply the results it supplies
+    /// ahead of the query, then the fallbacks.
+    after: Vec<StaticRow>,
+}
+
+/// One row of root search as it is spliced: the row, what activating it
+/// does, what it can show to tell itself apart from another row with the
+/// same folded title, and that folded title — all computed once per query
+/// (#202, see [`Ranked`]).
+#[derive(Clone)]
+struct StaticRow {
+    row: Row,
+    entry: Entry,
+    told: Told,
+    folded: String,
+}
+
+/// Whether the rows kept for `query` are still the ones to show (#202,
+/// see [`State::ranked`]): the query stands, and nothing they were ranked
+/// from has changed since they were ranked.
+fn kept_ranking(state: &State, query: &str) -> bool {
+    state.ranked.as_ref().is_some_and(|ranked| {
+        ranked.query == query && ranked.statics == state.statics
+    })
+}
+
+/// Ranks root search's static rows for `query` (see [`Ranked`]): every
+/// row but the results computed for it, in root search order.
+fn rank_statics(state: &State, query: &str) -> Ranked {
     let blank = query.trim().is_empty();
     // What the comparator ranks: the root results — Pane's own rows and
     // every package's commands, one provider in the order root search
@@ -5073,59 +5312,54 @@ fn root_rows(state: &State, query: &str) -> (Vec<Row>, Vec<Entry>) {
         .failures()
         .filter(|_| !blank)
         .map(|(row, entry)| (row.clone(), entry.clone()));
-    let (files, computed): (Vec<&Computed>, Vec<&Computed>) = state
-        .computed
-        .iter()
-        .partition(|computed| computed.in_files);
-    let computed_row =
-        |computed: &Computed| (computed.row.clone(), computed.entry.clone(), Told::Apart);
     let apart = |(row, entry)| (row, entry, Told::Apart);
     // What the user's alias names comes first, even before computed
-    // results; files found for the query follow what is found by title,
-    // since a folder can hold many; the fallbacks, which the user chooses
-    // when anything else is listed, come last.
-    let listed: Vec<(Row, Entry, Told)> = aliases::rows_sending_after_alias(state, query)
-        .into_iter()
-        .map(apart)
-        .chain(by_alias.into_iter().map(by_its_alias))
-        .chain(computed.into_iter().map(computed_row))
-        .chain(matches.into_iter().map(found))
-        // The rows declared for the address or path the query is (#195),
-        // below the results found by title and above the files.
-        .chain(typed_query::rows(state).into_iter().map(apart))
-        .chain(files.into_iter().map(computed_row))
-        .chain(failures.map(apart))
-        .chain(aliases::fallback_rows(state, query).into_iter().map(apart))
-        .collect();
-    // Rows that share a folded title each show what tells them apart.
-    let folded: Vec<String> = listed
-        .iter()
-        .map(|(row, _, _)| search::fold(&row.title))
-        .collect();
-    let mut rows: Vec<Row> = Vec::with_capacity(listed.len());
-    let mut entries: Vec<Entry> = Vec::with_capacity(listed.len());
-    for ((row, entry, told), title) in listed.into_iter().zip(&folded) {
-        let shared = folded.iter().filter(|other| *other == title).count() > 1;
-        let row = match (told, shared) {
-            (Told::Source(identity), true) => Row {
-                subtitle: Some(match row.subtitle {
-                    Some(subtitle) => format!("{subtitle} · {identity}"),
-                    None => identity.to_string(),
-                }),
-                ..row
-            },
-            _ => row,
-        };
-        rows.push(row);
-        entries.push(entry);
+    // results; the rows declared for the address or path the query is
+    // (#195) come below the results found by title and above the files;
+    // the fallbacks, which the user chooses when anything else is listed,
+    // come last.
+    Ranked {
+        query: query.to_owned(),
+        statics: state.statics,
+        before: aliases::rows_sending_after_alias(state, query)
+            .into_iter()
+            .map(apart)
+            .chain(by_alias.into_iter().map(by_its_alias))
+            .map(into_static)
+            .collect(),
+        middle: matches
+            .into_iter()
+            .map(found)
+            // The rows declared for the address or path the query is
+            // (#195), below the results found by title and above the
+            // files.
+            .chain(typed_query::rows(state).into_iter().map(apart))
+            .map(into_static)
+            .collect(),
+        after: failures
+            .map(apart)
+            .chain(aliases::fallback_rows(state, query).into_iter().map(apart))
+            .map(into_static)
+            .collect(),
     }
-    (rows, entries)
+}
+
+/// The row as it is kept for a query, with its title folded once for
+/// the same-name pass (#202, see [`Ranked`]).
+fn into_static((row, entry, told): (Row, Entry, Told)) -> StaticRow {
+    StaticRow {
+        folded: search::fold(&row.title),
+        row,
+        entry,
+        told,
+    }
 }
 
 /// Lists root search's rows for `query` again after results arrived: the
 /// best match stays selected, now that better ones may be first, and a row
 /// the user moved to stays selected. The query's list must be published
-/// (#201): while it is held, the rows shown stay the previous query's.
+/// (#201): while it is held, the rows shown stay the previous query's. The
+/// rows that did not change are not ranked again (#202, see `root_rows`).
 fn relist_root(state: &mut State, query: &str) {
     let keep = state
         .view

@@ -1419,6 +1419,15 @@ impl Runtime {
         self.shared.applications.on_change(Arc::new(changed));
     }
 
+    /// The components that asked for the installed applications and may
+    /// still run: what they supply ahead of the query may have changed
+    /// when the applications did, and is asked for again then (see
+    /// [`Runtime::on_applications_changed`]), so a show of root search
+    /// that changed nothing asks them for nothing (#202).
+    pub(crate) fn applications_askers(&self) -> Vec<PathBuf> {
+        self.shared.applications.askers()
+    }
+
     /// Has the runtime list granted folders through `folders` from now on,
     /// instead of this system's own ([`crate::files::native`]).
     pub fn set_folders(&self, folders: Arc<dyn Folders>) {
@@ -1653,6 +1662,14 @@ impl Runtime {
     /// searching commands starts none; invoking a command starts its own.
     pub async fn running(&self) -> Vec<PathBuf> {
         self.try_running().await.unwrap_or_default()
+    }
+
+    /// How many times an instance of `component` was started: a diagnostic
+    /// for tests and logs, like [`Runtime::running`]. A cancelled call
+    /// drops its instance, so a call after it starts one again; root search
+    /// asks a provider once a burst of keystrokes has gone quiet (#202).
+    pub fn instance_starts(&self, component: &Path) -> u64 {
+        lock(&self.shared.starts).get(component).copied().unwrap_or(0)
     }
 
     /// The components with calls the user asked for that have not answered
@@ -2721,6 +2738,9 @@ struct Host {
     next_chain: Cell<u64>,
     /// The next instance's serial.
     next_serial: Cell<u64>,
+    /// How many times each component was instantiated, shared with the
+    /// runtime's handles: a diagnostic for tests (#202).
+    starts: Arc<Mutex<HashMap<PathBuf, u64>>>,
     /// Woken whenever an instance taken out for a call comes back or goes.
     returned: tokio::sync::Notify,
     /// Where an instance's undo asks this thread to drop the instances of
@@ -3000,6 +3020,7 @@ impl Host {
             next_view: shared.next_view.clone(),
             next_chain: Cell::new(0),
             next_serial: Cell::new(0),
+            starts: shared.starts.clone(),
             returned: tokio::sync::Notify::new(),
             nudge,
             directory: shared.directory.clone(),
@@ -4584,6 +4605,10 @@ impl Host {
         });
         let serial = self.next_serial.get();
         self.next_serial.set(serial + 1);
+        // Counted for the diagnostic of when a component starts again
+        // (#202): a cancelled call drops its instance, so the call after
+        // it starts one.
+        *lock(&self.starts).entry(path.to_path_buf()).or_insert(0) += 1;
         self.instances.borrow_mut().insert(
             path.to_path_buf(),
             Instance {

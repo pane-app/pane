@@ -20,7 +20,9 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use futures::executor::block_on;
-use pane_core::applications::{Cached, Change, Changes, Discovery, GRACE, Key, Source, Watch};
+use pane_core::applications::{
+    Application, Applications, Cached, Change, Changes, Discovery, GRACE, Key, Source, Watch,
+};
 use pane_core::clipboard::ManualClock;
 use pane_core::{
     Launcher, PackageIdentity, PinTarget, ResultAction, Runtime, Screen, SlotChange, Status,
@@ -111,6 +113,45 @@ fn shortcut(name: &str) -> Source {
     )
 }
 
+/// The host's list of applications, counting each ask of it: the
+/// Applications provider calls `installed` once for each ask of its
+/// results (#202).
+struct Counted {
+    applications: Arc<dyn Applications>,
+    asks: Arc<AtomicUsize>,
+}
+
+impl Applications for Counted {
+    fn installed(&self) -> Result<Vec<Application>, String> {
+        self.asks.fetch_add(1, Ordering::SeqCst);
+        self.applications.installed()
+    }
+
+    fn open(&self, id: &str) -> Result<(), String> {
+        self.applications.open(id)
+    }
+
+    fn source(&self, id: &str) -> Option<String> {
+        self.applications.source(id)
+    }
+
+    fn current_id(&self, id: &str) -> Option<String> {
+        self.applications.current_id(id)
+    }
+
+    fn on_change(&self, changed: Arc<dyn Fn() + Send + Sync>) {
+        self.applications.on_change(changed);
+    }
+
+    fn release(&self) {
+        self.applications.release();
+    }
+
+    fn icon_source(&self, id: &str) -> Option<String> {
+        self.applications.icon_source(id)
+    }
+}
+
 impl Discovery for FakeSystem {
     fn sources(&self) -> Result<Vec<Source>, String> {
         self.scans.fetch_add(1, Ordering::SeqCst);
@@ -142,13 +183,21 @@ impl Pane {
     /// A launcher with the Applications package installed, whose host
     /// lists `system`'s applications, at root search.
     fn new(system: &Arc<FakeSystem>) -> Pane {
+        let clock = ManualClock::at(1_000_000);
+        let list = Arc::new(
+            Cached::new(system.clone(), Duration::from_secs(3600)).with_clock(clock.clone()),
+        );
+        Pane::with_list(clock, list)
+    }
+
+    /// A launcher as [`Pane::new`], whose host's list of applications is
+    /// `list`: a test that counts the asks of the Applications provider
+    /// wraps one around the host's list (#202).
+    fn with_list(clock: Arc<ManualClock>, list: Arc<dyn Applications>) -> Pane {
         let data = tempfile::tempdir().unwrap();
         let cache = tempfile::tempdir().unwrap();
-        let clock = ManualClock::at(1_000_000);
         let runtime = Runtime::start_with_cache(cache.path().to_path_buf()).unwrap();
-        runtime.set_applications(Arc::new(
-            Cached::new(system.clone(), Duration::from_secs(3600)).with_clock(clock.clone()),
-        ));
+        runtime.set_applications(list);
         let launcher = Launcher::with_packages(Ok(runtime), vec![], data.path().join("extensions"))
             .with_quick_slots(data.path())
             .with_clock(clock.clone());
@@ -426,6 +475,45 @@ fn a_change_while_the_query_is_blank_is_listed_by_the_next_query() {
     // The same visit of root search: the results are asked for again.
     pane.search("zeta");
     assert_eq!(pane.sorted(), ["Zeta Editor", "Zeta Mail"]);
+}
+
+#[test]
+fn a_show_of_root_search_that_changed_nothing_asks_applications_for_nothing() {
+    let system = FakeSystem::with(&["Zeta Editor"]);
+    let clock = ManualClock::at(1_000_000);
+    let asks = Arc::new(AtomicUsize::new(0));
+    let list = Arc::new(Counted {
+        applications: Arc::new(
+            Cached::new(system.clone(), Duration::from_secs(3600)).with_clock(clock.clone()),
+        ),
+        asks: asks.clone(),
+    });
+    let pane = Pane::with_list(clock, list);
+
+    // The first query that is not blank asks the provider for its
+    // results, which call the host's list once.
+    pane.search("zeta");
+    assert_eq!(pane.listed(), ["Zeta Editor"]);
+    wait_until("watching", || system.watching() == 1);
+    let asked = asks.load(Ordering::SeqCst);
+    assert!(asked >= 1, "the provider was asked for its results");
+
+    // Showing root search again and again — the reopening that pops to
+    // root — with no application change: the provider is not asked again
+    // (#202); the results kept are listed as they were.
+    for _ in 0..3 {
+        pane.launcher.show_root_search();
+        pane.search("zeta");
+        assert_eq!(pane.listed(), ["Zeta Editor"]);
+    }
+    assert_eq!(asks.load(Ordering::SeqCst), asked);
+
+    // An application change does ask it again, at once.
+    system.set(&["Zeta Editor", "Zeta Mail"]);
+    system.report(Change::Changed);
+    pane.wait_for(&["Zeta Editor", "Zeta Mail"], ABOUT_A_SECOND);
+    assert!(asks.load(Ordering::SeqCst) > asked);
+    pane.still_searching("zeta");
 }
 
 #[test]

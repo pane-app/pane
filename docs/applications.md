@@ -151,7 +151,10 @@ The host's list stays current by itself (ADR 0038), replacing the earlier
   once and listed in place (a command being asked is waited for first, its
   answer possibly predating the change); otherwise at the next query. The
   selected row stays on the same result wherever it moved, or at the same
-  position if that result left, so the list never jumps under the user. No
+  position if that result left, so the list never jumps under the user. A
+  return to root search asks such a command for nothing, nothing having
+  changed (#202); a command whose results nothing tells of is
+  asked again after each return. No
   guest export is added: the guest's `results()` reads the host's current
   list, which answers at once.
 
@@ -486,7 +489,10 @@ and returns `open-application(id)`; only the adapter differs.
   title and keeps the pin; a lost change and the period reconcile; the
   selected row stays on its application, or at its position when it left;
   a change while the query is blank is listed by the next query of the
-  same visit; and disabling Applications stops every watcher and drops the
+  same visit; showing root search again and again with no application
+  change asks the Applications provider for nothing, an application
+  change asking it again (#202); and disabling Applications stops every
+  watcher and drops the
   list, enabling it looking and watching again.
 - Names through the launcher ([`crates/pane-core/tests/application_names.rs`](../crates/pane-core/tests/application_names.rs)),
   with the real guest and the host's list over a fake system's sources: a

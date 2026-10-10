@@ -5,13 +5,12 @@
 //! Each enabled command with `"indexedResults": true` is asked for its
 //! results once root search is used (a query that is not blank) and they
 //! are kept for later queries, so typing never waits for them. Coming back to
-//! root search marks them stale: the next query asks again, listing the kept
-//! results until the answer replaces them. So does a change of what they
-//! are made from, the installed applications (`application_changes`),
-//! which asks again at once while root search shows a query. A disabled or
-//! replaced command's
-//! results are forgotten at once, and an answer from it arriving afterwards
-//! is discarded.
+//! root search marks stale those whose results nothing tells of their own
+//! changes: a command that asked for the installed applications is asked
+//! for its results again when the list changes (see `application_changes`),
+//! so a show that changed nothing asks it for nothing (#202). A disabled or
+//! replaced command's results are forgotten at once, and an answer from it
+//! arriving afterwards is discarded.
 
 use std::path::{Path, PathBuf};
 
@@ -45,11 +44,15 @@ struct Index {
 }
 
 impl Indexes {
-    /// Marks every command's results stale, to be asked for again with the
-    /// next query; they stay listed meanwhile.
-    pub(super) fn stale(&mut self) {
+    /// Marks every command's results stale but `except`'s — those whose
+    /// data tells of its own changes, asked for again when it does (see
+    /// `application_changes`) — to be asked for again with the next query;
+    /// they stay listed meanwhile (#202).
+    pub(super) fn stale(&mut self, except: &[PathBuf]) {
         for index in &mut self.commands {
-            index.fresh = false;
+            if !except.contains(&index.component) {
+                index.fresh = false;
+            }
         }
     }
 

@@ -437,6 +437,43 @@ fn the_calculator_starts_only_once_something_is_typed() {
 }
 
 #[test]
+fn a_query_typed_one_key_at_a_time_asks_the_calculator_once() {
+    let dirs = Dirs::new();
+    let runtime = dirs.runtime();
+    let launcher = dirs.launcher(runtime.clone());
+    install(&launcher, &calculator());
+    launcher.back();
+
+    // Ten characters, one key at a time at typing speed: each keystroke
+    // begins a search, awaited as the window awaits it, and the quiet
+    // period after the last keystroke (#202) asks the calculator for the
+    // query once — one instance of its component, or at most a second
+    // for a call a keystroke landed on. The final list is the same as a
+    // query typed at once gives.
+    let query = "1 + 23 + 4";
+    let mut searching = Vec::new();
+    for typed in 1..query.len() {
+        let pending = launcher.set_query(&query[..typed]);
+        searching.push(thread::spawn(move || block_on(pending)));
+        thread::sleep(Duration::from_millis(25));
+    }
+    let finished = launcher.set_query(query);
+    block_on(finished);
+    for searching in searching {
+        searching.join().unwrap();
+    }
+
+    assert_eq!(titles(&launcher), ["28"]);
+    let running = block_on(runtime.running());
+    assert_eq!(running.len(), 1, "the calculator's instance is live");
+    let started = runtime.instance_starts(&running[0]);
+    assert!(
+        started <= 2,
+        "the calculator's component was started {started} times"
+    );
+}
+
+#[test]
 fn disabling_the_calculator_removes_its_answer_and_leaves_other_results() {
     let dirs = Dirs::new();
     let runtime = dirs.runtime();
