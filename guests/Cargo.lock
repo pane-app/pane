@@ -296,6 +296,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "quick"
+version = "0.1.0"
+dependencies = [
+ "pane-extension",
+]
+
+[[package]]
 name = "registrations-fixture"
 version = "0.1.0"
 dependencies = [
