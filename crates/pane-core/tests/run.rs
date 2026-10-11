@@ -949,7 +949,6 @@ mod windows {
     use super::defaults;
     use super::feedback::RecordingWindow;
     use super::repo_server;
-    use serde_json::Value;
 
     /// A number making this test's registry names its own.
     static NAMES: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
