@@ -317,6 +317,10 @@ impl Launcher {
             }
             _ => None,
         };
+        // Pane's own Create Extension form: the package is written from
+        // the templates, built once and handed to the install preview the
+        // author confirms, after which Pane develops it (see `create`).
+        let creation = super::Launcher::begun_creation(state, &values);
         // Pane's own npm and Git forms preview the package they name; the
         // form stays until the preview replaces it, and Back meanwhile
         // discards it.
@@ -332,7 +336,9 @@ impl Launcher {
                 ),
             ) => {
                 open.submitting = true;
-                state.view.status = Status::Running;
+                state.view.status = Status::Running {
+                    since: std::time::Instant::now(),
+                };
                 let git = matches!(open.purpose, super::FormPurpose::Git);
                 let field = if git {
                     super::GIT_REPOSITORY_FIELD
@@ -362,6 +368,9 @@ impl Launcher {
                 Some((false, spec)) => launcher.preview_npm(&spec).await,
                 Some((true, spec)) => launcher.preview_git(&spec).await,
                 None => {}
+            }
+            if let Some(creation) = creation {
+                launcher.finish_creation(epoch, creation).await;
             }
         }
     }

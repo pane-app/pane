@@ -9,8 +9,10 @@
 # scratch LOCALAPPDATA (Pane's cache is %LOCALAPPDATA%\Pane\cache on
 # Windows - crates/pane/src/lib.rs cache_dir(); PANE_CACHE_DIR is NOT read)
 # through spawn-scoped environment variables that are restored immediately
-# after the child starts. PANE_ARTIFACTS is cleared for the child only, so
-# no default-extension downloads or update checks run.
+# after the child starts. PANE_ARTIFACTS is cleared for the child and
+# PANE_DEFAULTS points at a pins file naming no default extension, so no
+# default-extension fetches or update checks run: nothing the child reaches
+# is off this computer.
 #
 # Focus handling: SetWindowPos-untouched activation via SetForegroundWindow
 # with an EXPLICIT Int64 HWND comparison, then a WScript.Shell.AppActivate
@@ -170,6 +172,11 @@ $localAppData = Join-Path $runDir 'localappdata'    # child LOCALAPPDATA (cache_
 $expectedCache = Join-Path $localAppData 'Pane\cache'   # the app's actual cache location
 New-Item -ItemType Directory -Path $runDir, $dataDir, $localAppData | Out-Null
 $stderrLog = Join-Path $runDir 'pane-stderr.log'
+# A development build takes its default extensions' pins from PANE_DEFAULTS;
+# without it, the committed pins point at the real repositories, which this
+# capture may not reach. The file names none, so first setup adds nothing.
+$noDefaultPins = Join-Path $runDir 'no-default-pins.json'
+Set-Content -LiteralPath $noDefaultPins -Value '[]'
 if (-not (Test-Path -LiteralPath $ExtensionsDir)) {
     Write-Warning "ExtensionsDir not found: $ExtensionsDir (samples will be absent)"
 }
@@ -270,9 +277,11 @@ if ($Backdrop) {
 # Everything the child needs is set here and restored IMMEDIATELY after the
 # child is spawned (the child keeps its own inherited copy); the helper's
 # and the operator's environment is otherwise untouched for the whole run.
-# PANE_ARTIFACTS is removed for the child so no default downloads or update
-# checks run; if the operator had one, it is restored afterwards.
-$spawnEnvNames = 'PANE_DATA_DIR', 'PANE_EXTENSIONS_DIR', 'PANE_THEME', 'PANE_MATERIAL', 'PANE_ARTIFACTS', 'LOCALAPPDATA'
+# PANE_ARTIFACTS is removed for the child and PANE_DEFAULTS points at the
+# run's pins file (naming no default extension), so no default-extension
+# fetches or update checks run; if the operator had either, they are
+# restored afterwards.
+$spawnEnvNames = 'PANE_DATA_DIR', 'PANE_EXTENSIONS_DIR', 'PANE_THEME', 'PANE_MATERIAL', 'PANE_ARTIFACTS', 'PANE_DEFAULTS', 'LOCALAPPDATA'
 $oldSpawnEnv = @{}
 foreach ($name in $spawnEnvNames) {
     if (Test-Path "Env:$name") { $oldSpawnEnv[$name] = (Get-Item "Env:$name").Value }
@@ -414,6 +423,7 @@ try {
         if ($Theme)    { Set-Item 'Env:PANE_THEME' $Theme }
         if ($Material) { Set-Item 'Env:PANE_MATERIAL' $Material }
         Remove-Item 'Env:PANE_ARTIFACTS' -ErrorAction SilentlyContinue
+        Set-Item 'Env:PANE_DEFAULTS' $noDefaultPins
         $startOptions = @{ FilePath = $Binary; PassThru = $true; RedirectStandardError = $stderrLog }
         if ($InstallFolder) {
             $packagePath = (Resolve-Path -LiteralPath $InstallFolder).Path

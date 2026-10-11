@@ -1,7 +1,8 @@
 //! Disabling a package other installed packages require, through the
 //! launcher's public interface: before anything changes, Pane lists the
 //! packages that require it (directly or through each other, optional ones
-//! excluded) with Disable all and Cancel. Cancel changes nothing; Disable
+//! excluded) with Disable all, Disable only and Cancel. Cancel changes
+//! nothing; Disable
 //! all disables exactly what was shown, stops their running instances and
 //! keeps their settings; enabling the dependency again enables it alone.
 //! Pane pausing a dependency after it failed is not the user disabling it
@@ -270,7 +271,10 @@ fn disabling_a_required_dependency_shows_its_dependents_first_and_cancel_changes
     );
     // An optional integration is not affected.
     assert!(!details.contains("Package d"), "{details}");
-    assert_eq!(titles(&launcher), ["Disable all 3", "Cancel"]);
+    assert_eq!(
+        titles(&launcher),
+        ["Disable all 3", "Disable only Package a", "Cancel"]
+    );
     assert_eq!(view.selected, Some(0));
     // Nothing has changed yet.
     assert!(all_enabled(&launcher));
@@ -337,10 +341,30 @@ fn disable_all_disables_the_shown_set_stops_it_and_keeps_its_settings() {
     // the toasts `restarted`'s calls show.
     assert_eq!(enabled(&dirs.restarted()), alone);
 
-    // Settings b kept its settings.
+    // Settings b kept its settings. Enabled while Package c is still
+    // disabled, its command waits for c now, rather than its calls failing
+    // (#152); enabled once c is, it runs and finds its setting.
     assert_eq!(
         toggle(&restarted, "Settings b"),
         Status::Result("Enabled Settings b".into())
+    );
+    to_root(&restarted);
+    let greeting = restarted
+        .view()
+        .rows
+        .iter()
+        .find(|row| row.title == "Greeting")
+        .unwrap()
+        .clone();
+    assert_eq!(
+        greeting.unavailable,
+        Some(pane_core::Unavailable::Waiting(
+            "Needs Package c, which is disabled".into()
+        ))
+    );
+    assert_eq!(
+        toggle(&restarted, "Package c"),
+        Status::Result("Enabled Package c".into())
     );
     assert_eq!(
         greet(&restarted, "Greet me"),
@@ -360,7 +384,10 @@ fn a_dependent_enabled_while_the_question_is_shown_is_asked_about_again() {
         details.contains("Already disabled: Package c, which requires Package a"),
         "{details}"
     );
-    assert_eq!(titles(&launcher), ["Disable all 2", "Cancel"]);
+    assert_eq!(
+        titles(&launcher),
+        ["Disable all 2", "Disable only Package a", "Cancel"]
+    );
 
     // Meanwhile Package c is enabled again.
     block_on(launcher.set_enabled(&dirs.identity("c"), true));
@@ -373,7 +400,10 @@ fn a_dependent_enabled_while_the_question_is_shown_is_asked_about_again() {
         )
     );
     assert!(all_enabled(&launcher));
-    assert_eq!(titles(&launcher), ["Disable all 3", "Cancel"]);
+    assert_eq!(
+        titles(&launcher),
+        ["Disable all 3", "Disable only Package a", "Cancel"]
+    );
 
     press(&launcher, "Disable all 3");
     assert_eq!(
@@ -408,7 +438,10 @@ fn a_package_disabled_while_the_question_is_shown_disables_nothing_even_with_a_n
     let launcher = four(&dirs);
     block_on(launcher.set_enabled(&dirs.identity("c"), false));
     toggle(&launcher, "Package a");
-    assert_eq!(titles(&launcher), ["Disable all 2", "Cancel"]);
+    assert_eq!(
+        titles(&launcher),
+        ["Disable all 2", "Disable only Package a", "Cancel"]
+    );
 
     // Meanwhile Package a is disabled, and Package c, which requires it and
     // was not shown to be disabled, is enabled again.
@@ -438,7 +471,10 @@ fn packages_requiring_each_other_are_disabled_together() {
     let launcher = dirs.launcher();
     block_on(launcher.install_package(&y));
     toggle(&launcher, "Package x");
-    assert_eq!(titles(&launcher), ["Disable all 2", "Cancel"]);
+    assert_eq!(
+        titles(&launcher),
+        ["Disable all 2", "Disable only Package x", "Cancel"]
+    );
     assert_eq!(
         press(&launcher, "Disable all 2"),
         Status::Result("Disabled Package x and Package y, which requires it".into())
@@ -478,11 +514,12 @@ fn damage(launcher: &Launcher, identity: &PackageIdentity) {
 }
 
 #[test]
-fn pane_pausing_a_required_dependency_disables_nothing_else() {
+fn pane_pausing_a_required_dependency_disables_nothing_else_and_its_dependent_waits() {
     let dirs = Dirs::new();
     dirs.operations_sample();
-    let caller = dirs.fixture(
+    let caller = dirs.settings(
         "caller",
+        "Settings caller",
         r#"{ "id": "greeter", "source": "local:../sample-operations",
              "operations": [{ "id": "greet", "version": 1 }] }"#,
     );
@@ -503,13 +540,40 @@ fn pane_pausing_a_required_dependency_disables_nothing_else() {
     manage(&restarted);
     assert!(matches!(restarted.view().screen, Screen::Extensions { .. }));
 
+    // Its dependent now waits for the paused dependency, rather than
+    // having its calls refused (#152): its command stays listed, saying
+    // what it needs, and comes back once the dependency is retried or
+    // reloaded.
+    to_root(&restarted);
+    let greeting = restarted
+        .view()
+        .rows
+        .iter()
+        .find(|row| row.title == "Greeting")
+        .unwrap()
+        .clone();
+    assert_eq!(
+        greeting.unavailable,
+        Some(pane_core::Unavailable::Waiting(
+            "Needs Rust operations sample, which is paused".into()
+        ))
+    );
+
     // The user disabling the paused package still asks about its dependent.
+    manage(&restarted);
     press(&restarted, "Rust operations sample");
     assert_eq!(
         restarted.view().title,
         "Disable Rust operations sample and the extensions that require it?"
     );
-    assert_eq!(titles(&restarted), ["Disable all 2", "Cancel"]);
+    assert_eq!(
+        titles(&restarted),
+        [
+            "Disable all 2",
+            "Disable only Rust operations sample",
+            "Cancel"
+        ]
+    );
 }
 
 #[test]
@@ -537,4 +601,178 @@ fn a_disable_all_that_cannot_be_recorded_changes_none_of_them() {
     fs::remove_dir_all(&registry).unwrap();
     fs::write(&registry, text).unwrap();
     assert!(all_enabled(&dirs.launcher()));
+}
+
+// A package that provides a capability the packages being asked about
+// use (ADR 0041): capabilities add no package to the closure, and the
+// question says instead who will wait for a provider. Disable only
+// disables the dependency alone, leaving its dependents waiting (#152).
+
+/// The `provides` of a package providing the fixture's capability, as
+/// manifest members, beside the `echo` it publishes.
+const PROVIDES: &str = r#","provides": [{ "capability": "fixture:greet@1", "component":
+     "fixture.wasm", "operations": ["greet"] }],
+     "operations": [{ "id": "echo", "version": 1, "component": "fixture.wasm" }]"#;
+
+/// A required dependency on the provider's `echo`, as manifest members.
+const NEEDS: &str = r#","dependencies": [{ "id": "p", "source": "local:../p",
+     "operations": [{ "id": "echo", "version": 1 }] }]"#;
+
+/// The `uses` of a package using the fixture's capability, as manifest
+/// members.
+const USES: &str = r#","uses": [{ "capability": "fixture:greet@1", "operations": ["greet"] }]"#;
+
+impl Dirs {
+    /// Writes a capabilities fixture package in folder `name`, titled
+    /// "Package <name>", whose one command is titled `command` and calls
+    /// the fixture's capability, with `members` (manifest members, each
+    /// starting with a comma): its `provides`, `uses`, `operations` or
+    /// `dependencies`.
+    fn capability(&self, name: &str, command: &str, members: &str) -> PathBuf {
+        let folder = self.folder(name);
+        fs::create_dir_all(&folder).unwrap();
+        fs::copy(
+            guest("capabilities_fixture.wasm"),
+            folder.join("fixture.wasm"),
+        )
+        .unwrap();
+        let manifest = format!(
+            r#"{{
+                "manifestVersion": 1,
+                "title": "Package {name}",
+                "apiVersion": "0.1",
+                "commands": [
+                    {{ "id": "fixture", "title": "{command}", "component": "fixture.wasm" }}
+                ]{members}
+            }}"#
+        );
+        fs::write(folder.join("pane.json"), manifest).unwrap();
+        folder
+    }
+
+    /// The provider of the fixture's capability (`p`, whose command needs
+    /// no one) with the enabled packages around it: `d`, which requires it,
+    /// and `c`, which uses the capability without depending on it, all
+    /// installed.
+    fn provider_and_users(&self) -> Launcher {
+        self.capability("p", "Greeting provider", PROVIDES);
+        self.capability("d", "Dependent greeting", NEEDS);
+        self.capability("c", "Greeting user", USES);
+        let launcher = self.launcher();
+        block_on(launcher.install_package(&self.folder("d")));
+        block_on(launcher.install_package(&self.folder("c")));
+        assert_eq!(
+            enabled(&launcher),
+            [
+                ("Package p".into(), true),
+                ("Package d".into(), true),
+                ("Package c".into(), true)
+            ]
+        );
+        launcher
+    }
+}
+
+#[test]
+fn disabling_the_last_provider_of_a_capability_says_who_waits_for_it() {
+    let dirs = Dirs::new();
+    let launcher = dirs.provider_and_users();
+
+    assert_eq!(toggle(&launcher, "Package p"), Status::Idle);
+    let details = launcher.view().details().join("\n");
+    assert!(
+        details.contains(
+            "Package c will wait for fixture:greet@1 until another extension provides it"
+        ),
+        "{details}"
+    );
+    // Package d is disabled with it, so it does not wait.
+    assert!(!details.contains("Package d will wait"), "{details}");
+    assert_eq!(
+        titles(&launcher),
+        ["Disable all 2", "Disable only Package p", "Cancel"]
+    );
+    assert!(all_enabled(&launcher));
+    assert_eq!(press(&launcher, "Cancel"), Status::Idle);
+
+    // With another provider left, there is no line and the closure is
+    // unchanged.
+    dirs.capability("q", "Second greeting provider", PROVIDES);
+    block_on(launcher.install_package(&dirs.folder("q")));
+    assert_eq!(toggle(&launcher, "Package p"), Status::Idle);
+    let details = launcher.view().details().join("\n");
+    assert!(
+        !details.contains("will wait for fixture:greet@1"),
+        "{details}"
+    );
+    assert_eq!(
+        titles(&launcher),
+        ["Disable all 2", "Disable only Package p", "Cancel"]
+    );
+}
+
+#[test]
+fn disable_only_disables_the_dependency_alone_and_its_dependents_wait() {
+    let dirs = Dirs::new();
+    let launcher = dirs.provider_and_users();
+
+    assert_eq!(toggle(&launcher, "Package p"), Status::Idle);
+    assert_eq!(
+        titles(&launcher),
+        ["Disable all 2", "Disable only Package p", "Cancel"]
+    );
+    assert_eq!(
+        launcher.view().rows[1].subtitle.as_deref(),
+        Some(
+            "The extensions that require it wait for it, and come back when it is enabled \
+             again"
+        )
+    );
+
+    assert_eq!(
+        press(&launcher, "Disable only Package p"),
+        Status::Result("Disabled Package p".into())
+    );
+    // The package alone: d and c stay enabled, and d waits for it.
+    assert_eq!(
+        enabled(&launcher),
+        [
+            ("Package p".into(), false),
+            ("Package d".into(), true),
+            ("Package c".into(), true)
+        ]
+    );
+    assert_eq!(
+        launcher.view().rows[launcher.view().selected.unwrap()].title,
+        "Package p"
+    );
+    to_root(&launcher);
+    let dependent = launcher
+        .view()
+        .rows
+        .iter()
+        .find(|row| row.title == "Dependent greeting")
+        .cloned()
+        .unwrap_or_else(|| panic!("no row: {:?}", titles(&launcher)));
+    assert_eq!(
+        dependent.unavailable,
+        Some(pane_core::Unavailable::Waiting(
+            "Needs Package p, which is disabled".into()
+        ))
+    );
+
+    // Enabling the dependency again brings it back by itself.
+    assert_eq!(
+        toggle(&launcher, "Package p"),
+        Status::Result("Enabled Package p".into())
+    );
+    to_root(&launcher);
+    let dependent = launcher
+        .view()
+        .rows
+        .iter()
+        .find(|row| row.title == "Dependent greeting")
+        .cloned()
+        .unwrap_or_else(|| panic!("no row: {:?}", titles(&launcher)));
+    assert_eq!(dependent.unavailable, None);
 }

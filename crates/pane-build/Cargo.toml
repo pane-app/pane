@@ -1,6 +1,10 @@
 # How a package is built from its source folder, once or on each save
 # (development mode): shared by Pane's core and `pane-ext`, so that the two
-# never build a package differently (ADR 0047, #216).
+# never build a package differently (ADR 0047, #216). Its JavaScript and
+# TypeScript build (#218) runs with Node.js and npm alone, componentizing
+# either with its own componentizer (the `componentizer` feature: the
+# vendored componentize-qjs and the committed wasm parts) or with a
+# componentizer binary.
 [package]
 name = "pane-build"
 version = "0.1.0"
@@ -9,12 +13,32 @@ publish.workspace = true
 license.workspace = true
 rust-version.workspace = true
 
+[features]
+# Pane's componentizer linked in-process, with the committed wasm parts
+# (tools/componentize-js/wasm-parts) embedded: `pane-ext` builds with it, and
+# Pane's own tests through its dev-dependencies, so a JavaScript or
+# TypeScript package builds with no componentizer binary anywhere. Without
+# it, the build spawns a componentizer: the one PANE_COMPONENTIZER names, or
+# the package's own `@pane-app/cli` platform package installed.
+componentizer = ["dep:componentize-qjs", "dep:tokio"]
+
 [dependencies]
-# Reading cargo's JSON messages for the components a Rust build made.
+# Reading cargo's JSON messages for the components a Rust build made, and the
+# package.json of a JavaScript or TypeScript package.
 serde_json.workspace = true
 # The native file watcher of development mode (inotify, FSEvents,
 # ReadDirectoryChangesW), which builds a local package on save.
 notify = "8.2"
+# The target of the `@pane-app/cli` platform package a package's own
+# componentizer is looked up by (`node_modules/@pane-app/cli-<target>`).
+pane-target = { path = "../pane-target" }
+# The marker of the lockfile a package's dependencies were installed for.
+sha2.workspace = true
+# Pane's componentizer (the vendored componentize-qjs), linked in-process by
+# the `componentizer` feature.
+componentize-qjs = { path = "../../tools/componentize-js/componentize-qjs/crates/core", optional = true }
+# Driving the componentize future on a current-thread runtime.
+tokio = { workspace = true, optional = true, features = ["rt"] }
 
 # The Job Object that stops a build or a system program with every process
 # it started, and the thread list that lets a program started suspended

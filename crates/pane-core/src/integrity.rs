@@ -1,6 +1,6 @@
 //! Checking downloads against the sha512 integrity their source gives
-//! (`sha512-<base64>`, as npm writes it): an npm package's tarball, a
-//! default extension's payload, Pane's own application package.
+//! (`sha512-<base64>`, as npm writes it): an npm package's tarball, Pane's
+//! own application package.
 
 use sha2::{Digest, Sha512};
 
@@ -13,46 +13,11 @@ pub(crate) fn sha512_values(integrity: &str) -> impl Iterator<Item = &str> {
     })
 }
 
-/// Whether `integrity` names a sha512 hash at all (used by the default
-/// extensions' index, which Pane checks before it downloads anything).
+/// Whether `integrity` names a sha512 hash at all (used by the index of
+/// Pane's own application package, which Pane checks before it downloads
+/// anything).
 pub(crate) fn has_sha512(integrity: &str) -> bool {
     sha512_values(integrity).next().is_some()
-}
-
-/// The sha512 digest `integrity` names, decoded, or `None` when it names
-/// none or one that is not the digest's 64 bytes: the first bytes of it
-/// name a downloaded payload in Pane's cache.
-pub(crate) fn sha512_digest(integrity: &str) -> Option<[u8; 64]> {
-    let value = sha512_values(integrity).next()?;
-    let mut digest = [0u8; 64];
-    let mut filled = 0usize;
-    // The six bits each character holds, and how many of them are still
-    // waiting for a character to complete a byte.
-    let (mut bits, mut held) = (0u32, 0u32);
-    for byte in value.bytes() {
-        let digit = match byte {
-            b'A'..=b'Z' => byte - b'A',
-            b'a'..=b'z' => byte - b'a' + 26,
-            b'0'..=b'9' => byte - b'0' + 52,
-            b'+' => 62,
-            b'/' => 63,
-            // Padding, which only ends the value.
-            b'=' => break,
-            _ => return None,
-        };
-        bits = (bits << 6) | u32::from(digit);
-        held += 6;
-        if held >= 8 {
-            held -= 8;
-            if filled == 64 {
-                return None;
-            }
-            digest[filled] = (bits >> held) as u8;
-            filled += 1;
-        }
-        bits &= (1 << held) - 1;
-    }
-    (filled == 64).then_some(digest)
 }
 
 /// Checks `bytes` against the sha512 hashes of `integrity`: they match when
@@ -91,7 +56,9 @@ pub(crate) fn base64(bytes: &[u8]) -> String {
     text
 }
 
-/// `bytes` as lowercase hexadecimal digits, two to a byte.
+/// `bytes` as lowercase hexadecimal digits, two to a byte: the tests'
+/// object ids.
+#[cfg(test)]
 pub(crate) fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
@@ -101,24 +68,17 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_named_sha512_decodes_to_its_digest() {
+    fn a_sha512_hash_is_named() {
         let digest = Sha512::digest(b"the payload");
         let named = format!("sha512-{}", base64(&digest));
-        assert_eq!(
-            sha512_digest(&named).as_ref().map(|digest| &digest[..]),
-            Some(&digest[..])
-        );
         assert!(has_sha512(&named));
-        // Neither another algorithm nor a damaged value names one.
+        // Neither another algorithm nor an integrity without any hash
+        // names one.
         assert!(!has_sha512("sha1-abc"));
-        assert_eq!(sha512_digest("sha1-abc"), None);
-        assert_eq!(sha512_digest("sha512-sh?rt"), None);
-        // A second hash is not read; the first is used.
+        assert!(!has_sha512(""));
+        // A second hash after the first does not hide it.
         let two = format!("{named} sha512-{}", base64(&Sha512::digest(b"other")));
-        assert_eq!(
-            sha512_digest(&two).as_ref().map(|digest| &digest[..]),
-            Some(&digest[..])
-        );
+        assert!(has_sha512(&two));
     }
 
     #[test]

@@ -1,0 +1,22 @@
+{
+  "manifestVersion": 1,
+  "title": "Keywords sample",
+  "version": "0.1.0",
+  "apiVersion": "0.1",
+  "commands": [
+    {
+      "id": "bin",
+      "title": "Empty the Bin",
+      "component": "sample_keywords.wasm",
+      "mode": "no-view",
+      "keywords": ["trash", "rubbish"]
+    },
+    {
+      "id": "moons",
+      "title": "Moons",
+      "component": "sample_keywords.wasm",
+      "mode": "provider",
+      "indexedResults": true
+    }
+  ]
+}

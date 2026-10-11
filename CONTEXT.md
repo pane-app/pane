@@ -17,20 +17,20 @@ An installable addition that contributes functionality to the launcher.
 _Avoid_: Plugin, add-on
 
 **Default extension**:
-An official extension provided by default to supply an everyday feature: offered ticked at first setup and acquired then rather than shipped inside the installer, at the revision the Pane release names. The user can leave it out at first setup or disable it individually.
+An official extension provided by default to supply an everyday feature: installed at first setup, from the commit of its repository's release tag that the Pane release pins, rather than shipped inside the installer. The choice screen is deferred (#283): every default is installed, and disabling one is the opt-out — one the user uninstalled is not installed again.
 _Avoid_: Mandatory feature, core feature
 
 **Official extension**:
-An extension Pane's maintainers publish, each from a repository of its own that anyone may contribute to, and which Pane marks as its own. The default extensions are official extensions.
+An extension Pane's maintainers publish, each from a repository of its own that anyone may contribute to, and which Settings marks as Pane's own wherever it lists extensions, by its default identity or its repository in the pane-app organization. The default extensions are official extensions.
 _Avoid_: Built-in extension, core extension, first-party plugin
 
 **Artifact source**:
-Where Pane reads the index of its default extensions and downloads their payloads from: Pane's own downloads, distinct from npm and the Git hosts. A development build can name one on this computer instead, for tests and smokes; a release build cannot.
-_Avoid_: Registry (npm's), repository (Git's), update server (Pane's application updates)
+Where Pane reads the index of its own application updates: Pane's own downloads, distinct from npm and the Git hosts. Nothing about a default extension is acquired from it — a default is fetched from the commit of its repository's release tag that the Pane release pins. A development build can name an artifact source on this computer instead, for tests and smokes; a release build cannot.
+_Avoid_: Registry (npm's), repository (Git's)
 
 **Acquired artifact**:
-A default extension's payload Pane downloads itself at first setup: a tarball its index names by version, file, size and sha512 integrity, unpacked and checked as an npm package's tarball is and installed through the same path into a managed copy, whose identity is the default extension's own. Pane keeps what it downloaded in its payload cache only while it still matches that integrity.
-_Avoid_: Installer payload (the installer carries none), bundled feature, runtime download (the extension runtime is part of Pane)
+Pane's own application-update package, downloaded only when the user chooses the update: the zip or tarball the artifact source's index names by version, file, size, target and sha512 integrity, checked against that integrity and unpacked by the same strict readers an npm package's tarball is, then swapped for the running program, so the new version is used the next start. It is not cached between attempts.
+_Avoid_: Installer payload (the installer carries none), bundled feature, default extension's payload (a default is fetched from its pinned commit)
 
 **Disabled extension**:
 An installed extension whose execution and contributed functionality are switched off, while its settings and unexpired saved data are retained.
@@ -101,20 +101,32 @@ The launcher's main search and result view before a specific command is opened.
 _Avoid_: Every integration's internal search
 
 **Root result**:
-One entry root search lists for a query and can invoke, such as an extension command; it is matched by its title, subtitle and, for an installed command, its package's title, and ranked by the core.
+One entry root search lists for a query and can invoke, such as an extension command; it is matched — fuzzily, without accents, by the strictness the user chose — by its title, alternate titles, subtitle, keywords and, for an installed command, its package's title, and ranked by the core's comparator, of which its kind (command, link, application, file) and the provider that supplied it are steps. Rows that share a folded title each show what tells them apart.
 _Avoid_: Item (an item belongs to a command's own list), search hit
+
+**Search sensitivity**:
+How strict root search's matching is, as the Launcher page records it: Low, Medium or High (the default). The choice applies on the next keystroke, the list the current query has already made staying as it is.
+_Avoid_: Filter, search mode
 
 **Result kind**:
 What invoking a root result reaches, shown on its row: Command, Application, File, Folder, Link or Fallback. The core derives it from the result's action, never from its title; Folder is a folder the file index found.
 _Avoid_: Type, category
 
 **Result section**:
-A labelled run of root results: "Commands" over a blank query's commands and applications, below the pinned home; "Results" with their count over a query's, then "Fallbacks"; a run of computed answers sits under the title of the command that computed them ("Calculator"), and the files found for the query, with the row searching them all, under "Files". Sections only label the list; they never reorder or filter it, and none claims recent use: learning orders the list (frecency orders the blank query's), never a section.
+A labelled run of root results: "Commands" over a blank query's commands and applications, below the pinned home; "Results" with their count over a query's, then "Fallbacks"; a run of computed answers sits under the title of the command that computed them ("Calculator"), the rows declared for the address or path the query is under "Addresses" (#195), and the files found for the query, with the row searching them all, under "Files". Sections only label the list; they never reorder or filter it, and none claims recent use: learning orders the list (frecency orders the blank query's), never a section.
 _Avoid_: Group (a shortcut group is a Settings term), suggestions
+
+**Learned ranking**:
+How root search orders its results by what it learned from the user's choices (see Frecency and Learned query): a query the result was chosen with ranks it above how well titles match, frecency breaks ties between equally good matches and orders the blank query. The list itself shows no section of it.
+_Avoid_: Suggestions, history, personalization, favorites
 
 **Learned query**:
 A query the user had typed when they chose a root result from root search, which Pane remembers by the result's identity (the last few distinct ones), never by its title or row. Typing it again ranks that result above how well titles match, after only an alias and an exact title, while the result was used recently (ADR 0030).
 _Avoid_: Search history (the queries Up recalls), alias (the user's own word for a command), suggestion
+
+**Search history**:
+The recent queries root search was cleared of, kept in Pane's own record on this computer: Up on an empty query restores the newest one with the argument values typed with it (a password's empty), and Up again the one before, until any other key ends the walk. The "Learn from what I choose" switch also stops it recording; the Launcher page's "Reset search history" clears it.
+_Avoid_: Learned query (a per-result ranking input), suggestions, recent files
 
 **Frecency**:
 A root result's score of uses from root search that decays with time (halving every ten days, never below an unused result's), kept by identity in Pane's own record. It breaks ties between equally good matches and orders the blank query's commands and applications. A global hotkey's use, a computed answer and a file earn none.
@@ -173,7 +185,7 @@ A computed result whose action copies text, such as the calculator's answer: roo
 _Avoid_: Calculation, conversion, answer card (the card is how it is drawn)
 
 **No-results notice**:
-What root search shows above its fallbacks when nothing else is listed for a query that is not blank: the query, and what the user can do — pick a fallback, install an extension, or offer a command as one on its extension's page in Settings. The notice selects nothing itself; root search preselects the first fallback below it, so Enter sends it the query (ADR 0031).
+What root search shows above its fallbacks when nothing else is listed for a query that is not blank: the query, and what the user can do — send the text to the first fallback with Enter, install an extension, or offer a command as one on its extension's page in Settings. The notice selects nothing itself; root search preselects the first fallback below it, so Enter sends it the query (ADR 0031).
 _Avoid_: Empty state (a screen's own line when it has no rows), zero state
 
 **Announcer**:
@@ -201,7 +213,7 @@ Pane's fixed bounds on listing a granted folder, the same on every system: regul
 _Avoid_: Index scope (the file index's rules), crawl, whole-disk search
 
 **Indexed result**:
-A root result an extension command supplies ahead of the query, such as an installed application; Pane asks for them once root search is used, keeps them, and matches and ranks them by title like commands, for a query that is not blank. It may also carry alternate titles, matched as its title is, and keywords, matched as its subtitle is; its row still shows its title.
+A root result an extension command supplies ahead of the query, such as an installed application; Pane asks for them once root search is used, keeps them, and matches and ranks them by title like commands. The blank query lists the applications among them in its own order, never a link (#122). It may also carry alternate titles, matched as its title is, and keywords, matched as its subtitle is; its row still shows its title.
 _Avoid_: Index entry, cached result
 
 **Root provider**:
@@ -240,8 +252,16 @@ _Avoid_: File browser, Finder, file manager (Pane only finds and acts on files)
 A key combination the user assigns to an installed command in Pane, which opens that command in Pane's window while any application has focus; Pane keeps it as its own record and registers it with the system only while the command's extension is enabled.
 _Avoid_: Shortcut (any key combination, including Pane's own keys), keybinding, alias
 
+**Keyboard hook**:
+Pane's own `WH_KEYBOARD_LL` low-level keyboard hook on Windows, which recognizes the chords `RegisterHotKey` cannot take — another application has the shortcut, or Windows keeps it — so a refused shortcut is never an error: the binding works while Pane runs, does nothing while an elevated application is in front, and its row says it is dispatched through the hook. Installed only while a binding needs it, and kept alive by a watchdog that reinstalls it when Windows removes it (ADR 0039).
+_Avoid_: Keylogger, global hook, event tap (a different mechanism, needing permission on macOS)
+
+**Game mode**:
+An optional setting, Windows only and off by default, that pauses Pane's hotkeys while a game is in front: each foreground change — a system event, never a timer — is decided (Windows reports a full-screen Direct3D application in front through its notification state, or the program of the window is one the user listed, so windowed games are covered), and while a game is in front every hotkey, the Open Pane hotkey included, is released, so the game gets every key; they come back by themselves when the game leaves the front, and the tray icon's tooltip says while they are paused (ADR 0039).
+_Avoid_: Do-not-disturb, focus mode (a different feature), fullscreen detection (one signal the decision uses)
+
 **Alias**:
-A word the user gives an installed command in Pane; typing it in root search lists that command first, and, for a query-taking command, typing it before some text lists a row that sends the text to the command when invoked. Pane keeps it as its own record by command id; a disabled package's commands offer none.
+A word the user gives an installed command in Pane; typing it in root search lists that command first, and typing a space after it (or Tab) invokes it at once — through its argument fields, which the text typed next fills, when it declares any. A query-taking command is not invoked that way: its row that sends the text after the alias when the user presses Enter stays. Pane keeps it as its own record by command id; a disabled package's commands offer none.
 _Avoid_: Keyword (an author's search term), shortcut, nickname
 
 **Fallback**:
@@ -249,12 +269,16 @@ A query-taking command the user chose to have offered below root search's result
 _Avoid_: Default action, catch-all
 
 **Query-taking command**:
-An extension command that declares it takes a query: text typed in root search, which Pane sends it only when the user invokes it through its alias or as a fallback, as the fallback text of its launch record (and its first text argument, when it declares arguments).
+An extension command that declares it takes a query: text typed in root search, which Pane sends it only when the user invokes it — through its alias or as a fallback — as the fallback text of its launch record (and its first text argument, when it declares arguments). Its alias never enters it with a space: the text after the alias is its input, sent when the user presses Enter.
 _Avoid_: Argument (one declared field, which the text may fill), search provider (a provider is asked while the user types)
 
 **Argument**:
-One of up to three typed fields (text, password or dropdown) a command declares for input before each run. Root search shows them after the query, and a launch without them asks for the required ones that are empty. Their values reach the command in its launch record; a password's is never recorded.
+One of up to three typed fields (text, password or dropdown) a command declares for input before each run. Its value reaches the command in its launch record; a password's is never recorded.
 _Avoid_: Query (root search's text), parameter, preference (set once, not for each run)
+
+**Argument field**:
+An argument as root search shows it, after the query while its command's row is selected: the place the user types it before invoking the command, which a launch from anywhere else asks for through the argument form. The values survive the list being re-ranked but not a new query.
+_Avoid_: Argument (the declared field itself), form field (the argument form's), input
 
 **Launch record**:
 The one record a command receives on every way in: how it was launched (by the user or in the background, and from where), its arguments' values, any fallback text sent through its alias or as a fallback, and any context another command passed when launching it.
@@ -277,7 +301,7 @@ A short message a command shows in the launcher's footer, where the status line 
 _Avoid_: Status line (what it replaces), notification (the system's), HUD (outside the launcher)
 
 **HUD**:
-A small message in a window of its own over other applications, which never takes focus: showing one closes the launcher first, and it leaves after 1.2 seconds, or 3 for a failure.
+A small message in a window of its own over other applications, which never takes focus: showing one closes the launcher first, and it leaves after 1.2 seconds, or 3 for a failure, fading out over about a second; a pending one stays until it is updated or the launcher becomes active again.
 _Avoid_: Toast (inside the launcher), notification (the system's), tooltip
 
 **Command search**:
@@ -309,11 +333,11 @@ The version of the interface an extension is built against, which its package ma
 _Avoid_: SDK version, manifest version (the format of `pane.json` itself)
 
 **Collection**:
-A Git repository or folder whose root lists several extension packages, each in a folder of its own under an extension id. The user installs some or all of them, and each one installed is a package of its own.
+A Git repository or folder whose root lists several extension packages, each in a folder of its own under an extension id. The user installs some or all of them, and each one installed is a package of its own. Where its host serves Git's partial-clone filter, Pane fetches the revision without its file contents and then only the chosen extensions' folders, so a large collection downloads only what is installed; a host without the filter is fetched whole.
 _Avoid_: Monorepo, bundle, extension pack, marketplace
 
 **Extension id**:
-The name a collection gives one of its extensions, unique within the collection and kept across its releases; with the repository, it forms that extension's package identity.
+The name a collection gives one of its extensions, unique within the collection and kept across its releases; with the repository, it forms that extension's package identity. A collection may rename one — its index's `renamed` map naming the old id's new one, or `null` for one it removed (ADR 0044): an old id resolves to the extension's current one wherever an id is resolved, and an installed copy keeps the id it was installed with, its updates following the map to the current id's files.
 _Avoid_: Slug, path (an extension's folder can move; its id stays)
 
 **Source-only package**:
@@ -329,11 +353,11 @@ An extension package distributed as a Git repository whose root holds its packag
 _Avoid_: Cloned extension, repository checkout (Pane keeps no repository)
 
 **Release revision**:
-A Git revision of a Git-distributed package whose commit holds the built components its manifest names, such as a release tag or a release branch its author commits the built files to; only a release revision can be installed. A revision holding only the source is a source-only package.
+A Git revision of a Git-distributed package whose commit holds the built components its manifest names, such as a release tag or a release branch its author commits the built files to; only a release revision can be installed. A repository of one extension tags its releases `v<semver>`, and a collection tags each extension's `<id>/v<semver>` (ADR 0044). A revision holding only the source is a source-only package.
 _Avoid_: Release (a Pane release), build
 
 **Tracked reference**:
-The branch a Git-distributed package was installed from (the repository's default branch when none was named): an update fetches that branch again, whatever commit it has moved to. A tag or a commit named by its id is a pinned revision instead, which an update keeps; naming another reference changes either.
+The branch a Git-distributed package was installed from (the repository's default branch when none was named): an update fetches that branch again, whatever commit it has moved to. A tag or a commit named by its id is a pinned revision instead, which an update keeps — an extension of a collection installed from its own release tag being the exception, its newer releases being followed; naming another reference changes either.
 _Avoid_: Channel, floating version
 
 **Pinned version**:
@@ -353,7 +377,7 @@ Replacing the managed copy of an installed package from its source while keeping
 _Avoid_: Reinstall
 
 **Reload**:
-Replacing an installed package's code from its source folder while Pane and other packages keep running: the replacement is checked as an install would check it, then replaces the managed copy, the old instances stop and the new code starts. Settings are kept; live state is not carried over, except a snapshot a package opts in to hand over to its new code (ADR 0041).
+Replacing an installed package's code from its source folder while Pane and other packages keep running: the replacement is checked as an install would check it, then replaces the managed copy, the old instances stop and the new code starts. Settings are kept; live state is not carried over, except a snapshot a package opts in to hand over to its new code (ADR 0041), and the command screen that was on display opens again on the new code.
 _Avoid_: Restart, hot swap, update (an update does not start the new code)
 
 **Automatic updates**:
@@ -419,6 +443,26 @@ _Avoid_: Version (a package's version is its manifest's), session, instance (one
 **Owned registration**:
 Something an extension registers imperatively at run time, held as a WIT resource it owns. Examples are a dynamic root item or command, a timer, a subscription, a watcher, and a provider registered for a capability its manifest declares. Dropping the resource undoes the registration, and so does the instance holding it going away or its generation ending (ADR 0041). Pane tags each registration with its owner and generation and refuses a handle of an ended generation. Declarations in `pane.json` are contributions, not owned registrations.
 _Avoid_: Listener, hook, effect (Cordis's word), contribution (declared in the manifest)
+
+**Dynamic root item**:
+A root search row an extension registers at run time as an owned registration, under one of its package's commands, in the item shape a command's list items use. Without a mode, invoking the row runs its first action; with one it is a dynamic command. It is matched and ranked like an indexed result, and a quick slot, alias or global hotkey holds it by its command and item id, saying why while it is not registered.
+_Avoid_: Dynamic command (only one with a mode), injected row, live result
+
+**Dynamic command**:
+A dynamic root item that declares a mode: invoking it launches its command, with a launch record naming the item's id, so one component can offer a row per workspace or whatever it registered. Pinned, aliased and given hotkeys like a command; while it is not registered, the surface that holds it says so.
+_Avoid_: Virtual command, generated command
+
+**Run-time provision**:
+An owned registration by which a package provides a capability its manifest declares and marks `atRunTime`, served by the instance holding it, typically made once the user has signed in. While it is held the package is a provider of the capability; dropping it, its instance going or its generation ending withdraws the provider at once, and the capability's consumers fall back to another provider or wait.
+_Avoid_: Live provider, service registration
+
+**Activation entry point**:
+The `activate` export a package's `pane.json` may name, which Pane calls when the package's code may run and it is not waiting — at install, enable, start, reload, update, Retry and on coming back from waiting — and again when the instance that ran it is dropped while the generation continues unpaused. An opt-in exception to lazy activation (ADR 0005 as amended by ADR 0041): without it, a package's code first runs when the user asks for one of its commands.
+_Avoid_: Startup hook, bootstrap, background service (a continuing service is another activation model)
+
+**State handoff**:
+The in-memory state a replaced extension's old instance hands to its new code, on Reload, Update or a development-mode reload only, and only once the replacement passed its checks: a bounded snapshot Pane asks of each idle instance that opted in (never after a crash, a pause, a failure to start, Retry, a disable followed by an enable, or a restart of Pane), kept in memory alone, restored on the new code's first start before any other call. The command screen that was on display opens again with its launch record whether or not the package opted in.
+_Avoid_: Hot reload (no old code is reused), session restore (Pane restarting), checkpoint
 
 **Scheduled work**:
 Work Pane runs for an installed package without the user asking: a command's `pane.json` entry declares a schedule, an interval and the item whose action runs, and Pane runs that action each interval while the package's code may run, taking the generation current when the run is due. A disable, an uninstall, a pause or a code replacement ends it; enabling the package, replacing its code or restarting Pane starts it again, from a full interval, never replaying work that fell due meanwhile.
@@ -503,3 +547,11 @@ _Avoid_: Component alone (a package's built WebAssembly component), widget, cust
 **Theme token**:
 A named value of Pane's theme that an extension's UI uses instead of a raw value: a tone, text style, text level, space, radius or icon size. Tokens follow the user's appearance and background image. Raw values (hex colours, pixel sizes) are allowed beside them, and Pane corrects a raw colour's contrast against what it is drawn on.
 _Avoid_: Theme (the user's light or dark choice, part of Appearance), style, CSS variable
+
+**Run history**:
+The command lines the Windows Run dialog (Win+R) keeps in the registry (Explorer's RunMRU format) and Pane's Run default extension shares with it in both directions: what ran in either appears in both, recorded as typed, newest first, at most 26 entries, and deleting an entry removes it from both (ADR 0040).
+_Avoid_: Run's history (as if Pane kept its own), MRU list (the format's value, not the feature), command history
+
+**Switch Windows**:
+Pane's default extension that lists the open windows as Windows' Alt+Tab does — visible, unowned top-level windows that are not helpers, shell surfaces or a Store app's inner core window, with ones on another virtual desktop kept only where Alt+Tab shows all desktops — each with its title and the application it belongs to, in z-order with the front application's window first, and brings one of them to the front through the `windows` host capability (ADR 0040).
+_Avoid_: window switcher (the Alt+Tab replacement Pane is not), task view, window manager

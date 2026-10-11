@@ -29,10 +29,10 @@ One documented workload, run by
 the same runner, with the same guests and the same Pane binary as the smoke
 ([the Linux baseline](../platforms/linux.md)). It requires what
 `scripts/smoke-linux.sh` requires (Xvfb, xdotool, Pillow, a Vulkan driver)
-plus the guests built (`cargo xtask ci`) and, for the hidden phases only,
-the default extensions' payloads in `target/dist/artifacts` (`cargo xtask
-package-linux --dev`, which CI's smoke, run just before the workload in the
-same job, leaves there). Without them the hidden phases are skipped, said
+plus the guests built (`cargo xtask ci`), whose assembled packages the
+hidden phases make the default extensions' five repositories from and
+serve on 127.0.0.1 (as the smoke's first-setup phases serve them). Without
+the guests the hidden phases are skipped, said
 so on standard error and in `record.json` (`"skipped": ["hidden-idle"]`),
 and `proc_tree.py check` reports `hidden-idle` as skipped rather than
 failing; the other phases run and are checked as before. The phases are
@@ -45,7 +45,7 @@ fixed; their durations are the defaults (each has a
 | `cold-start` | Pane starts with a fresh data folder, nothing installed (screenshot 1, the smoke's hint-line check) | cold-start latency (exec → window appears), startup RSS/CPU |
 | `warm-start` | three restarts with the same data folder | warm-start latency (median of three) |
 | `idle-core` | Pane sits at root search, untouched, 60 s | idle whole-tree RSS and CPU, and the wake-ups of each thread |
-| `hidden-setup` | a data folder of its own: Pane starts (its one show), is hidden with Escape at its blank root search, acquires its five default extensions from the payloads served on 127.0.0.1, and settles for 30 s (`PANE_MEASURE_SETTLE_SECONDS`) | nothing with a target: the setup the next phase follows |
+| `hidden-setup` | a data folder of its own: Pane starts (its one show), is hidden with Escape at its blank root search, acquires its five default extensions from their repositories, served on 127.0.0.1, and settles for 30 s (`PANE_MEASURE_SETTLE_SECONDS`) | nothing with a target: the setup the next phase follows |
 | `hidden-idle` | Pane, hidden, with its default extensions and nothing else installed, untouched, 60 s (`PANE_MEASURE_HIDDEN_SECONDS`); the workload fails if the launcher shows itself | Pane's cost while hidden: whole-tree RSS and CPU share, and the wake-ups of each thread, the epoch ticker's and the watchdog's among them (#188) |
 | `installed-unused` | the seven packages calculator, quicklinks, applications, files, sample-rust, sample-js, sample-ts are installed, none invoked, 60 s | the cost of installed-but-unused extensions (T02); the applications extension's host-side scan of desktop entries runs, as it does for a user's Pane |
 | `calculator` | the calculator, a default extension: an expression typed into root search, Enter copies the answer, Escape clears, ten times (the first answer is color-checked) | active-command use; repeated growth is the leak bound |
@@ -64,8 +64,9 @@ of `hidden-idle`, and the per-thread counts say whose it is.
 (`/etc/os-release`), the kernel and architecture (`uname -srm`), the
 commit, the Rust version, the Pane binary's path, size and profile, and the
 workload's parameters. The default binary is the smoke's `target/debug/pane`:
-a release build's first setup reaches for the not-yet-deployed artifact
-source at start, so the release profile's workload waits for that source;
+a release build's first setup fetches its default extensions from the
+repositories its committed pins name, so the release profile's workload
+waits for a network the runner may not give;
 pass a release binary to the script when that day comes and the profile is
 recorded either way.
 
@@ -151,17 +152,20 @@ numbers it records then go under [Evidence](#evidence).
 
 ```powershell
 cargo build -p pane
-cargo xtask package-windows --dev   # the default extensions' payloads, in target/dist/artifacts
+cargo xtask guests   # the default extensions' packages, made into the repositories the script serves
 ./scripts/measure-windows.ps1 -OutDir measure-windows
 ```
 
 It starts the development build (`-Binary` names another) with
 `PANE_DATA_DIR` and `LOCALAPPDATA` (where Pane keeps its cache) pointing
 into a new folder of the temporary folder, for that one process only. The
-scratch Pane acquires its five default extensions there from
-`target/dist/artifacts`, served on 127.0.0.1 by
-[`scripts/artifact_server.py`](../../scripts/artifact_server.py) as the
-smoke serves them, and Files' index covers an empty folder there. The
+scratch Pane acquires its five default extensions there from their
+repositories, made from the guests' assembled packages and served on
+127.0.0.1 by
+[`scripts/repository_server.py`](../../scripts/repository_server.py) as
+the smoke serves them, and Files' index covers an empty folder there
+(without the guests the script skips the phase and reports so, in
+`record.json`, as the Linux workload does). The
 launcher's window shows once, as every start shows it, and is hidden at
 once with Escape at its blank root search, posted to Pane's own window
 (typed only if that did not hide it and Pane's window is the foreground
@@ -375,11 +379,10 @@ not edit the issue.
 - `hidden-idle` follows a first setup: the defaults were acquired in the
   same run, so what a start does once (the applications' icons) may still
   run after the settling, and is counted there by thread. No update of
-  Pane itself is offered there: the Linux workload serves the payloads with
-  an index whose `application` entry is left out (CI's smoke leaves a newer
-  package named in it). The Windows script serves `target/dist/artifacts`
-  as it is, so a newer package named there is offered (a root row and a
-  word on the status line; nothing is downloaded).
+  Pane itself is offered there: neither workload's hidden phase names an
+  application update source, so nothing offers a newer Pane (CI's smoke
+  leaves one in the artifacts it serves, which the hidden phases never
+  read).
 - Wake-ups are counted at the sample cadence: a thread that ends between
   two samples loses the switches since its last one. Names that share their
   first 15 bytes are one entry, on both platforms (above).

@@ -7,7 +7,8 @@ stops the calls into it that are still pending, and their late results never
 reach the screen or the extension's data. This page is the ownership and
 cancellation model later lifecycle work builds on: native helpers (#15),
 pausing a broken extension (#16), recovering from a guest that stops
-responding (#18), uninstall (#40) and cancelling a pending search (#29, #30).
+responding (#18), uninstall (#40), cancelling a pending search (#29, #30)
+and the state handoff across a replacement (#159).
 
 ## The model
 
@@ -17,7 +18,13 @@ starts, and ends when the package is disabled, [paused](pausing.md) after it
 failed, or its code is replaced by a reload or an update (a reload's or update's new code runs in a new
 generation). A disabled package stays in an ended generation until it is
 enabled again. Commands built into Pane have no generation: they run as long
-as Pane.
+as Pane. A package that
+[waits](dependencies.md#waiting-for-a-required-dependency) for a required
+dependency that cannot serve it keeps its generation: waiting is not one
+of the ways a generation ends. What Pane would start for a waiting package
+— its commands' views and runs, scheduled work, services and results — is
+not started, but a call or cycle already running finishes, an open screen
+stays and its calls answer as calls do.
 
 Every guest call has two owners, with different powers:
 
@@ -51,9 +58,11 @@ waits on something outside its guest, the others run, and each instance's
 own calls run one after another (#136). When a generation ends, it runs its
 undo list, newest first (what it set up: its instances, its helpers' and
 system programs' runs, its web requests and web images, a command search
-in progress, and its schedules, services and command hotkeys, which the
+in progress, its schedules, services and command hotkeys, which the
 end marks for the scheduler, the services thread and the next hotkey sync
-to drop or carry over to the next generation), and:
+to drop or carry over to the next generation, and what the package's code
+registered at run time — its [owned
+registrations](#owned-registrations), dropped with their handles), and:
 
 1. **Queued calls** of it (asked for but not started) are not started; they
    answer "The extension is disabled" or "The extension was reloaded or
@@ -87,8 +96,10 @@ to drop or carry over to the next generation), and:
 
 The launcher then shows what the disable, reload or update says ("Disabled
 <title>", "Reloaded <title>", "Updated <title> to <version>"); a command,
-form or view of the package that was open has closed, and no answer of the
-stopped code appears, on the old screen or on the new code's.
+form or view of the package that was open has closed — and on a reload or
+an update Pane opens the command again on the new code, as [the state
+handoff](#the-state-handoff) describes — and no answer of the stopped code
+appears, on the old screen or on the new code's.
 
 ## What stopping costs
 
@@ -98,7 +109,9 @@ resume in the store. So:
 
 - **The instance's in-memory state is lost** with it: an open view of the
   same instance, caches kept in guest memory, and so on. For disable,
-  reload and update that is intended, since the code stops anyway. Later
+  reload and update that is intended, since the code stops anyway — a
+  reload or an update can hand a bounded snapshot of it to the new code
+  instead ([the state handoff](#the-state-handoff)). Later
   owners that stop calls while the package keeps running pay this cost
   too: cancelling a search's pending provider calls (#29) drops the
   provider's instance, losing what it keeps in memory between queries (the
@@ -136,6 +149,39 @@ resume in the store. So:
   guest answers, or when a generation in its chain ends; only computing
   (5 seconds of the guest's own) is limited. A native helper's run has had
   no limit of Pane's own since #136.
+## Owned registrations
+
+An extension can register things at run time, each an **owned
+registration** ([glossary](../CONTEXT.md)) the guest holds as a Wasm
+resource: a dynamic root item (a row of root search under one of its
+commands), a timer, a folder watcher, or a run-time provision of a
+capability its `pane.json` marks `atRunTime`. Each lasts until the first
+of three: the guest dropping the handle, the instance holding it going
+away, or the generation ending — every one of the ways above — so
+nothing an extension registered outlives its code, and an author writes
+no cleanup code. Each records its undo on the generation's list; ending
+it another way takes the entry off. A handle whose generation ended is
+refused, as host imports already refuse stopped code.
+
+Timer firings and watcher changes are delivered as guest calls, so they
+belong to the generation and follow every rule on this page: a call in
+flight is stopped by an ended generation, a trap counts towards
+[pausing](pausing.md), and a package that
+[waits](dependencies.md#waiting-for-a-required-dependency) runs none of
+its code, its timers' and watchers' events held as one, delivered when it
+can run again.
+
+A package whose `pane.json` declares `"activate": "<component>"` has that
+entry point called when its code may run and it is not waiting — at
+install, enable, start, reload, update, Retry and on coming back from
+waiting — and again when the instance that ran it is dropped while the
+generation continues unpaused, so its registrations are made without
+waiting for the user (an opt-in exception to lazy activation, ADR 0005
+as amended by ADR 0041). A trap in it is a crash; during a reload's
+start, a startup failure. Without `activate`, a package's code first runs
+when the user asks for one of its commands, and its registrations live
+only as long as the instance that made them.
+
 - **External side effects are not undone**: what the guest did before the
   stop (a file written through WASI, a request sent) stays done; only what
   it would have done afterwards is prevented. Data it saved before the stop
@@ -156,6 +202,58 @@ resume in the store. So:
 - Measured cleanup is what the runtime reports (`Runtime::running`,
   `Runtime::view_count`); memory returned to the operating system after a
   dropped store is not measured.
+
+## The state handoff
+
+A package's replacement — a Reload, an Update (made by the user or by
+Pane itself) or a development-mode reload — can hand what the old code
+kept in memory to the new code: the **state handoff** (ADR 0004's
+"explicit extension support", now defined). A component opts in by
+exporting `snapshot` and `restore` in the lifecycle interface (`wit/
+registrations.wit`; the component a `pane.json` names under `activate`
+exports the same interface), which installing detects without running
+guest code. A JavaScript or TypeScript package sets `"snapshot": true`
+in the `"pane"` options of its `package.json` so that the build links
+them, as for services.
+
+- **When.** Only once the replacement has passed its checks and is about
+to be installed: a replacement or build that fails changes nothing and
+takes no snapshot. Never after a crash, a pause, a failure to start,
+Retry, a disable followed by an enable, a runtime crash or hang, or a
+restart of Pane.
+- **Taking the snapshot.** Each running instance of the package that
+exports `snapshot` and is idle (no call pending in it) is asked for one
+before the old generation ends; an instance busy with a call is stopped
+as today and gives none. The answer must come within 1 second, so a
+handoff never delays a replacement by more than that, and is limited to
+1 MiB, the limit on operation JSON; a late or larger one is dropped and
+the replacement goes ahead. Snapshots are kept in memory only, never
+written to disk.
+- **Restoring.** The new code's instance of the same component file
+restores the snapshot on its first start, before any other call into it,
+so a continuing service's first cycle finds the restored state too. An
+error from `restore` discards the state and is not a failure: the
+extension starts fresh. A trap in `restore` is a crash; during a
+reload's start it is a startup failure, so the package is paused and
+the state is lost. A snapshot whose component the new code no longer has
+is discarded. Development mode's diagnostics report a dropped,
+oversized, late or rejected snapshot; elsewhere it is silent.
+- **The screen reopens.** For every package, opted in or not: when one of
+the package's command screens was on display at the replacement, Pane
+opens that command again on the new code with its original launch
+record — only its root view, not the views or forms it had pushed, which
+an author restores from the snapshot if they want them back. The setup
+gate applies if the new code adds required preferences. An automatic
+update never applies while a screen is on display, so this concerns
+Reload, development-mode reload and an update the user made.
+
+The handoff sample, in [Rust](../guests/sample-handoff/src/lib.rs),
+[JavaScript](../guests/sample-handoff-js/src/index.js) and
+[TypeScript](../guests/sample-handoff-ts/src/index.ts), keeps a counter
+and a draft in memory; the SDKs' helpers (`pane_extension::state`,
+`@pane-app/extension/state`) serialise a value — serde in Rust, JSON in
+JavaScript and TypeScript — while the bytes stay the author's to
+version.
 
 ## Examples and tests
 
@@ -189,6 +287,19 @@ resume in the store. So:
   yielding while the test disables or reloads `a`: what they try
   afterwards (saving, calling `b`) is refused, and their answer, or their
   error, completing in the same turn is discarded.
+- [`crates/pane-core/tests/waiting.rs`](../crates/pane-core/tests/waiting.rs)
+  drives a call that is already running when the package that made it
+  begins to [wait](dependencies.md#waiting-for-a-required-dependency): it
+  finishes with its answer, since waiting ends no generation and stops no
+  instance.
+- [`crates/pane-core/tests/handoff.rs`](../crates/pane-core/tests/handoff.rs)
+  drives the state handoff in all three languages through the launcher:
+  the counter and draft kept across a reload and a user's update, the
+  screen reopened with its launch record for a package that does not opt
+  in (a pushed view not reopened), nothing handed over after a crash, a
+  disable followed by an enable or a restart, and the fixture's edges:
+  a busy instance, the deadline, the size limit, and a `restore` that
+  errs or traps.
 - Runtime tests (`runtime.rs`): stopping a call whose instance holds a
   stream open to the host (stdout), the pending future of that write and
   an open custom view releases them all (the faulty fixture's `hold`); and

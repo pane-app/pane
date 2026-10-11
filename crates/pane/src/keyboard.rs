@@ -35,27 +35,55 @@
 //! rebound.
 
 use gpui::{App, KeyBinding, Keystroke};
-use pane_core::hotkeys::Shortcut;
+use gpui_elements::editable_text::actions::DEFAULT_INPUT_CONTEXT;
+use pane_core::hotkeys::{Kind, Shortcut, Side};
 use pane_core::{Binding, Keyboard, KeyboardAction, NavigationBindings};
 
 use crate::app::KEY_CONTEXT;
+use crate::features::actions_panel;
 use crate::features::root_search;
 use crate::ui::keycap::{Key, KeySequence};
 use crate::{
-    Back, Confirm, DismissLauncher, OpenActions, OpenSettings, ReturnToRoot, SelectNext,
-    SelectPrevious,
+    Back, Confirm, DismissLauncher, FocusNext, FocusPrevious, OpenActions, OpenSettings,
+    ReturnToRoot, SelectNext, SelectNextFive, SelectNextSection, SelectPrevious,
+    SelectPreviousFive, SelectPreviousSection,
 };
 
 /// Registers the navigation actions under their effective bindings in
 /// [`Keyboard`], in the contexts above. Call after the shared text
 /// editing keys, so the search field's selection keys take precedence
 /// over the field's own.
+///
+/// The navigation bindings' Left and Right (Alt+B and Alt+F, Alt+H and
+/// Alt+L) are the focus traversal Tab already is: they move between the
+/// query and the argument fields (#258).
+///
+/// Back a level is the one action of the set with no keymap binding: a
+/// focused field's own Backspace deletes text, and the keymap would
+/// either swallow the key ahead of that or fire beside it. The window
+/// follows the binding itself, ahead of the fields where the field has
+/// nothing left to delete (see [`LauncherWindow::backspace_back_keys`]),
+/// so the field's own key keeps its priority by construction.
 pub(crate) fn bind_keys(cx: &mut App, keyboard: &Keyboard, navigation: NavigationBindings) {
     let field = root_search::field_context();
+    let panel = format!("{} > {}", actions_panel::CONTEXT, DEFAULT_INPUT_CONTEXT);
     let mut bindings = Vec::new();
     // The extra selection keys the Keyboard page's navigation bindings
     // choose, first, so the set's own bindings registered after them win.
+    // Wherever Up and Down move a list — the Actions panel's list is one
+    // — the pair moves it too (#258), bound in the panel's own field to
+    // its own selection action.
     if let Some((previous, next)) = navigation.bindings() {
+        bindings.push(KeyBinding::new(
+            previous,
+            actions_panel::PreviousAction,
+            Some(panel.as_str()),
+        ));
+        bindings.push(KeyBinding::new(
+            next,
+            actions_panel::NextAction,
+            Some(panel.as_str()),
+        ));
         for (id, action) in [
             (previous, KeyboardAction::PreviousResult),
             (next, KeyboardAction::NextResult),
@@ -63,6 +91,12 @@ pub(crate) fn bind_keys(cx: &mut App, keyboard: &Keyboard, navigation: Navigatio
             bindings.push(launcher_binding(id, action));
             bindings.push(field_binding(id, action, &field));
         }
+    }
+    // Left and Right between the query and the argument fields: the
+    // focus traversal, on the pair's keys.
+    if let Some((left, right)) = navigation.left_right() {
+        bindings.push(KeyBinding::new(left, FocusPrevious, Some(KEY_CONTEXT)));
+        bindings.push(KeyBinding::new(right, FocusNext, Some(KEY_CONTEXT)));
     }
     for action in KeyboardAction::ALL {
         let id = keyboard.binding(action).id();
@@ -73,15 +107,33 @@ pub(crate) fn bind_keys(cx: &mut App, keyboard: &Keyboard, navigation: Navigatio
         if Keystroke::parse(&id).is_err() {
             continue;
         }
+        // Back a level is followed by the window itself, not the keymap
+        // (see the module docs).
+        if action == KeyboardAction::BackspaceBack {
+            continue;
+        }
         bindings.push(launcher_binding(&id, action));
-        // The selection keys also move the selection while the query
+        // The keys that move the selection also move it while the query
         // field has focus, above the field's own caret keys — the fixed
-        // Up and Down's arrangement, kept for whatever keys replace them.
+        // Up and Down's arrangement, kept for whatever keys replace
+        // them — and above the caret keys macOS binds to Command and the
+        // arrows (Command+Down is the caret to the text's end there).
+        // The selection and section keys also take the Actions panel's
+        // own field, so its list answers them there as it answers Up and
+        // Down.
         if matches!(
             action,
-            KeyboardAction::PreviousResult | KeyboardAction::NextResult
+            KeyboardAction::PreviousResult
+                | KeyboardAction::NextResult
+                | KeyboardAction::FiveRowsUp
+                | KeyboardAction::FiveRowsDown
+                | KeyboardAction::PreviousSection
+                | KeyboardAction::NextSection
         ) {
             bindings.push(field_binding(&id, action, &field));
+            if action != KeyboardAction::PreviousResult && action != KeyboardAction::NextResult {
+                bindings.push(field_binding(&id, action, &panel));
+            }
         }
     }
     cx.bind_keys(bindings);
@@ -92,8 +144,17 @@ fn launcher_binding(id: &str, action: KeyboardAction) -> KeyBinding {
     match action {
         KeyboardAction::PreviousResult => KeyBinding::new(id, SelectPrevious, Some(KEY_CONTEXT)),
         KeyboardAction::NextResult => KeyBinding::new(id, SelectNext, Some(KEY_CONTEXT)),
+        KeyboardAction::FiveRowsUp => KeyBinding::new(id, SelectPreviousFive, Some(KEY_CONTEXT)),
+        KeyboardAction::FiveRowsDown => KeyBinding::new(id, SelectNextFive, Some(KEY_CONTEXT)),
+        KeyboardAction::PreviousSection => {
+            KeyBinding::new(id, SelectPreviousSection, Some(KEY_CONTEXT))
+        }
+        KeyboardAction::NextSection => KeyBinding::new(id, SelectNextSection, Some(KEY_CONTEXT)),
         KeyboardAction::InvokeSelectedAction => KeyBinding::new(id, Confirm, Some(KEY_CONTEXT)),
         KeyboardAction::Back => KeyBinding::new(id, Back, Some(KEY_CONTEXT)),
+        KeyboardAction::BackspaceBack => {
+            unreachable!("Back a level is followed by the window, not the keymap")
+        }
         KeyboardAction::ReturnToRoot => KeyBinding::new(id, ReturnToRoot, Some(KEY_CONTEXT)),
         KeyboardAction::DismissLauncher => KeyBinding::new(id, DismissLauncher, Some(KEY_CONTEXT)),
         KeyboardAction::OpenSettings => KeyBinding::new(id, OpenSettings, Some(KEY_CONTEXT)),
@@ -106,6 +167,12 @@ fn field_binding(id: &str, action: KeyboardAction, context: &str) -> KeyBinding 
     match action {
         KeyboardAction::PreviousResult => KeyBinding::new(id, SelectPrevious, Some(context)),
         KeyboardAction::NextResult => KeyBinding::new(id, SelectNext, Some(context)),
+        KeyboardAction::FiveRowsUp => KeyBinding::new(id, SelectPreviousFive, Some(context)),
+        KeyboardAction::FiveRowsDown => KeyBinding::new(id, SelectNextFive, Some(context)),
+        KeyboardAction::PreviousSection => {
+            KeyBinding::new(id, SelectPreviousSection, Some(context))
+        }
+        KeyboardAction::NextSection => KeyBinding::new(id, SelectNextSection, Some(context)),
         _ => unreachable!("only the selection keys bind in the field's context"),
     }
 }
@@ -227,22 +294,70 @@ pub(crate) fn binding_keys(binding: &Binding) -> KeySequence {
 
 /// The keys a command's global hotkey is pressed with, shown as
 /// [`binding_keys`] shows a binding: a hotkey's keys are a binding's.
-/// (Core's type for a global hotkey is `Shortcut`.)
+/// (Core's type for a global hotkey is `Shortcut`.) The binding kinds
+/// #260 adds show as Windows names them: a lone tap is its modifier —
+/// "Win", "Right Ctrl" — a double tap the name twice — "Ctrl Ctrl" —
+/// and a chord with a named side carries it — "Right Alt+Space". The
+/// numpad's keys keep their own names, distinct from their
+/// counterparts'.
 pub(crate) fn hotkey_keys(shortcut: &Shortcut) -> KeySequence {
-    match Binding::new(
-        shortcut.control(),
-        shortcut.alt(),
-        shortcut.shift(),
-        shortcut.super_key(),
-        false,
-        shortcut.key(),
-    ) {
-        Ok(binding) => binding_keys(&binding),
-        // Every hotkey key is a binding key; a future one that is not is
-        // still shown, by its own text.
-        Err(_) => KeySequence {
-            keys: vec![Key::new(shortcut.to_string(), shortcut.to_string())],
-        },
+    match shortcut.kind() {
+        Kind::Chord => {
+            let macos = cfg!(target_os = "macos");
+            // The chord's modifiers, each with the side it names where one
+            // is named (#260), in the order the platform writes them, then
+            // the key — the caps of the binding of the key alone.
+            let order: [usize; 4] = if macos { [0, 1, 2, 3] } else { [3, 0, 1, 2] };
+            let mut keys: Vec<Key> = order
+                .into_iter()
+                .filter_map(|at| shortcut.sides()[at].map(|side| (at, side)))
+                .map(|(at, side)| {
+                    let name = format!("{}{}", side_prefix(side), modifier_name(at, macos));
+                    Key::new(name.clone(), name)
+                })
+                .collect();
+            match Binding::new(false, false, false, false, false, shortcut.key()) {
+                Ok(alone) => keys.extend(binding_keys(&alone).keys),
+                // Every hotkey key is a binding key; a future one that is
+                // not is still shown, by its own text.
+                Err(_) => keys.push(Key::new(shortcut.key().to_uppercase(), shortcut.key())),
+            }
+            KeySequence { keys }
+        }
+        Kind::Tap | Kind::Double => {
+            // One cap: the binding as the user names it — "Win", "Right
+            // Ctrl", "Ctrl Ctrl".
+            let name = shortcut.to_string();
+            KeySequence {
+                keys: vec![Key::new(name.clone(), name)],
+            }
+        }
+    }
+}
+
+/// How `side` prefixes a modifier's name as a hotkey's cap shows it
+/// (#260): "Left ", "Right ", or nothing for either.
+fn side_prefix(side: Side) -> &'static str {
+    match side {
+        Side::Any => "",
+        Side::Left => "Left ",
+        Side::Right => "Right ",
+    }
+}
+
+/// The modifier at `at` — control, alt, shift, then the Windows key —
+/// as a hotkey's cap names it on `macos` (Control, Option, Shift,
+/// Command) and elsewhere (Win, Ctrl, Alt, Shift), as [`binding_keys`]
+/// orders them.
+fn modifier_name(at: usize, macos: bool) -> &'static str {
+    match (at, macos) {
+        (0, true) => "Control",
+        (0, false) => "Ctrl",
+        (1, true) => "Option",
+        (1, false) => "Alt",
+        (2, _) => "Shift",
+        (_, true) => "Command",
+        (_, false) => "Win",
     }
 }
 
@@ -316,6 +431,57 @@ mod tests {
         assert_eq!(keys.name(), "Ctrl+Shift+V");
         let keys = hotkey_keys(&Shortcut::parse("super+alt+space").unwrap());
         assert_eq!(keys.name(), "Win+Alt+Space");
+    }
+
+    #[test]
+    fn the_binding_kinds_show_as_windows_names_them() {
+        // A lone tap is one cap, the modifier it names — "Win",
+        // "Right Ctrl" — and a double tap the name twice — "Ctrl Ctrl"
+        // (#260): the cap, the announced name and the written-out binding
+        // agree, as they do for a chord.
+        let keys = hotkey_keys(&Shortcut::parse("tap:win").unwrap());
+        let name = keys.name();
+        if cfg!(target_os = "macos") {
+            assert_eq!(name, "Command");
+        } else if cfg!(target_os = "windows") {
+            assert_eq!(name, "Win");
+        } else {
+            assert_eq!(name, "Super");
+        }
+        let keys = hotkey_keys(&Shortcut::parse("tap:rctrl").unwrap());
+        let caps: Vec<_> = keys.keys.iter().map(|key| key.cap.to_string()).collect();
+        let ctrl = if cfg!(target_os = "macos") {
+            "Control"
+        } else {
+            "Ctrl"
+        };
+        assert_eq!(caps, [format!("Right {ctrl}").as_str()]);
+        assert_eq!(keys.name(), format!("Right {ctrl}"));
+        let keys = hotkey_keys(&Shortcut::parse("double:ctrl").unwrap());
+        assert_eq!(keys.name(), format!("{ctrl} {ctrl}"));
+        assert_eq!(keys.keys.len(), 1);
+        // A chord with a named side carries it, with the other modifiers
+        // and the key as a binding shows them.
+        let keys = hotkey_keys(&Shortcut::parse("ralt+space").unwrap());
+        let alt = if cfg!(target_os = "macos") {
+            "Option"
+        } else {
+            "Alt"
+        };
+        assert_eq!(keys.name(), format!("Right {alt}+Space"));
+        let caps: Vec<_> = keys.keys.iter().map(|key| key.cap.to_string()).collect();
+        assert_eq!(caps, [format!("Right {alt}").as_str(), "Space"]);
+        // The numpad's keys keep their own names, distinct from their
+        // counterparts' (#260).
+        let keys = hotkey_keys(&Shortcut::parse("ctrl+numpad5").unwrap());
+        let caps: Vec<_> = keys.keys.iter().map(|key| key.cap.to_string()).collect();
+        assert_eq!(caps, [ctrl, "Num 5"]);
+        let keys = hotkey_keys(&Shortcut::parse("ctrl+enter").unwrap());
+        let caps: Vec<_> = keys.keys.iter().map(|key| key.cap.to_string()).collect();
+        assert_eq!(caps, [ctrl, "\u{21b5}"]);
+        let keys = hotkey_keys(&Shortcut::parse("ctrl+numpad_enter").unwrap());
+        let caps: Vec<_> = keys.keys.iter().map(|key| key.cap.to_string()).collect();
+        assert_eq!(caps, [ctrl, "Num Enter"]);
     }
 
     #[test]

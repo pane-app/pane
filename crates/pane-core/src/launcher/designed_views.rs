@@ -414,7 +414,9 @@ impl Launcher {
         // The status line is about the submission from now on, as it is
         // about any action: what the answer lands replaces it — the
         // view's own tree, a toast, or the error an answer carries.
-        state.view.status = Status::Running;
+        state.view.status = Status::Running {
+            since: std::time::Instant::now(),
+        };
         // The remembered values, written as the form's own settings while
         // its answer is on its way.
         let component = state.open.clone().unwrap_or_default();

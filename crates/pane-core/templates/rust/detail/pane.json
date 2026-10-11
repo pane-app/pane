@@ -1,0 +1,18 @@
+{
+  "$schema": "https://raw.githubusercontent.com/pane-app/pane/main/guests/js/schema/pane.schema.json",
+  "manifestVersion": 1,
+  "title": "__TITLE__",
+  "description": "A command that shows the detail of the text root search sends it.",
+  "version": "0.1.0",
+  "apiVersion": "0.1",
+  "icon": "icon.png",
+  "commands": [
+    {
+      "id": "__NAME__",
+      "title": "__TITLE__",
+      "subtitle": "Shows the detail of the text it is sent from root search",
+      "component": "target/wasm32-wasip2/release/__CRATE__.wasm",
+      "takesQuery": true
+    }
+  ]
+}

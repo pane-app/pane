@@ -6,7 +6,7 @@
 //!   after the compute limit, says so, keeps its saved data and counts it
 //!   towards pausing the package: the third time pauses it, with Retry and
 //!   the details. Meanwhile the launcher keeps answering the user, and the
-//!   calculator, another extension, answers as soon as the call is stopped.
+//!   Rust sample, another extension, answers as soon as the call is stopped.
 //! - A runtime thread stuck outside any guest (a fault injected in debug
 //!   builds) is first said to be not responding yet, then given up on:
 //!   nothing is named or paused, Manage extensions says the runtime stopped
@@ -99,7 +99,7 @@ struct Pane {
 }
 
 impl Pane {
-    /// Pane with the settings sample of `fixture` and the calculator
+    /// Pane with the settings sample of `fixture` and the Rust sample
     /// installed.
     fn new(fixture: &Fixture) -> Pane {
         let sources = tempfile::tempdir().unwrap();
@@ -114,8 +114,8 @@ impl Pane {
             launcher.view().status,
             Status::Result(format!("Installed {}", fixture.title))
         );
-        let calculator = package("calculator", &sources.path().join("calculator"));
-        block_on(launcher.install_package(&calculator));
+        let sample = package("sample-rust", &sources.path().join("sample-rust"));
+        block_on(launcher.install_package(&sample));
         assert!(
             matches!(launcher.view().status, Status::Result(_)),
             "{:?}",
@@ -188,11 +188,11 @@ fn error(status: Status) -> String {
     }
 }
 
-/// Root search lists the calculator's answer to `6 * 7`.
-fn calculator_answers(launcher: &Launcher) -> bool {
+/// Root search lists the Rust sample's answer to `reverse 42`.
+fn sample_answers(launcher: &Launcher) -> bool {
     to_root(launcher);
-    block_on(launcher.set_query("6 * 7"));
-    let answered = titles(launcher).iter().any(|title| title == "42");
+    block_on(launcher.set_query("reverse 42"));
+    let answered = titles(launcher).iter().any(|title| title == "24");
     block_on(launcher.set_query(""));
     answered
 }
@@ -205,7 +205,7 @@ fn a_guest_that_stops_responding_is_stopped_and_paused_the_third_time(fixture: &
         run(launcher, "Use a formal greeting"),
         Status::Result("Saved the formal greeting".into())
     );
-    assert!(calculator_answers(launcher));
+    assert!(sample_answers(launcher));
 
     // The first time, the user leaves the command and keeps working while
     // the guest computes: with no compute limit to speak of, the guest's
@@ -226,10 +226,10 @@ fn a_guest_that_stops_responding_is_stopped_and_paused_the_third_time(fixture: &
         "Manage extensions waited for the guest"
     );
     to_root(launcher);
-    // The call is stopped once the limit applies, and the calculator's
+    // The call is stopped once the limit applies, and the Rust sample's
     // answer, which waited behind it, comes.
     pane.runtime.set_limits(limits());
-    assert!(calculator_answers(launcher));
+    assert!(sample_answers(launcher));
     busy.join().unwrap();
     assert_eq!(pane.saved("busy").as_deref(), Some("started"));
 
@@ -258,7 +258,7 @@ fn a_guest_that_stops_responding_is_stopped_and_paused_the_third_time(fixture: &
         "saved data is kept"
     );
     // The other extension still answers.
-    assert!(calculator_answers(launcher));
+    assert!(sample_answers(launcher));
 
     // Manage extensions explains it, with Retry.
     manage(launcher);
@@ -375,13 +375,13 @@ fn a_runtime_that_stops_responding_is_replaced_naming_no_extension() {
     );
     assert!(launcher.view().rows.is_empty(), "it was restarted");
 
-    // A fresh thread runs the next call; the calculator answers too.
+    // A fresh thread runs the next call; the Rust sample answers too.
     assert_eq!(
         run(launcher, "Use a casual greeting"),
         Status::Result("Saved the casual greeting".into())
     );
     to_root(launcher);
-    assert!(calculator_answers(launcher));
+    assert!(sample_answers(launcher));
 
     // The stuck thread returns, and saves nothing: the guest's wait went
     // with it.

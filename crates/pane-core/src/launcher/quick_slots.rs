@@ -36,6 +36,7 @@
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 use serde_json::{Map, Value};
 
@@ -69,6 +70,11 @@ pub enum PinTarget {
     /// An indexed result, such as an installed application, by its own
     /// id among the results of the command (by id) that supplies it.
     Indexed { command: String, result: String },
+    /// A dynamic root item (#158), by its own id among the items the
+    /// command (by id) has registered: a dynamic command is launched from
+    /// its slot, and an item with actions runs its first action. While it
+    /// is not registered the slot says so.
+    Dynamic { command: String, item: String },
 }
 
 impl PinTarget {
@@ -79,6 +85,7 @@ impl PinTarget {
         match self {
             PinTarget::Command(id) => id.clone(),
             PinTarget::Indexed { command, result } => format!("{command}:{result}"),
+            PinTarget::Dynamic { command, item } => format!("{command}:{item}"),
         }
     }
 }
@@ -246,7 +253,7 @@ fn parse(text: &str) -> Result<Arrangement, String> {
 fn target_of(entry: &Map<String, Value>) -> Result<PinTarget, String> {
     if let Some(unknown) = entry
         .keys()
-        .find(|key| *key != "command" && *key != "result")
+        .find(|key| *key != "command" && *key != "result" && *key != "item")
     {
         return Err(format!(
             "it has a field “{unknown}” this Pane does not know"
@@ -257,13 +264,17 @@ fn target_of(entry: &Map<String, Value>) -> Result<PinTarget, String> {
         .and_then(Value::as_str)
         .filter(|command| !command.is_empty())
         .ok_or("it names no command")?;
-    match entry.get("result") {
-        None => Ok(PinTarget::Command(command.to_owned())),
-        Some(Value::String(result)) if !result.is_empty() => Ok(PinTarget::Indexed {
+    match (entry.get("result"), entry.get("item")) {
+        (None, None) => Ok(PinTarget::Command(command.to_owned())),
+        (Some(Value::String(result)), None) if !result.is_empty() => Ok(PinTarget::Indexed {
             command: command.to_owned(),
             result: result.clone(),
         }),
-        Some(_) => Err("its result is not an id".into()),
+        (None, Some(Value::String(item))) if !item.is_empty() => Ok(PinTarget::Dynamic {
+            command: command.to_owned(),
+            item: item.clone(),
+        }),
+        (Some(_), _) | (_, Some(_)) => Err("its result is not an id".into()),
     }
 }
 
@@ -275,6 +286,9 @@ fn text(arrangement: &Arrangement) -> String {
             PinTarget::Command(id) => serde_json::json!({ "command": id }),
             PinTarget::Indexed { command, result } => {
                 serde_json::json!({ "command": command, "result": result })
+            }
+            PinTarget::Dynamic { command, item } => {
+                serde_json::json!({ "command": command, "item": item })
             }
         })
         .collect();
@@ -298,7 +312,51 @@ fn resolve(launcher: &Launcher, state: &State, target: &PinTarget) -> Resolved {
     match target {
         PinTarget::Command(id) => resolve_command(launcher, state, target, id),
         PinTarget::Indexed { command, .. } => resolve_indexed(state, target, command),
+        PinTarget::Dynamic { command, item } => resolve_dynamic(state, target, command, item),
     }
+}
+
+/// The dynamic root item `item` of the command with id `command`, as
+/// `target` holds it, resolved as the registry is now. While the item is
+/// registered the slot does what its row does; while it is not, the slot
+/// keeps its place and says so, as a missing indexed result's does.
+fn resolve_dynamic(state: &State, _target: &PinTarget, command: &str, item: &str) -> Resolved {
+    let Some((_, registration)) = registered(state, command) else {
+        return Resolved {
+            title: missing_title(command),
+            detail: None,
+            kind: None,
+            outcome: Err("Its extension is not installed".into()),
+        };
+    };
+    let unresolved = |reason: String| Resolved {
+        title: registration.title.clone(),
+        detail: None,
+        kind: None,
+        outcome: Err(reason),
+    };
+    // While the item is registered, the slot does what its row does, the
+    // row itself saying why it cannot run (a disabled or paused package
+    // does not list it); while it is not, the slot keeps its place and
+    // says so, whatever the package's state.
+    if let Some(found) = super::dynamic::pinned(state, command, item) {
+        return Resolved {
+            title: found.row.title.clone(),
+            detail: None,
+            kind: presentation::kind(&found.entry),
+            outcome: match found.entry {
+                Entry::Unavailable(reason) => Err(reason),
+                Entry::Waiting {
+                    identity, manifest, ..
+                } => Err(state.waiting.reason_for(&identity, &manifest).map_or_else(
+                    || format!("{} no longer waits", state.title_of(&identity)),
+                    |reason| reason.row.clone(),
+                )),
+                entry => Ok(entry),
+            },
+        };
+    }
+    unresolved(format!("{} no longer lists it", registration.title))
 }
 
 /// The command with id `id` among `package`'s, whether it runs or not.
@@ -340,6 +398,14 @@ fn resolve_command(launcher: &Launcher, state: &State, target: &PinTarget, id: &
     {
         let outcome = match listed.entry {
             Entry::Unavailable(reason) => Err(reason),
+            // A quick slot of a waiting command says why it cannot run and
+            // runs nothing (see `waiting`).
+            Entry::Waiting {
+                identity, manifest, ..
+            } => Err(state.waiting.reason_for(&identity, &manifest).map_or_else(
+                || format!("{} no longer waits", state.title_of(&identity)),
+                |reason| reason.row.clone(),
+            )),
             entry => Ok(entry),
         };
         return Resolved {
@@ -528,7 +594,7 @@ fn forget_provider_pins(state: &mut State) -> bool {
             }
             None => true,
         },
-        PinTarget::Indexed { .. } => true,
+        PinTarget::Indexed { .. } | PinTarget::Dynamic { .. } => true,
     });
     for title in &gone {
         Launcher::note_provider_pin(state, title);
@@ -564,8 +630,10 @@ pub(super) fn pin_of_selected(state: &State) -> Option<PinTarget> {
         Some(
             Entry::Open(_)
                 | Entry::Unavailable(_)
+                | Entry::Waiting { .. }
                 | Entry::OpenApplication { .. }
                 | Entry::OpenTarget { .. }
+                | Entry::DynamicAction(_)
         )
     ) {
         return None;
@@ -644,6 +712,7 @@ fn change(
             | ResultAction::ConfigureCommand
             | ResultAction::ConfigureExtension
             | ResultAction::DismissNotice
+            | ResultAction::ResetRanking
     );
     if !quick_slot_action || !matches!(state.view.screen, Screen::Root { .. }) {
         return refused;
@@ -697,7 +766,8 @@ fn change(
         | ResultAction::Alias
         | ResultAction::ConfigureCommand
         | ResultAction::ConfigureExtension
-        | ResultAction::DismissNotice => refused,
+        | ResultAction::DismissNotice
+        | ResultAction::ResetRanking => refused,
     }
 }
 
@@ -751,48 +821,6 @@ impl Launcher {
         self.lock().quick_slots.unreadable.clone()
     }
 
-    /// Asks the enabled commands whose indexed results the quick slots pin
-    /// for those results, if they never answered — what a cold visit of
-    /// root search's home needs, since the indexed results are otherwise
-    /// asked for only once a query is typed. The query stays as it is and
-    /// nothing is searched; await the returned future to list them, which
-    /// resolves the slots holding them.
-    pub fn resolve_quick_slots(&self) -> impl Future<Output = ()> + Send + 'static {
-        let mut guard = self.lock();
-        let state = &mut *guard;
-        let pinned: Vec<String> = state
-            .quick_slots
-            .chosen
-            .iter()
-            .filter_map(|target| match target {
-                PinTarget::Indexed { command, .. } => Some(command.clone()),
-                PinTarget::Command(_) => None,
-            })
-            .collect();
-        let commands: Vec<_> = state
-            .packages
-            .iter()
-            .filter(|package| state.runs(package))
-            .flat_map(|package| {
-                let data = self
-                    .installation
-                    .as_ref()
-                    .map(|installation| installation.data.owned_by(&package.identity));
-                package
-                    .indexed_result_commands()
-                    .into_iter()
-                    .map(move |command| (command, data.clone()))
-            })
-            .filter(|(command, _)| {
-                pinned.contains(&command.id) && !state.indexes.answered(&command.component)
-            })
-            .collect();
-        let asking = state.indexes.begin_asking(commands);
-        drop(guard);
-        let launcher = self.clone();
-        async move { launcher.show_indexed_results(asking).await }
-    }
-
     /// Invokes the quick slot at `index` from root search: its target is
     /// resolved again now and, when it can run, opened as its row would
     /// be — the command opens, the application is opened — in the
@@ -807,7 +835,7 @@ impl Launcher {
         // Only root search's slots, and never while an action already runs:
         // a second press or click during an opening invokes nothing.
         let ready = matches!(state.view.screen, Screen::Root { .. })
-            && state.view.status != Status::Running;
+            && !matches!(state.view.status, Status::Running { .. });
         let target = state.quick_slots.chosen.get(index).cloned();
         let entry = match target.filter(|_| ready) {
             Some(target) => match resolve(self, state, &target).outcome {
@@ -819,14 +847,16 @@ impl Launcher {
             },
             None => None,
         };
-        // Only a command or an indexed result is ever pinned. A command is
-        // launched from its quick slot.
+        // Only a command, an indexed result or a dynamic root item is ever
+        // pinned. A command is launched from its quick slot; a dynamic
+        // root item does what its row does.
         let entry = match entry {
             Some(Entry::Open(mut opening)) => {
                 opening.launch.source = crate::launch::LaunchSource::QuickSlot;
                 Some(Entry::Open(opening))
             }
             Some(entry @ (Entry::OpenApplication { .. } | Entry::OpenTarget { .. })) => Some(entry),
+            Some(entry @ Entry::DynamicAction(_)) => Some(entry),
             _ => None,
         };
         match &entry {
@@ -835,17 +865,29 @@ impl Launcher {
             Some(_) => {
                 // The status line is about this action from now on.
                 state.sent_from = None;
-                state.view.status = Status::Running;
+                state.view.status = Status::Running {
+                    since: Instant::now(),
+                };
             }
             None => {}
         }
         let data = match &entry {
             // A call into the package belongs to its generation as of now.
             Some(Entry::Open(opening)) => self.data_in(state, &opening.component),
+            Some(Entry::DynamicAction(action)) => self.data_in(state, &action.component),
             _ => None,
         };
+        // Invoking a quick slot from the pinned home is a choice of its
+        // target (#199, see `learned`): a use with no query, once the
+        // target resolved and its action dispatches.
+        let used = entry
+            .is_some()
+            .then(|| state.quick_slots.chosen[index].key());
         let epoch = state.screen_epoch;
         drop(guard);
+        if let Some(target) = used {
+            self.record_use(&target, None);
+        }
         let launcher = self.clone();
         async move {
             match entry {
@@ -858,6 +900,9 @@ impl Launcher {
                     application,
                     name,
                 }) => launcher.open_target(epoch, target, application, name).await,
+                Some(Entry::DynamicAction(action)) => {
+                    launcher.run_dynamic_action(epoch, action, data).await
+                }
                 _ => {}
             }
         }
@@ -934,7 +979,9 @@ impl Launcher {
         let (changed, said) = change(self, state, target, action);
         let save = match &changed {
             SlotChange::Changed(_) => {
-                state.view.status = Status::Running;
+                state.view.status = Status::Running {
+                    since: Instant::now(),
+                };
                 Some((state.screen_epoch, said))
             }
             SlotChange::AlreadyPinned(_) => {

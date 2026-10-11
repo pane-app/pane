@@ -1,0 +1,21 @@
+{
+  "manifestVersion": 1,
+  "title": "JavaScript greet provider sample",
+  "version": "0.1.0",
+  "apiVersion": "0.1",
+  "commands": [
+    {
+      "id": "greet",
+      "title": "JavaScript greet provider",
+      "subtitle": "Provides the pane-samples:greet@1 capability, answering in JavaScript",
+      "component": "sample_greet_js.wasm"
+    }
+  ],
+  "provides": [
+    {
+      "capability": "pane-samples:greet@1",
+      "component": "sample_greet_js.wasm",
+      "operations": ["greet"]
+    }
+  ]
+}

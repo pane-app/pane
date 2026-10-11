@@ -7,6 +7,7 @@
 //! "Celsius" }`; the title defaults to the value). A dropdown has at least
 //! one option, each with a value that is not empty, none repeated.
 
+use schemars::JsonSchema;
 use serde::Deserialize;
 
 /// One option of a dropdown: its `value` is what the command receives when
@@ -19,12 +20,16 @@ pub struct DropdownOption {
 }
 
 /// An option as `pane.json` writes it.
-#[derive(Deserialize)]
+#[derive(Deserialize, JsonSchema)]
+#[schemars(inline)]
 #[serde(untagged)]
 pub(crate) enum OptionJson {
+    /// The option's value, shown as it is.
     Value(String),
     Titled {
+        /// What the command receives when the option is chosen.
         value: String,
+        /// What the user sees; the value when the manifest gives no title.
         #[serde(default)]
         title: Option<String>,
     },

@@ -78,7 +78,8 @@ helper files into Pane, as for a folder, and records the package in
 `installed.json` as `"git": "<host>/<path>", "gitUrl": "<address fetched>",
 "gitRef": "refs/tags/v1.0.0", "gitCommit": "<id>", "pinned": true` (no
 `gitRef` for the default branch or a commit named by its id; `pinned` for a
-tag or a commit). Its commands then run like any other.
+tag or a commit; for one extension of a [collection](#one-extension-of-a-collection-307),
+`"gitExtension": "<id>"` beside them). Its commands then run like any other.
 
 The revision is written into a download folder of its own under the data
 folder's `extensions/downloads/`, the one npm downloads use, removed once the
@@ -101,6 +102,54 @@ offers **Update**. A copy of the same code from a folder or from npm is
 another package, installed beside it and never changed by it: Pane does not
 merge sources, move data between them or infer personal and project scopes.
 Moving a repository to another host or path makes another package.
+
+## One extension of a collection (#307)
+
+A repository whose root holds `pane-collection.json` rather than `pane.json`
+is a **collection** ([ADR 0044](adr/0044-a-git-repository-holds-one-extension-or-a-collection.md)):
+it lists the extensions it offers, each by an id (lowercase letters, digits
+and `-`) and the folder holding it, with an optional `renamed` map of ids it
+renamed or removed. `#<id>` after the repository names one of them, a
+reference following as a reference follows a repository
+(`git:github.com/owner/tools#clock@refs/tags/clock/v1.2.0`), and it
+installs as a package of its own: the identity is
+`git:github.com/owner/tools#clock`, and it gets its own preview (which
+names the extension), managed copy, record, disabled state, uninstall and
+data, as any installed package. A second install of the same identity is
+refused; another extension of the same collection, or the repository's own
+package were it one, installs beside it.
+
+Only the files under the extension's folder reach its managed copy, so it
+must be self-contained: a component outside the folder is missing, and the
+revision is explained as source-only. An index that cannot be taken is
+refused saying what is wrong: a root holding both manifests, an unknown
+field, a duplicate id or path, a malformed id, an id reused through
+`renamed`, a path that is not a plain relative folder, or a path naming no
+package.
+
+Each extension is released on its own, its releases tagged `<id>/v<semver>`
+(Go's convention for modules in subfolders), so a fix to one never forces
+a version on the rest; the repository's own tags — other extensions' and
+`v<semver>` — are never taken for one's. An extension installed from its
+own release tag [updates by itself](#updating-by-itself) to the newest
+release above the version installed, pinned to that tag's commit; one on
+a tracked reference updates as any Git package does, the newer revision
+read through the collection's index, so an extension whose folder moved
+within it still updates, keeping its identity. An id the newer index
+renames is followed, the identity kept, and an id it no longer offers is
+reported in the update results as a notice, the extension keeping running
+its installed code — never uninstalled silently.
+
+Naming a collection without an id, by address or by a picked folder,
+opens the choice: the collection's extensions are listed — each package's
+own icon, title, description and version — and the user ticks some or all
+to install, each one installed as a package of its own. A `#<id>` on a
+one-extension repository is
+refused. A local folder takes `#<id>` the same way
+(`pane --install <folder>#<id>`; the part after the last `#` is the id),
+with the identity `local:<folder>#<id>`, and a dependency's `git:` or
+`local:` source may name one extension of a collection, following the
+conflict rules a dependency's source already follows.
 
 ## References, tracking and pins
 
@@ -140,17 +189,26 @@ folder on this computer.
 
 An eligible Git package updates by itself, as [an npm package
 does](npm.md#updating-by-itself) (#50): the same updater thread, on the
-same cadence (a second after Pane starts, then every 24 hours, by the
+same cadence (a minute after Pane starts, then every 24 hours, by the
 launcher's clock) and under the same controls (the global row in the
 extension list and a per-package one, in `updates.json`), applying at the
 same safe activation boundary — never during a command of the package
 the user asked for that has not answered, nor while one of its screens is
-on display, retrying every second until the package is quiet — and
-applying as the preview's Update row does: the identity, saved data,
-disabled state, hotkeys and aliases are kept, the old generation ends,
-managed background work restarts with the new code, and the outcome says
-so in the status line of root search or the extension list ("Updated
-Greeter from Git to 0.2.0").
+on display, retrying every second until the package is quiet, listed in
+the update results as "Waiting until <title> is not in use" until it
+applies — and applying as the preview's Update row does: the identity,
+saved data, disabled state, hotkeys and aliases are kept, the old
+generation ends, managed background work restarts with the new code —
+a component that opts in to the [state
+handoff](generations.md#the-state-handoff) (ADR 0041, #159) keeps what
+it had in memory — and the outcome is the pass's update results, a
+quiet row with the old and the new commit ("1a2b3c4d5e6f →
+6f5e4d3c2b1a"). The user can also ask for a check at once — root
+search's **Check for Extension Updates** command, or the Settings
+Extensions page's **Check for updates** button — which looks at every
+tracked package, turned off, disabled and paused ones included, and whose
+toast follows the pass (see
+[npm](npm.md#updating-by-itself)).
 
 What differs is what a check reads and what it fetches. A check of a
 tracked package asks the repository for its reference listing alone —
@@ -160,16 +218,43 @@ commit installed. When it has moved, the new commit is fetched (with
 `deepen 1`, as an install fetches it) and checked exactly as an install
 checks a package; a check or an update that fails — the repository gone,
 the branch deleted, the moved-to revision source-only, its manifest or
-API or components or helpers no longer passing — explains in the status
-line ("Greeter from Git was not updated: Branch release (commit …) of the
+API or components or helpers no longer passing — is a Failed row in the
+update results ("It was not updated: Branch release (commit …) of the
 Git repository … holds only the source of …; It keeps running its
-installed code") and leaves the installed copy as it is.
+installed code"), announced once the next time the launcher is shown,
+and leaves the installed copy as it is.
+
+One extension of a collection installed from its own release tag
+`<id>/v<semver>` (ADR 0044) is checked differently: the repository's tags
+with the extension's prefix (`ls-refs` with `refs/tags/<id>/`) alone say
+what its newest release is — nothing is fetched while the newest names
+the version installed, and the repository's other tags, other
+extensions' and `v<semver>`, are never taken for its. When a newer
+release exists, the tag's commit is fetched and checked as an install
+checks a package, read through the collection's index so an extension
+whose folder moved within it still updates, and the extension is pinned
+to that tag's commit — the update is its own, never moving another
+extension of the collection. Where the index no longer lists the id as
+an extension, the `renamed` map decides (ADR 0044, #310): one naming the
+id's new one is followed — the newer revision's files are read from the
+new id's folder, the installed copy's identity kept, as a moved
+folder's — and an id that is gone, or mapped to `null`, is reported in
+the update results as a notice ("The collection no longer offers this
+extension. It keeps running its installed code."), a row with no Retry,
+whose installed copy keeps running, never uninstalled silently. Check
+for Update on its page previews that one extension by its repository
+and id, at its newest release above the version installed — the
+ordinary preview, whose Update keeps or changes the recorded reference
+as a Git package's does; a renamed id resolves through the map, so the
+preview shows the extension under its current id.
 
 **Which packages update** (as [npm's](npm.md#which-packages-update)):
 an installed Git package that is tracked — installed from the default
-branch or a named branch — enabled, not paused after a failure, and not
-turned off; a tag or commit named to install it pins it, and an update
-installs that revision again, so it is never updated by itself. The same
+branch or a named branch — or, one extension of a collection, installed
+from its own release tag; enabled, not paused after a failure, and not
+turned off; any other tag or a commit named to install it pins it, and
+an update installs that revision again, so it is never updated by
+itself. The same
 safe boundary defers an update while a command runs, and an update the
 user chose (choosing the repository again, Update on its preview, `pane
 --install git:<address>`) replaces the copy without waiting, as a reload
@@ -214,7 +299,7 @@ installed or left in the downloads folder:
 
 | Case | Status |
 | --- | --- |
-| Not an address Pane fetches | "`ftp://…` is not a Git repository address: Pane fetches Git repositories over HTTPS, and does not use `ftp://`"; plain `http://` ("… only over HTTPS …"), credentials in the address, `?`, `#`, `%`, `..` |
+| Not an address Pane fetches | "`ftp://…` is not a Git repository address: Pane fetches Git repositories over HTTPS, and does not use `ftp://`"; plain `http://` ("… only over HTTPS …"), credentials in the address, `?`, `%`, `..` (a `#` after the repository path names one extension of a [collection](#one-extension-of-a-collection-307), so it is taken as the id rather than refused) |
 | No repository there | "There is no Git repository at https://…" |
 | A private repository | "The Git repository … asks to sign in (its server answered 401): Pane sends no credentials, so it installs only from public repositories" |
 | A redirect | "…/info/refs?service=git-upload-pack answered 301, sending Pane elsewhere: Pane follows no redirect, so name the repository by the address it moved to" |
@@ -254,6 +339,29 @@ one; the tests and smokes serve their repositories that way
 [`scripts/repository_server.py`](../scripts/repository_server.py)), so none
 of them reaches the network. Those servers, not Pane, run `git upload-pack`,
 with none of the user's Git configuration.
+
+Where the server advertises the partial-clone filter (`uploadpack.allowFilter`,
+as GitHub's and GitLab's servers do) and the revision holds a collection
+([#311](https://github.com/pane-app/pane/issues/311),
+[ADR 0044](adr/0044-a-git-repository-holds-one-extension-or-a-collection.md)),
+the fetch is made in parts: the commit and its trees are fetched with
+`filter blob:none`, without any file contents, then the blobs are fetched
+naming them by their ids (`want <blob id>`, the same lazy fetch Git's own
+partial clones make of missing objects). First the collection's listing —
+the index, each extension's manifest, and the icon a manifest names — so
+the choice shows each extension's own details; then, as the user chooses,
+one fetch for every extension chosen from the same revision together (the
+revision is never fetched twice, and an install by its id fetches its one
+extension's folder whole at once). The trees are walked in memory to find
+the chosen extensions' folders, and every object in every pack is checked
+against its id as any pack's is; a wanted blob the server does not send is
+refused, not skipped. The limits still bound what is taken: each pack on
+its own (64 MiB, 20,000 objects), and the files and folders written — the
+listing's and the chosen extensions' together — under the one budget of
+files and folders and their size. A server that advertises no filter, and
+a repository that is one extension rather than a collection, are fetched
+whole as above; looking for the index first costs such a repository one
+small extra fetch of its trees.
 
 ### Trying a real host by hand
 
@@ -305,17 +413,42 @@ yet.
   hooks, filters and install scripts never running
   and components taken as committed; missing repositories, references and
   commits, ambiguous names, redirects, sign-in, protocol version 0, a
-  `# service` line, an unreachable server; the form.
+  `# service` line, an unreachable server; the form; since #307, one
+  extension of a collection installed by its id (with the id recorded beside
+  the Git fields, only its folder's files in the managed copy, a duplicate
+  install refused and choosing it again offering Update), every way an
+  index is refused, a component outside the extension's folder explained as
+  source-only, the local-folder form, and a dependency's `git:` and `local:`
+  sources naming one extension of a collection. Since #311, a server that
+  allows the partial-clone filter serves the choice and the chosen
+  extensions' files only — the fetches it was sent checked against the
+  repository's object ids — a server that allows none is fetched whole, an
+  install by id from a filtering server takes only that extension's
+  folder, a one-extension repository from one is fetched whole as ever, a
+  collection's refusals say the same from either, and a component stored
+  with Git LFS is refused as one.
 - [`crates/pane/tests/repositories.rs`](../crates/pane/tests/repositories.rs):
   the form, the source-only explanation, preview, Install in view below whole Git lines and the
-  command running in the native window at Pane's size.
+  command running in the native window at Pane's size; one extension of a
+  collection previewed by its id, installed and run, with its page in
+  Settings.
 - [`crates/pane-core/tests/update.rs`](../crates/pane-core/tests/update.rs)
   for the [automatic updates](#updating-by-itself) of Git packages, from
   the same server: a tracked branch that has moved updating by itself
   (identity, tracked reference and pin kept, the new copy running), a
   pinned tag never asked about, the per-package control row, and a
   branch that has moved to a source-only revision refused with the
-  installed copy untouched.
+  installed copy untouched; since #309, one extension of a collection
+  installed from its own release tag updating to the newest one above
+  the version installed, choosing it among other extensions' tags, a
+  prerelease and the repository's root `v<semver>` tag; a tracked branch
+  moving the extension's folder within the collection, its identity
+  kept; each extension updating on its own, one's release never moving
+  another; a release whose index no longer lists the id refused; one
+  that needs a newer Pane refused; a pinned tag that is not the
+  extension's own never asked about; and Check for Update on its page
+  previewing it at its newest release (or its installed one, when
+  none is newer).
 - The native smokes' own phase (frames 300 to 307;
   [Linux](platforms/linux.md#git-packages-46)).
 
@@ -326,8 +459,8 @@ yet.
 - The package must be at the repository's root; submodules and Git LFS are
   not fetched.
 - No check for a newer commit other than the updater's [tracked-branch
-  check](#updating-by-itself) and choosing the repository again, no
-  history browser and no publishing to a host.
+  and release-tag checks](#updating-by-itself) and choosing the repository
+  again, no history browser and no publishing to a host.
 - Signed tags and commits are not checked; the commit id, checked object by
   object, is the pin, and it proves contents, not provenance: a fork's
   commit served at the repository's address is only cautioned about, on
@@ -338,7 +471,10 @@ yet.
   allow fetching an unadvertised commit id refuses a commit named by its id
   (GitHub, GitLab and Git's own server allow it).
 - The pack and its objects are held in memory while the revision is written
-  (at most 64 MiB and 256 MiB).
+  (at most 64 MiB and 256 MiB); a collection fetched in parts holds its
+  trees while the choice is open, and each of its packs is bounded on its
+  own, with the files written under one budget across them
+  ([The client](#the-client)).
 - Only github.com, gitlab.com, bitbucket.org and codeberg.org fold the
   path's case; another host that ignores case (a self-hosted GitLab, say)
   makes `Owner/Repo` and `owner/repo` two packages.

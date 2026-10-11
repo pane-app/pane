@@ -1,0 +1,30 @@
+[package]
+# The QuickJS runtime of the vendored componentize-qjs (see the README beside
+# this tree): built only for `wasm32-wasip3` with the pinned nightly Rust and
+# wasi-sdk, by `tools/componentize-js/pane_js.py wasm-parts` (#215, #218). It is
+# excluded from Pane's workspace: nothing in Pane builds it; the runtime it
+# produces is the committed `tools/componentize-js/wasm-parts/runtime.wasm`.
+name = "componentize-qjs-runtime"
+version = "0.4.5"
+edition = "2024"
+description = "QuickJS runtime for componentize-qjs"
+license = "Apache-2.0"
+repository = "https://github.com/andreiltd/componentize-qjs"
+homepage = "https://github.com/andreiltd/componentize-qjs"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+rquickjs = { version = "0.13", default-features = false, features = ["bindgen", "disable-assertions", "loader", "std", "macro"] }
+wit-bindgen = "0.61"
+wit-dylib-ffi = { version = "0.1.0", git = "https://github.com/bytecodealliance/wasm-tools", tag = "v1.258.0", default-features = false, features = ["async-raw"] }
+heck = "0.5"
+num_enum = { version = "0.7", default-features = false }
+smallvec = "1"
+indexmap = { version = "2", default-features = false }
+
+[features]
+default = ["component-model-async"]
+component-model-async = []

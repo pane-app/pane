@@ -52,10 +52,19 @@ pub(super) fn provider_title(state: &State, command: &str) -> Option<String> {
 pub(super) trait Choices: Clone + Default + Send + 'static {
     /// The record's file name, beside `installed.json`.
     const FILE: &'static str;
-    /// The record's version; a record of another version is not read.
+    /// The record's version as this Pane writes it; a record of a version
+    /// [`reads`] does not is not read.
     const VERSION: u64;
     /// What the choices are, for messages ("hotkeys").
     const WHAT: &'static str;
+
+    /// Whether this Pane reads a record of `version`: the version it
+    /// writes by default, with the earlier ones a choices' record kept
+    /// the grammar of (hotkeys' version 1, #252) reading too. Overridden
+    /// by the choices whose record moved.
+    fn reads(version: u64) -> bool {
+        version == Self::VERSION
+    }
 
     /// The choices in a record's fields (besides `version`). Entries that
     /// cannot be used are left out.
@@ -101,7 +110,7 @@ impl<C: Choices> Record<C> {
         let read = match std::fs::read_to_string(&file) {
             Ok(text) => match serde_json::from_str::<Map<String, Value>>(&text) {
                 Ok(fields) => match fields.get("version").and_then(Value::as_u64) {
-                    Some(version) if version == C::VERSION => C::read(&fields)
+                    Some(version) if C::reads(version) => C::read(&fields)
                         .map(Some)
                         .map_err(|error| format!("{} is invalid: {error}", file.display())),
                     Some(version) => Err(format!(
@@ -121,6 +130,18 @@ impl<C: Choices> Record<C> {
         }
         *record.recorded.lock().unwrap_or_else(|p| p.into_inner()) = record.chosen.clone();
         record
+    }
+
+    /// Why the record could not be read, if it could not: it is then
+    /// never overwritten.
+    pub(super) fn unreadable(&self) -> Option<&str> {
+        self.unreadable.as_deref()
+    }
+
+    /// Whether the choices are kept anywhere at all; a launcher that
+    /// installs no packages keeps none.
+    pub(super) fn kept(&self) -> bool {
+        self.file.is_some()
     }
 
     /// The record's text as the choices are now, and where it goes; `Err`
@@ -148,6 +169,19 @@ impl<C: Choices> Record<C> {
         let key = identity.key();
         self.forgotten.insert(key.clone());
         self.chosen.retain(&|command| split(command).0 != key)
+    }
+
+    /// Puts the choices back to what the record last held: a change whose
+    /// write failed, with no one entry to undo it by (resetting all that
+    /// root search learned does), never loses what was recorded — the
+    /// next write holds what the record holds, not what failed to.
+    pub(super) fn revert(&mut self) {
+        let recorded = self
+            .recorded
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone();
+        self.chosen = recorded;
     }
 }
 
@@ -191,6 +225,14 @@ impl Launcher {
             .iter()
             .flat_map(|package| package.commands())
             .find(|registration| registration.id == command)
-            .map_or_else(|| command.to_owned(), |registration| registration.title)
+            .map_or_else(
+                || {
+                    // A dynamic root item's row id names its row (#158).
+                    super::dynamic::pinned_by_id(state, command)
+                        .map(|found| found.row.title)
+                        .unwrap_or_else(|| command.to_owned())
+                },
+                |registration| registration.title,
+            )
     }
 }

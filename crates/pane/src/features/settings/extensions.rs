@@ -7,13 +7,18 @@
 //! **The group.** After Pane's own pages, the sidebar's Extensions entry
 //! heads the group: its + menu installs from a folder, npm or Git, and
 //! under it each installed extension has an entry of its own — its icon,
-//! its title, and a mark in a word while it is paused, broken or updating
+//! its title, the word Official on one of Pane's own (ADR 0045), and a
+//! mark in a word while it is paused, broken or updating
 //! ([`sidebar_entries`]). The entry itself opens the group's page: the
-//! installed extensions as a list, what governs them all (automatic
-//! updates), what belongs to none of them (the runtime's rows, data kept
-//! for an uninstalled extension), and the install sources.
+//! installed extensions as a list, the capabilities two or more of them
+//! provide (each with the provider the user chooses for it, #154; the
+//! choice applies to the next call, with nothing reloaded), what governs
+//! them all (automatic updates), what belongs to none of them (the
+//! runtime's rows, data kept for an uninstalled extension), and the
+//! install sources.
 //!
-//! **An extension's page.** Its large icon, title, description and source
+//! **An extension's page.** Its large icon, its title with Official
+//! beside it on one of Pane's own (ADR 0045), its description and source
 //! at the top, with the mark that needs saying; its enable switch; its
 //! "Actions…" menu — Check for Update, Reload, Clear Cache, Reset
 //! Confirmations, Show Source Folder, Uninstall, and what else the
@@ -73,10 +78,11 @@ use gpui::{
     anchored, deferred, div, prelude::*, px,
 };
 use gpui_elements::editable_text::{EditableTextState, StringStorage, TextChanged, text_input};
+use pane_core::clipboard::{Clock as _, SystemClock};
 use pane_core::{
-    ExtensionMark, ExtensionOperation, InstalledPackage, Launcher, LauncherView, OperationKind,
-    PackageIdentity, PackagePreferences, PreferenceField, PreferenceKind, Screen, ShortcutCommand,
-    Status,
+    ExtensionDetails, ExtensionMark, ExtensionOperation, InstalledPackage, Launcher, LauncherView,
+    OperationKind, PackageIdentity, PackagePreferences, PreferenceField, PreferenceKind,
+    ProvidedCapability, RequirementCycle, RequirementFix, Screen, ShortcutCommand, Status,
 };
 
 use super::{Page, SettingsWindow, search};
@@ -95,6 +101,15 @@ pub(crate) const ABOUT: &str = "Install and manage extensions";
 
 /// The group's title: its sidebar entry, and its page's.
 pub(crate) const TITLE: &str = "Extensions";
+
+/// The word the sidebar's entry and an extension's page mark one of
+/// Pane's own extensions with (#280, ADR 0045): an official extension, in
+/// a word.
+const OFFICIAL_WORD: &str = "Official";
+
+/// What the group's list says of one of Pane's own extensions (#280,
+/// ADR 0045), in full.
+const OFFICIAL: &str = "One of Pane's official extensions";
 
 /// The scroll anchor of the preferences of the command `command` (its id
 /// in `pane.json`) on the page of the extension whose identity key is
@@ -180,6 +195,9 @@ pub(crate) struct State {
     fields: HashMap<String, (Entity<EditableTextState>, Subscription)>,
     /// Each dropdown preference's select by [`field_key`].
     selects: HashMap<String, PreferenceSelect>,
+    /// Each capability's select by its name, for the group page's
+    /// Capabilities section (#154).
+    capability_selects: HashMap<String, CapabilitySelect>,
     /// Why the last change of a preference could not be saved, if it
     /// could not; shown as the page's status.
     problem: Option<String>,
@@ -224,6 +242,17 @@ struct PreferenceSelect {
     /// changing them makes it again.
     labels: SelectLabels,
     /// The options and the value in force as the page last drew them,
+    /// which the select's model reads live.
+    live: Rc<RefCell<SelectLive>>,
+}
+
+/// A capability's select, the group page's Capabilities section's (#154):
+/// the shared searchable select over the capability's providers, told the
+/// providers and the provider in force each time the section draws. The
+/// capability's name is stable, so the select is made once.
+struct CapabilitySelect {
+    select: Entity<Select>,
+    /// The providers and the provider in force as the page last drew them,
     /// which the select's model reads live.
     live: Rc<RefCell<SelectLive>>,
 }
@@ -397,25 +426,30 @@ fn focus(
 }
 
 /// Whether the launcher's screen is one an extension's operation opened:
-/// a confirmation, a package's preview, pause, build, network, program or
-/// runtime details. While it is, the pages draw it from the launcher's
-/// live view, so its confirmations show and are answered here; otherwise
-/// they read the launcher, whose screen stays wherever the user left it.
+/// a confirmation, a package's preview, the choice of a collection's
+/// extensions (#308), pause, build, network, program or runtime details,
+/// or the update results. While it is, the pages draw it from the
+/// launcher's live view, so its confirmations show and are answered here;
+/// otherwise they read the launcher, whose screen stays wherever the user
+/// left it.
 pub(crate) fn in_extension_flow(screen: &Screen) -> bool {
     matches!(
         screen,
         Screen::Confirm { .. }
             | Screen::Package { .. }
+            | Screen::Choice { .. }
             | Screen::PauseDetails { .. }
             | Screen::BuildDetails { .. }
             | Screen::RuntimeDetails { .. }
             | Screen::NetworkDetails { .. }
             | Screen::ProgramDetails { .. }
+            | Screen::UpdateResults { .. }
     )
 }
 
 /// Whether the screen offers no Cancel row of its own (a confirmation's
-/// is its own): the details screens and a preview, where the page offers
+/// is its own): the details screens, a preview, the choice of a
+/// collection's extensions and the update results, where the page offers
 /// the way out the launcher window's Escape is.
 fn details_screen(screen: &Screen) -> bool {
     matches!(
@@ -426,6 +460,8 @@ fn details_screen(screen: &Screen) -> bool {
             | Screen::NetworkDetails { .. }
             | Screen::ProgramDetails { .. }
             | Screen::Package { .. }
+            | Screen::Choice { .. }
+            | Screen::UpdateResults { .. }
     )
 }
 
@@ -436,7 +472,7 @@ fn status_tone(status: &Status, theme: &Theme) -> Option<(SharedString, Hsla)> {
         Status::Progress(work) => Some((work.into(), theme.warning)),
         Status::Result(answer) => Some((answer.into(), theme.success)),
         Status::Error(message) => Some((message.into(), theme.danger)),
-        Status::Running => Some(("Running…".into(), theme.warning)),
+        Status::Running { .. } => Some(("Running…".into(), theme.warning)),
     }
 }
 
@@ -500,7 +536,12 @@ pub(crate) fn source_line(package: &InstalledPackage) -> String {
         };
     }
     if let Some(git) = &package.git {
-        return format!("Git · {}", git.url);
+        // One extension of a collection is named by its id, after `#` in
+        // the repository's address (ADR 0044).
+        return match identity.extension_id() {
+            Some(id) => format!("Git · {}#{id}", git.url),
+            None => format!("Git · {}", git.url),
+        };
     }
     match identity.local_folder() {
         Some(folder) => format!("Folder · {}", folder.display()),
@@ -639,8 +680,9 @@ fn popover(
 
 /// The sidebar's entries for the installed extensions, under the group's
 /// own entry (`group`, its index among the pages): each its icon, its
-/// title and the mark that needs saying (a word: Paused, Broken,
-/// Updating), selected while its page shows.
+/// title, the word Official on one of Pane's own, and the mark that needs
+/// saying (a word: Paused, Broken, Updating), selected while its page
+/// shows.
 pub(super) fn sidebar_entries(
     this: &SettingsWindow,
     group: usize,
@@ -678,16 +720,23 @@ fn sidebar_entry_of(
     let key = package.identity.key();
     let title = package.title();
     let mark = this.launcher.extension_mark(&package.identity);
+    let official = this.launcher.extension_is_official(&package.identity);
     let icon = crate::features::icons::row_icon_of(&this.launcher, &key, theme);
-    let label = match &mark {
-        Some(mark) => format!("{title}, {}", mark.word()),
-        None => title.clone(),
-    };
+    // What the entry is called for assistive technology: its title, then
+    // that it is one of Pane's own, then the word of what needs saying.
+    let mut label = title.clone();
+    if official {
+        label = format!("{label}, {OFFICIAL_WORD}");
+    }
+    if let Some(mark) = &mark {
+        label = format!("{label}, {}", mark.word());
+    }
     let selector = format!("extension-entry-{title}");
     sidebar_entry(
         ("extension-entry", index),
         &icon,
         &title,
+        official,
         mark.as_ref(),
         selected,
         theme,
@@ -705,12 +754,14 @@ fn sidebar_entry_of(
 
 /// One extension's sidebar entry: the sidebar item's family (#97) — its
 /// height, padding, radius and washes — indented under the group's entry,
-/// with the extension's own icon in place of a glyph and its mark at its
-/// right end, in the warning's tone.
+/// with the extension's own icon in place of a glyph, the word Official
+/// at its right end on one of Pane's own, and the mark that needs saying
+/// beyond it, in the warning's tone.
 fn sidebar_entry(
     id: impl Into<ElementId>,
     icon: &RowIcon,
     title: &str,
+    official: bool,
     mark: Option<&ExtensionMark>,
     selected: bool,
     theme: &Theme,
@@ -724,6 +775,16 @@ fn sidebar_entry(
     };
     let caption = typography.settings_caption_size;
     let scope = format!("extension-entry-{title}");
+    let official = official.then(|| {
+        let selector = format!("extension-entry-official-{title}");
+        div()
+            .id("entry-official")
+            .debug_selector(move || selector)
+            .flex_none()
+            .text_size(caption)
+            .text_color(theme.text_muted)
+            .child(OFFICIAL_WORD)
+    });
     let mark = mark.map(|mark| {
         let selector = format!("extension-entry-mark-{title}");
         div()
@@ -770,6 +831,7 @@ fn sidebar_entry(
                 .truncate()
                 .child(title.to_owned()),
         )
+        .children(official)
         .children(mark)
 }
 
@@ -860,7 +922,13 @@ fn render(
             .into_any_element()
     });
     let body = if flow {
-        flow_screen(&live, &theme, cx)
+        if matches!(live.screen, Screen::UpdateResults { .. }) {
+            update_results_screen(this, &live, &theme, cx)
+        } else if matches!(live.screen, Screen::Choice(_)) {
+            choice_screen(&live, &theme, cx)
+        } else {
+            flow_screen(&live, &theme, cx)
+        }
     } else {
         match this.extension.clone() {
             Some(key) => extension_page(this, &key, &theme, window, cx),
@@ -951,6 +1019,341 @@ fn flow_screen(
     ]
 }
 
+/// The choice of a collection's extensions in place of the page (#308,
+/// ADR 0043): drawn where a package preview is, from the launcher's live
+/// view. One row per extension — its own icon, title, description and
+/// version, and its check mark at the row's right end — none ticked at
+/// first; what the run of the ticked ones came to for each once it ends.
+/// Clicking a row previews that extension (as Enter does in the launcher
+/// window); the check mark alone ticks it. The Install row after them
+/// runs the ticked extensions, each as its own package.
+fn choice_screen(
+    live: &LauncherView,
+    theme: &Theme,
+    cx: &mut Context<SettingsWindow>,
+) -> Vec<AnyElement> {
+    let inset = theme.geometry.settings.section_label_inset;
+    // What the launcher's status line says of the choice — the run's
+    // progress and what it came to — on the page, which the flow draws in
+    // place of the page's own status.
+    let status = status_tone(&live.status, theme).map(|(text, color)| {
+        controls::field_description(text.clone(), color, theme)
+            .px(inset)
+            .id("extensions-choice-status")
+            .debug_selector(|| "extensions-choice-status".into())
+            .role(Role::Status)
+            .aria_label(text)
+            .into_any_element()
+    });
+    let details = live
+        .details()
+        .iter()
+        .enumerate()
+        .map(|(index, line)| {
+            let selector = format!("extension-detail-{line}");
+            controls::field_description(line.clone(), theme.text_body, theme)
+                .px(inset)
+                .id(("extension-detail", index))
+                .debug_selector(move || selector)
+                .into_any_element()
+        })
+        .collect::<Vec<_>>();
+    let Screen::Choice(choice) = &live.screen else {
+        return flow_screen(live, theme, cx);
+    };
+    let mut rows: Vec<AnyElement> = Vec::new();
+    for (index, row) in live.rows.iter().enumerate().take(choice.extensions.len()) {
+        let extension = &choice.extensions[index];
+        let ticked = choice.ticked.get(index).copied().unwrap_or(false);
+        let outcome = choice.outcomes.get(index).cloned().flatten();
+        let id = row.id.clone();
+        let title = row.title.clone();
+        // What the run came to for it, under its description, once it
+        // reaches it.
+        let refusal = match &outcome {
+            Some(pane_core::ChoiceOutcome::Refused(why)) => Some(why.clone()),
+            _ => None,
+        };
+        let outcome_word = match &outcome {
+            Some(pane_core::ChoiceOutcome::Installed) => Some("Installed".to_owned()),
+            Some(pane_core::ChoiceOutcome::Installing) => Some("Installing…".to_owned()),
+            Some(pane_core::ChoiceOutcome::Refused(_)) => Some("Not installed".to_owned()),
+            None => None,
+        };
+        let mut lines: Vec<AnyElement> = Vec::new();
+        if let Some(description) = &extension.description {
+            lines.push(
+                controls::field_description(description.clone(), theme.text_muted, theme)
+                    .truncate()
+                    .into_any_element(),
+            );
+        }
+        if let Some(version) = &extension.version {
+            lines.push(
+                controls::field_description(format!("Version {version}"), theme.text_muted, theme)
+                    .into_any_element(),
+            );
+        }
+        if let Some(word) = &outcome_word {
+            lines.push(
+                controls::field_description(
+                    word.clone(),
+                    match &outcome {
+                        Some(pane_core::ChoiceOutcome::Installed) => theme.success,
+                        Some(pane_core::ChoiceOutcome::Refused(_)) => theme.danger,
+                        _ => theme.warning,
+                    },
+                    theme,
+                )
+                .into_any_element(),
+            );
+        }
+        if let Some(refusal) = &refusal {
+            lines.push(
+                controls::field_description(refusal.clone(), theme.danger, theme)
+                    .truncate()
+                    .into_any_element(),
+            );
+        }
+        let icon = crate::features::icons::drawn(&extension.icon, theme);
+        let scope = format!("extension-{title}");
+        let tick = settings_choice_tick(index, &id, &title, ticked, theme, cx);
+        let selector = format!("extension-row-{title}");
+        rows.push(
+            controls::list_item(
+                ("extension-row", index),
+                Some(row_icon_at(
+                    &RowIcon::Drawn(icon),
+                    TileSize::Row,
+                    "extension-item-icon",
+                    &scope,
+                    theme,
+                )),
+                title.clone(),
+                lines,
+                theme,
+            )
+            .debug_selector(move || selector)
+            .role(Role::Button)
+            .aria_label(title.clone())
+            .child(tick)
+            .on_click(cx.listener(move |this, _: &gpui::ClickEvent, _, cx| {
+                answer(this, &id, cx);
+            }))
+            .into_any_element(),
+        );
+    }
+    // The Install row, after the extensions, while no run is going: the
+    // last of the choice's rows, as the launcher's own rows list it.
+    for (index, row) in live.rows.iter().enumerate().skip(choice.extensions.len()) {
+        let id = row.id.clone();
+        let title = row.title.clone();
+        let subtitle = row.subtitle.clone().unwrap_or_default();
+        let selector = format!("extension-row-{title}");
+        rows.push(
+            controls::list_item(
+                ("extension-row", index),
+                None,
+                title.clone(),
+                vec![
+                    controls::field_description(subtitle, theme.text_muted, theme)
+                        .truncate()
+                        .into_any_element(),
+                ],
+                theme,
+            )
+            .debug_selector(move || selector)
+            .role(Role::Button)
+            .aria_label(title.clone())
+            .on_click(cx.listener(move |this, _: &gpui::ClickEvent, _, cx| {
+                answer(this, &id, cx);
+            }))
+            .into_any_element(),
+        );
+    }
+    let back = details_screen(&live.screen).then(|| {
+        let back = controls::button("extension-back", "Back", true, theme)
+            .debug_selector(|| "extension-back".into())
+            .role(Role::Button)
+            .aria_label("Back")
+            .on_click(cx.listener(|this, _: &gpui::ClickEvent, _, cx| {
+                // The way out of the choice the page shows, as the
+                // launcher window's Escape is there.
+                this.launcher.back();
+                launcher_changed_outside(cx);
+                cx.notify();
+            }));
+        div().flex().child(back)
+    });
+    let body = div()
+        .flex()
+        .flex_col()
+        .gap(theme.geometry.settings.section_label_gap)
+        .children(status)
+        .children(details)
+        .children((!rows.is_empty()).then(|| controls::list_card(rows, theme)))
+        .children(back);
+    vec![
+        controls::section(Some(live.title.clone().into()), body, theme)
+            .debug_selector(|| "extensions-title".into())
+            .into_any_element(),
+    ]
+}
+
+/// The check mark of one extension's row on the page's choice (#308):
+/// ticked or not, its own click target — the row around it previews the
+/// extension.
+fn settings_choice_tick(
+    index: usize,
+    id: &str,
+    title: &str,
+    ticked: bool,
+    theme: &Theme,
+    cx: &mut Context<SettingsWindow>,
+) -> Stateful<Div> {
+    let mark = div()
+        .flex_none()
+        .size(px(16.))
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(px(4.))
+        .border_1()
+        .border_color(if ticked {
+            theme.accent
+        } else {
+            theme.text_muted
+        })
+        .when(ticked, |mark| {
+            mark.bg(theme.accent)
+                .child(div().size(px(6.)).rounded(px(2.)).bg(theme.text_title))
+        });
+    let label = if ticked {
+        format!("Untick {title}")
+    } else {
+        format!("Tick {title}")
+    };
+    let id = id.to_owned();
+    div()
+        .id(("extension-tick", index))
+        .debug_selector(move || format!("extension-tick-{title}"))
+        .flex_none()
+        .flex()
+        .items_center()
+        .cursor_pointer()
+        .role(Role::CheckBox)
+        .aria_label(label)
+        .aria_toggled(if ticked {
+            Toggled::True
+        } else {
+            Toggled::False
+        })
+        .on_click(cx.listener(move |this, _: &gpui::ClickEvent, _, cx| {
+            // The mark takes the click, so the row around it does not
+            // preview the extension.
+            cx.stop_propagation();
+            if this.launcher.toggle_choice_tick(&id) {
+                cx.notify();
+            }
+        }))
+        .child(mark)
+}
+
+/// The update results screen in place of the page (#256): the launcher's
+/// record of the latest pass that recorded, its groups in the order
+/// Updated, Skipped, No longer offered, Failed, the empty ones hidden,
+/// each row the extension's icon, title and outcome, opening that
+/// extension's page — as the screen's own rows do in the launcher
+/// window. The way back is the page's own Back button, as a details
+/// screen's is.
+fn update_results_screen(
+    this: &mut SettingsWindow,
+    live: &LauncherView,
+    theme: &Theme,
+    cx: &mut Context<SettingsWindow>,
+) -> Vec<AnyElement> {
+    let results = this.launcher.update_results();
+    let mut groups = Vec::new();
+    let mut at: usize = 0;
+    for (label, group) in [
+        ("Updated", &results.updated),
+        ("Waiting", &results.waiting),
+        ("Skipped", &results.skipped),
+        // A notice, not a fault: the extensions of collections the pass
+        // found no longer offered by them (ADR 0044, #310).
+        ("No longer offered", &results.removed),
+        ("Failed", &results.failed),
+    ] {
+        if group.is_empty() {
+            continue;
+        }
+        let mut items: Vec<AnyElement> = Vec::new();
+        for row in group {
+            let index = at;
+            at += 1;
+            let key = row.identity.key();
+            let title = row.title.clone();
+            let icon = crate::features::icons::row_icon_of(&this.launcher, &key, theme);
+            let tile = row_icon_at(
+                &icon,
+                TileSize::Row,
+                ("extension-item-icon", index),
+                &format!("extension-{title}"),
+                theme,
+            );
+            let lines = vec![
+                controls::field_description(row.detail.clone(), theme.text_muted, theme)
+                    .truncate()
+                    .into_any_element(),
+            ];
+            let selector = format!("extension-row-{title}");
+            items.push(
+                controls::list_item(
+                    ("extension-row", index),
+                    Some(tile),
+                    title.clone(),
+                    lines,
+                    theme,
+                )
+                .debug_selector(move || selector)
+                .role(Role::Link)
+                .aria_label(title)
+                .on_click(cx.listener(move |this, _: &gpui::ClickEvent, _, cx| {
+                    this.show_extension(Some(key.clone()), cx);
+                }))
+                .into_any_element(),
+            );
+        }
+        groups.push(
+            controls::section(Some(label.into()), controls::list_card(items, theme), theme)
+                .debug_selector(move || format!("section-{label}"))
+                .into_any_element(),
+        );
+    }
+    let back = controls::button("extension-back", "Back", true, theme)
+        .debug_selector(|| "extension-back".into())
+        .role(Role::Button)
+        .aria_label("Back")
+        .on_click(cx.listener(|this, _: &gpui::ClickEvent, _, cx| {
+            // The way out of the results screen, as the launcher window's
+            // Escape is there.
+            this.launcher.back();
+            launcher_changed_outside(cx);
+            cx.notify();
+        }));
+    let body = div()
+        .flex()
+        .flex_col()
+        .gap(theme.geometry.settings.section_label_gap)
+        .children(groups)
+        .child(div().flex().child(back));
+    vec![
+        controls::section(Some(live.title.clone().into()), body, theme)
+            .debug_selector(|| "extensions-title".into())
+            .into_any_element(),
+    ]
+}
+
 /// One entry of a list on these pages as a Settings list item named `id`:
 /// its tile (with the scope its icon's selectors name) and its title,
 /// and, when it cannot be used here, the reason in the warning tone, which
@@ -975,6 +1378,33 @@ fn list_entry(
         .role(Role::Button)
         .aria_label(title.to_owned())
         .when_some(reason, |item, reason| item.aria_description(reason))
+}
+
+/// What the group's page says under its Check for updates button: when
+/// Pane last checked for extension updates, for people — "Last checked 3
+/// minutes ago" — or that it has not yet. The clock the record keeps is
+/// the launcher's, which in release builds is the system's.
+fn last_checked_words(checked: Option<u64>) -> String {
+    let Some(at) = checked else {
+        return "Not checked yet".into();
+    };
+    // A future time (the record read before this Pane's clock caught up)
+    // reads as just now, as a negative ago does elsewhere.
+    let seconds = SystemClock.now().saturating_sub(at) / 1000;
+    let ago = |count: u64, unit: &str| {
+        if count == 1 {
+            format!("1 {unit} ago")
+        } else {
+            format!("{count} {unit}s ago")
+        }
+    };
+    let when = match seconds {
+        0..60 => "just now".into(),
+        60..3600 => ago(seconds / 60, "minute"),
+        3600..86_400 => ago(seconds / 3600, "hour"),
+        _ => ago(seconds / 86_400, "day"),
+    };
+    format!("Last checked {when}")
 }
 
 /// The group's own page: the installed extensions, each opening its page;
@@ -1008,9 +1438,40 @@ fn group_page(
                 .truncate()
                 .into_any_element(),
         ];
+        // What the package does, under its title as the extension's own
+        // page shows it (#224): one line, cut like the source line.
+        if let Some(description) = package.description() {
+            lines.push(
+                controls::field_description(description.to_owned(), theme.text_muted, theme)
+                    .truncate()
+                    .id(("extension-item-description", index))
+                    .debug_selector(|| "extension-item-description".into())
+                    .into_any_element(),
+            );
+        }
+        // One of Pane's own, said after where it comes from (#280).
+        if this.launcher.extension_is_official(&package.identity) {
+            let selector = format!("extension-item-official-{title}");
+            lines.push(
+                controls::field_description(OFFICIAL, theme.text_muted, theme)
+                    .debug_selector(move || selector)
+                    .into_any_element(),
+            );
+        }
         if !package.enabled {
             lines.push(
                 controls::field_description("Disabled", theme.text_muted, theme).into_any_element(),
+            );
+        }
+        // A package that waits for what it requires says so, so the broken
+        // extensions are found without opening each (#157).
+        if let Some(wait) = this.launcher.extension_wait(&package.identity) {
+            let wait_selector = format!("extension-wait-{title}");
+            lines.push(
+                controls::field_description(wait.status(), theme.warning, theme)
+                    .id(("extension-wait", index))
+                    .debug_selector(move || wait_selector)
+                    .into_any_element(),
             );
         }
         if let Some(mark) = &mark {
@@ -1062,6 +1523,11 @@ fn group_page(
             )
             .into_any_element(),
         );
+    }
+    // The capabilities two or more of them provide, each with the provider
+    // the user chooses for it (#154).
+    if let Some(capabilities) = capabilities_section(this, theme, window, cx) {
+        content.push(capabilities);
     }
     // The operations that belong to no installed extension: the
     // runtime's, data kept for an uninstalled one; then every extension's
@@ -1120,10 +1586,43 @@ fn group_page(
         .on_click(cx.listener(move |this, _: &gpui::ClickEvent, _, cx| {
             run(this, &operation, cx);
         }));
+        // Check for updates, beside the choice that governs the automatic
+        // ones: the pass the user asked for — the same pass root search's
+        // Check for Extension Updates row starts (ADR 0043: two entry
+        // points, one flow) — with when Pane last checked under it. The
+        // toast that follows the pass is the launcher window's; the page
+        // says when the check ran.
+        let words = last_checked_words(this.launcher.last_extension_check());
+        let last = controls::field_description(words.clone(), theme.text_muted, theme)
+            .id("extension-last-checked")
+            .role(Role::Status)
+            .aria_label(words)
+            .debug_selector(|| "extension-last-checked".into());
+        let check = controls::setting_row_with(
+            div()
+                .flex()
+                .flex_col()
+                .child(controls::field_label("Check for updates", theme))
+                .child(last),
+            Vec::new(),
+            theme,
+        )
+        .child(
+            controls::button("extension-check-updates", "Check for updates", true, theme)
+                .debug_selector(|| "extension-check-updates".into())
+                .role(Role::Button)
+                .aria_label("Check for updates")
+                .on_click(cx.listener(|this, _: &gpui::ClickEvent, _, cx| {
+                    this.extensions.outcome = None;
+                    keep_outcome_of(this.launcher.check_extension_updates(), cx);
+                })),
+        )
+        .id("extension-row-Check for updates")
+        .debug_selector(|| "extension-row-Check for updates".into());
         content.push(
             controls::section(
                 None,
-                controls::card([switch.into_any_element()], theme),
+                controls::card([switch.into_any_element(), check.into_any_element()], theme),
                 theme,
             )
             .into_any_element(),
@@ -1221,6 +1720,152 @@ fn install_section(
         .into_any_element()
 }
 
+/// The group page's Capabilities section (#154): each capability two or
+/// more installed extensions provide, with a dropdown of its providers
+/// ([`crate::ui::select`], committing through
+/// [`pane_core::Launcher::choose_provider`]), the consumers that use it,
+/// and "<chosen> is disabled; using <other>" (or paused, waiting) while
+/// the choice falls back. `None` when no capability has two or more
+/// providers: a capability with one needs no choice. Its rows' debug
+/// selectors are the select's own under `capability-select-<name>`; the
+/// row is `capability-<name>`, its consumers line
+/// `capability-used-<name>` and the note `capability-note-<name>`.
+fn capabilities_section(
+    this: &mut SettingsWindow,
+    theme: &Theme,
+    window: &mut Window,
+    cx: &mut Context<SettingsWindow>,
+) -> Option<AnyElement> {
+    let capabilities = this.launcher.capabilities();
+    if capabilities.is_empty() {
+        return None;
+    }
+    let mut rows = Vec::new();
+    for capability in &capabilities {
+        let name = capability.name.clone();
+        let select = capability_select(this, capability, window, cx);
+        let mut lines = Vec::new();
+        if !capability.consumers.is_empty() {
+            let selector = format!("capability-used-{name}");
+            lines.push(
+                controls::field_description(
+                    format!("Used by {}", joined(&capability.consumers)),
+                    theme.text_muted,
+                    theme,
+                )
+                .truncate()
+                .debug_selector(move || selector)
+                .into_any_element(),
+            );
+        }
+        if let Some(fallback) = &capability.fallback {
+            let selector = format!("capability-note-{name}");
+            lines.push(
+                controls::field_description(fallback.clone(), theme.warning, theme)
+                    .debug_selector(move || selector)
+                    .into_any_element(),
+            );
+        }
+        let selector = format!("capability-{name}");
+        rows.push(
+            controls::setting_row(name, lines, theme)
+                .child(div().flex_none().child(select))
+                .id(SharedString::from(selector.clone()))
+                .debug_selector(move || selector)
+                .into_any_element(),
+        );
+    }
+    Some(
+        controls::section(
+            Some("Capabilities".into()),
+            controls::card(rows, theme),
+            theme,
+        )
+        .debug_selector(|| "extension-section-Capabilities".into())
+        .into_any_element(),
+    )
+}
+
+/// The select of the capability `capability`, as the Capabilities section
+/// offers it: made the first time the section draws it and kept, told the
+/// providers and the provider in force each time it draws. A choice is
+/// recorded as it is made ([`choose_provider`]), and applies to the next
+/// call, without reloading or restarting any consumer.
+fn capability_select(
+    this: &mut SettingsWindow,
+    capability: &pane_core::Capability,
+    window: &mut Window,
+    cx: &mut Context<SettingsWindow>,
+) -> Entity<Select> {
+    let name = capability.name.clone();
+    if !this.extensions.capability_selects.contains_key(&name) {
+        let live = Rc::new(RefCell::new(SelectLive::default()));
+        let read = live.clone();
+        let settings = cx.entity().downgrade();
+        let what = name.clone();
+        // The trigger is named for what it chooses, not the capability's
+        // name again: the row's label already says that, and a name of its
+        // own is what the smoke and a screen reader reach it by.
+        let combo = format!("Provider for {what}");
+        let debug = format!("capability-select-{what}");
+        let select = cx.new(|cx| {
+            Select::new(
+                combo,
+                "Which extension provides it",
+                debug,
+                Rc::new(move |cx: &App| {
+                    let visuals = crate::settings::visuals(cx);
+                    let live = read.borrow();
+                    Model {
+                        theme: visuals.theme,
+                        material: visuals.material,
+                        choices: live.choices.clone(),
+                        committed: live.committed.clone(),
+                    }
+                }),
+                Rc::new(move |provider: &str, _: &mut Window, cx: &mut App| {
+                    settings
+                        .update(cx, |this, cx| {
+                            choose_provider(this, &what, provider, cx);
+                        })
+                        .ok();
+                }),
+                window,
+                cx,
+            )
+        });
+        this.extensions
+            .capability_selects
+            .insert(name.clone(), CapabilitySelect { select, live });
+    }
+    let kept = &this.extensions.capability_selects[&name];
+    *kept.live.borrow_mut() = SelectLive {
+        choices: capability
+            .providers
+            .iter()
+            .map(|provider| Choice {
+                id: provider.source.clone().into(),
+                label: provider.title.clone().into(),
+                subtitle: None,
+                keywords: vec![provider.title.clone().into()],
+                unavailable_reason: None,
+            })
+            .collect(),
+        committed: Some(capability.selected.clone().into()),
+    };
+    kept.select.clone()
+}
+
+/// `names` as one list: "Notes", "Notes and Translate", "Notes, Translate
+/// and Farewell".
+fn joined(names: &[String]) -> String {
+    match names.split_last() {
+        None => String::new(),
+        Some((last, [])) => last.clone(),
+        Some((last, rest)) => format!("{} and {last}", rest.join(", ")),
+    }
+}
+
 /// A switch row of these pages: `title` with its switch at its right end,
 /// the whole row the switch (a click anywhere takes it), named `id`; its
 /// debug selector `selector`, its switch's `<selector>-switch`.
@@ -1270,6 +1915,9 @@ fn extension_page(
         fallbacks,
     } = page_operations(this.launcher.extension_operations(), &package.identity);
     let mark = this.launcher.extension_mark(&package.identity);
+    // What it needs, what it provides and the groups it is part of
+    // (#157), read live like every other part of the page.
+    let details = this.launcher.extension_details(&package.identity);
     let mut content = vec![header(this, &package, mark.as_ref(), theme)];
 
     // The enable switch: the launcher's own operation for the extension,
@@ -1339,6 +1987,14 @@ fn extension_page(
             .into_any_element(),
     );
 
+    // What it needs, when something it requires cannot serve it (#157):
+    // each unmet requirement, the chain down to what is actually missing,
+    // with the fix row beside it, which applies at once. The rows
+    // disappear when the package comes back.
+    if let Some(section) = requirements_section(details.as_ref(), theme, cx) {
+        content.push(section);
+    }
+
     // Its preferences (#143).
     if let Some(preferences) = this.launcher.preferences_of(&package.identity) {
         let fields = text_fields(this, &preferences, cx);
@@ -1373,11 +2029,165 @@ fn extension_page(
     content.push(commands_section(
         this, &package, &forget, &fallbacks, theme, window, cx,
     ));
+    // What it provides, and the groups of packages that require one
+    // another it is part of (#157).
+    if let Some(details) = details {
+        if let Some(section) = provides_section(&details.provides, theme) {
+            content.push(section);
+        }
+        if let Some(section) = cycles_section(&details.cycles, theme) {
+            content.push(section);
+        }
+    }
     content
 }
 
+/// The page's Requirements section (#157): each requirement of the
+/// extension that is not met, the chain down to what is actually missing
+/// as its title, with the fix row beside it as a button at its right end,
+/// which applies at once. Shown only while something is not met; the rows
+/// disappear when what they name comes back.
+fn requirements_section(
+    details: Option<&ExtensionDetails>,
+    theme: &Theme,
+    cx: &mut Context<SettingsWindow>,
+) -> Option<AnyElement> {
+    let requirements = &details?.requirements;
+    if requirements.is_empty() {
+        return None;
+    }
+    let rows = requirements
+        .iter()
+        .map(|requirement| {
+            let title = requirement.title.clone();
+            let label = controls::field_description(title.clone(), theme.warning, theme)
+                .debug_selector(move || format!("extension-requirement-{title}"));
+            // The fix row beside the requirement: a button, which runs the
+            // launcher's fix for it.
+            let fix = requirement.fix.as_ref().map(|fix| {
+                let selector = format!("extension-fix-{}", fix.title);
+                let chosen = fix.clone();
+                let id = SharedString::from(selector.clone());
+                controls::button(id, fix.title.clone(), true, theme)
+                    .debug_selector(move || selector)
+                    .role(Role::Button)
+                    .aria_label(fix.title.clone())
+                    .on_click(cx.listener(move |this, _: &gpui::ClickEvent, _, cx| {
+                        run_fix(this, &chosen, cx);
+                    }))
+            });
+            controls::setting_row_with(label, Vec::new(), theme)
+                .child(div().flex_none().children(fix))
+                .into_any_element()
+        })
+        .collect::<Vec<_>>();
+    let card = controls::card(rows, theme);
+    let section = controls::section(Some("Requirements".into()), card, theme)
+        .debug_selector(|| "extension-requirements".into());
+    Some(section.into_any_element())
+}
+
+/// The page's Provides section (#157): each capability the extension
+/// provides, marked chosen or not chosen — whether it is the provider
+/// Pane routes the capability's calls to — with the installed extensions
+/// that use it.
+fn provides_section(provides: &[ProvidedCapability], theme: &Theme) -> Option<AnyElement> {
+    if provides.is_empty() {
+        return None;
+    }
+    let rows = provides
+        .iter()
+        .enumerate()
+        .map(|(index, provided)| {
+            let marked = if provided.chosen {
+                "Chosen"
+            } else {
+                "Not chosen"
+            };
+            let capability = provided.capability.clone();
+            let chosen = controls::field_description(marked, theme.text_muted, theme)
+                .debug_selector(move || format!("extension-{marked}-{capability}"));
+            let mut lines = vec![chosen.into_any_element()];
+            if !provided.consumers.is_empty() {
+                let used = format!("Used by {}", consumers(&provided.consumers));
+                let consumers = controls::field_description(used, theme.text_muted, theme);
+                let capability = provided.capability.clone();
+                lines.push(
+                    consumers
+                        .debug_selector(move || format!("extension-consumers-{capability}"))
+                        .into_any_element(),
+                );
+            }
+            let title = provided.capability.clone();
+            let selector = format!("extension-provides-{}", provided.capability);
+            controls::setting_row(title, lines, theme)
+                .id(("extension-provides", index))
+                .debug_selector(move || selector)
+                .into_any_element()
+        })
+        .collect::<Vec<_>>();
+    let card = controls::card(rows, theme);
+    let section = controls::section(Some("Provides".into()), card, theme)
+        .debug_selector(|| "extension-provides".into());
+    Some(section.into_any_element())
+}
+
+/// The page's Cycles section (#157): each group of packages that require
+/// one another the extension is part of, as its declarations say. Healthy
+/// groups are listed too: they run, as ADR 0041 decides.
+fn cycles_section(cycles: &[RequirementCycle], theme: &Theme) -> Option<AnyElement> {
+    if cycles.is_empty() {
+        return None;
+    }
+    let rows = cycles
+        .iter()
+        .enumerate()
+        .map(|(index, cycle)| {
+            let note = controls::field_description(
+                "They wait together if one cannot run, and Disable all or Uninstall all \
+                 affects them together",
+                theme.text_muted,
+                theme,
+            );
+            let lines = vec![note.into_any_element()];
+            let title = cycle.title.clone();
+            let selector = format!("extension-cycle-{}", cycle.title);
+            controls::setting_row(title, lines, theme)
+                .id(("extension-cycle", index))
+                .debug_selector(move || selector)
+                .into_any_element()
+        })
+        .collect::<Vec<_>>();
+    let card = controls::card(rows, theme);
+    let section = controls::section(Some("Cycles".into()), card, theme)
+        .debug_selector(|| "extension-cycles".into());
+    Some(section.into_any_element())
+}
+
+/// The extensions that use a capability, as the Provides section names
+/// them: "X", "X and Y", "X, Y and Z".
+fn consumers(titles: &[String]) -> String {
+    match titles.split_last() {
+        None => String::new(),
+        Some((last, [])) => last.clone(),
+        Some((last, rest)) => format!("{} and {last}", rest.join(", ")),
+    }
+}
+
+/// Runs the fix row `fix` beside an unmet requirement through the
+/// launcher, which stays on the screen the user had
+/// ([`Launcher::run_extension_fix`]); what it came to is the page's
+/// status, and the requirement row disappears when the package comes
+/// back.
+fn run_fix(this: &mut SettingsWindow, fix: &RequirementFix, cx: &mut Context<SettingsWindow>) {
+    this.extensions.outcome = None;
+    let pending = this.launcher.run_extension_fix(fix);
+    keep_outcome_of(pending, cx);
+}
+
 /// The page's header: the extension's large icon, its title, what it does,
-/// where it comes from, and the mark that needs saying, in full.
+/// where it comes from, and the mark that needs saying, in full. One of
+/// Pane's own carries the word beside its title (#280, ADR 0045).
 fn header(
     this: &SettingsWindow,
     package: &InstalledPackage,
@@ -1387,6 +2197,19 @@ fn header(
     let key = package.identity.key();
     let title = package.title();
     let icon = crate::features::icons::row_icon_of(&this.launcher, &key, theme);
+    let official = this
+        .launcher
+        .extension_is_official(&package.identity)
+        .then(|| {
+            div()
+                .id("extension-page-official")
+                .debug_selector(|| "extension-page-official".into())
+                .flex_none()
+                .text_size(theme.typography.settings_caption_size)
+                .font_weight(theme.typography.medium)
+                .text_color(theme.text_muted)
+                .child(OFFICIAL_WORD)
+        });
     let description = description_of(package).map(|description| {
         controls::field_description(description, theme.text_body, theme)
             .id("extension-page-description")
@@ -1431,14 +2254,24 @@ fn header(
                 .gap(px(2.))
                 .child(
                     div()
-                        .id("extension-page-title")
-                        .debug_selector(move || title_selector)
-                        .text_size(px(18.))
-                        .font_weight(theme.typography.medium)
-                        .text_color(theme.text_title)
-                        .role(Role::Heading)
-                        .aria_label(title.clone())
-                        .child(title.clone()),
+                        .flex()
+                        .items_center()
+                        .gap(px(6.))
+                        .child(
+                            div()
+                                .id("extension-page-title")
+                                .debug_selector(move || title_selector)
+                                .flex_1()
+                                .min_w(px(0.))
+                                .truncate()
+                                .text_size(px(18.))
+                                .font_weight(theme.typography.medium)
+                                .text_color(theme.text_title)
+                                .role(Role::Heading)
+                                .aria_label(title.clone())
+                                .child(title.clone()),
+                        )
+                        .children(official),
                 )
                 .children(description)
                 .child(
@@ -2191,6 +3024,39 @@ fn preference_selects(
 
 // ------------------------------------------------------------ the behavior
 
+/// Records `provider` as the user's chosen provider of `capability`, as the
+/// Capabilities section's dropdown was changed: the choice applies to the
+/// next call, without reloading or restarting any consumer, and is
+/// recorded off the calling thread; a value that cannot be chosen, or a
+/// choice that cannot be recorded, says why on the page.
+fn choose_provider(
+    this: &mut SettingsWindow,
+    capability: &str,
+    provider: &str,
+    cx: &mut Context<SettingsWindow>,
+) {
+    match this.launcher.choose_provider(capability, provider) {
+        Err(problem) => {
+            this.extensions.problem = Some(problem);
+            cx.notify();
+        }
+        Ok(pending) => {
+            launcher_changed_outside(cx);
+            cx.notify();
+            cx.spawn(async move |this, cx| {
+                let problem = pending.await.err();
+                this.update(cx, |this, cx| {
+                    this.extensions.problem = problem;
+                    cx.notify();
+                })
+                .ok();
+                cx.update(launcher_changed_outside);
+            })
+            .detach();
+        }
+    }
+}
+
 /// Saves `value` as the preference kept as `key` of the extension whose
 /// identity key is `package`, as the user changed it on its page; the
 /// launcher window redraws (a row may no longer need setup), and a value
@@ -2296,11 +3162,10 @@ fn appended(listed: &str, file: &str) -> String {
         .join(", ")
 }
 
-/// The system's picker for a path of `kind`, as a file, folder or
-/// application preference's "Choose…" opens it, here and on the launcher's
-/// Setup screen.
 /// What a path preference's "Choose…" chooses: a file, a folder, or an
-/// application (a program's file, or on macOS its bundle, a folder).
+/// application (a program's file, or on macOS its bundle, a folder). The
+/// system's picker for a path of `kind` (see [`path_prompt`]) opens here
+/// and on the launcher's Setup screen.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum PathKind {
     File,
@@ -2572,5 +3437,39 @@ mod tests {
             appended("KeePass.exe,1Password.exe", "keepass.EXE"),
             "KeePass.exe, 1Password.exe"
         );
+    }
+
+    /// What the group's page says of when Pane last checked, pluralized as
+    /// the codebase's other "… ago" words are.
+    #[test]
+    fn the_last_checked_line_says_when_for_people() {
+        assert_eq!(last_checked_words(None), "Not checked yet");
+        let now = SystemClock.now();
+        let minutes = |count: u64| now - count * 60 * 1000;
+        assert_eq!(last_checked_words(Some(now)), "Last checked just now");
+        assert_eq!(
+            last_checked_words(Some(now + 60_000)),
+            "Last checked just now"
+        );
+        assert_eq!(
+            last_checked_words(Some(minutes(1))),
+            "Last checked 1 minute ago"
+        );
+        assert_eq!(
+            last_checked_words(Some(minutes(3))),
+            "Last checked 3 minutes ago"
+        );
+        let hours = |count: u64| now - count * 3600 * 1000;
+        assert_eq!(
+            last_checked_words(Some(hours(1))),
+            "Last checked 1 hour ago"
+        );
+        assert_eq!(
+            last_checked_words(Some(hours(2))),
+            "Last checked 2 hours ago"
+        );
+        let days = |count: u64| now - count * 86_400 * 1000;
+        assert_eq!(last_checked_words(Some(days(1))), "Last checked 1 day ago");
+        assert_eq!(last_checked_words(Some(days(5))), "Last checked 5 days ago");
     }
 }

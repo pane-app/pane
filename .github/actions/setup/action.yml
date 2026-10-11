@@ -101,6 +101,7 @@ runs:
           echo "PANE_TEST_PROCESS_TREES=1"
           if [ "$RUNNER_OS" != Linux ]; then echo "PANE_TEST_REAL_CLIPBOARD=1"; fi
           if [ "$RUNNER_OS" = Windows ]; then echo "PANE_TEST_SYSTEM_ICONS=1"; fi
+          if [ "$RUNNER_OS" = Windows ]; then echo "PANE_TEST_REAL_INPUT=1"; fi
         } >> "$GITHUB_ENV"
 
     # The tests write many small files under their temporary folders. On

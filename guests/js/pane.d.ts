@@ -12,6 +12,7 @@
 /// <reference path="./commands.d.ts" />
 /// <reference path="./feedback-host.d.ts" />
 /// <reference path="./system-host.d.ts" />
+/// <reference path="./system-commands-host.d.ts" />
 /// <reference path="./data.d.ts" />
 /// <reference path="./operations.d.ts" />
 /// <reference path="./applications.d.ts" />
@@ -19,7 +20,10 @@
 /// <reference path="./programs-host.d.ts" />
 /// <reference path="./files.d.ts" />
 /// <reference path="./file-index.d.ts" />
+/// <reference path="./typed-folder.d.ts" />
 /// <reference path="./clipboard.d.ts" />
+/// <reference path="./run.d.ts" />
+/// <reference path="./windows.d.ts" />
 
 import type { LaunchRecord } from "pane:extension/commands@0.1.0";
 import type { Outcome, Rendered, UiEvent } from "./view.js";
@@ -317,6 +321,36 @@ export type RootAction =
   | { tag: "open-file"; val: string };
 
 /**
+ * One further way to copy a computed answer, as the Actions panel offers
+ * it: what the copy is called and the text it copies.
+ */
+export interface AnswerCopy {
+  /** The copy's title, as the panel shows it ("Copy as RGB"). */
+  title: string;
+  /** The text it copies. */
+  text: string;
+}
+
+/**
+ * What a root result that is an answer's card says beyond its title and
+ * action (the calculator's colour and date answers): the section it sits
+ * under, the colour of its swatch, and further ways to copy it. An answer
+ * without it sits under its command's title and offers only the copy its
+ * own action is.
+ */
+export interface AnswerDetail {
+  /** The section the answer is listed under, in place of the command's
+   * ("Color", "Date & Time"). */
+  section: string;
+  /** The colour of the card's swatch, as `#RRGGBB` or `#RRGGBBAA`; null
+   * or omitted when the answer is not a colour. */
+  swatch?: string | null;
+  /** Further ways to copy the answer, each an entry of the Actions
+   * panel, in order; Enter's copy stays the result's own action. */
+  copies: AnswerCopy[];
+}
+
+/**
  * One result computed from root search's query, listed above the results
  * root search finds by title (below them for an `open-file` result).
  */
@@ -331,11 +365,18 @@ export interface RootResult {
    * `{ tag: "open-url", val: url }` opens `url`, an `http://` or `https://`
    * address, with the system's handler for web links (Pane refuses others);
    * `{ tag: "open-file", val: id }` opens the entry with `id`, as the file
-   * index's `search()` or `listFolder()` gave it, with the system's handler
-   * for its type, once Pane has checked it again (Enter on a program the
-   * index found shows it in the file manager, never runs it).
+   * index's `search()`, `listFolder()` or the typed folder's
+   * `listEntries()` gave it, with the system's handler for its type, once
+   * Pane has checked it again (Enter on a program the index found shows it
+   * in the file manager, never runs it).
    */
   action: RootAction;
+  /**
+   * What the answer's card shows beyond its title and action, when the
+   * result is one (see {@link AnswerDetail}); omitted or `null` for a
+   * plain result.
+   */
+  answer?: AnswerDetail | null;
 }
 
 /**
@@ -359,14 +400,29 @@ export interface RootResult {
 export interface RootResults {
   /**
    * The results for `query`, the text typed into root search, never empty or
-   * blank, best first. A query the command has no answer for resolves to
-   * `[]`: that is not an error. Throwing is the extension failing; Pane
-   * lists a result explaining it. Pane asks again on every change of the
-   * query; once the query changes or root search is left, it cancels a call
-   * still waiting (on `listFolder`, say): the instance is dropped, so its
-   * module state is lost, and the next call starts afresh.
+   * blank, best first, asked about at `at`. A query the command has no
+   * answer for resolves to `[]`: that is not an error. Throwing is the
+   * extension failing; Pane lists a result explaining it. Pane asks again
+   * on every change of the query; once the query changes or root search is
+   * left, it cancels a call still waiting (on `listFolder`, say): the
+   * instance is dropped, so its module state is lost, and the next call
+   * starts afresh.
    */
-  resultsFor(query: string): Promise<RootResult[]>;
+  resultsFor(query: string, at: WallTime): Promise<RootResult[]>;
+}
+
+/**
+ * When Pane asks for results: the moment the user stopped at the query and
+ * how far the local time there is from UTC, by the clock root search's own
+ * dates are shown by. A command that answers about the current date or
+ * time ("now", "today") computes its answer from it; anything else can
+ * ignore it.
+ */
+export interface WallTime {
+  /** Milliseconds since the Unix epoch. */
+  milliseconds: number;
+  /** How far local time at `milliseconds` is from UTC, in milliseconds. */
+  offset: number;
 }
 
 

@@ -7,13 +7,18 @@
 //!
 //! Where the system can paste, paste closes the window, puts the content
 //! on the clipboard, has the application paste it and puts back what the
-//! clipboard held, unless something else was copied meanwhile. Where it
-//! cannot yet, paste answers "not available", distinct from a failure, and
+//! clipboard held, unless something else was copied meanwhile — but not
+//! when the paste fails (#125): what was pasted stays on the clipboard,
+//! still concealed, for the user to paste by hand. Where the system cannot
+//! paste yet, paste answers "not available", distinct from a failure, and
 //! leaves the window open; the SDKs' standard Paste then copies and says so
 //! in a HUD. The front application answers its name and icon, or none; the
 //! selected text answers the text, "nothing selected" or a failure. The
-//! real adapters answer "not available on this system yet" for each, and
-//! that is never a reason to pause the package.
+//! real adapters answer "not available on this system yet" for each of
+//! those that their system does not implement — on Windows, paste, the
+//! front application and the selected text are implemented (#125), their
+//! real paths covered by the real-input adapter test — and that is never
+//! a reason to pause the package.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -278,20 +283,25 @@ fn a_failed_paste_is_an_error_not_a_copy(fixture: &Fixture) {
         system.set_clipboard(Some(Clip::Text(BEFORE.into())));
     });
     pane.act(PASTE);
+    // Nothing is put back on a failure (#125): what was pasted stays on
+    // the clipboard, still concealed, for the user to paste by hand.
     assert_eq!(
         pane.system.take(),
         [
             copied(pasted_text(), true),
             Done::Pasted(Some(pasted_text())),
-            copied(Clip::Text(BEFORE.into()), true),
         ],
-        "{}: no copy instead",
+        "{}: no copy instead, and nothing put back",
         fixture.title
     );
-    // The window had closed for the paste: the failure is said in a HUD.
+    assert_eq!(pane.system.clipboard(), Some(pasted_text()));
+    // The window had closed for the paste: the failure is said in a
+    // HUD, its title and its message split as the HUD shows them (#250).
     pane.closed(
         &[Hud {
-            title: format!("The extension reported an error: {why}"),
+            title: "The extension reported an error".into(),
+            message: Some(why.to_owned()),
+            icon: None,
             style: ToastStyle::Failure,
         }],
         "a failed Paste",
@@ -311,10 +321,7 @@ fn where_paste_is_not_available_paste_copies_and_says_so(fixture: &Fixture) {
         fixture.title
     );
     pane.closed(
-        &[Hud {
-            title: PASTE_FALLBACK.into(),
-            style: ToastStyle::Success,
-        }],
+        &[Hud::new(ToastStyle::Success, PASTE_FALLBACK)],
         "Paste where it is not available",
     );
 
@@ -440,7 +447,13 @@ fn selected_text_tells_nothing_selected_from_a_failure(fixture: &Fixture) {
     pane.stayed("reading the selected text");
 }
 
-fn the_real_adapters_say_each_is_not_available_on_this_system_yet(fixture: &Fixture) {
+fn the_real_adapters_answer_what_this_system_implements(fixture: &Fixture) {
+    // On macOS and Linux, paste, the front application and the selected
+    // text are not available yet. On Windows all three are implemented
+    // (#125): what they answer depends on the session, so only that they
+    // answer rather than say "not available" — their real paths are the
+    // real-input adapter test's, which owns the windows it pastes into
+    // and reads the selection of.
     let pane = Pane::native(fixture);
     let system = if cfg!(target_os = "windows") {
         "Windows"
@@ -450,28 +463,40 @@ fn the_real_adapters_say_each_is_not_available_on_this_system_yet(fixture: &Fixt
         "Linux"
     };
     let not_yet = |what: &str| not_available(&format!("{what} is not available on {system} yet"));
-    assert_eq!(
-        pane.titles()[PASTE_TO],
-        "Paste to Active App",
-        "{}",
-        fixture.title
-    );
-    // Not the standard Paste: its fallback would copy to the real
-    // clipboard.
-    pane.act(PASTE_DIRECTLY);
-    assert_eq!(
-        shown(&pane.launcher),
-        not_yet("Pasting into another application")
-    );
-    pane.stayed("Paste Directly");
-    pane.act(FRONT_APPLICATION);
-    assert_eq!(
-        shown(&pane.launcher),
-        not_yet("Reading the application in front")
-    );
-    pane.act(SEARCH_SELECTION);
-    assert_eq!(shown(&pane.launcher), not_yet("Reading the selected text"));
-    pane.stayed("reading the selection");
+    if cfg!(target_os = "windows") {
+        // Only the read-only halves are asked: a paste here would paste
+        // for real, into whatever the session has in front, and so would
+        // reading the selection, which copies where UI Automation gives
+        // nothing.
+        pane.act(FRONT_APPLICATION);
+        assert_ne!(
+            shown(&pane.launcher),
+            not_yet("Reading the application in front")
+        );
+    } else {
+        assert_eq!(
+            pane.titles()[PASTE_TO],
+            "Paste to Active App",
+            "{}",
+            fixture.title
+        );
+        // Not the standard Paste: its fallback would copy to the real
+        // clipboard.
+        pane.act(PASTE_DIRECTLY);
+        assert_eq!(
+            shown(&pane.launcher),
+            not_yet("Pasting into another application")
+        );
+        pane.stayed("Paste Directly");
+        pane.act(FRONT_APPLICATION);
+        assert_eq!(
+            shown(&pane.launcher),
+            not_yet("Reading the application in front")
+        );
+        pane.act(SEARCH_SELECTION);
+        assert_eq!(shown(&pane.launcher), not_yet("Reading the selected text"));
+        pane.stayed("reading the selection");
+    }
     assert_eq!(pane.system.take(), [], "the recording system was not given");
     assert_eq!(pane.launcher.view().screen, Screen::Command);
 }
@@ -497,5 +522,5 @@ contract!(
     where_paste_is_not_available_paste_copies_and_says_so,
     front_application_answers_its_name_and_icon_or_none,
     selected_text_tells_nothing_selected_from_a_failure,
-    the_real_adapters_say_each_is_not_available_on_this_system_yet,
+    the_real_adapters_answer_what_this_system_implements,
 );

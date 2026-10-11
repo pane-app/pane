@@ -20,6 +20,16 @@
 //! reading it fails (another program holds the clipboard open), the thread
 //! tries again shortly, a few times, before giving up on that change.
 //!
+//! For a paste into the application that was in front before Pane (#253),
+//! the module also keeps what the clipboard holds — every format held in
+//! ordinary memory — and puts it back afterwards, tagged as a concealed
+//! copy is, so no history keeps the restore. What is held as a graphics
+//! handle (`CF_BITMAP`, `CF_METAFILEPICT`, `CF_PALETTE`, `CF_PENDATA`,
+//! `CF_ENHMETAFILE`, and any private format whose data is not clipboard
+//! memory) cannot be copied as bytes and is lost; a format the application
+//! renders only when asked has it render, and keeps what it answers; and
+//! nothing past 64 MiB is kept.
+//!
 //! Reading can wait on the program that copied (a program that renders its
 //! data only when asked), however long it takes. Dropping the watch never
 //! waits on it for more than a moment: it tells the thread to stop and
@@ -39,9 +49,9 @@ use ::windows::Win32::Foundation::{
     CloseHandle, GlobalFree, HANDLE, HGLOBAL, HWND, LPARAM, LRESULT, WPARAM,
 };
 use ::windows::Win32::System::DataExchange::{
-    AddClipboardFormatListener, CloseClipboard, EmptyClipboard, GetClipboardData,
-    GetClipboardOwner, GetClipboardSequenceNumber, IsClipboardFormatAvailable, OpenClipboard,
-    RegisterClipboardFormatW, RemoveClipboardFormatListener, SetClipboardData,
+    AddClipboardFormatListener, CloseClipboard, EmptyClipboard, EnumClipboardFormats,
+    GetClipboardData, GetClipboardOwner, GetClipboardSequenceNumber, IsClipboardFormatAvailable,
+    OpenClipboard, RegisterClipboardFormatW, RemoveClipboardFormatListener, SetClipboardData,
 };
 use ::windows::Win32::System::Memory::{
     GMEM_MOVEABLE, GlobalAlloc, GlobalLock, GlobalSize, GlobalUnlock,
@@ -55,6 +65,7 @@ use ::windows::Win32::UI::WindowsAndMessaging::{
 };
 use ::windows::core::{PCWSTR, PWSTR, w};
 
+use super::ignoring::IGNORED;
 use super::{
     ClipboardSystem, Content, CopiedImage, MAX_FILES, MAX_IMAGE_BYTES, MAX_IMAGE_PIXELS,
     MAX_TEXT_BYTES, Markers, Observation, Sink, Watch,
@@ -259,7 +270,17 @@ fn stop_listening(window: Window) {
 /// reports it; if reading fails, tries again later.
 fn observe(window: HWND, listener: &mut Listener) {
     // SAFETY: no arguments.
-    if unsafe { GetClipboardSequenceNumber() } == listener.read_through {
+    let changed_to = unsafe { GetClipboardSequenceNumber() };
+    if changed_to == listener.read_through {
+        return;
+    }
+    // A simulated copy's window is armed (#262): the change it carries is
+    // the target's copy, which is not Pane's and carries no marker it
+    // could be given, or the restore that follows. It is skipped as a
+    // marked copy is, so no history keeps it; the read that armed the
+    // window is still running, and the next change is read as usual.
+    if IGNORED.is_ignoring(crate::util::now_ms()) {
+        listener.read_through = changed_to;
         return;
     }
     let ticket = listener.sink.reading();
@@ -788,6 +809,108 @@ pub(crate) fn put_clip(clip: &Clip, concealed: bool) -> Result<(), String> {
             markers.push(PREFERRED_DROP_EFFECT);
             write_formats(&owner, &[(CF_HDROP, drop_files(path))], &markers)
         }
+    }
+}
+
+/// What the clipboard holds, saved to be put back after a paste into the
+/// application that was in front before Pane (#253): every format it held
+/// in ordinary memory — text, rich text, HTML, a bitmap, a list of files
+/// — each as its bytes. The markers of a concealed copy are not kept:
+/// the restore adds them itself ([`restore_clip`]).
+pub(crate) struct Held {
+    /// Each format and its bytes, in the order the clipboard listed them.
+    formats: Vec<(u32, Vec<u8>)>,
+}
+
+/// How much of what the clipboard holds a paste keeps to put back: what
+/// it held beyond this is lost, as a format it could not read is.
+const MAX_HELD_BYTES: usize = 64 * 1024 * 1024;
+
+/// The formats whose data is a graphics handle, not memory Pane can copy
+/// as bytes: `CF_BITMAP`, `CF_METAFILEPICT`, `CF_PALETTE`, `CF_PENDATA`
+/// and `CF_ENHMETAFILE`. A private format of another kind that is a
+/// handle is caught by its size, which no clipboard memory has.
+const HANDLE_FORMATS: [u32; 5] = [2, 3, 9, 10, 14];
+
+/// Keeps what the clipboard holds, to put back with [`restore_clip`]
+/// after a paste. Owned by a window of the calling thread, which is
+/// destroyed once read; the clipboard is left as it is. Reading a format
+/// the application that copied renders only when asked has it render —
+/// and keeps what it answers; a format held as a graphics handle cannot
+/// be copied as bytes and is lost, and so is anything past
+/// [`MAX_HELD_BYTES`].
+pub(crate) fn hold_clip() -> Result<Held, String> {
+    let owner = WRITER_CLASS.message_window()?;
+    let _open = OpenedClipboard::by(owner.handle())?;
+    let skips = marked_formats();
+    let mut listed = Vec::new();
+    // SAFETY: the clipboard is open; 0 asks for the first format, and each
+    // answer for the next.
+    let mut format = unsafe { EnumClipboardFormats(0) };
+    while format != 0 {
+        // SAFETY: as above, with the format the enumeration answered.
+        let next = unsafe { EnumClipboardFormats(format) };
+        listed.push(format);
+        format = next;
+    }
+    let mut formats = Vec::new();
+    let mut held = 0;
+    for format in listed {
+        if HANDLE_FORMATS.contains(&format) || skips.contains(&format) {
+            continue;
+        }
+        // SAFETY: the clipboard is open; the handle stays the clipboard's.
+        if let Ok(handle) = unsafe { GetClipboardData(format) } {
+            let memory = HGLOBAL(handle.0);
+            // SAFETY: a clipboard format's memory, read within its size
+            // while locked; a handle that is not memory has no size.
+            let size = unsafe { GlobalSize(memory) };
+            if size > 0 && held + size <= MAX_HELD_BYTES {
+                // SAFETY: as above, locked while copied from.
+                let data = unsafe { GlobalLock(memory) };
+                if !data.is_null() {
+                    // SAFETY: `size` bytes of writable memory, locked above
+                    // while read within it.
+                    let bytes =
+                        unsafe { std::slice::from_raw_parts(data.cast::<u8>(), size) }.to_vec();
+                    // SAFETY: as above.
+                    let _ = unsafe { GlobalUnlock(memory) };
+                    if !bytes.is_empty() {
+                        held += size;
+                        formats.push((format, bytes));
+                    }
+                }
+            }
+        }
+    }
+    Ok(Held { formats })
+}
+
+/// Puts back what [`hold_clip`] kept, replacing what the paste put
+/// there, with the markers of a concealed copy: neither Pane's history
+/// nor Windows' own keeps the restore. A clipboard that held nothing is
+/// left as the paste left it, not emptied. Owned by a window of the
+/// calling thread, destroyed once the clipboard is closed: what was put
+/// stays there.
+pub(crate) fn restore_clip(held: &Held) -> Result<(), String> {
+    if held.formats.is_empty() {
+        return Ok(());
+    }
+    let owner = WRITER_CLASS.message_window()?;
+    write_formats(&owner, &held.formats, &CONCEALED_MARKERS)
+}
+
+/// The registered formats that say a copy must not be kept, which a hold
+/// skips: the restore carries them itself.
+fn marked_formats() -> [u32; 4] {
+    // SAFETY: valid NUL-terminated names.
+    unsafe {
+        [
+            RegisterClipboardFormatW(w!("ExcludeClipboardContentFromMonitorProcessing")),
+            RegisterClipboardFormatW(w!("Clipboard Viewer Ignore")),
+            RegisterClipboardFormatW(w!("CanIncludeInClipboardHistory")),
+            RegisterClipboardFormatW(w!("CanUploadToCloudClipboard")),
+        ]
     }
 }
 

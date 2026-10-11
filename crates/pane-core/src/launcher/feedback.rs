@@ -42,6 +42,7 @@
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Instant;
 
 use super::{Launcher, Screen, State, Status, WeakLauncher, confirmations, item_actions, stopped};
 use crate::extension_data::PackageData;
@@ -173,6 +174,28 @@ impl HostFunctions for Hosted {
             .map_or_else(crate::system::none, |launcher| launcher.system())
     }
 
+    fn run(&self) -> Arc<dyn crate::run::Run> {
+        self.0
+            .upgrade()
+            .map_or_else(crate::run::none, |launcher| launcher.run())
+    }
+
+    fn system_commands(&self) -> Arc<dyn crate::system_commands::SystemCommands> {
+        self.0
+            .upgrade()
+            .map_or_else(crate::system_commands::none, |launcher| {
+                launcher.system_commands()
+            })
+    }
+
+    fn switch_windows(&self) -> Arc<dyn crate::switch_windows::SwitchWindows> {
+        self.0
+            .upgrade()
+            .map_or_else(crate::switch_windows::none, |launcher| {
+                launcher.switch_windows()
+            })
+    }
+
     fn confirm(&self, caller: &Caller, confirmation: GivenConfirmation) -> Asking {
         match self.0.upgrade() {
             Some(launcher) => launcher.ask_to_confirm(caller, confirmation),
@@ -211,11 +234,38 @@ impl Launcher {
             {
                 files.indexer().launcher_shown();
             }
-            if state.feedback.presence == presence {
+            let same = state.feedback.presence == presence;
+            if !same {
+                state.feedback.presence = presence;
+            }
+            // A failure the update record holds and has not announced
+            // yet is announced now, the launcher being shown: a failure
+            // recorded while it was hidden waits for this showing, and
+            // one recorded while it was shown is announced at once (in
+            // `note_update_pass`) — as is one a start of Pane still
+            // holds, the window saying so the first time. Said once the
+            // presence above is set, so the toast is the footer's, not a
+            // HUD.
+            if presence == WindowPresence::Shown {
+                self.announce_update_failures(&mut state);
+            }
+            if same {
                 return;
             }
-            state.feedback.presence = presence;
-            if presence != WindowPresence::Shown {
+            // Collapsed to its search field, the launcher has no footer for
+            // a toast: one still shown there becomes a HUD, as one that
+            // arrives while it is collapsed does (#141). An animated toast
+            // makes a pending one, which stays until the launcher is active
+            // again (#250).
+            if presence == WindowPresence::Compact
+                && state
+                    .feedback
+                    .toast
+                    .as_ref()
+                    .is_some_and(|current| current.in_footer)
+            {
+                present(&mut state.feedback);
+            } else if presence != WindowPresence::Shown {
                 leave_if_animated(&mut state.feedback);
             }
             match presence {
@@ -280,6 +330,20 @@ impl Launcher {
         }
     }
 
+    /// The outcome status the window drew as a toast (#249) —
+    /// [`Status::Result`] or [`Status::Error`] — has been shown for its
+    /// [`crate::feedback::TOAST_DURATION`] (the window counts it, pausing
+    /// while the pointer is over the toast or it has the focus): the
+    /// status line goes back to rest, so a later screen never shows a
+    /// stale outcome. The core keeps the status; the window owns the
+    /// timing. Nothing happens once the status changed.
+    pub fn outcome_left(&self, outcome: &Status) {
+        let mut state = self.lock();
+        if state.view.status == *outcome {
+            state.view.status = Status::Idle;
+        }
+    }
+
     /// The window lost the focus: an animated toast leaves the footer (its
     /// command may still update it, which shows it again), while a success
     /// or failure toast keeps its time. A confirmation the window showed is
@@ -338,6 +402,11 @@ impl Launcher {
             });
         match chosen {
             None => {}
+            // Pane's own View Details: the results screen replaces
+            // whatever the launcher shows; the toast keeps its time.
+            Some((_, _, ToastDoes::ShowUpdateResults)) => {
+                self.show_update_results(&mut state);
+            }
             Some((owner, command, ToastDoes::Copy(_))) => {
                 let copied = Toast::new(ToastStyle::Success, "Copied the error to the clipboard");
                 self.put_toast(&mut state, owner, command, copied);
@@ -346,7 +415,9 @@ impl Launcher {
                 // The status line is about this action from now on: it
                 // runs until the command answered, as an item's action does.
                 state.sent_from = None;
-                state.view.status = Status::Running;
+                state.view.status = Status::Running {
+                    since: Instant::now(),
+                };
                 let data = self.data_in(&state, &owner);
                 run = Some((state.screen_epoch, owner, command, callback, data));
             }
@@ -609,7 +680,35 @@ impl Launcher {
     /// Shows a toast of Pane's own, of no command, with no actions: such as
     /// the one naming what a start forgot for root providers (#164).
     pub(super) fn show_own_toast(&self, state: &mut State, toast: Toast) {
-        self.put_toast(state, PathBuf::new(), None, toast);
+        self.put_own_toast(state, toast);
+    }
+
+    /// Shows a toast of Pane's own, of no command, and its id: for the
+    /// updater's asked pass, which updates it by id through its life (see
+    /// `update_results`).
+    pub(super) fn put_own_toast(&self, state: &mut State, toast: Toast) -> u64 {
+        self.put_toast(state, PathBuf::new(), None, toast)
+    }
+
+    /// Updates Pane's own toast `id` — one [`Launcher::put_own_toast`]
+    /// showed — with `toast`, and shows it again, while it is still the
+    /// launcher's toast: another that replaced it leaves the id stale,
+    /// and nothing happens. Whether it did update. Updating starts the
+    /// toast's time again and bumps its revision, so the window counts it
+    /// anew.
+    pub(super) fn update_own_toast(&self, state: &mut State, id: u64, toast: Toast) -> bool {
+        let Some(current) = state
+            .feedback
+            .toast
+            .as_mut()
+            .filter(|current| current.id == id)
+        else {
+            return false;
+        };
+        current.toast = toast;
+        current.revision += 1;
+        present(&mut state.feedback);
+        true
     }
 
     /// Shows the error `message` the command `command` in `component`
@@ -692,7 +791,9 @@ fn present(feedback: &mut Feedback) {
     } else {
         current.in_footer = false;
         window.show_hud(&Hud {
-            title: current.toast.text(),
+            title: current.toast.title.clone(),
+            message: current.toast.message.clone(),
+            icon: None,
             style: current.toast.style,
         });
     }
@@ -754,6 +855,7 @@ fn bind_action(action: GivenAction, keys: &PaneKeys, taken: Option<&Binding>) ->
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::packages::{CommandMatches, CommandWhen};
 
     fn given(shortcut: Option<&str>) -> GivenAction {
         GivenAction {
@@ -853,6 +955,9 @@ mod tests {
                 subtitle: Some("Your notes".into()),
                 component: PathBuf::from(COMPONENT),
                 takes_query: false,
+                keywords: Vec::new(),
+                when: CommandWhen::default(),
+                matches: CommandMatches::default(),
             }],
         );
         let window = Arc::new(Recording::default());
@@ -994,10 +1099,14 @@ mod tests {
                 [
                     WindowRequest::Hud(Hud {
                         title: "Working".into(),
+                        message: None,
+                        icon: None,
                         style: ToastStyle::Animated
                     }),
                     WindowRequest::Hud(Hud {
-                        title: "Done: 3 files".into(),
+                        title: "Done".into(),
+                        message: Some("3 files".into()),
+                        icon: None,
                         style: ToastStyle::Success
                     }),
                 ],
@@ -1061,10 +1170,7 @@ mod tests {
     #[test]
     fn a_hud_closes_the_window_first() {
         let (launcher, window) = launcher();
-        let hud = Hud {
-            title: "Copied to Clipboard".into(),
-            style: ToastStyle::Success,
-        };
+        let hud = Hud::new(ToastStyle::Success, "Copied to Clipboard");
         launcher.show_hud(hud.clone());
         assert_eq!(
             window.take(),

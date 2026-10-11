@@ -21,7 +21,7 @@ success-output = "immediate"
 # CI runner, where most tests take seconds. A test found to take minutes
 # is added here.
 [[profile.default.overrides]]
-filter = "test(/memory_peaks/)"
+filter = "test(/memory_peaks|every_.*_template_builds/)"
 priority = 100
 
 # The real-clipboard adapter tests (with PANE_TEST_REAL_CLIPBOARD=1) replace
@@ -33,4 +33,22 @@ real-clipboard = { max-threads = 1 }
 
 [[profile.default.overrides]]
 filter = "binary(~clipboard_adapter)"
+test-group = "real-clipboard"
+
+# The real-input test (#253) replaces the clipboard too, and pastes with
+# real input, so it joins the one-at-a-time group of the real-clipboard
+# tests: each test is a process of its own under nextest.
+[[profile.default.overrides]]
+filter = "test(real_input::)"
+test-group = "real-clipboard"
+
+# The real-input hotkey tests (#260) inject keys with SendInput and the
+# recording session watches the foreground window, so they join the
+# one-at-a-time group too: injected keys reach every process's low-level
+# hook at once, so two of these running together break each other's tap
+# candidacies and steal each other's foreground. They are the
+# `hotkey_adapters` binary's `windows::` module, whose names begin with
+# the module the binary's own targets are named from.
+[[profile.default.overrides]]
+filter = "test(/^windows::/)"
 test-group = "real-clipboard"

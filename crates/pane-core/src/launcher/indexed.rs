@@ -5,18 +5,18 @@
 //! Each enabled command with `"indexedResults": true` is asked for its
 //! results once root search is used (a query that is not blank) and they
 //! are kept for later queries, so typing never waits for them. Coming back to
-//! root search marks them stale: the next query asks again, listing the kept
-//! results until the answer replaces them. So does a change of what they
-//! are made from, the installed applications (`application_changes`),
-//! which asks again at once while root search shows a query. A disabled or
-//! replaced command's
-//! results are forgotten at once, and an answer from it arriving afterwards
-//! is discarded.
+//! root search marks stale those whose results nothing tells of their own
+//! changes: a command that asked for the installed applications is asked
+//! for its results again when the list changes (see `application_changes`),
+//! so a show that changed nothing asks it for nothing (#202). A disabled or
+//! replaced command's results are forgotten at once, and an answer from it
+//! arriving afterwards is discarded.
 
 use std::path::{Path, PathBuf};
 
 use super::quick_slots::PinTarget;
 use super::{CommandRegistration, Entry, RootResult, Row};
+use crate::packages::{CommandMatches, CommandWhen};
 use crate::runtime::{CallError, IndexedAction, IndexedResult};
 use crate::search::Keys;
 
@@ -44,11 +44,15 @@ struct Index {
 }
 
 impl Indexes {
-    /// Marks every command's results stale, to be asked for again with the
-    /// next query; they stay listed meanwhile.
-    pub(super) fn stale(&mut self) {
+    /// Marks every command's results stale but `except`'s — those whose
+    /// data tells of its own changes, asked for again when it does (see
+    /// `application_changes`) — to be asked for again with the next query;
+    /// they stay listed meanwhile (#202).
+    pub(super) fn stale(&mut self, except: &[PathBuf]) {
         for index in &mut self.commands {
-            index.fresh = false;
+            if !except.contains(&index.component) {
+                index.fresh = false;
+            }
         }
     }
 
@@ -160,6 +164,19 @@ impl Indexes {
         self.commands.iter().flat_map(|index| &index.results)
     }
 
+    /// Every kept result with the position of the command that supplies
+    /// it among the commands asked, in the order the commands were first
+    /// asked and their answers give them: the provider's own order, as
+    /// the comparator's twelfth step ranks it.
+    pub(super) fn grouped_results(&self) -> impl Iterator<Item = (usize, &RootResult)> {
+        self.commands
+            .iter()
+            .enumerate()
+            .flat_map(|(provider, index)| {
+                std::iter::repeat_n(provider, index.results.len()).zip(&index.results)
+            })
+    }
+
     /// Where the results of the command with component `component` stand:
     /// a quick slot pinning one of them says so while it cannot be found.
     pub(super) fn listing(&self, component: &Path) -> Listing {
@@ -177,13 +194,6 @@ impl Indexes {
             Some(index) if index.answered => Listing::Listed,
             Some(_) => Listing::NotAsked,
         }
-    }
-
-    /// Whether the command with component `component` ever answered.
-    pub(super) fn answered(&self, component: &Path) -> bool {
-        self.commands
-            .iter()
-            .any(|index| index.component == component && index.answered)
     }
 
     /// The rows explaining why a command could not supply its results.
@@ -250,5 +260,8 @@ fn indexed_result(command: &CommandRegistration, result: IndexedResult) -> RootR
         keys,
         target: None,
         pin: Some(pin),
+        // An indexed result is matched by its titles and keywords, as ever.
+        when: CommandWhen::Always,
+        matches: CommandMatches::Title,
     }
 }

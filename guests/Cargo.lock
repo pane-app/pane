@@ -9,23 +9,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
 
 [[package]]
-name = "applications"
-version = "0.1.0"
-dependencies = [
- "pane-extension",
-]
-
-[[package]]
 name = "bitflags"
 version = "2.13.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3ded4057c258ba199e2d26386d3af3780957ecaee6c4ef4041c6b4b8b97c0b06"
 
 [[package]]
-name = "calculator"
+name = "capabilities-fixture"
 version = "0.1.0"
 dependencies = [
  "pane-extension",
+ "serde_json",
 ]
 
 [[package]]
@@ -33,22 +27,6 @@ name = "cfg-if"
 version = "1.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4e7648175b45a9a48536d676f68d918270699102aa8dab5496df06904c914600"
-
-[[package]]
-name = "clipboard_history"
-version = "0.1.0"
-dependencies = [
- "pane-extension",
-]
-
-[[package]]
-name = "designed-fixture"
-version = "0.1.0"
-dependencies = [
- "dlmalloc",
- "wasip3",
- "wit-bindgen",
-]
 
 [[package]]
 name = "dlmalloc"
@@ -80,13 +58,6 @@ version = "0.1.0"
 dependencies = [
  "pane-extension",
  "wasip3",
-]
-
-[[package]]
-name = "files"
-version = "0.1.0"
-dependencies = [
- "pane-extension",
 ]
 
 [[package]]
@@ -181,6 +152,15 @@ version = "0.1.0"
 dependencies = [
  "pane-extension",
  "serde_json",
+]
+
+[[package]]
+name = "handoff-fixture"
+version = "0.1.0"
+dependencies = [
+ "pane-extension",
+ "serde",
+ "wasip3",
 ]
 
 [[package]]
@@ -308,20 +288,26 @@ dependencies = [
 ]
 
 [[package]]
-name = "quicklinks"
-version = "0.1.0"
-dependencies = [
- "pane-extension",
- "serde_json",
-]
-
-[[package]]
 name = "quote"
 version = "1.0.47"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1fbf4db142a473a8d80c26bbf18454ed458bf8d26c8219c331daecfdbd079001"
 dependencies = [
  "proc-macro2",
+]
+
+[[package]]
+name = "quick"
+version = "0.1.0"
+dependencies = [
+ "pane-extension",
+]
+
+[[package]]
+name = "registrations-fixture"
+version = "0.1.0"
+dependencies = [
+ "pane-extension",
 ]
 
 [[package]]
@@ -346,6 +332,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "sample-capabilities"
+version = "0.1.0"
+dependencies = [
+ "pane-extension",
+ "serde_json",
+]
+
+[[package]]
 name = "sample-dependencies"
 version = "0.1.0"
 dependencies = [
@@ -358,6 +352,22 @@ name = "sample-files"
 version = "0.1.0"
 dependencies = [
  "pane-extension",
+]
+
+[[package]]
+name = "sample-greet"
+version = "0.1.0"
+dependencies = [
+ "pane-extension",
+ "serde_json",
+]
+
+[[package]]
+name = "sample-handoff"
+version = "0.1.0"
+dependencies = [
+ "pane-extension",
+ "serde",
 ]
 
 [[package]]
@@ -376,7 +386,14 @@ dependencies = [
 ]
 
 [[package]]
-name = "sample-nav"
+name = "sample-keywords"
+version = "0.1.0"
+dependencies = [
+ "pane-extension",
+]
+
+[[package]]
+name = "sample-matches"
 version = "0.1.0"
 dependencies = [
  "pane-extension",
@@ -423,6 +440,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "sample-registrations"
+version = "0.1.0"
+dependencies = [
+ "pane-extension",
+ "serde_json",
+ "wasip3",
+]
+
+[[package]]
+name = "sample-run"
+version = "0.1.0"
+dependencies = [
+ "pane-extension",
+ "serde",
+]
+
+[[package]]
 name = "sample-rust"
 version = "0.1.0"
 dependencies = [
@@ -464,19 +498,17 @@ dependencies = [
 ]
 
 [[package]]
-name = "sample-timer"
+name = "sample-system-commands"
 version = "0.1.0"
 dependencies = [
  "pane-extension",
- "wasip3",
 ]
 
 [[package]]
-name = "sample-view"
+name = "sample_switch_windows"
 version = "0.1.0"
 dependencies = [
  "pane-extension",
- "wasip3",
 ]
 
 [[package]]
@@ -712,3 +744,35 @@ name = "zmij"
 version = "1.0.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "29666d0abbfad1e3dc4dcf6144730dd3a3ab225bbbdac83319345b1b44ccfc1b"
+[[package]]
+name = "designed-fixture"
+version = "0.1.0"
+dependencies = [
+ "dlmalloc",
+ "wasip3",
+ "wit-bindgen",
+]
+
+[[package]]
+name = "sample-nav"
+version = "0.1.0"
+dependencies = [
+ "pane-extension",
+]
+
+[[package]]
+name = "sample-timer"
+version = "0.1.0"
+dependencies = [
+ "pane-extension",
+ "wasip3",
+]
+
+[[package]]
+name = "sample-view"
+version = "0.1.0"
+dependencies = [
+ "pane-extension",
+ "wasip3",
+]
+

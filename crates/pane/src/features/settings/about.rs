@@ -24,12 +24,12 @@
 //! opening does, and what it reported is shown as the page's status.
 //!
 //! The diagnostics the page can copy are what Pane already knows — its
-//! version, the system it runs on, where its data and its log live and
-//! what its update check last found — nothing invented, nothing uploaded,
-//! no credentials and no extension's settings or data. The copy is the
-//! user's explicit choice, to the clipboard of this computer only; the
-//! clipboard write has no failure path, so what the copy reports is its
-//! completion.
+//! version, the system it runs on, where its data and its log live, the
+//! state of its keyboard hook, and what its update check last found —
+//! nothing invented, nothing uploaded, no credentials and no extension's
+//! settings or data. The copy is the user's explicit choice, to the
+//! clipboard of this computer only; the clipboard write has no failure
+//! path, so what the copy reports is its completion.
 //!
 //! Beside the diagnostics, the Log row (#133) names the folder of Pane's
 //! log, says when Pane quit unexpectedly last time — the same notice root
@@ -44,6 +44,7 @@ use gpui::{
     AnyElement, App, ClipboardItem, Context, Div, Hsla, Role, SharedString, Stateful, Window, div,
     prelude::*,
 };
+use pane_core::hotkeys::HookHealth;
 use pane_core::{ApplicationUpdate, Status};
 
 use super::{Page, SettingsWindow, search};
@@ -66,7 +67,8 @@ pub(crate) const ABOUT: &str = "Version, updates and documentation";
 
 /// What the rows say under their names.
 pub(crate) const DOCUMENTATION_NOTE: &str = "Pane's README on GitHub";
-pub(crate) const DIAGNOSTICS_NOTE: &str = "Your version, system, data folder and log folder";
+pub(crate) const DIAGNOSTICS_NOTE: &str =
+    "Your version, system, data folder, log folder and keyboard hook";
 pub(crate) const LOG_NOTE: &str = "Pane's own diagnostics, kept on this computer only";
 
 /// The notice that the run before this one ended unexpectedly (#133), as
@@ -299,6 +301,7 @@ fn render(
                 let report = diagnostics(
                     &this.launcher.application_update(),
                     this.launcher.log_notice().as_ref(),
+                    this.launcher.hook_health(),
                 );
                 cx.write_to_clipboard(ClipboardItem::new_string(report));
                 this.about.copied = true;
@@ -470,7 +473,7 @@ pub(crate) fn compose(
         action_button(
             "about-diagnostics",
             DIAGNOSTICS_LABEL,
-            "Copies your version, system, data folder and log folder",
+            "Copies your version, system, data folder, log folder and keyboard hook",
             theme,
         ),
     ));
@@ -581,11 +584,16 @@ fn install_progress(status: &Status, version: &str) -> SharedString {
 /// The report the diagnostics copy holds: what Pane already knows of this
 /// installation — its version, the system it runs on, where its data
 /// lives, where its log is (and whether the run before ended
-/// unexpectedly) and what its update check last found — and nothing else
-/// (see the module docs). The folders are redacted as the log redacts
-/// (#133): the home folder is `~`, and the user's and the computer's names
-/// are left out, so the report can be pasted into a public bug report.
-fn diagnostics(update: &ApplicationUpdate, log: Option<&pane_core::LogNotice>) -> String {
+/// unexpectedly), the state of its keyboard hook, and what its update
+/// check last found — and nothing else (see the module docs). The folders
+/// are redacted as the log redacts (#133): the home folder is `~`, and the
+/// user's and the computer's names are left out, so the report can be
+/// pasted into a public bug report.
+fn diagnostics(
+    update: &ApplicationUpdate,
+    log: Option<&pane_core::LogNotice>,
+    hook: Option<HookHealth>,
+) -> String {
     let folder =
         |path: &std::path::Path| pane_core::diagnostics::redacted(&path.display().to_string());
     let mut report = format!("Pane {}", crate::APP_VERSION);
@@ -604,6 +612,16 @@ fn diagnostics(update: &ApplicationUpdate, log: Option<&pane_core::LogNotice>) -
             }
         }
         None => report.push_str("\nLog folder: none"),
+    }
+    // The keyboard hook's state, as the launcher's adapter answers for it
+    // (#259): "not in use" where none is — no binding needs one, or the
+    // system's adapter has none.
+    match hook {
+        Some(hook) => report.push_str(&format!(
+            "\nKeyboard hook: {}",
+            pane_core::diagnostics::redacted(&hook.note())
+        )),
+        None => report.push_str("\nKeyboard hook: not in use"),
     }
     report.push_str(&format!("\nUpdate check: {}", update_line(update)));
     report

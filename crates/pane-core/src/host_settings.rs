@@ -35,8 +35,18 @@ use crate::keyboard::Keyboard;
 /// The file the settings are recorded in, in Pane's data folder.
 const FILE: &str = "settings.json";
 
-/// The record's version; a record of another version is not read.
-const VERSION: u64 = 1;
+/// The record's version as this Pane writes it.
+const VERSION: u64 = 2;
+
+/// Whether this Pane reads a record of `version`: its own, and 1, the
+/// record an older Pane wrote. The Open Pane field's grammar moved with
+/// #260's binding kinds — a lone tap (`tap:win`), a double tap
+/// (`double:ctrl`), a side-specific modifier (`rctrl+space`) — but the
+/// grammar is [`Shortcut::parse`], which reads a chord's id from version
+/// 1 as it is, so a record of either version reads.
+fn reads(version: u64) -> bool {
+    version == VERSION || version == 1
+}
 
 /// The theme the user chose for Pane's windows: follow the operating
 /// system's appearance, or force one of the two palettes.
@@ -167,6 +177,27 @@ pub enum PinnedLayout {
     Vertical,
 }
 
+/// How strict root search's matching is, as the Launcher page records
+/// it. A preference of the matcher, not a mode of the window: the
+/// launcher applies it on the next keystroke after the choice is taken,
+/// the list the query has already made staying as it is.
+///
+/// The thresholds themselves are the scorer's (see
+/// `crate::search`); what the record holds is only which of the three
+/// the user chose.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SearchSensitivity {
+    /// Low: every result the query's letters can make, in order.
+    Low,
+    /// Medium: word starts and tight matches.
+    Medium,
+    /// High: a match must also start the text or a word of it. The
+    /// default, as the reference's fresh installation stores it.
+    #[default]
+    High,
+}
+
 /// What the launcher's back key (Escape by default) does.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum EscapeBehavior {
@@ -186,8 +217,10 @@ pub enum EscapeBehavior {
 /// Windows' do, so none meets the Ctrl chords the launcher already has
 /// (Ctrl+K opens the Actions panel); on macOS, where Option types
 /// characters, they hold Control, as Raycast for Mac's do. Raycast's
-/// left and right keys (B and F, H and L) move through its grids; Pane's
-/// lists have no left or right selection, so those stay unbound.
+/// left and right keys (B and F, H and L) move between its search
+/// fields: Pane's take Left and Right between the query and the
+/// argument fields, as Raycast's do between its query and the inline
+/// argument fields beside it (#258).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum NavigationBindings {
@@ -210,6 +243,20 @@ impl NavigationBindings {
             NavigationBindings::Emacs => Some(("alt-p", "alt-n")),
             NavigationBindings::Vim if mac => Some(("ctrl-k", "ctrl-j")),
             NavigationBindings::Vim => Some(("alt-k", "alt-j")),
+        }
+    }
+
+    /// The choice's Left and Right, the keys that move between the query
+    /// and the argument fields: backward's then forward's. As the
+    /// selection keys', Alt on Windows and Linux, Control on macOS.
+    pub fn left_right(self) -> Option<(&'static str, &'static str)> {
+        let mac = cfg!(target_os = "macos");
+        match self {
+            NavigationBindings::None => None,
+            NavigationBindings::Emacs if mac => Some(("ctrl-b", "ctrl-f")),
+            NavigationBindings::Emacs => Some(("alt-b", "alt-f")),
+            NavigationBindings::Vim if mac => Some(("ctrl-h", "ctrl-l")),
+            NavigationBindings::Vim => Some(("alt-h", "alt-l")),
         }
     }
 }
@@ -259,6 +306,15 @@ pub struct HostSettings {
     /// those actions live outside Pane's own windows; the General page
     /// can hide it, where the platform provides one.
     pub tray_visible: bool,
+    /// Whether Pane shows the taskbar while the launcher window is open
+    /// (#268, ADR 0039): for a user whose taskbar hides itself, the
+    /// Windows adapter shows it while the launcher is open — so the
+    /// Start button stays one click away once the Windows key opens Pane
+    /// — and puts it back as the user had it when the launcher hides.
+    /// Windows only; where the platform has no taskbar of the kind, the
+    /// General page does not offer the choice. A provisional default,
+    /// proposed by ADR 0039: off.
+    pub show_taskbar: bool,
     /// Whether the user chose Pane to start at login. A preference, not a
     /// registration: whether Pane actually starts is the platform's own
     /// login integration, which the window layer reconciles with this
@@ -287,6 +343,15 @@ pub struct HostSettings {
     pub compact_pinned: bool,
     /// How the pinned home lays out its quick slots.
     pub pinned_layout: PinnedLayout,
+    /// How strict root search's matching is; the launcher applies it on
+    /// the next keystroke.
+    pub search_sensitivity: SearchSensitivity,
+    /// Whether root search learns from what the user chooses — the
+    /// Launcher page's "Learn from what I choose" switch. Turned off,
+    /// nothing is recorded and ranking acts as if nothing was learned;
+    /// what was learned is kept until it is reset. The same switch also
+    /// stops search history (#206).
+    pub learning: bool,
     /// What the launcher's back key does.
     pub escape: EscapeBehavior,
     /// Whether Escape closes the Settings window.
@@ -309,6 +374,7 @@ impl Default for HostSettings {
             material: MaterialPreference::default(),
             open_pane: Shortcut::open_pane_default(),
             tray_visible: true,
+            show_taskbar: false,
             launch_at_login: false,
             opening_monitor: OpeningMonitor::default(),
             reopening: Reopening::default(),
@@ -316,6 +382,8 @@ impl Default for HostSettings {
             window_mode: WindowMode::default(),
             compact_pinned: false,
             pinned_layout: PinnedLayout::default(),
+            search_sensitivity: SearchSensitivity::default(),
+            learning: true,
             escape: EscapeBehavior::default(),
             escape_closes_settings: true,
             navigation: NavigationBindings::default(),
@@ -335,7 +403,12 @@ impl HostSettings {
     /// Reads the settings recorded in `dir`. No record at all means the
     /// defaults, as a record with missing fields does; a record that
     /// cannot be read, parsed or validated is `Err` with the problem,
-    /// phrased with the file's path, and is left as it is.
+    /// phrased with the file's path, and is left as it is. No record is
+    /// also what makes a data folder fresh, the one case whose Open Pane
+    /// hotkey starts with the fresh-install default rather than what a
+    /// record names — that is the caller's to decide against the
+    /// hotkeys adapter ([`crate::hotkeys::Hotkeys::open_pane_fresh_default`],
+    /// #268), and [`HostSettings::recorded`] says which case it is.
     pub fn open(dir: &Path) -> Result<HostSettings, String> {
         let file = dir.join(FILE);
         let text = match std::fs::read_to_string(&file) {
@@ -348,7 +421,7 @@ impl HostSettings {
         let fields: Map<String, Value> = serde_json::from_str(&text)
             .map_err(|error| format!("{} is invalid: {error}", file.display()))?;
         match fields.get("version").and_then(Value::as_u64) {
-            Some(VERSION) => {}
+            Some(version) if reads(version) => {}
             Some(version) => {
                 return Err(format!(
                     "{} has version {version}, which this Pane does not read",
@@ -391,6 +464,7 @@ impl HostSettings {
             material: recorded.material,
             open_pane,
             tray_visible: recorded.tray_visible,
+            show_taskbar: recorded.show_taskbar,
             launch_at_login: recorded.launch_at_login,
             opening_monitor: recorded.opening_monitor,
             reopening: recorded.reopening,
@@ -398,12 +472,24 @@ impl HostSettings {
             window_mode: recorded.window_mode,
             compact_pinned: recorded.compact_pinned,
             pinned_layout: recorded.pinned_layout,
+            search_sensitivity: recorded.search_sensitivity,
+            learning: recorded.learning,
             escape: recorded.escape_behavior,
             escape_closes_settings: recorded.escape_closes_settings,
             navigation: recorded.navigation_bindings,
             background: recorded.background,
             background_effect: recorded.background_effect,
         })
+    }
+
+    /// Whether `dir` holds a settings record at all (#268): a fresh data
+    /// folder — one no Pane has saved settings into — holds none, and it
+    /// is the one whose Open Pane hotkey starts with the fresh-install
+    /// default rather than what a record names. A record that cannot be
+    /// read still counts: it exists, and is never replaced (see
+    /// [`HostSettings::open`]).
+    pub fn recorded(dir: &Path) -> bool {
+        dir.join(FILE).exists()
     }
 
     /// Writes these settings to the record in `dir`, atomically: the
@@ -418,6 +504,7 @@ impl HostSettings {
             material: self.material,
             open_pane: Some(self.open_pane.id()),
             tray_visible: self.tray_visible,
+            show_taskbar: self.show_taskbar,
             launch_at_login: self.launch_at_login,
             opening_monitor: self.opening_monitor,
             reopening: self.reopening,
@@ -425,6 +512,8 @@ impl HostSettings {
             window_mode: self.window_mode,
             compact_pinned: self.compact_pinned,
             pinned_layout: self.pinned_layout,
+            search_sensitivity: self.search_sensitivity,
+            learning: self.learning,
             escape_behavior: self.escape,
             escape_closes_settings: self.escape_closes_settings,
             navigation_bindings: self.navigation,
@@ -449,11 +538,13 @@ struct Recorded {
     theme: ThemePreference,
     #[serde(default)]
     material: MaterialPreference,
-    /// The Open Pane hotkey as its id, such as `ctrl+alt+space`; missing
-    /// means this system's provisional default. A value that is not a
-    /// shortcut fails the whole record. The field keeps the name it was
-    /// first recorded with, so records an earlier Pane wrote still read,
-    /// while the record's other fields follow the house camelCase names.
+    /// The Open Pane hotkey as its id, such as `ctrl+alt+space`, or one of
+    /// the binding kinds #260 adds written as their ids (`tap:win`,
+    /// `double:ctrl`, `rctrl+space`); missing means this system's
+    /// provisional default. A value that is not a shortcut fails the whole
+    /// record. The field keeps the name it was first recorded with, so
+    /// records an earlier Pane wrote still read, while the record's other
+    /// fields follow the house camelCase names.
     #[serde(default, rename = "open_pane")]
     open_pane: Option<String>,
     /// Whether the tray or menu-bar entry is shown; missing means shown,
@@ -461,6 +552,10 @@ struct Recorded {
     /// whole record, as unknown values do.
     #[serde(default = "shown_by_default")]
     tray_visible: bool,
+    /// Whether Pane shows the taskbar while the launcher is open (#268);
+    /// missing means not, the provisional default.
+    #[serde(default)]
+    show_taskbar: bool,
     /// Whether the user chose Pane to start at login; missing means not.
     #[serde(default)]
     launch_at_login: bool,
@@ -490,6 +585,14 @@ struct Recorded {
     /// The pinned home's layout; missing means horizontal.
     #[serde(default)]
     pinned_layout: PinnedLayout,
+    /// How strict root search's matching is; missing means High, the
+    /// default a fresh installation starts from.
+    #[serde(default)]
+    search_sensitivity: SearchSensitivity,
+    /// Whether root search learns from what the user chooses; missing
+    /// means it does, the default.
+    #[serde(default = "learning_by_default")]
+    learning: bool,
     /// The back key's behavior; missing means back, then hide.
     #[serde(default)]
     escape_behavior: EscapeBehavior,
@@ -511,6 +614,11 @@ struct Recorded {
 /// The record's default for the tray visibility (and Escape closing
 /// Settings): on.
 fn shown_by_default() -> bool {
+    true
+}
+
+/// The record's default for learning from what the user chooses: on.
+fn learning_by_default() -> bool {
     true
 }
 
@@ -567,6 +675,7 @@ mod tests {
             material: MaterialPreference::Solid,
             open_pane: Shortcut::parse("ctrl+alt+b").unwrap(),
             tray_visible: false,
+            show_taskbar: true,
             launch_at_login: true,
             opening_monitor: super::OpeningMonitor::Pointer,
             reopening: super::Reopening::After90Seconds,
@@ -574,6 +683,8 @@ mod tests {
             window_mode: super::WindowMode::Compact,
             compact_pinned: true,
             pinned_layout: super::PinnedLayout::Vertical,
+            search_sensitivity: super::SearchSensitivity::Medium,
+            learning: false,
             escape: super::EscapeBehavior::Hide,
             escape_closes_settings: false,
             navigation: super::NavigationBindings::Emacs,
@@ -590,9 +701,12 @@ mod tests {
             "\"windowMode\": \"compact\"",
             "\"compactPinned\": true",
             "\"pinnedLayout\": \"vertical\"",
+            "\"searchSensitivity\": \"medium\"",
+            "\"learning\": false",
             "\"escapeBehavior\": \"hide\"",
             "\"escapeClosesSettings\": false",
             "\"navigationBindings\": \"emacs\"",
+            "\"showTaskbar\": true",
         ] {
             assert!(text.contains(field), "the record is {text}");
         }
@@ -621,6 +735,7 @@ mod tests {
             "alt"
         };
         assert_eq!(NavigationBindings::None.bindings(), None);
+        assert_eq!(NavigationBindings::None.left_right(), None);
         assert_eq!(
             NavigationBindings::Emacs.bindings(),
             Some((
@@ -633,6 +748,22 @@ mod tests {
             Some((
                 format!("{modifier}-k").as_str(),
                 format!("{modifier}-j").as_str()
+            ))
+        );
+        // Left and Right: B and F under the Emacs choice, H and L under
+        // the Vim one (#258).
+        assert_eq!(
+            NavigationBindings::Emacs.left_right(),
+            Some((
+                format!("{modifier}-b").as_str(),
+                format!("{modifier}-f").as_str()
+            ))
+        );
+        assert_eq!(
+            NavigationBindings::Vim.left_right(),
+            Some((
+                format!("{modifier}-h").as_str(),
+                format!("{modifier}-l").as_str()
             ))
         );
     }
@@ -702,6 +833,42 @@ mod tests {
     }
 
     #[test]
+    fn showing_the_taskbar_while_the_launcher_is_open_defaults_to_off_and_is_written_and_read() {
+        // Missing: off, so nothing shows a taskbar the user did not ask
+        // for (#268).
+        assert!(!HostSettings::default().show_taskbar);
+        assert!(!reading(r#"{ "version": 1 }"#).unwrap().show_taskbar);
+        // Recorded as the record's camelCase field, and read back.
+        assert_eq!(
+            reading(r#"{ "version": 1, "showTaskbar": true }"#).unwrap(),
+            HostSettings {
+                show_taskbar: true,
+                ..HostSettings::default()
+            }
+        );
+        // A value that is not a boolean fails the whole record.
+        let problem = reading(r#"{ "version": 1, "showTaskbar": "yes" }"#);
+        assert!(problem.is_err(), "{problem:?}");
+    }
+
+    #[test]
+    fn a_folder_with_no_record_is_fresh_and_one_with_any_record_is_not() {
+        // The fresh data folder is the one with no settings record at
+        // all: its Open Pane hotkey starts with the fresh-install
+        // default (#268), while a record — readable or not, naming the
+        // hotkey or defaulting it — keeps the hotkey it has.
+        let dir = tempfile::tempdir().unwrap();
+        assert!(!HostSettings::recorded(dir.path()));
+        HostSettings::default().save(dir.path()).unwrap();
+        assert!(HostSettings::recorded(dir.path()));
+        std::fs::write(dir.path().join(FILE), "{ not a record").unwrap();
+        assert!(
+            HostSettings::recorded(dir.path()),
+            "an unreadable record is still a record, never replaced"
+        );
+    }
+
+    #[test]
     fn the_tray_visibility_defaults_to_shown_and_a_non_boolean_fails_the_record() {
         // Missing: shown, the provisional default.
         assert_eq!(
@@ -736,6 +903,18 @@ mod tests {
                 ..HostSettings::default()
             }
         );
+        // The binding kinds #260 add are the field's grammar too, recorded
+        // as their ids and read back.
+        for text in ["tap:win", "double:ctrl", "rctrl+space", "tap:ralt"] {
+            assert_eq!(
+                reading(&format!(r#"{{ "version": 2, "open_pane": "{text}" }}"#)).unwrap(),
+                HostSettings {
+                    open_pane: Shortcut::parse(text).unwrap(),
+                    ..HostSettings::default()
+                },
+                "{text} does not round trip"
+            );
+        }
         // A value that is not a shortcut fails the whole record.
         let problem = reading(r#"{ "version": 1, "open_pane": "not a shortcut" }"#);
         assert!(problem.is_err(), "{problem:?}");
@@ -745,6 +924,8 @@ mod tests {
                 .contains("its open pane hotkey is not one"),
             "the field is named"
         );
+        let problem = reading(r#"{ "version": 2, "open_pane": "tap:escape" }"#);
+        assert!(problem.is_err(), "{problem:?}");
     }
 
     #[test]
@@ -808,6 +989,41 @@ mod tests {
     }
 
     #[test]
+    fn the_search_sensitivity_defaults_to_high_and_is_written_and_read() {
+        // Missing: High, the default a fresh installation starts from.
+        assert_eq!(
+            reading(r#"{ "version": 1 }"#).unwrap().search_sensitivity,
+            super::SearchSensitivity::High
+        );
+        // Recorded as the record's camelCase field, and read back.
+        assert_eq!(
+            reading(r#"{ "version": 1, "searchSensitivity": "low" }"#)
+                .unwrap()
+                .search_sensitivity,
+            super::SearchSensitivity::Low
+        );
+        // A value that is not one of the three fails the whole record.
+        let problem = reading(r#"{ "version": 1, "searchSensitivity": "loose" }"#);
+        assert!(problem.is_err(), "{problem:?}");
+    }
+
+    #[test]
+    fn learning_from_choices_defaults_to_on_and_is_written_and_read() {
+        // Missing: on, the default a fresh installation starts from.
+        assert!(HostSettings::default().learning);
+        assert!(reading(r#"{ "version": 1 }"#).unwrap().learning);
+        // Recorded as the record's camelCase field, and read back.
+        assert!(
+            !reading(r#"{ "version": 1, "learning": false }"#)
+                .unwrap()
+                .learning
+        );
+        // A value that is not a boolean fails the whole record.
+        let problem = reading(r#"{ "version": 1, "learning": "off" }"#);
+        assert!(problem.is_err(), "{problem:?}");
+    }
+
+    #[test]
     fn an_unparseable_record_is_a_problem() {
         let problem = reading("{ not a record");
         assert!(problem.is_err(), "{problem:?}");
@@ -816,7 +1032,16 @@ mod tests {
 
     #[test]
     fn another_versions_record_is_not_read() {
-        let problem = reading(r#"{ "version": 2, "theme": "light" }"#);
+        // Version 1 still reads (the Open Pane field's first grammar, a
+        // chord's id); version 3, a later Pane's, does not.
+        assert_eq!(
+            reading(r#"{ "version": 1, "theme": "light" }"#).unwrap(),
+            HostSettings {
+                theme: ThemePreference::Light,
+                ..HostSettings::default()
+            }
+        );
+        let problem = reading(r#"{ "version": 3, "theme": "light" }"#);
         assert!(problem.is_err(), "{problem:?}");
         assert!(
             problem

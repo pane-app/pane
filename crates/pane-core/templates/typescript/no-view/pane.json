@@ -1,0 +1,19 @@
+{
+  "$schema": "./node_modules/@pane-app/extension/schema/pane.schema.json",
+  "manifestVersion": 1,
+  "title": "__TITLE__",
+  "description": "A command that runs without a screen and answers in a toast.",
+  "version": "0.1.0",
+  "apiVersion": "0.1",
+  "icon": "icon.png",
+  "commands": [
+    {
+      "id": "__NAME__",
+      "title": "__TITLE__",
+      "subtitle": "Runs without a screen and answers in a toast",
+      "component": "dist/__NAME__.wasm",
+      "mode": "no-view",
+      "takesQuery": true
+    }
+  ]
+}

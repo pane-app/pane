@@ -62,7 +62,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::Receiver;
 use std::sync::{Arc, Mutex, MutexGuard};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 pub use pane_build::{BuildFailure, Development};
 use pane_build::{Claim, Host, MAX_OBSOLETE, Prepared};
@@ -253,6 +253,14 @@ impl Developing {
         if let Some(changes) = &self.config().changes {
             changes.changed();
         }
+    }
+
+    /// The builder local packages are built with on save, and Create
+    /// Extension's package once (see `create`); `None` until
+    /// `with_development` runs, so a launcher without it explains that
+    /// this Pane does not build extensions.
+    pub(super) fn builder(&self) -> Option<Arc<dyn Builder>> {
+        self.config().builder.clone()
     }
 
     /// The sender that tells the window the launcher changed in the
@@ -486,7 +494,9 @@ impl Launcher {
             .installation
             .as_ref()
             .expect("changeable checked there is an installation");
-        state.view.status = Status::Running;
+        state.view.status = Status::Running {
+            since: Instant::now(),
+        };
         Some(DevelopStart {
             builder,
             folder: folder.to_path_buf(),
@@ -711,13 +721,24 @@ impl Launcher {
         let logged = match &status {
             Status::Progress(text) | Status::Result(text) => Some((LogLevel::Info, text)),
             Status::Error(text) => Some((LogLevel::Error, text)),
-            Status::Idle | Status::Running => None,
+            Status::Idle | Status::Running { .. } => None,
         };
         if let Some((level, text)) = logged {
             self.developing.logs.pane(&identity.key(), 0, level, text);
         }
         let mut state = self.lock();
         self.refresh(&mut state);
+        // A development event of the package whose error overlay is on
+        // display ends it, when its code is being replaced: what the
+        // overlay was about is over. A build failure or another failed
+        // start leaves it — the failure it shows is still the state of
+        // things.
+        if matches!(status, Status::Progress(_) | Status::Result(_))
+            && matches!(&state.view.screen, Screen::Crash { identity: shown, .. } if shown == identity)
+        {
+            self.leave_error_overlay(&mut state);
+            self.refresh(&mut state);
+        }
         let shown = match &state.view.screen {
             Screen::Extensions { .. } | Screen::BuildDetails { .. } => true,
             Screen::Root { query } => query.is_empty(),
@@ -765,7 +786,9 @@ impl Launcher {
     }
 
     /// Develops the installed package with `identity` with the builds
-    /// `pane-ext` hands over the local channel, built with `command`: Pane
+    /// `pane-ext` hands over the local channel, built with `command` in
+    /// `folder` — the package's source folder, which `pane-ext` watches:
+    /// the extension's, for one extension of a collection (ADR 0044). Pane
     /// neither watches nor builds it, and `build` asks `pane-ext` to build it
     /// now, as the row "Build <title> again" does. A development of the
     /// package already going on, Pane's own or another `pane-ext`'s, ends
@@ -776,6 +799,7 @@ impl Launcher {
     pub(crate) fn develop_remotely(
         &self,
         identity: &PackageIdentity,
+        folder: &Path,
         command: &str,
         build: BuildNow,
     ) -> Result<(Remote, Receiver<LogLine>), String> {
@@ -785,10 +809,12 @@ impl Launcher {
         if let Some(busy) = state.changing.get(identity) {
             return Err(format!("{title} {}", busy.doing()));
         }
-        let Some(folder) = identity.local_folder().map(Path::to_path_buf) else {
+        if identity.local_folder().is_none() {
             let message = format!("Cannot develop {title}: it has no local source folder");
             return Err(message);
-        };
+        }
+        // The folder the package is built in, as the report names it.
+        let folder = folder.to_path_buf();
         let installation = self
             .installation
             .as_ref()
@@ -880,7 +906,7 @@ fn logs_row(id: String, identity: &PackageIdentity, title: &str) -> (Row, Entry)
 
 /// The name of the development folder of the package with `identity`: a
 /// hash of its identity, so that it is short and a valid file name.
-fn slot(identity: &PackageIdentity) -> String {
+pub(in crate::launcher) fn slot(identity: &PackageIdentity) -> String {
     // FNV-1a, which is stable across Rust versions, unlike `DefaultHasher`.
     let hash = identity
         .key()

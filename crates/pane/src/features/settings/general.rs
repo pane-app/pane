@@ -11,7 +11,16 @@
 //! `crate::settings` keeps), it is registered through the launcher this
 //! window shares with the launcher window, and it stays registered while
 //! every extension is disabled and while the extension runtime has
-//! failed — nothing of its lifecycle belongs to a package.
+//! failed — nothing of its lifecycle belongs to a package. A fresh
+//! install starts with the fresh default of its platform (#268, ADR
+//! 0039): the Windows key alone on Windows where the adapter's own
+//! keyboard hook recognizes the tap, and, while another hotkey is set,
+//! the "Use the Windows key" choice beside the recorder sets it in one
+//! step — Raycast's "Replace Start Menu" — saying where the Start menu
+//! remains, since only the lone tap changes. Beside it, the taskbar
+//! choice: "Show the taskbar when Pane opens" keeps a taskbar that hides
+//! itself on screen while the launcher is shown, so the Start button
+//! stays one click away; Windows only, explained elsewhere.
 //!
 //! The recorder captures keys without executing them. While it listens,
 //! its row holds focus and its key context swallows the keys that would
@@ -68,6 +77,7 @@ use gpui::{
     Role, Stateful, Toggled, Window, actions, div, prelude::*,
 };
 use pane_core::Launcher;
+use pane_core::Platform;
 use pane_core::autostart::Registration;
 use pane_core::hotkeys::Shortcut;
 
@@ -139,6 +149,32 @@ pub(crate) const ABOUT: &str = "Hotkey, startup, tray and appearance";
 /// What the recorder's row says under its name while it rests.
 pub(crate) const RECORDER_HINT: &str = "Shows or hides the launcher from any app";
 
+/// The "Use the Windows key" choice's title (Raycast's "Replace Start
+/// Menu", #268): what sets the Windows key alone as the Open Pane hotkey
+/// in one step, while another hotkey is set.
+pub(crate) const USE_WINDOWS_KEY: &str = "Use the Windows key";
+
+/// What the choice says under its title: the Start menu stays reachable
+/// while the Windows key alone opens Pane, and only the lone tap changes
+/// (#268, ADR 0039).
+const WINDOWS_KEY_NOTE: &str = "Only the lone tap of the Windows key changes; Win+E, \
+                                Win+D, Win+L and the rest keep \
+                                Windows' meaning";
+const START_MENU_NOTE: &str = "The Start menu stays reachable from the taskbar's Start \
+                              button and Ctrl+Esc";
+
+/// The taskbar choice's title (#268).
+pub(crate) const SHOW_TASKBAR: &str = "Show the taskbar when Pane opens";
+
+/// What the taskbar row says under its title while the choice works.
+const TASKBAR_NOTE: &str = "While the launcher is open, a taskbar that hides itself \
+                           stays on screen, so the Start button stays one \
+                           click away";
+
+/// What the taskbar row says where the platform has no taskbar of the
+/// kind (macOS, Linux today): the choice is Windows only (#268).
+const TASKBAR_NOT_OFFERED: &str = "The taskbar choice is available on Windows only";
+
 /// The General page, registered first in the window's page list: the
 /// page of Pane as a whole, the one the window opens on.
 pub(crate) fn page() -> Page {
@@ -195,9 +231,13 @@ impl State {
 /// live, so a binding that changes or an integration that answers
 /// differently is in the next catalog.
 fn entries(launcher: &Launcher, cx: &App) -> Vec<search::Entry> {
-    let (login_unavailable, tray_unavailable) = {
+    let (login_unavailable, tray_unavailable, taskbar_offered) = {
         let state = crate::settings::shared(cx).read(cx);
-        (state.login_unavailable(), state.tray_unavailable())
+        (
+            state.login_unavailable(),
+            state.tray_unavailable(),
+            state.taskbar_offered(),
+        )
     };
     let mut entries = vec![
         search::Entry {
@@ -213,6 +253,12 @@ fn entries(launcher: &Launcher, cx: &App) -> Vec<search::Entry> {
             unavailable: None,
         },
         search::Entry {
+            control: Some("use-windows-key".into()),
+            title: USE_WINDOWS_KEY.into(),
+            group: Some("Open Pane".into()),
+            unavailable: launcher.windows_key_unavailable(),
+        },
+        search::Entry {
             control: Some("launch-at-login".into()),
             title: "Launch Pane at login".into(),
             group: Some("Startup".into()),
@@ -223,6 +269,12 @@ fn entries(launcher: &Launcher, cx: &App) -> Vec<search::Entry> {
             title: tray_row_title().into(),
             group: Some(tray_group_title().into()),
             unavailable: tray_unavailable,
+        },
+        search::Entry {
+            control: Some("show-taskbar".into()),
+            title: SHOW_TASKBAR.into(),
+            group: Some("Taskbar".into()),
+            unavailable: (!taskbar_offered).then(|| TASKBAR_NOT_OFFERED.into()),
         },
     ];
     entries.extend(appearance::entries(launcher, cx));
@@ -255,10 +307,14 @@ pub(crate) enum GeneralControl {
     Recorder,
     /// The recorder's Reset button.
     Reset,
+    /// The "Use the Windows key" choice (#268).
+    UseWindowsKey,
     /// The launch-at-login switch.
     Login,
     /// The tray or menu-bar switch.
     Tray,
+    /// The taskbar switch (#268).
+    Taskbar,
 }
 
 /// What the General page shows, as plain values: what [`render`] reads
@@ -277,8 +333,23 @@ pub(crate) struct GeneralView {
     pub(crate) resettable: bool,
     /// Why the chosen binding is not registered, if it is not.
     pub(crate) problem: Option<String>,
+    /// How the binding is dispatched when it is active, if it is not the
+    /// system's own registration: through Pane's own keyboard hook
+    /// (Windows, #252), which the row says below the binding.
+    pub(crate) route: Option<String>,
     /// What the last recording was refused with, if anything.
     pub(crate) rejection: Option<String>,
+    /// The "Use the Windows key" choice (#268): whether another hotkey
+    /// is set — the choice shows only then, and not once the Windows key
+    /// alone is the binding — whether it can be taken here, and why not
+    /// where it cannot, as the platform-availability mechanism carries.
+    pub(crate) windows_key_shown: bool,
+    pub(crate) windows_key_offered: bool,
+    pub(crate) windows_key_unavailable: Option<String>,
+    /// The taskbar choice (#268): the saved preference, and whether the
+    /// platform has a taskbar of the kind to show at all.
+    pub(crate) taskbar: bool,
+    pub(crate) taskbar_offered: bool,
     /// The saved launch-at-login preference, whether choosing it does
     /// anything here, and the note under it with its tone.
     pub(crate) login: bool,
@@ -318,6 +389,8 @@ fn render(
         tray_visible,
         tray_unavailable,
         tray_status,
+        taskbar,
+        taskbar_offered,
     ) = {
         let state = settings.read(cx);
         (
@@ -329,9 +402,17 @@ fn render(
             state.tray_visible(),
             state.tray_unavailable(),
             state.tray_status(),
+            state.show_taskbar(),
+            state.taskbar_offered(),
         )
     };
-    let default = Shortcut::open_pane_default();
+    // The default the page resets to is the one a fresh data folder
+    // starts with, decided as this launcher's adapter can take it (#268):
+    // the Windows key alone where the adapter's hook recognizes the tap,
+    // today's default otherwise.
+    let default = this.launcher.open_pane_fresh_default().shortcut;
+    let windows_key = Shortcut::windows_key();
+    let windows_key_unavailable = this.launcher.windows_key_unavailable();
     let view = GeneralView {
         keys: crate::keyboard::hotkey_keys(&choice),
         binding: format!("{choice}"),
@@ -339,7 +420,19 @@ fn render(
         recording: this.general.recording,
         resettable: choice != default,
         problem: this.launcher.open_pane_problem(),
+        route: this
+            .launcher
+            .open_pane_route()
+            .note_on(&choice, Platform::current()),
         rejection: this.general.rejection.clone(),
+        // The choice shows while another hotkey is set — not once the
+        // Windows key alone is the binding — and is offered only where
+        // the adapter can take it, explained where it cannot.
+        windows_key_shown: choice != windows_key,
+        windows_key_offered: windows_key_unavailable.is_none(),
+        windows_key_unavailable,
+        taskbar,
+        taskbar_offered,
         login: preference,
         login_offered: unavailable.is_none(),
         login_note: login_note(preference, unavailable, registration, &theme),
@@ -354,13 +447,20 @@ fn render(
     // of their own, so a jump to them reveals them.
     let recorder_anchor = this.search_anchor("open-pane-recorder");
     let reset_anchor = this.search_anchor("open-pane-reset");
+    let windows_key_anchor = this.search_anchor("use-windows-key");
     let login_anchor = this.search_anchor("launch-at-login");
     let tray_anchor = this.search_anchor("tray-visibility");
+    let taskbar_anchor = this.search_anchor("show-taskbar");
     let focus = this.general.focus.clone();
     let focused = focus.is_focused(window);
     let recording = this.general.recording;
-    let (resettable, login_offered, tray_offered) =
-        (view.resettable, view.login_offered, view.tray_offered);
+    let (resettable, windows_key_offered, login_offered, tray_offered, taskbar_offered) = (
+        view.resettable,
+        view.windows_key_offered,
+        view.login_offered,
+        view.tray_offered,
+        view.taskbar_offered,
+    );
     let appearance = appearance::section(this, cx);
     compose(
         &view,
@@ -394,15 +494,33 @@ fn render(
                     }
                 })),
             GeneralControl::Reset => {
+                // The default is taken per call: the listener outlives this
+                // frame, and it may be invoked again.
+                let default = default.clone();
                 element
                     .anchor_scroll(Some(reset_anchor.clone()))
                     // The reset sits inside the recorder: its click is its own.
                     .on_click(cx.listener(move |this, _: &gpui::ClickEvent, window, cx| {
                         cx.stop_propagation();
                         if resettable {
-                            this.apply_open_pane(Shortcut::open_pane_default(), window, cx);
+                            this.apply_open_pane(default.clone(), window, cx);
                         }
                     }))
+            }
+            GeneralControl::UseWindowsKey => {
+                element
+                    .anchor_scroll(Some(windows_key_anchor.clone()))
+                    .when(windows_key_offered, |row| {
+                        // The choice's click is its own step (#268): through
+                        // the same checks a recording takes, so a refusal
+                        // keeps the binding that works and says why. Where
+                        // the Windows key cannot be taken, the row explains
+                        // and takes no step.
+                        row.on_click(cx.listener(|this, _: &gpui::ClickEvent, window, cx| {
+                            cx.stop_propagation();
+                            this.apply_open_pane(Shortcut::windows_key(), window, cx);
+                        }))
+                    })
             }
             GeneralControl::Login => {
                 element
@@ -433,19 +551,38 @@ fn render(
                         }))
                     })
             }
+            GeneralControl::Taskbar => {
+                element.anchor_scroll(Some(taskbar_anchor.clone())).when(
+                    taskbar_offered,
+                    |switch| {
+                        // The click reports the choice to the host settings: the
+                        // record is written, and the launcher window — which
+                        // observes the settings — shows the taskbar or puts it
+                        // back at once, for it is open now (#268).
+                        switch.on_click(cx.listener(|_, _: &gpui::ClickEvent, _, cx| {
+                            crate::settings::shared(cx).update(cx, |settings, cx| {
+                                let shown = settings.show_taskbar();
+                                settings.set_show_taskbar(!shown, cx);
+                            });
+                        }))
+                    },
+                )
+            }
         },
     )
     .into_any_element()
 }
 
 /// The General page's composition: a card of the page's own rows (`ui::controls`) — the Open
-/// Pane hotkey's (its recorder's well, with Reset beside it), the
-/// launch-at-login switch's and the tray switch's, each with what it
-/// explains under its name — then `appearance`, the Appearance section,
-/// and a failed save's status above them all. `focused` is whether the
-/// recorder has the keyboard (its well's ring). `attach` adds each
-/// control's behavior (focus, keys, clicks, scroll anchors); the
-/// composition gives each its identity, its accessibility and its look.
+/// Pane hotkey's (its recorder's well, with Reset beside it, and the
+/// "Use the Windows key" choice under it while another hotkey is set,
+/// #268), the launch-at-login switch's, the tray switch's and the
+/// taskbar switch's, each with what it explains under its name — then
+/// `appearance`, the Appearance section, and a failed save's status
+/// above them all. `focused` is whether the recorder has the keyboard
+/// (its well's ring). `attach` adds each control's behavior (focus, keys,
+/// clicks, scroll anchors); the composition gives each its identity, its
+/// accessibility and its look.
 pub(crate) fn compose(
     view: &GeneralView,
     focused: bool,
@@ -501,14 +638,39 @@ pub(crate) fn compose(
         theme,
         |switch| attach(GeneralControl::Tray, switch),
     );
-    let card = controls::card(
-        [
-            recorder.into_any_element(),
-            login.into_any_element(),
-            tray.into_any_element(),
-        ],
+    // The taskbar while the launcher is open (#268): what it does while
+    // the choice is on, and — in its place, as the other not-offered
+    // choices are — that the platform has no taskbar of the kind.
+    let taskbar_lines = if view.taskbar_offered {
+        vec![controls::row_line(TASKBAR_NOTE, theme.text_muted, theme)]
+    } else {
+        vec![controls::row_line(
+            TASKBAR_NOT_OFFERED,
+            theme.text_muted,
+            theme,
+        )]
+    };
+    let taskbar = switch_row(
+        SwitchRow {
+            id: "show-taskbar",
+            selector: "general-show-taskbar",
+            title: SHOW_TASKBAR,
+            on: view.taskbar,
+            offered: view.taskbar_offered,
+            lines: taskbar_lines,
+        },
         theme,
+        |switch| attach(GeneralControl::Taskbar, switch),
     );
+    let card = {
+        let mut rows = vec![recorder.into_any_element()];
+        if view.windows_key_shown {
+            rows.push(windows_key_row(view, theme, &attach).into_any_element());
+        }
+        rows.extend([login.into_any_element(), tray.into_any_element()]);
+        rows.push(taskbar.into_any_element());
+        controls::card(rows, theme)
+    };
     let page = controls::page(theme)
         // What a save reported, if it failed.
         .children(view.status.as_ref().map(|status| {
@@ -573,6 +735,19 @@ fn recorder_row(
         )
         .into_any_element()
     }));
+    // The route of a binding the system refused and Pane's own keyboard
+    // hook took (Windows, #252): the row says it below the binding, as
+    // the Shortcuts page's cells do — the binding works, and behaves
+    // differently (nothing while an elevated application is in front).
+    lines.extend(view.route.as_ref().map(|route| {
+        note(
+            "open-pane-route",
+            format!("Dispatched {route}"),
+            theme.text_muted,
+            theme,
+        )
+        .into_any_element()
+    }));
     // What the last attempt to record a binding was refused with.
     lines.extend(view.rejection.as_ref().map(|rejection| {
         note("general-refusal", rejection.clone(), theme.danger, theme).into_any_element()
@@ -580,6 +755,68 @@ fn recorder_row(
     controls::setting_row("Open Pane hotkey", lines, theme)
         .debug_selector(|| "general-open-pane-row".into())
         .child(attach(GeneralControl::Recorder, recorder))
+}
+
+/// The "Use the Windows key" choice (Raycast's "Replace Start Menu"),
+/// under the Open Pane hotkey's row while another hotkey is set (#268):
+/// one step to the Windows key alone, with the note that says where the
+/// Start menu remains — the taskbar's Start button and Ctrl+Esc — and
+/// that only the lone tap changes, Win+E, Win+D, Win+L and the rest
+/// keeping Windows' meaning. Where the Windows key alone cannot be bound
+/// here — an adapter with no keyboard hook — the choice is explained
+/// instead of offered: the row stays, dimmed, with the reason under it,
+/// as the platform-availability mechanism carries the choices a system
+/// cannot take.
+fn windows_key_row(
+    view: &GeneralView,
+    theme: &Theme,
+    attach: &impl Fn(GeneralControl, Stateful<Div>) -> Stateful<Div>,
+) -> Stateful<Div> {
+    // What the row says under the choice: the two halves of the note
+    // while it is offered, the reason it is not where it is not.
+    let lines = match &view.windows_key_unavailable {
+        Some(reason) => vec![
+            note("use-windows-key-note", reason.clone(), theme.warning, theme).into_any_element(),
+        ],
+        None => vec![
+            note(
+                "use-windows-key-note",
+                WINDOWS_KEY_NOTE,
+                theme.text_muted,
+                theme,
+            )
+            .into_any_element(),
+            note(
+                "use-windows-key-menu",
+                START_MENU_NOTE,
+                theme.text_muted,
+                theme,
+            )
+            .into_any_element(),
+        ],
+    };
+    let offered = view.windows_key_offered;
+    // A choice not offered dims its name; what it says under the name
+    // stays legible, since it says why.
+    let opacity = if offered {
+        1.
+    } else {
+        theme.geometry.controls.disabled_opacity
+    };
+    attach(
+        GeneralControl::UseWindowsKey,
+        controls::setting_row_with(
+            controls::field_label(USE_WINDOWS_KEY, theme).opacity(opacity),
+            lines,
+            theme,
+        )
+        .id("use-windows-key")
+        .debug_selector(|| "general-use-windows-key".into())
+        .role(Role::Button)
+        .aria_label(USE_WINDOWS_KEY)
+        .when(offered, |row| row.cursor_pointer())
+        .when(!offered, |row| row.aria_disabled(true)),
+    )
 }
 
 /// One boolean choice of a page, as [`switch_row`] draws it.
@@ -709,20 +946,30 @@ impl SettingsWindow {
     }
 
     /// Starts listening: the recorder row takes focus, so the keys
-    /// pressed next are the binding being recorded.
+    /// pressed next are the binding being recorded. On a system whose
+    /// adapter has one, a recording session starts with it (#260): the
+    /// adapter holds the keys back from the system and reports what the
+    /// user presses, so the Windows key alone, a double tap and the side
+    /// of a modifier are recorded without the Start menu opening; Escape
+    /// and Tab still cancel, and the session ends when this stops
+    /// listening, the window loses focus, or Pane quits.
     fn start_recorder(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.general.recording = true;
         self.general.rejection = None;
         let focus = self.general.focus.clone();
         window.focus(&focus, cx);
+        self.start_recording_session(window, cx);
         cx.notify();
     }
 
     /// Stops listening, without changing anything: focus returns to the
-    /// sidebar, the window's own keyboard focus.
+    /// sidebar, the window's own keyboard focus, and the recording
+    /// session ends with the listening (#260), so the adapter stops
+    /// holding the keys back.
     fn stop_recording(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.general.recording = false;
         self.general.rejection = None;
+        self.end_recording_session();
         let sidebar = self.focus.clone();
         window.focus(&sidebar, cx);
         cx.notify();
@@ -765,7 +1012,13 @@ impl SettingsWindow {
     /// keep and save the choice. A refusal leaves the previous binding
     /// working and nothing saved; the reason is the page's status, and the
     /// recorder — if one is listening — keeps listening for another try.
-    fn apply_open_pane(&mut self, shortcut: Shortcut, window: &mut Window, cx: &mut Context<Self>) {
+    /// Called with what a recording session reported too (#260).
+    pub(super) fn apply_open_pane(
+        &mut self,
+        shortcut: Shortcut,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let applied = crate::settings::shared(cx)
             .update(cx, |settings, cx| settings.set_open_pane(shortcut, cx));
         match applied {
@@ -774,6 +1027,7 @@ impl SettingsWindow {
                 // returns to the sidebar.
                 self.general.recording = false;
                 self.general.rejection = None;
+                self.end_recording_session();
                 let sidebar = self.focus.clone();
                 window.focus(&sidebar, cx);
                 cx.notify();

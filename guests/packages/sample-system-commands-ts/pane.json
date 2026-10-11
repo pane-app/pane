@@ -1,0 +1,14 @@
+{
+  "manifestVersion": 1,
+  "title": "TypeScript system commands sample",
+  "version": "0.1.0",
+  "apiVersion": "0.1",
+  "commands": [
+    {
+      "id": "system-commands",
+      "title": "TypeScript system commands sample",
+      "subtitle": "Calls the session and power commands, one item for each, saying what each answered",
+      "component": "sample_system_commands_ts.wasm"
+    }
+  ]
+}

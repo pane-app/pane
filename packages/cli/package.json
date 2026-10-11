@@ -1,0 +1,42 @@
+{
+  "name": "@pane-app/cli",
+  "version": "0.1.0",
+  "description": "Pane's command-line tool for extension authors: pane-ext creates, develops, checks and packs an extension package, and builds JavaScript and TypeScript with nothing but Node.js and npm",
+  "keywords": [
+    "pane",
+    "launcher",
+    "extension",
+    "cli",
+    "wasm",
+    "component-model"
+  ],
+  "homepage": "https://github.com/pane-app/pane/tree/main/packages/cli#readme",
+  "bugs": "https://github.com/pane-app/pane/issues",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/pane-app/pane.git",
+    "directory": "packages/cli"
+  },
+  "license": "GPL-3.0-or-later",
+  "bin": {
+    "pane-ext": "bin/pane-ext.js"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "esbuild": "0.28.2"
+  },
+  "optionalDependencies": {
+    "@pane-app/cli-linux-x86_64": "0.1.0",
+    "@pane-app/cli-linux-aarch64": "0.1.0",
+    "@pane-app/cli-windows-x86_64": "0.1.0",
+    "@pane-app/cli-windows-aarch64": "0.1.0",
+    "@pane-app/cli-macos-x86_64": "0.1.0",
+    "@pane-app/cli-macos-aarch64": "0.1.0"
+  },
+  "files": [
+    "bin/pane-ext.js",
+    "LICENSE-GPL"
+  ]
+}

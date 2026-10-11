@@ -33,6 +33,7 @@
 
 use std::collections::{BTreeMap, HashSet};
 use std::future::Future;
+use std::time::Instant;
 
 use super::pane_form::{self, PaneFieldKind, PaneForm, PaneFormField, PathPick};
 use super::{FormPurpose, Launcher, Opening, Screen, State, Status, choices, next_form_id, owner};
@@ -265,7 +266,9 @@ impl Launcher {
             opening: gate.opening.clone(),
             values: values.to_vec(),
         };
-        state.view.status = Status::Running;
+        state.view.status = Status::Running {
+            since: Instant::now(),
+        };
         Some(submit)
     }
 
@@ -329,7 +332,9 @@ impl Launcher {
             if opening.no_view {
                 Launcher::begin_run(state);
             } else {
-                state.view.status = Status::Running;
+                state.view.status = Status::Running {
+                    since: Instant::now(),
+                };
             }
             let data = self.data_in(state, &opening.component);
             (state.screen_epoch, opening, data)

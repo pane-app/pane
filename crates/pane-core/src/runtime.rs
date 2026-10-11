@@ -43,7 +43,7 @@ use futures::stream::{FuturesUnordered, StreamExt};
 use tokio::sync::{mpsc, oneshot};
 
 use crate::packages::paused_reason;
-use wasmtime::component::{Component, Linker, ResourceAny, ResourceTable};
+use wasmtime::component::{Component, Linker, Resource, ResourceAny, ResourceTable};
 use wasmtime::{Cache, CacheConfig, Config, Engine, Store};
 use wasmtime_wasi::{WasiCtx, WasiCtxView, WasiView};
 use wasmtime_wasi_http::{WasiHttpCtx, WasiHttpCtxView, WasiHttpView};
@@ -56,9 +56,12 @@ mod designed;
 mod faults;
 mod host_functions;
 mod memory;
+mod run_functions;
 mod supervisor;
+mod system_command_functions;
 mod system_functions;
 mod tree;
+mod windows_functions;
 
 pub use crate::tokens::{Space, TextLevel, TextStyle};
 use deadlines::Doing;
@@ -106,7 +109,15 @@ pub use tree::{
 pub(crate) mod bindings {
     wasmtime::component::bindgen!({
         path: "../../wit",
-        world: "extension-with-file-index",
+        world: "extension-with-typed-folder",
+        with: {
+            // The host type behind each owned registration resource: the
+            // registration's id in the registry (see `registrations`).
+            "pane:extension/registrations.root-item": crate::registrations::RootItemHandle,
+            "pane:extension/registrations.timer": crate::registrations::TimerHandle,
+            "pane:extension/registrations.watcher": crate::registrations::WatcherHandle,
+            "pane:extension/registrations.provision": crate::registrations::ProvisionHandle,
+        },
         imports: {
             "pane:extension/operations": store,
             "pane:extension/helpers": store,
@@ -123,6 +134,22 @@ pub(crate) mod bindings {
             // starting, the clipboard held by another program), off the
             // runtime thread, which awaits them.
             "pane:extension/system": async,
+            // Listing the folder the user typed reads the file system,
+            // which may block, off the runtime thread, which awaits it.
+            "pane:extension/typed-folder": async,
+            // What the Run dialog runs waits for the shell and Windows'
+            // elevation prompt, off the runtime thread, which awaits it.
+            "pane:extension/run": async,
+            // The session and power commands likewise wait for the system
+            // (the displays' power message, the session ending), off the
+            // runtime thread, which awaits them.
+            "pane:extension/system-commands": async,
+            // The open windows wait for their processes and the
+            // foreground, off the runtime thread, which awaits them.
+            "pane:extension/windows": async,
+            // What a command registers at run time it owns as a resource:
+            // interactions with the store's resource table can trap.
+            "pane:extension/registrations": trappable,
         },
         exports: { default: async | store },
     });
@@ -165,16 +192,40 @@ mod operations_bindings {
     });
 }
 
+/// The `events` export of a component that registers timers or watchers,
+/// which their firings are delivered to.
+mod events_bindings {
+    wasmtime::component::bindgen!({
+        path: "../../wit",
+        world: "events-provider",
+        exports: { default: async | store },
+    });
+}
+
+/// The `lifecycle` export of a component that opts in to the activation
+/// entry point or the state handoff (ADR 0041).
+mod lifecycle_bindings {
+    wasmtime::component::bindgen!({
+        path: "../../wit",
+        world: "lifecycle-provider",
+        exports: { default: async | store },
+    });
+}
+
 use bindings::exports::pane::extension::command;
 use bindings::pane::extension::commands as launching;
 use bindings::pane::extension::preferences as preference_values;
+use bindings::pane::extension::registrations as registering;
 use bindings::pane::extension::view as view_host;
 use bindings::pane::extension::{
     applications, cache, clipboard_history, content, credentials, settings,
 };
 use bindings::pane::extension::{
-    feedback as feedback_host, system as system_host, window as window_host,
+    feedback as feedback_host, run as run_host, system as system_host,
+    system_commands as system_commands_host, typed_folder as typed_folder_host,
+    window as window_host, windows as windows_host,
 };
+use events_bindings::exports::pane::extension::events;
 use indexed_bindings::exports::pane::extension::indexed_results;
 use root_bindings::exports::pane::extension::root_results;
 
@@ -188,8 +239,11 @@ use crate::generation::{End, Fence, Generation, Registration};
 use crate::helpers;
 use crate::helpers::runner::{self, HelperError, HelperErrorKind, Helpers, Running, Spec};
 use crate::launch::{LaunchRecord, LaunchRequest, LaunchSource, LaunchType, Launches};
-use crate::operations::{self, Directory, OperationCall, OperationError, Target};
+use crate::operations::{
+    self, Addressed, Directory, OperationAnswer, OperationCall, OperationError, Target,
+};
 use crate::packages::EXTENSION_API;
+use crate::registrations::Registrations;
 
 /// Interface-version prefix every imported WASI interface must carry.
 const WASI_VERSION: &str = "@0.3.";
@@ -210,6 +264,38 @@ const OPERATIONS_INTERFACE: &str = "pane:extension/published-operations@0.1.0";
 /// The interface a command that runs a continuing service also exports.
 const SERVICE_INTERFACE: &str = "pane:extension/service@0.1.0";
 
+/// The interface a component that registers timers or watchers also
+/// exports, which their firings are delivered to.
+const EVENTS_INTERFACE: &str = "pane:extension/events@0.1.0";
+
+/// The interface a component that opts in to the state handoff exports,
+/// as the activation entry point its package's `pane.json` names under
+/// `activate` does (ADR 0041): `pane:extension/lifecycle`.
+const LIFECYCLE_INTERFACE: &str = "pane:extension/lifecycle@0.1.0";
+
+/// How long the runtime waits for the `snapshot` answer of an instance
+/// whose code is being replaced (ADR 0041's state handoff): a snapshot
+/// that is not answered by then is dropped, so a handoff never delays a
+/// replacement by more than this.
+const SNAPSHOT_DEADLINE: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// The state an instance handed to the code that replaced it (ADR 0041's
+/// state handoff), staged in memory for the new code's first instance of
+/// the same component file to restore. Never written to disk.
+struct StagedSnapshot {
+    /// The generation that restores the state: the one that directly
+    /// replaced the code the snapshot came from, so nothing is handed over
+    /// after, say, a disable followed by an enable.
+    generation: Generation,
+    /// The bytes the old code's `snapshot` answered.
+    state: Vec<u8>,
+}
+
+/// Snapshots staged for the new code to restore, by the package's identity
+/// key and the new code's component path: shared by every runtime thread,
+/// so one that replaces a crashed thread still restores them.
+type SharedSnapshots = Arc<Mutex<HashMap<(String, PathBuf), StagedSnapshot>>>;
+
 /// What a result a command answers with shows as a row: the fields its
 /// computed root results and indexed results share (each interface's WIT
 /// declares its own record, as a WIT record cannot extend another).
@@ -226,6 +312,45 @@ pub(crate) struct ResultListing {
 pub(crate) struct RootResult {
     pub listing: ResultListing,
     pub action: RootAction,
+    /// The answer's card, when the result is one: its own section, its
+    /// swatch and further ways to copy it (see [`AnswerDetail`]).
+    pub answer: Option<AnswerDetail>,
+}
+
+/// What a root result that is an answer's card says beyond its title and
+/// action: the section it sits under, the colour of its swatch and
+/// further ways to copy it, as the command answered (the calculator's
+/// colour and date answers, #196).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct AnswerDetail {
+    /// The section the answer is listed under, in place of the command's
+    /// title ("Color", "Date & Time").
+    pub section: String,
+    /// The colour of the card's swatch, as `#RRGGBB` or `#RRGGBBAA`;
+    /// `None` when the answer is not a colour.
+    pub swatch: Option<String>,
+    /// Further ways to copy the answer, each an entry of the Actions
+    /// panel, in order.
+    pub copies: Vec<AnswerCopy>,
+}
+
+/// One further way to copy a computed answer, as the Actions panel offers
+/// it: what the copy is called and the text it copies.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct AnswerCopy {
+    pub title: String,
+    pub text: String,
+}
+
+/// When a query is asked about: the moment the user stopped at it, in
+/// milliseconds since the Unix epoch, and how far the local time there
+/// is from UTC, by the clock root search's own dates are shown by (a
+/// test's, in a test).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct WallTime {
+    pub milliseconds: u64,
+    /// In milliseconds.
+    pub offset: i64,
 }
 
 /// What invoking a computed root result does; Pane performs it.
@@ -277,6 +402,10 @@ pub(crate) struct Exports {
     /// `service`: it runs a continuing service while the package's code
     /// may run.
     pub service: bool,
+    /// `lifecycle`: it is the activation entry point its package's
+    /// `pane.json` names under `activate`, or a component that opts in to
+    /// the state handoff (ADR 0041).
+    pub activate: bool,
 }
 
 // The system's applications as the runtime's guests and the launcher see
@@ -648,6 +777,30 @@ enum Request {
         data: Option<PackageData>,
         reply: oneshot::Sender<Result<Cycle, CallError>>,
     },
+    /// Activates the package of `data`: calls its component's
+    /// `activate` export (the activation entry point, ADR 0041).
+    Activate {
+        component: PathBuf,
+        data: Option<PackageData>,
+        reply: oneshot::Sender<Result<(), CallError>>,
+    },
+    /// Asks the running instance of `component` that exports `snapshot`
+    /// for the state it hands to its replacement (ADR 0041), before the
+    /// old generation ends.
+    Snapshot {
+        component: PathBuf,
+        data: Option<PackageData>,
+        reply: oneshot::Sender<Result<Option<Vec<u8>>, CallError>>,
+    },
+    /// Delivers one event of what the package of `data` registered (a
+    /// timer's firing, a watcher's coalesced changes) to its component's
+    /// `events` export.
+    Event {
+        component: PathBuf,
+        event: crate::registrations::GuestEvent,
+        data: Option<PackageData>,
+        reply: oneshot::Sender<Result<(), CallError>>,
+    },
     IndexedResults {
         component: PathBuf,
         data: Option<PackageData>,
@@ -656,6 +809,7 @@ enum Request {
     RootResults {
         component: PathBuf,
         query: String,
+        at: WallTime,
         data: Option<PackageData>,
         reply: oneshot::Sender<Result<Vec<RootResult>, CallError>>,
     },
@@ -1209,6 +1363,15 @@ impl Runtime {
         self.shared.applications.on_change(Arc::new(changed));
     }
 
+    /// The components that asked for the installed applications and may
+    /// still run: what they supply ahead of the query may have changed
+    /// when the applications did, and is asked for again then (see
+    /// [`Runtime::on_applications_changed`]), so a show of root search
+    /// that changed nothing asks them for nothing (#202).
+    pub(crate) fn applications_askers(&self) -> Vec<PathBuf> {
+        self.shared.applications.askers()
+    }
+
     /// Has the runtime list granted folders through `folders` from now on,
     /// instead of this system's own ([`crate::files::native`]).
     pub fn set_folders(&self, folders: Arc<dyn Folders>) {
@@ -1247,12 +1410,13 @@ impl Runtime {
     }
 
     /// Asks the command in `component`, which computes root results, for
-    /// its results for `query`; the command reads and saves `data`.
-    /// Starts its instance if it has none.
+    /// its results for `query` at `at` (see [`WallTime`]); the command
+    /// reads and saves `data`. Starts its instance if it has none.
     pub(crate) async fn root_results_with(
         &self,
         component: &Path,
         query: &str,
+        at: WallTime,
         data: Option<PackageData>,
     ) -> Result<Vec<RootResult>, CallError> {
         let (reply, response) = oneshot::channel();
@@ -1260,6 +1424,7 @@ impl Runtime {
             Request::RootResults {
                 component: component.to_path_buf(),
                 query: query.to_owned(),
+                at,
                 data,
                 reply,
             },
@@ -1277,6 +1442,121 @@ impl Runtime {
     /// is the same), and its late answer is discarded. An error the service
     /// answers with is an expected error; a trap, or a cycle that computes
     /// without finishing, is a crash of the package like any call's.
+    /// What the packages' guests registered at run time, and which
+    /// activation entry points ran: the registry the launcher reads (see
+    /// `registrations`).
+    pub(crate) fn registrations(&self) -> Arc<Registrations> {
+        self.shared.registrations.clone()
+    }
+
+    /// Activates the package of `data`: calls its component's `activate`
+    /// export (the activation entry point its `pane.json` names, ADR
+    /// 0041). A trap is a crash of the package, counted towards pausing
+    /// it; an error loading or instantiating the component is as any
+    /// call's is. The caller that runs it while starting reloaded code
+    /// takes the failure as a startup failure.
+    pub(crate) async fn activate_with(
+        &self,
+        component: &Path,
+        data: Option<PackageData>,
+    ) -> Result<(), CallError> {
+        let (reply, response) = oneshot::channel();
+        self.call(
+            Request::Activate {
+                component: component.to_path_buf(),
+                data,
+                reply,
+            },
+            response,
+        )
+        .await
+    }
+
+    /// Asks the running instance of `component` that exports `snapshot`
+    /// for the state it hands to the code the caller is about to install
+    /// (the state handoff, ADR 0041): the instance must be idle (no call
+    /// pending in it), the answer must come within [`SNAPSHOT_DEADLINE`],
+    /// and the bytes are limited to the operation JSON limit. `None` when
+    /// the instance is not running, exports no `snapshot`, is busy, is
+    /// late, answers too much or traps: the replacement goes ahead either
+    /// way, never delayed by more than the deadline. What this returns is
+    /// kept in memory only, for [`Runtime::stage_restores`] to hand to the
+    /// new code; a replacement or build that failed its checks never asks.
+    pub(crate) async fn snapshot_of(
+        &self,
+        component: &Path,
+        data: Option<PackageData>,
+    ) -> Result<Option<Vec<u8>>, CallError> {
+        let (reply, response) = oneshot::channel();
+        self.call(
+            Request::Snapshot {
+                component: component.to_path_buf(),
+                data,
+                reply,
+            },
+            response,
+        )
+        .await
+    }
+
+    /// Stages `states` for the new code of the package with identity key
+    /// `owner` in its generation `generation` to restore (the state
+    /// handoff, ADR 0041): each component path names a component of the
+    /// new code — the instance that first starts at it restores the bytes
+    /// it holds, before any other call into it — and whatever the
+    /// package's earlier code left staged goes. Kept in memory only, never
+    /// written to disk. Called once the replacement passed its checks and
+    /// the old code's generation ended, with the new code not yet started:
+    /// the generation given is the one the new code runs in, so only it
+    /// restores the state.
+    pub(crate) fn stage_restores(
+        &self,
+        owner: &str,
+        generation: &Generation,
+        states: Vec<(PathBuf, Vec<u8>)>,
+    ) {
+        let mut staged = lock(&self.shared.snapshots);
+        staged.retain(|(whose, _), _| whose != owner);
+        for (component, state) in states {
+            staged.insert(
+                (owner.to_owned(), component),
+                StagedSnapshot {
+                    generation: generation.clone(),
+                    state,
+                },
+            );
+        }
+    }
+
+    /// Drops the snapshots staged for the new code of the package with
+    /// identity key `owner` (see [`Runtime::stage_restores`]), for a
+    /// package that will never start again, such as one being uninstalled.
+    pub(crate) fn drop_restores(&self, owner: &str) {
+        lock(&self.shared.snapshots).retain(|(whose, _), _| whose != owner);
+    }
+
+    /// Delivers one event of what the package of `data` registered — a
+    /// timer's firing, a watcher's coalesced changes — to its component's
+    /// `events` export, as the timers and watchers threads do.
+    pub(crate) async fn event_with(
+        &self,
+        component: &Path,
+        event: crate::registrations::GuestEvent,
+        data: Option<PackageData>,
+    ) -> Result<(), CallError> {
+        let (reply, response) = oneshot::channel();
+        self.call(
+            Request::Event {
+                component: component.to_path_buf(),
+                event,
+                data,
+                reply,
+            },
+            response,
+        )
+        .await
+    }
+
     pub(crate) async fn run_cycle_with(
         &self,
         component: &Path,
@@ -1446,6 +1726,17 @@ impl Runtime {
     /// searching commands starts none; invoking a command starts its own.
     pub async fn running(&self) -> Vec<PathBuf> {
         self.try_running().await.unwrap_or_default()
+    }
+
+    /// How many times an instance of `component` was started: a diagnostic
+    /// for tests and logs, like [`Runtime::running`]. A cancelled call
+    /// drops its instance, so a call after it starts one again; root search
+    /// asks a provider once a burst of keystrokes has gone quiet (#202).
+    pub fn instance_starts(&self, component: &Path) -> u64 {
+        lock(&self.shared.starts)
+            .get(component)
+            .copied()
+            .unwrap_or(0)
     }
 
     /// The components with calls the user asked for that have not answered
@@ -1933,13 +2224,29 @@ pub(crate) struct GuestState {
     /// asked in this instance: whose preferences `pane:extension/
     /// preferences` reads when the guest names none.
     command: Option<String>,
+    /// What the package registered at run time, which its host functions
+    /// add to and its resource handles name (see `registrations`).
+    registrations: Arc<Registrations>,
+    /// Which instance of its component this is: the runtime thread's
+    /// number and the instance's serial, never reused together. What the
+    /// instance registers is tagged with it, so the instance going ends
+    /// its registrations ([`GuestState::drop`]).
+    identity: (u64, u64),
+    /// Whether the component exports `pane:extension/events`, which
+    /// timer firings and watcher changes are delivered to; a component
+    /// that registers a timer or a watcher must.
+    events: bool,
 }
 
 impl Drop for GuestState {
     /// The instance is going (its generation ended, it crashed, it was
-    /// forgotten or the runtime stopped): so do the helpers it started.
+    /// forgotten or the runtime stopped): so do the helpers it started,
+    /// and so do the registrations it holds and the activation entry
+    /// point it ran, whose instance going is what ends them (ADR 0041).
     fn drop(&mut self) {
         self.helpers.stop_owned_by(self.owner);
+        self.registrations
+            .instance_gone(&self.component, self.identity);
     }
 }
 
@@ -2187,6 +2494,370 @@ impl launching::Host for GuestState {
     }
 }
 
+impl registering::Host for GuestState {
+    /// Registers a dynamic root item under `command`, from `item`: the
+    /// item shape of docs/list-tree.md as JSON, plus the `mode` that makes
+    /// it a dynamic command. Only code Pane is running a call of, of an
+    /// installed package, may register, as operations may only be called;
+    /// the manifest's command and the item are checked here, so the entry
+    /// the registry keeps is one Pane can list.
+    fn add_root_item(
+        &mut self,
+        command: String,
+        item: String,
+    ) -> wasmtime::Result<Result<Resource<crate::registrations::RootItemHandle>, String>> {
+        Ok(self
+            .add_registration(
+                "dynamic root item",
+                crate::registrations::MAX_ROOT_ITEMS,
+                |kind| matches!(kind, crate::registrations::Kind::RootItem { .. }),
+                |state, installed| {
+                    let manifest = state.command_manifest(installed, &command)?;
+                    let declared = manifest
+                        .commands
+                        .iter()
+                        .find(|declared| declared.id == command)
+                        .ok_or_else(|| format!("{} has no command `{command}`", manifest.title))?;
+                    if state.component != state.location_of(installed).join(&declared.component) {
+                        return Err(format!(
+                            "command `{command}` is not served by this component; a dynamic \
+                             root item is under a command this component serves"
+                        ));
+                    }
+                    if declared.mode == crate::packages::CommandMode::Provider {
+                        return Err(format!(
+                            "command `{command}` only answers root search; a dynamic root item \
+                             is under a command with a row of its own"
+                        ));
+                    }
+                    Ok(crate::registrations::Kind::RootItem {
+                        command,
+                        item: state.read_item(&item)?,
+                    })
+                },
+            )
+            .and_then(|id| {
+                self.table
+                    .push(crate::registrations::RootItemHandle(id))
+                    .map_err(|error| error.to_string())
+            }))
+    }
+
+    /// Registers a timer that fires once, `seconds` from now.
+    fn timer_after(
+        &mut self,
+        seconds: u64,
+        tag: String,
+    ) -> wasmtime::Result<Result<Resource<crate::registrations::TimerHandle>, String>> {
+        Ok(self.timer(false, seconds, tag))
+    }
+
+    /// Registers a timer that fires every `seconds` until it is dropped
+    /// or the generation ends.
+    fn timer_every(
+        &mut self,
+        seconds: u64,
+        tag: String,
+    ) -> wasmtime::Result<Result<Resource<crate::registrations::TimerHandle>, String>> {
+        Ok(self.timer(true, seconds, tag))
+    }
+
+    /// Registers a watcher of `path`, recursive or not, reporting with
+    /// `tag`.
+    fn watch_folder(
+        &mut self,
+        path: String,
+        recursive: bool,
+        tag: String,
+    ) -> wasmtime::Result<Result<Resource<crate::registrations::WatcherHandle>, String>> {
+        Ok(self
+            .add_registration(
+                "folder watcher",
+                crate::registrations::MAX_WATCHERS,
+                |kind| matches!(kind, crate::registrations::Kind::Watcher { .. }),
+                |state, _| {
+                    state.wants_events()?;
+                    let path = PathBuf::from(&path);
+                    if !path.exists() {
+                        return Err(format!(
+                            "Pane cannot watch {}: there is nothing there",
+                            path.display()
+                        ));
+                    }
+                    Ok(crate::registrations::Kind::Watcher {
+                        path,
+                        recursive,
+                        tag,
+                    })
+                },
+            )
+            .and_then(|id| {
+                self.table
+                    .push(crate::registrations::WatcherHandle(id))
+                    .map_err(|error| error.to_string())
+            }))
+    }
+
+    /// Registers a provision of `capability`: the package provides it
+    /// while this is held.
+    fn provide_capability(
+        &mut self,
+        capability: String,
+    ) -> wasmtime::Result<Result<Resource<crate::registrations::ProvisionHandle>, String>> {
+        let provided = capability.clone();
+        Ok(self
+            .add_registration(
+                "run-time provision",
+                crate::registrations::MAX_PROVISIONS,
+                |kind| matches!(kind, crate::registrations::Kind::Provision { .. }),
+                |state, installed| {
+                    let manifest = state.manifest_of(installed)?;
+                    match manifest
+                        .provides
+                        .iter()
+                        .find(|provides| provides.capability == provided)
+                    {
+                        None => Err(format!(
+                            "{} declares no `provides` entry for `{provided}` in its pane.json; \
+                             declare it there, marked `atRunTime`, to provide it at run time",
+                            manifest.title
+                        )),
+                        Some(provides) if !provides.at_run_time => Err(format!(
+                            "{} provides `{provided}` whenever it can run; mark the entry \
+                             `atRunTime` in its pane.json to provide it at run time",
+                            manifest.title
+                        )),
+                        Some(_) => Ok(crate::registrations::Kind::Provision {
+                            capability: provided,
+                        }),
+                    }
+                },
+            )
+            .and_then(|id| {
+                self.table
+                    .push(crate::registrations::ProvisionHandle(id))
+                    .map_err(|error| error.to_string())
+            }))
+    }
+}
+
+impl registering::HostRootItem for GuestState {
+    /// Replaces the item this handle owns with `item`.
+    fn update(
+        &mut self,
+        own: Resource<crate::registrations::RootItemHandle>,
+        item: String,
+    ) -> wasmtime::Result<Result<(), String>> {
+        let _host = self.host();
+        // Read first, so a handle that is no longer held says that rather
+        // than what is wrong with the item.
+        let read = self.read_item(&item);
+        match self.table.get(&own) {
+            Ok(handle) => Ok(match read {
+                Ok(item) => self.registrations.update_root_item(handle.0, item),
+                Err(error) => Err(error),
+            }),
+            // A handle the table no longer holds: its registration ended.
+            Err(_) => Ok(Err("its registration was undone".into())),
+        }
+    }
+
+    /// The handle is gone: so is the registration, and its entry on the
+    /// generation's undo list.
+    fn drop(
+        &mut self,
+        own: Resource<crate::registrations::RootItemHandle>,
+    ) -> wasmtime::Result<()> {
+        if let Ok(handle) = self.table.delete(own) {
+            self.registrations.release(handle.0);
+        }
+        Ok(())
+    }
+}
+
+impl registering::HostTimer for GuestState {
+    /// The handle is gone: so is the timer.
+    fn drop(&mut self, own: Resource<crate::registrations::TimerHandle>) -> wasmtime::Result<()> {
+        if let Ok(handle) = self.table.delete(own) {
+            self.registrations.release(handle.0);
+        }
+        Ok(())
+    }
+}
+
+impl registering::HostWatcher for GuestState {
+    /// The handle is gone: so is the watcher.
+    fn drop(&mut self, own: Resource<crate::registrations::WatcherHandle>) -> wasmtime::Result<()> {
+        if let Ok(handle) = self.table.delete(own) {
+            self.registrations.release(handle.0);
+        }
+        Ok(())
+    }
+}
+
+impl registering::HostProvision for GuestState {
+    /// The handle is gone: the provider is withdrawn at once.
+    fn drop(
+        &mut self,
+        own: Resource<crate::registrations::ProvisionHandle>,
+    ) -> wasmtime::Result<()> {
+        if let Ok(handle) = self.table.delete(own) {
+            self.registrations.release(handle.0);
+        }
+        Ok(())
+    }
+}
+
+impl GuestState {
+    /// Registers what `make` makes, named `what` on the generation's undo
+    /// list, refusing beyond `limit` registrations of the kinds `same`
+    /// names: the shared half of the registrations interface's functions.
+    /// The guest's call is a host call; the registry records the entry
+    /// and tells its hooks, so the launcher relists root search, the
+    /// worker threads take their work and the routing sees the provision.
+    fn add_registration(
+        &mut self,
+        what: &'static str,
+        limit: usize,
+        same: impl Fn(&crate::registrations::Kind) -> bool,
+        make: impl FnOnce(
+            &GuestState,
+            &operations::Installed,
+        ) -> Result<crate::registrations::Kind, String>,
+    ) -> Result<u64, String> {
+        let _host = self.host();
+        if !self.serving {
+            return Err(
+                "registrations can only be made while Pane runs a call of the extension".into(),
+            );
+        }
+        if let Some(end) = self.stopped() {
+            return Err(crate::registrations::replaced(end));
+        }
+        let owner = self.owner().ok_or(
+            "only installed packages register at run time; this command is built into Pane",
+        )?;
+        let generation = self
+            .generation()
+            .cloned()
+            .expect("an instance with an owner has a generation");
+        self.registrations
+            .refuse_beyond(&owner, what, limit, &same)?;
+        let installed = self.installed();
+        let kind = make(self, &installed)?;
+        Ok(self.registrations.add(
+            &owner,
+            &self.component,
+            self.identity,
+            &generation,
+            what,
+            kind,
+        ))
+    }
+
+    /// Registers a timer, one firing (`every` false) or one every
+    /// interval, refusing the bounds and the missing `events` export.
+    fn timer(
+        &mut self,
+        every: bool,
+        seconds: u64,
+        tag: String,
+    ) -> Result<Resource<crate::registrations::TimerHandle>, String> {
+        let bounds = crate::packages::MIN_SCHEDULE_SECONDS..=crate::packages::MAX_SCHEDULE_SECONDS;
+        if !bounds.contains(&seconds) {
+            return Err(format!(
+                "this timer's {seconds} seconds are beyond Pane's timer bounds, 1 second to \
+                 30 days; timers run within them"
+            ));
+        }
+        self.add_registration(
+            "timer",
+            crate::registrations::MAX_TIMERS,
+            |kind| matches!(kind, crate::registrations::Kind::Timer { .. }),
+            |state, _| {
+                state.wants_events()?;
+                Ok(crate::registrations::Kind::Timer {
+                    after: !every,
+                    seconds,
+                    tag,
+                })
+            },
+        )
+        .and_then(|id| {
+            self.table
+                .push(crate::registrations::TimerHandle(id))
+                .map_err(|error| error.to_string())
+        })
+    }
+
+    /// The manifest of the guest's own package, as `installed` holds it.
+    fn manifest_of(
+        &self,
+        installed: &operations::Installed,
+    ) -> Result<crate::packages::Manifest, String> {
+        let owner = self.owner().expect("checked by add_registration");
+        let package = installed
+            .packages
+            .iter()
+            .find(|package| package.identity.key() == owner)
+            .ok_or("the extension is no longer installed")?;
+        package
+            .manifest
+            .clone()
+            .map_err(|error| format!("{} cannot load: {error}", package.title()))
+    }
+
+    /// The folder of the guest's own package in `installed`, for checking
+    /// which of its commands this component serves.
+    fn location_of(&self, installed: &operations::Installed) -> PathBuf {
+        let owner = self.owner().expect("checked by add_registration");
+        installed
+            .packages
+            .iter()
+            .find(|package| package.identity.key() == owner)
+            .map(|package| package.location.clone())
+            .unwrap_or_default()
+    }
+
+    /// The manifest of the guest's own package, as a dynamic root item's
+    /// `command` needs it: the command must be one of its own.
+    fn command_manifest(
+        &self,
+        installed: &operations::Installed,
+        _command: &str,
+    ) -> Result<crate::packages::Manifest, String> {
+        self.manifest_of(installed)
+    }
+
+    /// The dynamic root item `item` describes, with its size bounded as
+    /// an indexed result's answer is.
+    fn read_item(&self, item: &str) -> Result<crate::registrations::DynamicItem, String> {
+        if item.len() > operations::MAX_OPERATION_JSON {
+            return Err(format!(
+                "the item is {} bytes; at most {} are passed",
+                item.len(),
+                operations::MAX_OPERATION_JSON
+            ));
+        }
+        tree::dynamic_item(item)
+    }
+
+    /// Whether the guest's component can be told of timer firings and
+    /// watcher changes, or why it cannot: a component that registers
+    /// either exports the events interface.
+    fn wants_events(&self) -> Result<(), String> {
+        if self.events {
+            return Ok(());
+        }
+        Err(format!(
+            "this component does not export {EVENTS_INTERFACE}, which timer firings and \
+             folder watcher changes are delivered to; export it beside `command` \
+             (pane_extension::registrations::export_events!(Events) in Rust, \"pane\": {{ \
+             \"events\": true }} in a JS/TS package.json)"
+        ))
+    }
+}
+
 /// `launch`, of the command with manifest id `command` (empty when Pane
 /// does not know it), as the guest's bindings carry it.
 fn launch_record(launch: &LaunchRecord, command: Option<&str>) -> launching::LaunchRecord {
@@ -2323,6 +2994,16 @@ impl GuestState {
     /// built into Pane.
     pub(crate) fn owner(&self) -> Option<String> {
         self.data.as_ref().map(|data| data.owner().to_owned())
+    }
+
+    /// The installed packages as the launcher has them, for host functions
+    /// that answer from them (a capability's providers); a runtime no
+    /// launcher drives answers as with none installed.
+    pub(crate) fn installed(&self) -> operations::Installed {
+        match lock(&self.directory).clone() {
+            Some(directory) => directory(),
+            None => operations::Installed::default(),
+        }
     }
 }
 
@@ -2501,7 +3182,7 @@ impl WasiHttpView for GuestState {
 /// A running guest instance of one component.
 struct Instance {
     store: Store<GuestState>,
-    bindings: bindings::ExtensionWithFileIndex,
+    bindings: bindings::ExtensionWithTypedFolder,
     /// Its root results export, if it has one.
     root_results: Option<root_bindings::RootResultsProvider>,
     /// Its indexed results export, if it has one.
@@ -2510,6 +3191,11 @@ struct Instance {
     operations: Option<operations_bindings::OperationsProvider>,
     /// Its continuing-service export, if it runs one.
     service: Option<service_bindings::ServiceProvider>,
+    /// Its events export, if it registers timers or watchers.
+    events: Option<events_bindings::EventsProvider>,
+    /// Its activation entry point export, if its package's `pane.json`
+    /// names it under `activate`.
+    lifecycle: Option<lifecycle_bindings::LifecycleProvider>,
     /// The operation calls its guest makes, which the call it runs serves
     /// ([`Host::run_guest`]); taken out while it runs one.
     calls: Option<mpsc::UnboundedReceiver<OperationCall>>,
@@ -2681,6 +3367,9 @@ struct Host {
     next_chain: Cell<u64>,
     /// The next instance's serial.
     next_serial: Cell<u64>,
+    /// How many times each component was instantiated, shared with the
+    /// runtime's handles: a diagnostic for tests (#202).
+    starts: Arc<Mutex<HashMap<PathBuf, u64>>>,
     /// Woken whenever an instance taken out for a call comes back or goes.
     returned: tokio::sync::Notify,
     /// Where an instance's undo asks this thread to drop the instances of
@@ -2722,6 +3411,14 @@ struct Host {
     files: FileAccess,
     /// Keeps clipboard history for guests' packages.
     clipboard: SharedClipboard,
+    /// What the packages' guests register at run time, shared with the
+    /// threads that replace this one and with the launcher (see
+    /// `registrations`).
+    registrations: Arc<Registrations>,
+    /// Snapshots staged for the new code of a replaced package to restore
+    /// (the state handoff, ADR 0041), shared with the threads that replace
+    /// this one.
+    snapshots: SharedSnapshots,
 }
 
 impl Code {
@@ -2778,6 +3475,11 @@ impl Code {
             |state| state,
         )
         .expect("registering the file index in a fresh linker cannot conflict");
+        typed_folder_host::add_to_linker::<_, wasmtime::component::HasSelf<_>>(
+            &mut linker,
+            |state| state,
+        )
+        .expect("registering the typed folder listing in a fresh linker cannot conflict");
         launching::add_to_linker::<_, wasmtime::component::HasSelf<_>>(&mut linker, |state| state)
             .expect("registering launching commands in a fresh linker cannot conflict");
         view_host::add_to_linker::<_, wasmtime::component::HasSelf<_>>(&mut linker, |state| state)
@@ -2794,11 +3496,29 @@ impl Code {
             state
         })
         .expect("registering the system functions in a fresh linker cannot conflict");
+        run_host::add_to_linker::<_, wasmtime::component::HasSelf<_>>(&mut linker, |state| state)
+            .expect("registering the Run dialog's work in a fresh linker cannot conflict");
+        system_commands_host::add_to_linker::<_, wasmtime::component::HasSelf<_>>(
+            &mut linker,
+            |state| state,
+        )
+        .expect("registering the system commands in a fresh linker cannot conflict");
+        windows_host::add_to_linker::<_, wasmtime::component::HasSelf<_>>(&mut linker, |state| {
+            state
+        })
+        .expect("registering the open windows in a fresh linker cannot conflict");
         preference_values::add_to_linker::<_, wasmtime::component::HasSelf<_>>(
             &mut linker,
             |state| state,
         )
         .expect("registering preferences in a fresh linker cannot conflict");
+        // What a command registers at run time it owns as a resource: the
+        // host side of the resources and of the functions that make them.
+        bindings::pane::extension::registrations::add_to_linker::<
+            _,
+            wasmtime::component::HasSelf<_>,
+        >(&mut linker, |state| state)
+        .expect("registering owned registrations in a fresh linker cannot conflict");
         Code { engine, linker }
     }
 
@@ -2942,7 +3662,28 @@ impl Code {
                 ))
             })?;
         }
-        bindings::ExtensionWithFileIndexPre::new(pre).map_err(interface)?;
+        if exports.activate {
+            lifecycle_bindings::LifecycleProviderPre::new(pre.clone()).map_err(|error| {
+                CallError::Interface(format!(
+                    "its pane.json names it under `activate`, but it does not export \
+                     {LIFECYCLE_INTERFACE} with the functions Pane calls: {error:#}"
+                ))
+            })?;
+        }
+        // A component opts in to the state handoff (ADR 0041) by exporting
+        // the lifecycle interface, whether or not its package's `pane.json`
+        // names it under `activate`: installing detects the export here,
+        // without running guest code, so a component exporting another
+        // shape of it is refused.
+        if ty.get_export(&self.engine, LIFECYCLE_INTERFACE).is_some() {
+            lifecycle_bindings::LifecycleProviderPre::new(pre.clone()).map_err(|error| {
+                CallError::Interface(format!(
+                    "it does not export {LIFECYCLE_INTERFACE} with the functions Pane calls: \
+                     {error:#}"
+                ))
+            })?;
+        }
+        bindings::ExtensionWithTypedFolderPre::new(pre).map_err(interface)?;
         Ok(Checked { network, programs })
     }
 }
@@ -2966,6 +3707,7 @@ impl Host {
             next_view: shared.next_view.clone(),
             next_chain: Cell::new(0),
             next_serial: Cell::new(0),
+            starts: shared.starts.clone(),
             returned: tokio::sync::Notify::new(),
             nudge,
             directory: shared.directory.clone(),
@@ -2984,6 +3726,8 @@ impl Host {
             network: shared.network.clone(),
             files: shared.files.clone(),
             clipboard: shared.clipboard.clone(),
+            registrations: shared.registrations.clone(),
+            snapshots: shared.snapshots.clone(),
         }
     }
 
@@ -3103,6 +3847,28 @@ impl Host {
             } => Box::pin(async move {
                 let _ = reply.send(self.run_cycle(&component, command, data).await);
             }),
+            Request::Activate {
+                component,
+                data,
+                reply,
+            } => Box::pin(async move {
+                let _ = reply.send(self.activate(&component, data).await);
+            }),
+            Request::Snapshot {
+                component,
+                data,
+                reply,
+            } => Box::pin(async move {
+                let _ = reply.send(Ok(self.snapshot(&component, data).await));
+            }),
+            Request::Event {
+                component,
+                event,
+                data,
+                reply,
+            } => Box::pin(async move {
+                let _ = reply.send(self.event(&component, event, data).await);
+            }),
             Request::IndexedResults {
                 component,
                 data,
@@ -3113,10 +3879,13 @@ impl Host {
             Request::RootResults {
                 component,
                 query,
+                at,
                 data,
                 mut reply,
             } => Box::pin(async move {
-                let result = self.root_results(&component, query, data, &mut reply).await;
+                let result = self
+                    .root_results(&component, query, at, data, &mut reply)
+                    .await;
                 let _ = reply.send(result);
             }),
             Request::Forget { components } => {
@@ -4029,6 +4798,7 @@ impl Host {
         &self,
         path: &Path,
         query: String,
+        at: WallTime,
         data: Option<PackageData>,
         reply: &mut oneshot::Sender<Result<Vec<RootResult>, CallError>>,
     ) -> Result<Vec<RootResult>, CallError> {
@@ -4052,6 +4822,11 @@ impl Host {
             .ok_or_else(|| {
                 CallError::Interface(format!("it does not export {ROOT_RESULTS_INTERFACE}"))
             })?;
+        // The moment the query was asked about, as the interface carries it.
+        let at = root_results::WallTime {
+            milliseconds: at.milliseconds,
+            offset: at.offset,
+        };
         let result = self
             .run_guest_until(
                 path,
@@ -4059,7 +4834,9 @@ impl Host {
                 async |instance| {
                     instance
                         .store
-                        .run_concurrent(async |store| provider.call_results_for(store, query).await)
+                        .run_concurrent(async |store| {
+                            provider.call_results_for(store, query, at).await
+                        })
                         .await
                 },
                 reply.closed(),
@@ -4079,6 +4856,18 @@ impl Host {
                     root_results::RootAction::OpenUrl(url) => RootAction::OpenUrl(url),
                     root_results::RootAction::OpenFile(path) => RootAction::OpenFile(path),
                 },
+                answer: result.answer.map(|answer| AnswerDetail {
+                    section: answer.section,
+                    swatch: answer.swatch,
+                    copies: answer
+                        .copies
+                        .into_iter()
+                        .map(|copy| AnswerCopy {
+                            title: copy.title,
+                            text: copy.text,
+                        })
+                        .collect(),
+                }),
             })
             .collect())
     }
@@ -4168,6 +4957,354 @@ impl Host {
                 status: cycle.status,
                 next_seconds: cycle.next_seconds,
             })
+    }
+
+    /// Activates the package of `data`: calls `path`'s `activate` export
+    /// (the activation entry point its `pane.json` names, ADR 0041), and
+    /// notes that it ran in this instance of this generation, so it runs
+    /// again only when this instance goes while the generation continues.
+    /// A trap is a crash of the package like any call's, counted towards
+    /// pausing it ([`Health`]); the caller that runs it while starting
+    /// reloaded code takes the failure as a startup failure instead.
+    async fn activate(&self, path: &Path, data: Option<PackageData>) -> Result<(), CallError> {
+        let chain = self.chain();
+        let _turn = self.turn_for(path, &chain).await?;
+        self.instance(path, data.clone()).await?;
+        let lifecycle = self
+            .instances
+            .borrow()
+            .get(path)
+            .and_then(|instance| instance.lifecycle.as_ref())
+            .map(|provider| provider.pane_extension_lifecycle().clone())
+            .ok_or_else(|| {
+                CallError::Interface(format!("it does not export {LIFECYCLE_INTERFACE}"))
+            })?;
+        // Noted before the call runs, so a second arrival of the same
+        // activation (the launcher looking again while this runs) starts
+        // none, and the instance that runs it is the one the registry
+        // notes.
+        if let Some(data) = data.as_ref() {
+            let identity = self
+                .instances
+                .borrow()
+                .get(path)
+                .map(|instance| instance.store.data().identity)
+                .unwrap_or_default();
+            self.registrations
+                .activated(data.owner(), data.generation(), identity);
+        }
+        let result = self
+            .run_guest(path, &chain, async |instance| {
+                instance
+                    .store
+                    .run_concurrent(async |store| lifecycle.call_activate(store).await)
+                    .await
+            })
+            .await?;
+        // Activate answers nothing; only a trap fails it, as a crash of
+        // the package like any call's, dropping the instance it ran in.
+        match result {
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(trap)) | Err(trap) => {
+                self.drop_instance(path);
+                let error = crashed(&trap, false);
+                self.report(path, data.as_ref(), Health::Crashed(error.clone()));
+                Err(error)
+            }
+        }
+    }
+
+    /// Asks `path`'s running instance for the state it hands to the code
+    /// replacing it (see [`Runtime::snapshot_of`]): only an idle instance
+    /// (no call pending in it), only one that exports `snapshot`, within
+    /// [`SNAPSHOT_DEADLINE`], of at most the operation JSON limit. `None`
+    /// whenever it gives none — a busy instance is stopped as today and
+    /// answers nothing — and never a failure of the package: the old
+    /// code's crash while it answers is only logged, since the code is
+    /// going either way.
+    async fn snapshot(&self, path: &Path, data: Option<PackageData>) -> Option<Vec<u8>> {
+        // A call pending in the instance, or holding its turn: stopped as
+        // today, no snapshot.
+        let busy = self
+            .lanes
+            .borrow()
+            .get(path)
+            .is_some_and(|lane| lane.out.is_some() || lane.holder.is_some());
+        if busy {
+            self.handoff_report(
+                data.as_ref(),
+                "a call was still running in the old code's instance",
+            );
+            return None;
+        }
+        let chain = self.chain();
+        let deadline = tokio::time::Instant::now() + SNAPSHOT_DEADLINE;
+        // The turn is waited for within the deadline too: a call that
+        // started meanwhile cannot delay the replacement past it.
+        let turn = unless(
+            self.turn_for(path, &chain),
+            tokio::time::sleep_until(deadline),
+        )
+        .await;
+        let _turn = match turn {
+            Ok(Ok(turn)) => turn,
+            // A fresh chain never waits on itself.
+            Ok(Err(_)) => return None,
+            Err(()) => {
+                self.handoff_report(data.as_ref(), "the old code did not answer within 1 second");
+                return None;
+            }
+        };
+        let lifecycle = self
+            .instances
+            .borrow()
+            .get(path)
+            .and_then(|instance| instance.lifecycle.as_ref())
+            .map(|provider| provider.pane_extension_lifecycle().clone());
+        // An instance that is not running, or exports no snapshot: nothing
+        // to ask. Exporting the interface opts in, whatever the manifest
+        // says.
+        let lifecycle = lifecycle?;
+        let answered = self
+            .run_guest_until(
+                path,
+                &chain,
+                async |instance| {
+                    instance
+                        .store
+                        .run_concurrent(async |store| lifecycle.call_snapshot(store).await)
+                        .await
+                },
+                tokio::time::sleep_until(deadline),
+            )
+            .await;
+        // The deadline passed (the instance goes with the call, as a
+        // stopped search's does), or the generation ended, the code was
+        // replaced again, the guest stopped responding or the thread was
+        // given up on: no snapshot and no delay.
+        let answered = match answered {
+            Ok(answered) => answered,
+            Err(CallError::Cancelled) => {
+                self.handoff_report(data.as_ref(), "the old code did not answer within 1 second");
+                return None;
+            }
+            Err(_) => return None,
+        };
+        let state = match answered {
+            Ok(Ok(state)) => state,
+            // A trap while it answers: the old code is going anyway, so it
+            // is logged where its author sees it, not counted against the
+            // new code.
+            Ok(Err(trap)) | Err(trap) => {
+                let out_of_memory = self
+                    .instances
+                    .borrow()
+                    .get(path)
+                    .is_some_and(|instance| instance.store.data().out_of_memory);
+                self.drop_instance(path);
+                let error = crashed(&trap, out_of_memory);
+                self.handoff_report(
+                    data.as_ref(),
+                    &format!("the old code crashed answering it: {error}"),
+                );
+                return None;
+            }
+        };
+        let state = state?;
+        if state.len() > operations::MAX_OPERATION_JSON {
+            self.handoff_report(
+                data.as_ref(),
+                &format!(
+                    "the old code answered {} bytes, and at most {} are handed over",
+                    state.len(),
+                    operations::MAX_OPERATION_JSON
+                ),
+            );
+            return None;
+        }
+        Some(state)
+    }
+
+    /// Restores the state an instance of `path`'s component handed to its
+    /// replacement (ADR 0041), on this instance's first start and before
+    /// any other call into it: the snapshot staged for the package of
+    /// `data` for this component, in the generation that directly replaced
+    /// the code the state came from. An error the new code answers with is
+    /// not a failure: the state is discarded and the extension starts
+    /// fresh. A trap is a crash of the package; during a reload's start,
+    /// where the caller pauses it, a startup failure. The caller holds
+    /// `path`'s turn.
+    async fn restore(&self, path: &Path, data: Option<&PackageData>) -> Result<(), CallError> {
+        let Some(data) = data else {
+            return Ok(());
+        };
+        let staged = lock(&self.snapshots).remove(&(data.owner().to_owned(), path.to_path_buf()));
+        let Some(staged) = staged else {
+            return Ok(());
+        };
+        // Only the generation that directly replaced the old code restores
+        // the state: a later one (a disable followed by an enable, a pause,
+        // a retry) hands nothing over.
+        if staged.generation.number() != data.generation().number() {
+            return Ok(());
+        }
+        let lifecycle = self
+            .instances
+            .borrow()
+            .get(path)
+            .and_then(|instance| instance.lifecycle.as_ref())
+            .map(|provider| provider.pane_extension_lifecycle().clone());
+        // The new code exports no snapshot entry point: the state has
+        // nowhere to go, and is discarded.
+        let Some(lifecycle) = lifecycle else {
+            return Ok(());
+        };
+        let chain = self.chain();
+        let state = staged.state;
+        let restored = self
+            .run_guest(path, &chain, async |instance| {
+                instance
+                    .store
+                    .run_concurrent(async |store| lifecycle.call_restore(store, state).await)
+                    .await
+            })
+            .await?;
+        match restored {
+            Ok(Ok(Ok(()))) => Ok(()),
+            // An error the new code answers with is not a failure: the
+            // state is discarded and it starts fresh.
+            Ok(Ok(Err(rejected))) => {
+                self.handoff_report(Some(data), &format!("the new code rejected it: {rejected}"));
+                Ok(())
+            }
+            Ok(Err(trap)) | Err(trap) => {
+                self.drop_instance(path);
+                let error = crashed(&trap, false);
+                self.report(path, Some(data), Health::Crashed(error.clone()));
+                Err(error)
+            }
+        }
+    }
+
+    /// Reports `why` a state handoff did not happen, or the state was
+    /// rejected, to the package's extension log: development mode's
+    /// diagnostics (the Logs screen); silent everywhere else, where
+    /// nothing of a dropped snapshot is shown.
+    fn handoff_report(&self, data: Option<&PackageData>, why: &str) {
+        let Some(data) = data else {
+            return;
+        };
+        self.logs.pane(
+            data.owner(),
+            data.generation().number(),
+            LogLevel::Warn,
+            &format!("the state was not handed over to the new code: {why}"),
+        );
+    }
+
+    /// Delivers one event of what the package of `data` registered — a
+    /// timer's firing, a watcher's coalesced changes — to `path`'s `events`
+    /// export. The call belongs to the generation of the code that
+    /// registered, so a disable, a reload, an update, an uninstall or a
+    /// pause stops it, and a trap counts towards pausing the package as
+    /// any call's does. An error the guest answers with is its own, logged
+    /// to its package's extension log.
+    async fn event(
+        &self,
+        path: &Path,
+        event: crate::registrations::GuestEvent,
+        data: Option<PackageData>,
+    ) -> Result<(), CallError> {
+        let chain = self.chain();
+        let _turn = self.turn_for(path, &chain).await?;
+        self.instance(path, data.clone()).await?;
+        let events = self
+            .instances
+            .borrow()
+            .get(path)
+            .and_then(|instance| instance.events.as_ref())
+            .map(|provider| provider.pane_extension_events().clone())
+            .ok_or_else(|| {
+                CallError::Interface(format!("it does not export {EVENTS_INTERFACE}"))
+            })?;
+        let result = self
+            .run_guest(path, &chain, async |instance| {
+                let event = events::Event::from(event.clone());
+                instance
+                    .store
+                    .run_concurrent(async |store| events.call_handle_event(store, event).await)
+                    .await
+            })
+            .await?;
+        let outcome = self.settle(path, result, CallError::Guest);
+        // An error the guest answered with is its own: logged, where its
+        // author sees it, and not a failure of the package.
+        if let Err(CallError::Guest(message)) = &outcome
+            && let Some(data) = data.as_ref()
+        {
+            self.logs.pane(
+                data.owner(),
+                data.generation().number(),
+                LogLevel::Error,
+                message,
+            );
+        }
+        outcome.map(|_: ()| ())
+    }
+
+    async fn indexed_results(
+        &self,
+        path: &Path,
+        data: Option<PackageData>,
+    ) -> Result<Vec<IndexedResult>, CallError> {
+        let chain = self.chain();
+        let _turn = self.turn_for(path, &chain).await?;
+        self.instance(path, data).await?;
+        let exported = self
+            .instances
+            .borrow()
+            .get(path)
+            .is_some_and(|instance| instance.indexed_results.is_some());
+        if !exported {
+            return Err(CallError::Interface(format!(
+                "it does not export {INDEXED_RESULTS_INTERFACE}"
+            )));
+        }
+        let result = self
+            .run_guest(path, &chain, async |instance| {
+                let provider = instance
+                    .indexed_results
+                    .as_ref()
+                    .expect("checked above")
+                    .pane_extension_indexed_results();
+                instance
+                    .store
+                    .run_concurrent(async |store| provider.call_results(store).await)
+                    .await
+            })
+            .await?;
+        let results = self.settle(path, result, CallError::Guest)?;
+        Ok(results
+            .into_iter()
+            .map(|result| IndexedResult {
+                listing: ResultListing {
+                    id: result.id,
+                    title: result.title,
+                    subtitle: result.subtitle,
+                },
+                alternate_titles: result.alternate_titles,
+                keywords: result.keywords,
+                action: match result.action {
+                    indexed_results::IndexedAction::OpenApplication(id) => {
+                        IndexedAction::OpenApplication(id)
+                    }
+                    indexed_results::IndexedAction::Open(open) => IndexedAction::Open {
+                        target: open.target,
+                        application: open.application,
+                    },
+                },
+            })
+            .collect())
     }
 
     /// Runs `call` on the live instance of `path`, in `chain`, serving the
@@ -4322,7 +5459,8 @@ impl Host {
         // A call the guest sent but did not wait for before its call ended
         // has no frame to serve it.
         while let Ok(stranded) = calls.try_recv() {
-            let _ = stranded.reply.send(Err(operations::outside_a_call()));
+            let answer = stranded.unanswered(operations::outside_a_call());
+            let _ = stranded.reply.send(answer);
         }
         instance.calls = Some(calls);
         match result {
@@ -4546,8 +5684,49 @@ impl Host {
         if call.reply.is_closed() {
             return;
         }
-        let result = self.operation(&mut call, chain).await;
-        let _ = call.reply.send(result);
+        let answer = match call.addressed {
+            Addressed::Every { .. } => OperationAnswer::Every(self.every(&mut call, chain).await),
+            _ => OperationAnswer::One(self.operation(&mut call, chain).await),
+        };
+        let _ = call.reply.send(answer);
+    }
+
+    /// Serves a fan-out call to every provider of the capability `call`
+    /// names, as the packages are now: each provider that can serve the
+    /// call is called in turn, as its own call in the chain, and answers
+    /// with its identity, title and result or error. The providers that
+    /// cannot serve — disabled, paused, waiting or for another system — are
+    /// skipped, and with none available the answer is an empty list. Only
+    /// the call as a whole can fail: a use the caller's `pane.json` does
+    /// not declare, or does not declare `"use": "all"`, is refused.
+    async fn every(
+        &self,
+        call: &mut OperationCall,
+        chain: &Chain,
+    ) -> Result<Vec<operations::ProviderAnswer>, OperationError> {
+        self.check_call(call, chain)?;
+        let targets = self.resolve_every(call)?;
+        let mut answers = Vec::new();
+        for target in targets {
+            // Each provider is its own call in the chain: one already
+            // serving a call in it is refused in its own answer, and the
+            // others are still called.
+            let answer = match self.in_chain(chain, &target) {
+                Some(error) => Err(error),
+                None => self.operation_in(call, chain, &target).await,
+            };
+            answers.push(operations::ProviderAnswer {
+                identity: target.identity.clone(),
+                title: target.title.clone(),
+                answer,
+            });
+            // The caller gave up on the fan-out: the providers after this
+            // are not called, and the answer has nowhere to go.
+            if call.reply.is_closed() {
+                break;
+            }
+        }
+        Ok(answers)
     }
 
     /// Serves `call`: checks it, resolves its target, runs the operation
@@ -4559,9 +5738,22 @@ impl Host {
     ) -> Result<String, OperationError> {
         self.check_call(call, chain)?;
         let target = self.resolve_target(call, chain)?;
+        self.operation_in(call, chain, &target).await
+    }
+
+    /// Runs `call`'s operation in `target`'s component, in its turn,
+    /// starting it if it is not running, and returns its answer: the step
+    /// every call to one target ends with, and each provider of a fan-out
+    /// is run as.
+    async fn operation_in(
+        &self,
+        call: &mut OperationCall,
+        chain: &Chain,
+        target: &Target,
+    ) -> Result<String, OperationError> {
         // Disabled or replaced while it was serving the call, it was
         // stopped, and its answer is not passed on.
-        let answer = self.run_operation(&target, call, chain).await?;
+        let answer = self.run_operation(target, call, chain).await?;
         operations::check_json(&answer, &format!("result of {}", target.title))?;
         Ok(answer)
     }
@@ -4580,9 +5772,9 @@ impl Host {
         Ok(())
     }
 
-    /// The installed package and component serving `call`, unless its
-    /// package already serves a call in the chain, through whichever of its
-    /// components.
+    /// The installed package and component serving `call`, by its package
+    /// source or by its capability, unless its package already serves a
+    /// call in the chain, through whichever of its components.
     fn resolve_target(
         &self,
         call: &OperationCall,
@@ -4593,20 +5785,69 @@ impl Host {
             Some(directory) => directory(),
             None => operations::Installed::default(),
         };
-        let target =
-            installed.resolve(&call.caller, &call.source, &call.operation, call.version)?;
+        let target = match &call.addressed {
+            Addressed::Package { source, version } => {
+                installed.resolve(&call.caller, source, &call.operation, *version)?
+            }
+            Addressed::Capability { capability } => {
+                installed.resolve_capability(&call.caller, capability, &call.operation)?
+            }
+            Addressed::Every { .. } => unreachable!("a fan-out resolves to several targets"),
+        };
+        match self.in_chain_of(&installed, chain, &target) {
+            Some(error) => Err(error),
+            None => Ok(target),
+        }
+    }
+
+    /// The providers serving a fan-out `call` to every provider of a
+    /// capability, as the packages are now, in the order Pane calls them.
+    /// The providers that cannot serve are already skipped: each answer
+    /// the fan-out returns was served, or refused by the chain rules.
+    fn resolve_every(&self, call: &OperationCall) -> Result<Vec<Target>, OperationError> {
+        let directory = lock(&self.directory).clone();
+        let installed = match directory {
+            Some(directory) => directory(),
+            None => operations::Installed::default(),
+        };
+        let Addressed::Every { capability } = &call.addressed else {
+            unreachable!("only a fan-out resolves to several targets");
+        };
+        installed.resolve_every(&call.caller, capability, &call.operation)
+    }
+
+    /// Why `target` cannot serve a call in `chain` now — it already serves
+    /// a call in it, through whichever of its components — or `None` when
+    /// it can. Shared by a call to one target and each provider of a
+    /// fan-out, so the chain rules hold for both.
+    fn in_chain(&self, chain: &Chain, target: &Target) -> Option<OperationError> {
+        let directory = lock(&self.directory).clone();
+        let installed = match directory {
+            Some(directory) => directory(),
+            None => operations::Installed::default(),
+        };
+        self.in_chain_of(&installed, chain, target)
+    }
+
+    /// [`Host::in_chain`] against `installed`, the packages as they now
+    /// are.
+    fn in_chain_of(
+        &self,
+        installed: &operations::Installed,
+        chain: &Chain,
+        target: &Target,
+    ) -> Option<OperationError> {
         let in_chain = chain.components.iter().any(|component| {
             *component == target.component
                 || installed.package_of(component) == Some(&target.identity)
         });
-        if in_chain {
-            return Err(OperationError::refused(format!(
+        in_chain.then(|| {
+            OperationError::refused(format!(
                 "{} is already serving a call in this chain; an extension cannot be \
                  called back while its own call waits",
                 target.title
-            )));
-        }
-        Ok(target)
+            ))
+        })
     }
 
     /// Runs the operation of `call` in `target`'s component, in its turn,
@@ -4670,7 +5911,10 @@ impl Host {
             self.drop_instance(&target.component);
             return Err(failed(CallError::Cancelled));
         }
-        let (name, input) = (call.operation.clone(), call.input.clone());
+        let (name, input) = (
+            call.addressed.operation_name(&call.operation),
+            call.input.clone(),
+        );
         // A call whose caller gives up on it while it runs is stopped, as
         // a search's call is (the caller is gone; the answer has nowhere
         // to go).
@@ -4797,6 +6041,10 @@ impl Host {
                 self.report(path, data.as_ref(), Health::FailedToStart(error.clone()));
             }
             started?;
+            // The state an instance of this component handed to the code
+            // that replaced it (ADR 0041) is restored on this instance's
+            // first start, before any other call into it.
+            self.restore(path, data.as_ref()).await?;
         }
         Ok(())
     }
@@ -4820,9 +6068,21 @@ impl Host {
         let mut wasi = WasiCtx::builder();
         if let Some(data) = &data {
             let generation = data.generation().number();
+            // A development build of JavaScript or TypeScript keeps a
+            // source map beside its component: what the package writes has
+            // the frames of its stacks mapped back to the sources its
+            // bundle was built from as the lines are captured. Read once
+            // here, per instance, rather than per line: the file is small,
+            // and the instance runs beside it for its whole life.
+            let map = crate::source_map::SourceMap::beside(path).map(Arc::new);
             let output = |stream| {
-                self.logs
-                    .output(data.owner(), generation, stream, log_command.clone())
+                self.logs.output(
+                    data.owner(),
+                    generation,
+                    stream,
+                    log_command.clone(),
+                    map.clone(),
+                )
             };
             wasi.stdout(output(LogStream::Stdout))
                 .stderr(output(LogStream::Stderr));
@@ -4854,6 +6114,9 @@ impl Host {
                 helpers: self.helpers.clone(),
                 watch: self.watch.clone(),
                 command: None,
+                registrations: self.registrations.clone(),
+                identity: (self.number, 0),
+                events: false,
             },
         );
         store.limiter(|state| state);
@@ -4900,7 +6163,7 @@ impl Host {
             started => started?,
         };
         let bindings =
-            bindings::ExtensionWithFileIndex::new(&mut store, &instance).map_err(load)?;
+            bindings::ExtensionWithTypedFolder::new(&mut store, &instance).map_err(load)?;
         // Only a command that computes root results exports them.
         let root_results = root_bindings::RootResultsProvider::new(&mut store, &instance).ok();
         // Only a command that supplies results ahead of the query exports
@@ -4912,6 +6175,18 @@ impl Host {
         let operations = operations_bindings::OperationsProvider::new(&mut store, &instance).ok();
         // Only a command that runs a continuing service exports it.
         let service = service_bindings::ServiceProvider::new(&mut store, &instance).ok();
+        // Only a component that registers timers or watchers exports the
+        // events they are delivered to.
+        let events = events_bindings::EventsProvider::new(&mut store, &instance).ok();
+        // Only the component a package's `pane.json` names under
+        // `activate` exports the activation entry point.
+        let lifecycle = lifecycle_bindings::LifecycleProvider::new(&mut store, &instance).ok();
+        // The instance's identity, which tags what it registers, and
+        // whether events can be delivered to it.
+        let serial = self.next_serial.get();
+        self.next_serial.set(serial + 1);
+        store.data_mut().identity = (self.number, serial);
+        store.data_mut().events = events.is_some();
         // On its generation's undo list: the generation's end has this
         // thread drop it at once, as only this thread may, even while no
         // call asks for it.
@@ -4927,8 +6202,10 @@ impl Host {
                 Ok(())
             })
         });
-        let serial = self.next_serial.get();
-        self.next_serial.set(serial + 1);
+        // Counted for the diagnostic of when a component starts again
+        // (#202): a cancelled call drops its instance, so the call after
+        // it starts one.
+        *lock(&self.starts).entry(path.to_path_buf()).or_insert(0) += 1;
         self.instances.borrow_mut().insert(
             path.to_path_buf(),
             Instance {
@@ -4938,6 +6215,8 @@ impl Host {
                 indexed_results,
                 operations,
                 service,
+                events,
+                lifecycle,
                 calls: Some(calls_received),
                 serial,
                 _undo: undo,
@@ -4992,6 +6271,27 @@ async fn unless<T, S>(
         work.as_mut().poll(cx).map(Ok)
     })
     .await
+}
+
+impl From<crate::registrations::GuestEvent> for events::Event {
+    fn from(event: crate::registrations::GuestEvent) -> events::Event {
+        match event {
+            crate::registrations::GuestEvent::Timer { tag } => events::Event::Timer(tag),
+            crate::registrations::GuestEvent::Watcher { tag, changes } => {
+                events::Event::Watcher(events::WatcherEvent {
+                    tag,
+                    changes: match changes {
+                        crate::registrations::WatcherChanges::Paths(paths) => {
+                            events::WatcherChanges::Paths(paths)
+                        }
+                        crate::registrations::WatcherChanges::Rescan => {
+                            events::WatcherChanges::Rescan
+                        }
+                    },
+                })
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -5355,12 +6655,15 @@ mod tests {
     /// Clipboard history's host calls (#35) are marked like every other
     /// host call: the slow host call computes inside the view's first one,
     /// so the view takes at least that long, yet the guest is never stopped
-    /// or blamed and the thread is never given up on.
+    /// or blamed and the thread is never given up on. The JavaScript
+    /// clipboard sample's view is the component: its render asks the
+    /// clipboard history's status first (the default extension's own
+    /// component lives in its repository, #285).
     #[test]
     fn a_guest_whose_clipboard_host_calls_are_slow_is_never_stopped_or_blamed() {
         let data = tempfile::tempdir().unwrap();
         let (packages, identity) = settings_package(&data);
-        let component = guest("clipboard_history.wasm");
+        let component = guest("sample_clipboard_js.wasm");
         let (runtime, reported) = watched_runtime();
         let slow = short_limits().compute * 3;
         assert!(slow > short_limits().unresponsive);
@@ -5369,7 +6672,10 @@ mod tests {
         let started = std::time::Instant::now();
         let view = block_on(runtime.render_with(&component, Some(packages.owned_by(&identity))));
 
-        assert_eq!(view.expect("the view is shown").title, "Clipboard History");
+        assert_eq!(
+            view.expect("the view is shown").title,
+            "Clipboard history (JavaScript)"
+        );
         assert!(
             started.elapsed() >= slow,
             "the slow host call was not one of clipboard history's: {:?}",

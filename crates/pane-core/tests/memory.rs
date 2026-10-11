@@ -65,6 +65,9 @@ fn a_command_that_grows_to_just_under_the_cap_completes() {
             subtitle: None,
             component: guest("faulty"),
             takes_query: false,
+            keywords: Vec::new(),
+            when: pane_core::CommandWhen::Always,
+            matches: pane_core::CommandMatches::Title,
         }],
     );
 
@@ -145,18 +148,14 @@ fn language(name: &str) -> &'static str {
     }
 }
 
-/// Every default extension and sample, started and asked for its list,
-/// stays under the cap; the log shows each one's peak. Their own suites
-/// run under the cap too, which is what shows that they fit; this tells by
-/// how much.
+/// Every sample, started and asked for its list, stays under the cap; the
+/// log shows each one's peak. Their own suites run under the cap too,
+/// which is what shows that they fit; this tells by how much. (The
+/// default extensions' own components live in their repositories, #285,
+/// #305.)
 #[test]
-fn memory_peaks_of_the_samples_and_default_extensions() {
+fn memory_peaks_of_the_samples() {
     let mut names: Vec<String> = [
-        "calculator",
-        "applications",
-        "quicklinks",
-        "files",
-        "clipboard_history",
         "sample_rust",
         "sample_settings",
         "sample_operations",

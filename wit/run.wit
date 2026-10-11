@@ -1,0 +1,133 @@
+package pane:extension@0.1.0;
+
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+//
+// What Windows' Run dialog (Win+R) runs (ADR 0040, #254): a command line
+// naming a program by its name or path with arguments, a Control Panel
+// applet, a management console, a document, a folder, a network path, a
+// `shell:` or `ms-settings:` address or another registered scheme, with
+// environment variables expanded — run for the command, through Windows'
+// own elevation prompt (ADR 0033) when asked — together with the Run
+// dialog's own history, which Pane reads, records what ran in and deletes
+// from, so one history serves Windows' Run dialog and Pane's Run alike —
+// and the completions for the text typed in Run's field (#264): history
+// entries, programs from App Paths and the registry search path, Control
+// Panel applets, management consoles, registered schemes and environment
+// variables, each matching the typed text. Where Windows Terminal is
+// installed, `terminal` answers `wt.exe`'s path, so a command can run a
+// command line in a new Windows Terminal tab (ADR 0033's run-program host
+// function) rather than the shell's own window.
+// Windows only: elsewhere every function answers `not-available`.
+// Kept apart from the other files so a command that runs nothing does not
+// import it. Rust
+// commands use it through pane-extension (`pane_extension::run`), and
+// JavaScript and TypeScript commands whose package.json sets
+// `"pane": { "run": true }` import it (guests/js/run.d.ts).
+// The header follows `package`: comments above it would document the package,
+// which extension.wit already does.
+
+/// Runs what Windows' Run dialog runs, and shares its history.
+interface run {
+  /// Why a run or a history call did not answer.
+  variant run-error {
+    /// Pane cannot do this here: running what the Run dialog runs is
+    /// Windows-only, and this Pane may reach no system at all. Nothing
+    /// went wrong, and the command can do something else. Says what is
+    /// not available, for the user.
+    not-available(string),
+    /// It went wrong: why, for the user. A run that ran but whose history
+    /// could not be written says that, saying it ran.
+    failed(string),
+    /// The user declined Windows' elevation prompt: nothing ran, and
+    /// nothing was recorded. Says what was declined, for the user.
+    declined(string),
+  }
+
+  /// Runs the command line `line` as the Run dialog reads it: a program
+  /// by its bare name, found on the search path the registry names at the
+  /// time of the call and in App Paths (so a tool installed after Pane
+  /// started is found), or by its path, with arguments; a Control Panel
+  /// applet (`.cpl`), through the Control Panel program; a document, a
+  /// folder or a network path, opened by the system; a `shell:`,
+  /// `ms-settings:` or other registered address. A quoted head is taken
+  /// as written; an unquoted one splits where Windows would split it, so
+  /// `C:\Program Files\Tool\tool.exe -a` runs without quotes.
+  /// Environment variables (`%NAME%`) are expanded in the program and in
+  /// the arguments alike. When `elevated` is true, Windows shows its own
+  /// prompt (ADR 0033), which the user may decline (`declined`). A run
+  /// that answered records the trimmed `line` in the Run dialog's
+  /// history, newest first, its case-insensitive duplicates removed; a
+  /// failed run, or a declined elevation, records nothing.
+  run: func(line: string, elevated: bool) -> result<_, run-error>;
+
+  /// The Run dialog's history, newest first, as the user typed it: what
+  /// ran in Windows' Run dialog and in Pane alike.
+  history: func() -> result<list<string>, run-error>;
+
+  /// Removes `line` from the Run dialog's history, matched ignoring
+  /// case, rewriting it without the entry so it is gone from Windows' Run
+  /// dialog too; a line that is not in the history is an error.
+  delete-from-history: func(line: string) -> result<_, run-error>;
+
+  /// Which source a completion came from, as its subtitle says: the Run
+  /// dialog's history, a program App Paths registered (`app-path`), a
+  /// program on the registry search path (`search-path`), a Control Panel
+  /// applet, a management console, a registered scheme, or an environment
+  /// variable.
+  enum completion-source {
+    history,
+    app-path,
+    search-path,
+    applet,
+    console,
+    scheme,
+    variable,
+  }
+
+  /// One completion for the text typed in Run's field: the command line
+  /// the text completes to, `line`, and which source it came from.
+  /// Running the line is the completion's own work: a history entry runs
+  /// again, a program's name resolves on the search path and in App Paths,
+  /// an applet's and a console's file names are kept with their extension,
+  /// a scheme's address ends in `:`, an environment variable's line is
+  /// `%NAME%` — each a line the Run dialog runs as it is.
+  record completion {
+    line: string,
+    source: completion-source,
+  }
+
+  /// The completions for `text`, the text typed so far, in the order they
+  /// are offered: the Run dialog's history first (newest first), then
+  /// programs from App Paths and the registry search path, Control Panel
+  /// applets, management consoles, registered schemes and environment
+  /// variables — each a line that starts with the typed text, ignoring
+  /// case, and no line two sources offer twice (matched ignoring case).
+  /// At most 100 are answered; typing more of the text narrows them. Blank
+  /// text answers nothing, as a blank field shows the command's own list.
+  /// The sources are read as they are at the time of the call, so a tool
+  /// installed after Pane started is completed; a source that cannot be
+  /// read contributes nothing, its own function reporting why.
+  completions: func(text: string) -> result<list<completion>, run-error>;
+
+  /// Windows Terminal, when it is installed: `wt.exe`'s absolute path,
+  /// as App Paths registered it (`wt.exe`) and then the registry search
+  /// path spell it. `none` when it is not installed, so the caller runs
+  /// the command line another way (the shell's own window). Windows
+  /// Terminal is asked as the Run dialog finds programs, not started here.
+  terminal: func() -> result<option<string>, run-error>;
+}
+
+/// The Run import alone, for guest bindings.
+world run-user {
+  import run;
+}
+
+/// The world Pane hosts: a command that may also use extension data, call
+/// operations, find and open installed applications, run its native
+/// helpers and system programs, list the folder granted to its package,
+/// keep clipboard history, search the file index and run what the Run
+/// dialog runs.
+world extension-with-run {
+  include extension-with-file-index;
+  import run;
+}

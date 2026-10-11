@@ -9,6 +9,7 @@
 //! the per-screen sync and render methods this orchestration calls.
 
 mod frame_motion;
+mod hover_wash;
 mod presence;
 mod result_list;
 
@@ -17,17 +18,19 @@ use std::mem::{Discriminant, discriminant};
 use std::path::Path;
 
 use gpui::{
-    App, ClipboardItem, Context, Div, EntityInputHandler, FocusHandle, Focusable, Hsla,
-    KeyDownEvent, MouseMoveEvent, ObjectFit, PathPromptOptions, Pixels, Point, Role, SharedString,
-    Size, Stateful, Window, div, img, prelude::*, px, relative,
+    App, ClipboardItem, Context, Div, Entity, EntityInputHandler, FocusHandle, Focusable, Hsla,
+    KeyDownEvent, Keystroke, MouseMoveEvent, ObjectFit, PathPromptOptions, Pixels, Point, Role,
+    ScrollWheelEvent, SharedString, Size, Stateful, Subscription, Toggled, Window, div, img,
+    prelude::*, px, relative,
 };
 use pane_core::changes::Changes;
 use pane_core::feedback::WindowRequest;
 use pane_core::hotkeys::Shortcut;
 use pane_core::tray::TrayAction;
 use pane_core::{
-    ComputedAnswer, Launcher, LauncherView, ListPresentation, NextShowing, Row, RowPresentation,
-    Screen, SelectedAction, SettingsTarget, Status, WindowPresence,
+    ChoiceOutcome, ComputedAnswer, FolderAsk, KeyboardAction, Launcher, LauncherView,
+    ListPresentation, NextShowing, Row, RowKind, RowPresentation, Screen, SelectedAction,
+    SettingsTarget, Status, WindowPresence,
 };
 
 use crate::extension_views::designed;
@@ -38,12 +41,15 @@ use crate::features::clipboard_history;
 use crate::features::compact_pins;
 use crate::features::confirmation;
 use crate::features::footer_menu;
+use crate::features::held_keys;
 use crate::features::hud;
 use crate::features::number_hints::row_number;
 use crate::features::quick_slots;
 use crate::features::root_search;
+use crate::features::root_search::arguments as argument_fields;
 use crate::features::settings;
 use crate::features::toast;
+use crate::features::update_results;
 use crate::ui::footer;
 use crate::ui::icon::{Glyph, IconTone};
 use crate::ui::keycap::CapStyle;
@@ -51,17 +57,24 @@ use crate::ui::material::Material;
 use crate::ui::motion;
 use crate::ui::result_row::{RowContent, RowMeta, result_row_with};
 use crate::ui::shell;
-use crate::ui::theme::{Theme, pressed};
+use crate::ui::theme::{TERTIARY_STRENGTH, Theme, pressed};
 use crate::ui::virtual_list;
 use crate::{
     Back, Confirm, DismissLauncher, FocusNext, FocusPrevious, OpenSettings, ReturnToRoot,
-    SelectNext, SelectNextPage, SelectPrevious, SelectPreviousPage,
+    SelectNext, SelectNextFive, SelectNextPage, SelectNextSection, SelectPrevious,
+    SelectPreviousFive, SelectPreviousPage, SelectPreviousSection, TickChoice,
 };
 
 pub(crate) use frame_motion::FrameMotion;
+pub(crate) use hover_wash::{HoverWashes, Spot};
 use presence::{Fit, Presence, Press, WindowSize};
 
 pub(crate) const KEY_CONTEXT: &str = "Launcher";
+
+/// The key context of the choice of a collection's extensions (#308):
+/// the list it draws, where Space ticks and unticks the extension
+/// selected.
+pub(crate) const CHOICE_CONTEXT: &str = "Choice";
 
 /// The launcher window's root view.
 pub struct LauncherWindow {
@@ -92,11 +105,30 @@ pub struct LauncherWindow {
     /// A package's Logs screen, while the launcher shows it; see
     /// [`features::extension_log`].
     pub(crate) log: Option<crate::features::extension_log::ExtensionLogView>,
+    /// The update results view, while the launcher shows it; see
+    /// [`features::update_results`].
+    pub(crate) update_results: Option<update_results::UpdateResultsView>,
     /// The footer toast's focus and time; see [`features::toast`].
     pub(crate) toast: toast::ToastControls,
     /// What the window's live region says of the selection and the
     /// footer's message (#132); see [`features::announcer`].
     pub(crate) announcer: announcer::Announcer,
+    /// The keys the window holds while the current query's list is not
+    /// yet published, and how they are replayed (#203; see
+    /// [`features::held_keys`]).
+    pub(crate) held: held_keys::HeldKeys,
+    /// Root search's inline argument fields' controls, while the selected
+    /// row's command declares arguments (#205; see
+    /// [`features::root_search::arguments`]).
+    pub(crate) arguments: Option<argument_fields::ArgumentControls>,
+    /// The walk through root search's recent queries while one stands
+    /// (#206; see [`features::root_search::recall`]): which entry the
+    /// query on screen was restored from.
+    pub(crate) recall: Option<root_search::Recall>,
+    /// The caret's place in the query, in characters, as the window last
+    /// knew it — counted wherever the window moves it, so the argument
+    /// fields' edge keys know when Right leaves the query (#205).
+    pub(crate) query_caret: usize,
     /// The HUD's window, while one shows; see [`features::hud`].
     pub(crate) hud: hud::HudWindow,
     /// The confirmation a command asks for: its focus and "Don't ask
@@ -106,14 +138,29 @@ pub struct LauncherWindow {
     /// [`features::quick_slots`].
     pub(crate) home: quick_slots::Home,
     /// What moves between frames — the view transition, the footer menu
-    /// popup's entrance and exit, the number hints' slide — and the rule
+    /// popup's entrance and exit, the number hints' slide, the hover
+    /// washes' exits — and the rule
     /// of which navigation arrives and which lands at once; see
     /// [`FrameMotion`].
     pub(crate) motion: FrameMotion,
+    /// The hotkey screen's recording session, while the screen listens
+    /// (#260): the hook adapter holds the keys back from Windows and
+    /// reports what the user presses, so the kinds no registration can
+    /// express are recorded without the Start menu opening. `None` where
+    /// this system's adapter has no session (macOS, X11) — the screen's
+    /// own keystrokes record, as they do today — or while no session
+    /// listens.
+    hotkey_recording: Option<pane_core::hotkeys::RecordingStop>,
     /// Whether the window is shown, when it was hidden, the Open Pane
     /// hotkey's repeat guard and the compact window mode's sizes; see
     /// [`Presence`].
     presence: Presence,
+    /// The "Show the taskbar when Pane opens" choice as this window last
+    /// applied it (#268), so only a change acts: turned on while the
+    /// launcher is shown, the taskbar shows at once; turned off, it goes
+    /// back as the user had it. The show and hide transitions apply the
+    /// choice in between.
+    taskbar_followed: bool,
     /// The result list, drawn virtually: its scroll position, the heights
     /// it measured and the frame it lays out (#165; see
     /// [`result_list`]).
@@ -135,7 +182,17 @@ pub struct LauncherWindow {
     scrolled_for: Option<ScrolledFor>,
     /// The row this frame scrolls to again once the list, changed in it,
     /// has been laid out (see [`LauncherWindow::keep_selected_visible`]).
-    reveal_after_layout: Option<usize>,
+    reveal_after_layout: Option<ScrollAfter>,
+    /// The row whose section's label the next frame's reveal scrolls into
+    /// view: a section jump landed on it (#258). Taken by the next
+    /// [`LauncherWindow::keep_selected_visible`], which reveals the
+    /// section instead of the row alone.
+    jump_reveal: Option<usize>,
+    /// Routes the Back-a-level key past a focused field's own Backspace
+    /// when a back would act, so the window's key handler — which tells a
+    /// press from a repeat — sees it (#258); dropped, and so stopped, with
+    /// the window.
+    _backspace_gate: Subscription,
     /// Draws the window again now and then while its rows show a date,
     /// keeping it current (#139; see
     /// [`LauncherWindow::keep_dates_current`]).
@@ -149,6 +206,10 @@ pub struct LauncherWindow {
     /// Test and debug builds only.
     #[cfg(any(test, debug_assertions))]
     drawn_over: bool,
+    /// Whether the tray entry's tooltip said Pane's hotkeys were paused
+    /// the last time the window looked (game mode, #125), so a change is
+    /// the only thing it tells the entry again.
+    tray_paused: bool,
 }
 
 /// What the list was last scrolled for. When any of it changes, the list
@@ -167,10 +228,22 @@ struct ScrolledFor {
     list: Size<Pixels>,
 }
 
+/// What the next frame scrolls the result list to again once it has been
+/// laid out (see [`LauncherWindow::keep_selected_visible`]): the row the
+/// selection moved to, or — for a section jump, whose landing keeps the
+/// section's head in view — the label of the section it crossed (#258).
+#[derive(Clone, Copy, PartialEq)]
+enum ScrollAfter {
+    /// The row this frame revealed, as the selection's follow-up.
+    Row(usize),
+    /// The section whose first row this frame revealed, label first.
+    Section(usize),
+}
+
 impl LauncherWindow {
     pub fn new(launcher: Launcher, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let focus_handle = cx.focus_handle();
-        let query = root_search::QueryField::new(cx);
+        let query = root_search::QueryField::new(window, cx);
         // The launcher starts at root search.
         query.focus(window, cx);
         // The footer menu's button, first of the strip's controls.
@@ -181,6 +254,11 @@ impl LauncherWindow {
         // in effect, and the platform's appearance notification feeds the
         // system's appearance back into them (see `crate::settings`).
         crate::settings::bind_window_appearance(&crate::settings::ensure(cx), window, cx);
+        // Root search's learning follows the Launcher page's switch from
+        // the start: the blank query's list was ranked when the launcher
+        // was made, before any keystroke pushed the switch, so it ranks
+        // again at once here while the switch is off (#200).
+        launcher.set_learning(crate::settings::learning_of(cx));
         // The launcher this window runs owns the global-shortcut
         // registration: the recorded Open Pane hotkey is applied to the
         // system here, at startup, and the settings keep this launcher for
@@ -206,6 +284,35 @@ impl LauncherWindow {
             async {}
         })
         .detach();
+        // The Back-a-level key is the one binding of the Keyboard page's
+        // set the keymap never holds: a focused field's own Backspace
+        // (deleting text) owns the key wherever there is text to delete,
+        // and the window has to see the raw event to tell a press from a
+        // repeat. This gate runs before every key's bindings — only in
+        // this window — and stops the key's dispatch exactly when a back
+        // would act on an empty field, so it reaches the window's capture
+        // handler with the event rather than the field's delete, which
+        // has nothing left to do (#258).
+        let gate_window = window.window_handle();
+        let gated = cx.weak_entity();
+        let backspace_gate = cx.intercept_keystrokes(move |event, window, cx| {
+            if window.window_handle() != gate_window {
+                return;
+            }
+            let Ok(pressed) = crate::keyboard::binding_of(&event.keystroke) else {
+                return;
+            };
+            let back = crate::settings::keyboard_of(cx)
+                .binding(pane_core::KeyboardAction::BackspaceBack)
+                .clone();
+            if pressed != back {
+                return;
+            }
+            let acts = gated.update(cx, |this, cx| this.backspace_back_ready(window, cx));
+            if acts.unwrap_or(false) {
+                cx.stop_propagation();
+            }
+        });
         let mut this = LauncherWindow {
             launcher,
             focus_handle,
@@ -215,6 +322,8 @@ impl LauncherWindow {
             pointer_selection_frozen: false,
             scrolled_for: None,
             reveal_after_layout: None,
+            jump_reveal: None,
+            _backspace_gate: backspace_gate,
             dates: None,
             designed: None,
             designed_search: designed::SearchEvents::default(),
@@ -224,13 +333,21 @@ impl LauncherWindow {
             clipboard: None,
             files: None,
             log: None,
+            update_results: None,
             toast: toast::ToastControls::new(cx),
             announcer: announcer::Announcer::default(),
+            held: held_keys::HeldKeys::default(),
+            arguments: None,
+            recall: None,
+            query_caret: 0,
             hud: hud::HudWindow::default(),
             confirmation: confirmation::ConfirmationControls::new(cx),
             home: quick_slots::Home::default(),
             motion: FrameMotion::new(),
+            hotkey_recording: None,
             presence: Presence::default(),
+            taskbar_followed: crate::settings::ensure(cx).read(cx).show_taskbar(),
+            tray_paused: false,
             #[cfg(any(test, debug_assertions))]
             drawn: None,
             #[cfg(any(test, debug_assertions))]
@@ -242,6 +359,11 @@ impl LauncherWindow {
         // answered as not confirmed (#146).
         cx.observe_window_activation(window, |this, window, cx| {
             let active = window.is_window_active();
+            // A pending HUD's work is done once the launcher is active
+            // again (#250).
+            if active {
+                this.close_pending_hud(cx);
+            }
             // A window that just showed itself for a confirmation may still
             // hear of the deactivation its own hiding caused (#146).
             let counts = this.confirmation_sees_activation(active);
@@ -262,6 +384,18 @@ impl LauncherWindow {
         this.place(window, cx);
         // The home's slots resolve from the first visit.
         this.sync_home(cx);
+        // The taskbar follows the choice as it changes while the window
+        // lives (#268), and the launcher starts shown, so the choice
+        // applies at once: for a user whose taskbar hides itself, the
+        // Start button is one click away from the first frame.
+        let taskbar = crate::settings::ensure(cx);
+        cx.observe_in(&taskbar, window, |this, settings, _, cx| {
+            this.follow_taskbar(&settings, cx);
+        })
+        .detach();
+        if this.taskbar_followed {
+            taskbar.read(cx).taskbar_while_open();
+        }
         this
     }
 
@@ -323,6 +457,20 @@ impl LauncherWindow {
         self.motion.menu_popup_presentation()
     }
 
+    /// Test support: the loading bar the last frame drew, as its strength
+    /// (0 hidden to 1 shown) and its sweep's highlight (its left edge and
+    /// width as shares of the line, `None` when the line is still);
+    /// `None` when the last frame drew no line, which is also all work
+    /// beneath the threshold ever reports (#248). Test and debug builds
+    /// only.
+    #[cfg(any(test, debug_assertions))]
+    #[doc(hidden)]
+    pub fn loading_presentation(&self) -> Option<(f32, Option<(f32, f32)>)> {
+        self.motion
+            .loading_presentation()
+            .map(|bar| (bar.strength, bar.sweep))
+    }
+
     /// Redraws whenever the launcher changes in the background, as
     /// `changes` (the other end of the launcher's
     /// [`with_development`](Launcher::with_development)) reports: a package
@@ -343,7 +491,20 @@ impl LauncherWindow {
                         window.activate_window();
                         cx.activate(true);
                     }
+                    // Game mode paused or resumed Pane's hotkeys for a
+                    // game in front (#125): the tray icon's tooltip
+                    // follows, on the window's thread as the entry's
+                    // changes are.
+                    let paused = this.launcher.hotkeys_paused();
+                    if paused != this.tray_paused {
+                        this.tray_paused = paused;
+                        crate::settings::shared(cx)
+                            .update(cx, |settings, _| settings.set_tray_paused(paused));
+                    }
                     this.sync_screen(window, cx);
+                    // A publication that arrived in the background applies
+                    // the keys the window held for the query's list (#203).
+                    this.replay_held_keys_if_published(window, cx);
                     cx.notify();
                 });
                 if shown.is_err() {
@@ -425,10 +586,7 @@ impl LauncherWindow {
     #[doc(hidden)]
     pub fn show_smoke_hud(&mut self, title: String, window: &mut Window, cx: &mut Context<Self>) {
         self.window_requested(WindowRequest::Hide, window, cx);
-        let hud = pane_core::Hud {
-            title,
-            style: pane_core::ToastStyle::Failure,
-        };
+        let hud = pane_core::Hud::new(pane_core::ToastStyle::Failure, title);
         self.window_requested(WindowRequest::Hud(hud), window, cx);
     }
 
@@ -446,23 +604,42 @@ impl LauncherWindow {
     }
 
     pub(crate) fn select_next(&mut self, _: &SelectNext, _: &mut Window, cx: &mut Context<Self>) {
-        // A Grid's Up and Down move by a whole row of cells (#240); a
-        // list's by one row.
+        // Down ends the walk through the recent queries (#206): any
+        // other key than the walking Up does. A Grid's Up and Down move
+        // by a whole row of cells (#240); a list's by one row.
+        self.recall = None;
         let step = self.designed_grid_columns().unwrap_or(1);
         self.launcher.move_selection(step);
         self.announcer.user_moved();
+        // The selected row's argument fields follow it (#205).
+        self.sync_arguments(window, cx);
         cx.notify();
     }
 
     pub(crate) fn select_previous(
         &mut self,
         _: &SelectPrevious,
-        _: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // The previous-result key is the history's while the query is
+        // empty or a standing walk's, and the first row (or no row) is
+        // selected (#206): the key is handed on to the listener that
+        // sees the press itself, which walks only a press — the system's
+        // repeat of a key still held never walks.
+        if self.recall_ready() {
+            cx.propagate();
+            return;
+        }
+        // The key moves the selection as it always did: the walk, if one
+        // stood, is over. A Grid's Up and Down move by a whole row of
+        // cells (#240); a list's by one row.
+        self.recall = None;
         let step = -self.designed_grid_columns().unwrap_or(1);
         self.launcher.move_selection(step);
         self.announcer.user_moved();
+        // The selected row's argument fields follow it (#205).
+        self.sync_arguments(window, cx);
         cx.notify();
     }
 
@@ -486,18 +663,34 @@ impl LauncherWindow {
         isize::try_from(columns.max(1)).ok()
     }
 
+    /// Space on the choice of a collection's extensions (#308): the
+    /// extension selected is ticked or unticked.
+    pub(crate) fn tick_choice(&mut self, _: &TickChoice, _: &mut Window, cx: &mut Context<Self>) {
+        if let Some(id) = self.launcher.selected_choice_extension()
+            && self.launcher.toggle_choice_tick(&id)
+        {
+            self.announcer.user_moved();
+            cx.notify();
+        }
+    }
+
     /// Page Down: the selection moves down by the rows that fit in the
     /// list's view, stopping at the last row (#165), kept in view as the
     /// arrows' is.
     pub(crate) fn select_next_page(
         &mut self,
         _: &SelectNextPage,
-        _: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // Page Down ends the walk through the recent queries, as Down
+        // does (#206).
+        self.recall = None;
         let step = virtual_list::page_move(Some(self.paged_list()), true);
         self.launcher.move_selection(step);
         self.announcer.user_moved();
+        // The selected row's argument fields follow it (#205).
+        self.sync_arguments(window, cx);
         cx.notify();
     }
 
@@ -506,13 +699,190 @@ impl LauncherWindow {
     pub(crate) fn select_previous_page(
         &mut self,
         _: &SelectPreviousPage,
-        _: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // Page Up ends the walk through the recent queries, as Up moving
+        // the selection does (#206).
+        self.recall = None;
         let step = virtual_list::page_move(Some(self.paged_list()), false);
         self.launcher.move_selection(step);
         self.announcer.user_moved();
+        // The selected row's argument fields follow it (#205).
+        self.sync_arguments(window, cx);
         cx.notify();
+    }
+
+    /// Alt+Down (#258): the selection moves five rows at a time, stopping
+    /// at the last row, kept in view as the arrows' is.
+    pub(crate) fn select_next_five(
+        &mut self,
+        _: &SelectNextFive,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.launcher.move_selection(FIVE_ROWS);
+        self.announcer.user_moved();
+        cx.notify();
+    }
+
+    /// Alt+Up (#258): the selection moves five rows back, stopping at the
+    /// first row.
+    pub(crate) fn select_previous_five(
+        &mut self,
+        _: &SelectPreviousFive,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.launcher.move_selection(-FIVE_ROWS);
+        self.announcer.user_moved();
+        cx.notify();
+    }
+
+    /// Ctrl+Down (Command on macOS, #258): the selection moves to the
+    /// first row of the next section, or the last row when there is no
+    /// next section, the section's label scrolling into view with it.
+    /// In the vertical pinned layout the pinned rows count as the first
+    /// section — a jump down from them lands on the first row of the
+    /// first row section — and the horizontal strip is never entered.
+    /// The jump stops at the ends; it never wraps.
+    pub(crate) fn select_next_section(
+        &mut self,
+        _: &SelectNextSection,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        // A focused pin is in the pins' section: down leaves them for the
+        // first row, taking the focus back to the search field.
+        if self.focused_slot(window).is_some() {
+            self.select_first_row(window, cx);
+            return;
+        }
+        let (view, listing) = self.launcher.presented_list();
+        let rows = view.rows.len();
+        if rows == 0 {
+            return;
+        }
+        // The first row of the first section past the selection; the last
+        // row when no section follows. A list with no sections of its
+        // own is one section, whose next is the last row.
+        let firsts = section_firsts(&listing, rows);
+        let row = match view.selected {
+            Some(selected) => firsts
+                .iter()
+                .copied()
+                .find(|first| *first > selected)
+                .unwrap_or(rows - 1),
+            // Nothing selected (root search's fallbacks): the first row,
+            // as Down does.
+            None => 0,
+        };
+        self.select_row(row, cx);
+    }
+
+    /// Ctrl+Up (Command on macOS, #258): the selection moves to the first
+    /// row of the previous section, its own section's first row first —
+    /// from inside a section, the jump lands on that section's head
+    /// before the one above it. In the vertical pinned layout the pinned
+    /// rows count as the first section, so the jump up from the first row
+    /// section reaches the first pin; the horizontal strip is not
+    /// entered. The jump stops at the ends; it never wraps.
+    pub(crate) fn select_previous_section(
+        &mut self,
+        _: &SelectPreviousSection,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        // A focused pin is in the pins' section: up stays in it, on its
+        // own first row — the first pin.
+        if let Some(slot) = self.focused_slot(window) {
+            if slot > 0 {
+                self.focus_slot(0, window, cx);
+                self.announcer.user_moved();
+                self.results.reveal_row(0);
+                cx.notify();
+            }
+            return;
+        }
+        let (view, listing) = self.launcher.presented_list();
+        let rows = view.rows.len();
+        if rows == 0 {
+            return;
+        }
+        let firsts = section_firsts(&listing, rows);
+        // Nothing selected: the jump lands on the last row, as Up does.
+        let Some(selected) = view.selected else {
+            self.select_row(rows - 1, cx);
+            return;
+        };
+        // The section the selection is in: the last one whose first row
+        // is not past it.
+        let section = firsts.iter().rposition(|first| *first <= selected);
+        let own_first = section.map(|at| firsts[at]);
+        if own_first.is_some_and(|first| first < selected) {
+            // Not at its own first row: its own head comes first.
+            self.select_row(own_first.unwrap(), cx);
+            return;
+        }
+        // At its section's first row: the section above it, or the pins.
+        match section.and_then(|at| at.checked_sub(1)) {
+            Some(above) => self.select_row(firsts[above], cx),
+            // No section above: the pins count as the first section —
+            // only in the vertical layout, and only while there is a pin.
+            None => self.select_first_pin(window, cx),
+        }
+    }
+
+    /// Selects `row`, announcing the move; the frame that follows keeps
+    /// its section's label in view as the list follows the selection
+    /// (#258, see [`LauncherWindow::keep_selected_visible`]).
+    fn select_row(&mut self, row: usize, cx: &mut Context<Self>) {
+        self.launcher.select(row);
+        self.announcer.user_moved();
+        self.jump_reveal = Some(row);
+        cx.notify();
+    }
+
+    /// Takes the row a section jump landed on, if one is pending (#258):
+    /// Search Files' split view reveals the section's label with the row
+    /// as the result list does, reading the jump before its own reveal —
+    /// the two never draw the same frame.
+    pub(crate) fn take_jump_reveal(&mut self) -> Option<usize> {
+        self.jump_reveal.take()
+    }
+
+    /// Selects the first row of the first row section, taking the focus
+    /// back to the search field, as a jump down from the pins does
+    /// (#258).
+    fn select_first_row(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.query.focus(window, cx);
+        self.select_row(0, cx);
+    }
+
+    /// Focuses the first pin, as a jump up from the rows into the pins'
+    /// section does (#258); nothing when the strip is what shows (it is
+    /// never entered) or no pin is pinned.
+    fn select_first_pin(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.pins_as_first_section(cx) > 0 {
+            self.focus_slot(0, window, cx);
+            self.announcer.user_moved();
+            self.results.reveal_row(0);
+            cx.notify();
+        }
+    }
+
+    /// How many pins the pinned home lays out as rows — the first section
+    /// a section jump can enter (#258) — in the vertical layout, over a
+    /// blank query; zero in the horizontal layout, whose strip the jump
+    /// never enters.
+    fn pins_as_first_section(&self, cx: &App) -> usize {
+        let settings = crate::settings::shared(cx).read(cx);
+        let vertical = settings.pinned_layout() == pane_core::PinnedLayout::Vertical;
+        if vertical && quick_slots::home_shown(&self.launcher.view()) {
+            self.launcher.quick_slots().len()
+        } else {
+            0
+        }
     }
 
     /// The list Page Down and Up move the launcher's selection through:
@@ -523,11 +893,35 @@ impl LauncherWindow {
             .map_or(&self.results.list, |files| &files.list)
     }
 
+    /// The query field's placeholder on root search: the selected
+    /// command's title, while its argument fields show after the query,
+    /// so the user knows what they are filling in — else the search's own
+    /// (#205).
+    fn search_placeholder(&self) -> String {
+        self.launcher
+            .argument_fields()
+            .map(|fields| fields.title)
+            .unwrap_or_else(|| root_search::ROOT_PLACEHOLDER.to_owned())
+    }
+
     pub(crate) fn confirm(&mut self, _: &Confirm, window: &mut Window, cx: &mut Context<Self>) {
+        // Enter ends the walk through the recent queries (#206), whatever
+        // it runs — a held key included.
+        self.recall = None;
         // The open Actions panel takes Enter from the key press itself, once
         // per press ([`LauncherWindow::panel_keys`]).
         if self.actions.is_some() {
             cx.propagate();
+            return;
+        }
+        // Enter waits for the current query's list to be published (#203):
+        // the key is held, then replayed through this same path, so it
+        // invokes the row the published list selects — and hands itself on
+        // to the item's actions below as a pressed Enter does. The key is
+        // consumed here, nothing else seeing it.
+        if held_keys::keystroke_of(KeyboardAction::InvokeSelectedAction, cx)
+            .is_some_and(|key| self.hold_key(key, window, cx))
+        {
             return;
         }
         // An item of a command's list (or a row of root search with actions
@@ -625,6 +1019,12 @@ impl LauncherWindow {
         if event.is_held {
             return;
         }
+        // The chord or the shortcut waits for the current query's list to
+        // be published (#203), as Enter does, and is replayed through this
+        // same path — applied to the row the published list selects.
+        if self.hold_key(event.keystroke.clone(), window, cx) {
+            return;
+        }
         if actions
             .actions
             .get(index)
@@ -655,6 +1055,12 @@ impl LauncherWindow {
         {
             return;
         }
+        // Escape in an argument field returns the focus to the query with
+        // its text selected; the next Escape is the usual one (#205).
+        if self.focused_argument(window, cx).is_some() {
+            self.escape_argument(window, cx);
+            return;
+        }
         // The Keyboard page's escape behavior: hide from wherever the
         // launcher is, or go back one level and hide from an empty root
         // search.
@@ -671,6 +1077,111 @@ impl LauncherWindow {
         self.motion.land_at_once();
         self.sync_screen(window, cx);
         cx.notify();
+    }
+
+    /// A key pressed in the launcher, before the focused control sees it:
+    /// the Back-a-level binding — the plain Backspace by default — goes
+    /// back one level without clearing a search's text (#258), but only
+    /// where the key is one to take: on an empty command search, on a
+    /// screen with no text field in focus (a command's own list, package
+    /// previews, confirmations, details) or, with an overlay open, on the
+    /// overlay's own level. Root search never backs out on it (an empty
+    /// query has nothing to leave and a query is the field's to delete),
+    /// the hotkey screen records it, a form's fields edit with it, and
+    /// an overlay's or a search field's own text keeps the key — see
+    /// [`LauncherWindow::backspace_back_ready`]. A repeat of a held key
+    /// is not a press, so it backs out of nothing: the Backspace that
+    /// empties a field leaves it empty.
+    ///
+    /// The key reaches this handler past a focused field's own Backspace
+    /// (which deletes text) only when the field is empty and a back
+    /// would act — the window's keystroke gate stops the key's dispatch
+    /// then (#258; see the field in [`LauncherWindow::new`]). Everywhere
+    /// else the field's own key consumes it first, as it should.
+    pub(crate) fn backspace_back_keys(
+        &mut self,
+        event: &KeyDownEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Ok(pressed) = crate::keyboard::binding_of(&event.keystroke) else {
+            return;
+        };
+        let back = crate::settings::keyboard_of(cx)
+            .binding(pane_core::KeyboardAction::BackspaceBack)
+            .clone();
+        if pressed != back || !self.backspace_back_ready(window, cx) {
+            return;
+        }
+        cx.stop_propagation();
+        if event.is_held {
+            return;
+        }
+        self.back_one_level(window, cx);
+    }
+
+    /// Whether the Back-a-level key would act now: the launcher is on a
+    /// screen the key leaves, and the focused field, if there is one, is
+    /// a search field that is empty — a field with text in it keeps its
+    /// own Backspace, deleting the text (#258).
+    fn backspace_back_ready(&self, window: &Window, cx: &App) -> bool {
+        // Root search is never one of the key's screens: an empty query
+        // has nothing to back out of, and one with text is the field's.
+        // The hotkey screen records every key pressed on it, and a Pane
+        // form's fields — an argument's among them — edit their own text.
+        if matches!(
+            self.launcher.screen(),
+            Screen::Root { .. } | Screen::Hotkey { .. } | Screen::PaneForm(_)
+        ) {
+            return false;
+        }
+        // An open footer menu is a level of its own, with no field in
+        // focus: the key closes it.
+        if self.menu.is_some() {
+            return true;
+        }
+        // The Actions panel's filter is a search field: with text in it
+        // the field keeps the key; empty, the key steps the panel back
+        // one level.
+        if let Some(panel) = self.actions.as_ref() {
+            return panel.query(cx).trim().is_empty();
+        }
+        // The window's own query field — a command search's, or Search
+        // Files' over its split view, which keeps the field: empty, the
+        // key backs out of the command.
+        if self.query_field().focus_handle(cx).is_focused(window) {
+            return self.query_field().read(cx).as_str().is_empty();
+        }
+        // The Clipboard History view's own search field is not one of the
+        // key's screens: the view keeps its own Escape chain, and its
+        // field deletes its text.
+        if self.clipboard_query_focused(window, cx) {
+            return false;
+        }
+        // No text field in focus: the command's own list, a package
+        // preview, a confirmation, the details screens, a custom view.
+        true
+    }
+
+    /// The Back-a-level key's act (#258): the Back action's order,
+    /// without its text clearing — an open footer menu closes, an open
+    /// Actions panel steps back one level, and only then is the screen
+    /// left. It never hides the launcher: root search is not one of the
+    /// key's screens, and a search it leaves is empty by the time it
+    /// leaves it.
+    fn back_one_level(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.close_open_menu(window, cx) {
+            return;
+        }
+        if self.actions.is_some() {
+            self.actions_back(&actions_panel::StepBack, window, cx);
+            return;
+        }
+        if self.launcher.back() {
+            self.motion.land_at_once();
+            self.sync_screen(window, cx);
+            cx.notify();
+        }
     }
 
     /// Returns to root search from wherever the launcher is — the state a
@@ -756,6 +1267,23 @@ impl LauncherWindow {
         self.preview_package(folder, window, cx);
     }
 
+    /// Brings the launcher forward with the extension `id` of the
+    /// collection in `folder` shown for installation, as
+    /// [`LauncherWindow::present_package`] shows a package folder: the
+    /// extension's own preview, which the author confirms here.
+    pub fn present_collection(
+        &mut self,
+        folder: &Path,
+        id: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.unhide(window, cx);
+        window.activate_window();
+        cx.activate(true);
+        self.preview_collection(folder, id, window, cx);
+    }
+
     /// Downloads and shows the npm package `spec` names, as
     /// [`LauncherWindow::preview_package`] shows a folder.
     pub fn preview_npm(&mut self, spec: &str, window: &mut Window, cx: &mut Context<Self>) {
@@ -769,6 +1297,20 @@ impl LauncherWindow {
     pub fn preview_git(&mut self, spec: &str, window: &mut Window, cx: &mut Context<Self>) {
         self.motion.pointer_open();
         let pending = self.launcher.preview_git(spec);
+        self.show_until_done(pending, window, cx);
+    }
+
+    /// Reads and shows the extension `id` of the collection in `folder`, as
+    /// [`LauncherWindow::preview_package`] shows a folder.
+    pub fn preview_collection(
+        &mut self,
+        folder: &Path,
+        id: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.motion.pointer_open();
+        let pending = self.launcher.preview_collection(folder, id);
         self.show_until_done(pending, window, cx);
     }
 
@@ -809,6 +1351,66 @@ impl LauncherWindow {
             window,
             cx,
         );
+    }
+
+    /// Asks for the parent folder a new extension package is written into
+    /// with the platform's folder picker, then shows the Create Extension
+    /// form for it (#222). Cancelling leaves root search as it was. A debug
+    /// build run by the native smokes takes the folder
+    /// `PANE_TEST_CHOOSE_FOLDER` names instead of showing the picker.
+    fn choose_create_folder(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        #[cfg(debug_assertions)]
+        if let Some(parent) = std::env::var_os("PANE_TEST_CHOOSE_FOLDER") {
+            self.create_extension(Path::new(&parent), window, cx);
+            return;
+        }
+        self.choose_folder(
+            "Create",
+            |this, parent, window, cx| this.create_extension(parent, window, cx),
+            window,
+            cx,
+        );
+    }
+
+    /// Shows the Create Extension form for the parent folder `parent`,
+    /// which the picker chose: the name, language and template of the
+    /// package the form writes there. As [`LauncherWindow::import_extension`]
+    /// is Import Extension's pick, this is Create Extension's.
+    pub fn create_extension(&mut self, parent: &Path, window: &mut Window, cx: &mut Context<Self>) {
+        self.launcher.show_create_form(parent);
+        self.sync_screen(window, cx);
+        cx.notify();
+    }
+
+    /// Asks for the folder of an extension package that already exists
+    /// with the platform's folder picker, then previews it for installing,
+    /// which develops the package once the author installs it (#222). The
+    /// folder is checked as any install is, so one without `pane.json`, or
+    /// a source-only package, is explained by Pane's own messages. A debug
+    /// build run by the native smokes takes the folder
+    /// `PANE_TEST_CHOOSE_FOLDER` names instead of showing the picker.
+    fn choose_import_folder(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        #[cfg(debug_assertions)]
+        if let Some(folder) = std::env::var_os("PANE_TEST_CHOOSE_FOLDER") {
+            self.import_extension(Path::new(&folder), window, cx);
+            return;
+        }
+        self.choose_folder(
+            "Import",
+            |this, folder, window, cx| this.import_extension(folder, window, cx),
+            window,
+            cx,
+        );
+    }
+
+    /// Shows the install preview of the package in `folder`, which Pane
+    /// develops once it is installed: Import Extension's pick (#222), as
+    /// [`LauncherWindow::preview_package`] shows a folder an install
+    /// offers.
+    pub fn import_extension(&mut self, folder: &Path, window: &mut Window, cx: &mut Context<Self>) {
+        self.motion.pointer_open();
+        let pending = self.launcher.import_extension(folder);
+        self.show_until_done(pending, window, cx);
     }
 
     /// Asks for a folder with the platform's folder picker, its button
@@ -887,6 +1489,8 @@ impl LauncherWindow {
     /// visible window, opened on the display the placement resolves.
     pub(crate) fn unhide(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.launcher.set_window_presence(WindowPresence::Shown);
+        // A pending HUD is over once the launcher is active again (#250).
+        self.close_pending_hud(cx);
         if self.presence.show() {
             window.set_visible(true);
             // The pointer is wherever it is now: the next event records it.
@@ -902,6 +1506,11 @@ impl LauncherWindow {
             // shares nothing of the launcher's lifecycle, stays where the
             // user put it.
             self.place(window, cx);
+            // The taskbar shows while the launcher is open, where the user
+            // chose that and this system has one to show (#268): a taskbar
+            // that hides itself is on screen now, so the Start button
+            // stays one click away.
+            crate::settings::shared(cx).read(cx).taskbar_while_open();
         }
     }
 
@@ -913,6 +1522,10 @@ impl LauncherWindow {
     fn hide(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         window.set_visible(false);
         self.presence.hide(cx.background_executor().now());
+        // The taskbar goes back as the user had it, where showing it while
+        // the launcher was open was chosen (#268): hidden, the launcher
+        // leaves the screen to what the user had there.
+        crate::settings::shared(cx).read(cx).restore_taskbar();
         // A toast shown from now on is a HUD (#141), and a confirmation
         // shown is answered as not confirmed (#146).
         self.launcher.set_window_presence(WindowPresence::Hidden);
@@ -922,6 +1535,35 @@ impl LauncherWindow {
         self.motion.land_at_once();
         self.end_numbers(cx);
         cx.notify();
+    }
+
+    /// Follows the "Show the taskbar when Pane opens" choice as it
+    /// changes while this window lives (#268): while the launcher is
+    /// shown, turning the choice on shows the taskbar at once, and
+    /// turning it off puts it back as the user had it; while the launcher
+    /// is hidden, the next showing applies the choice (see
+    /// [`LauncherWindow::unhide`]). Any other change of the settings
+    /// leaves the taskbar as it is.
+    fn follow_taskbar(
+        &mut self,
+        settings: &Entity<crate::settings::Settings>,
+        cx: &mut Context<Self>,
+    ) {
+        let chosen = settings.read(cx).show_taskbar();
+        if chosen == self.taskbar_followed {
+            return;
+        }
+        self.taskbar_followed = chosen;
+        if self.presence.hidden() {
+            // Hidden: nothing shows now; the next showing applies the
+            // choice.
+            return;
+        }
+        if chosen {
+            settings.read(cx).taskbar_while_open();
+        } else {
+            settings.read(cx).restore_taskbar();
+        }
     }
 
     /// Places the launcher window on the display the Launcher page's
@@ -1247,6 +1889,69 @@ impl LauncherWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // Tab ends the walk through the recent queries (#206), as any
+        // key but the walking Up does — held or pressed.
+        self.recall = None;
+        // Tab waits for the current query's list to be published (#203)
+        // and is replayed through this same path, so a Tab held under one
+        // query completes the typed folder the published list selects
+        // (#204) as a pressed Tab does.
+        if self.hold_key(
+            Keystroke::parse("tab").expect("tab is a keystroke"),
+            window,
+            cx,
+        ) {
+            return;
+        }
+        // Tab completes the query to a folder of the typed folder's
+        // entries when the selected row is one of them (#204), in place
+        // of focusing the next field: only a row of that kind takes it,
+        // so Tab still focuses the argument fields (#205) on any other
+        // row.
+        if let Some(query) = self.launcher.typed_folder_completion() {
+            self.query.replace(&query, cx);
+            return;
+        }
+        // Tab in an argument field goes to the next one, and from the
+        // last back to the query (#205).
+        if let Some(index) = self.focused_argument(window, cx) {
+            self.mark_left_argument(index);
+            let last = self
+                .launcher
+                .argument_fields()
+                .map(|fields| fields.fields.len())
+                .unwrap_or(0);
+            if index + 1 >= last {
+                self.query.focus(window, cx);
+            } else {
+                self.focus_argument(index + 1, window, cx);
+            }
+            return;
+        }
+        if self.query_field().focus_handle(cx).is_focused(window) {
+            // Tab after a word that is a command's alias enters what the
+            // alias names, as a space after it does (#205): the command's
+            // fields, focused on their first empty one, or the command
+            // itself.
+            match self.launcher.alias_after_tab() {
+                Some(pane_core::AliasFlow::Fields) => {
+                    self.enter_arguments(window, cx);
+                    return;
+                }
+                Some(pane_core::AliasFlow::Opens) => {
+                    self.activate_selected(window, cx);
+                    return;
+                }
+                None => {}
+            }
+            // Tab in the query, the selected row's fields showing: the
+            // first empty one of them, the first when none is empty
+            // (#205).
+            if self.launcher.argument_fields().is_some() {
+                self.enter_arguments(window, cx);
+                return;
+            }
+        }
         window.focus_next(cx);
     }
 
@@ -1256,6 +1961,44 @@ impl LauncherWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // Shift+Tab ends the walk through the recent queries (#206), as
+        // any key but the walking Up does — held or pressed.
+        self.recall = None;
+        // Shift+Tab waits for the query's list as Tab does (#203), and
+        // removes the last path component of the published query when
+        // replayed (#204).
+        if self.hold_key(
+            Keystroke::parse("shift-tab").expect("shift-tab is a keystroke"),
+            window,
+            cx,
+        ) {
+            return;
+        }
+        // Shift+Tab removes the last path component of the typed path the
+        // query is (#204), in place of focusing the previous field.
+        if let Some(query) = self.launcher.typed_path_parent() {
+            self.query.replace(&query, cx);
+            return;
+        }
+        // Shift+Tab in an argument field goes to the previous one, and
+        // from the first back to the query (#205).
+        if let Some(index) = self.focused_argument(window, cx) {
+            self.mark_left_argument(index);
+            if index == 0 {
+                self.query.focus(window, cx);
+            } else {
+                self.focus_argument(index - 1, window, cx);
+            }
+            return;
+        }
+        // Shift+Tab in the query, the selected row's fields showing: the
+        // last one of them (#205).
+        if self.query_field().focus_handle(cx).is_focused(window)
+            && let Some(fields) = self.launcher.argument_fields()
+        {
+            self.focus_argument(fields.fields.len().saturating_sub(1), window, cx);
+            return;
+        }
         window.focus_prev(cx);
     }
 
@@ -1281,6 +2024,23 @@ impl LauncherWindow {
     /// again after calling this (see [`crate::ui::motion`]).
     pub(crate) fn activate_selected(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.motion.land_at_once();
+        // Enter (or a click, the footer's button, Ctrl and a digit) inside
+        // an argument field that is required and blank marks it, and the
+        // launcher says what it waits for; nothing runs (#205).
+        if let Some(name) = self.focused_blank_argument(window, cx) {
+            self.launcher.argument_entered(&name);
+            cx.notify();
+            return;
+        }
+        // A blank required argument in the selected row's fields: the
+        // field takes the focus instead of the row running, so a command
+        // is never sent half-filled (#205).
+        if self.blank_required_argument().is_some() {
+            self.sync_arguments(window, cx);
+            let blank = self.blank_required_argument().unwrap_or(0);
+            self.focus_argument(blank, window, cx);
+            return;
+        }
         // The Settings root result opens the Settings window, "Manage
         // Extensions" opens it at the extensions, and the install rows at
         // its install flow (#168): Settings is where extensions are
@@ -1292,6 +2052,18 @@ impl LauncherWindow {
         }
         if self.launcher.selected_asks_for_folder() {
             self.choose_package_folder(window, cx);
+            return;
+        }
+        // Create Extension and Import Extension ask for a folder too: the
+        // parent folder a new package is written into, or the folder of one
+        // that already exists (#222). The launcher does nothing on their
+        // rows; the window asks, as it asks for the folder a package
+        // grants.
+        if let Some(ask) = self.launcher.selected_folder_ask() {
+            match ask {
+                FolderAsk::Create => self.choose_create_folder(window, cx),
+                FolderAsk::Import => self.choose_import_folder(window, cx),
+            }
             return;
         }
         if let Some(identity) = self.launcher.folder_to_choose() {
@@ -1346,8 +2118,22 @@ impl LauncherWindow {
             // As laid out in the last frame.
             list: self.results.list.viewport().size,
         };
+        // A section jump landed on a row: the section's label scrolls
+        // into view with it (#258), wherever the selection lands — a row
+        // it already held included, which the row's own follow-up below
+        // does not scroll for.
+        let jumped = self
+            .jump_reveal
+            .take()
+            .filter(|row| Some(*row) == view.selected);
         let last = self.scrolled_for.as_ref();
         self.reveal_after_layout = None;
+        if let Some(row) = jumped {
+            self.results.reveal_section(row);
+            self.reveal_after_layout = Some(ScrollAfter::Section(row));
+            self.scrolled_for = Some(shown);
+            return;
+        }
         if last == Some(&shown) && !rows_changed {
             return;
         }
@@ -1370,7 +2156,7 @@ impl LauncherWindow {
             });
         if let Some(selected) = view.selected {
             self.results.reveal_row(selected);
-            self.reveal_after_layout = relaid.then_some(selected);
+            self.reveal_after_layout = relaid.then_some(ScrollAfter::Row(selected));
         }
         self.scrolled_for = Some(shown);
     }
@@ -1419,6 +2205,12 @@ impl LauncherWindow {
             self.launcher.close_submenus();
         }
         self.sync_designed_view(window, cx);
+        // The hotkey screen's recording session starts when the screen
+        // listens and ends when it leaves (#260).
+        self.sync_hotkey_recording(window, cx);
+        // Root search's inline argument fields follow the selected row
+        // (#205).
+        self.sync_arguments(window, cx);
         // Last: coming back to root search, even as a view closes, focuses
         // the query rather than the list.
         self.sync_root_search(window, cx);
@@ -1429,11 +2221,79 @@ impl LauncherWindow {
         // A package's Logs screen reads its lines again, and takes the
         // focus as it opens.
         self.sync_extension_log(window, cx);
+        // The update results view follows the screen the launcher shows.
+        self.sync_update_results(cx);
         self.sync_home(cx);
         // Last of all: a confirmation a command waits on keeps the focus
         // over whatever screen is shown (#146).
         self.sync_confirmation(window, cx);
         cx.refresh_windows();
+    }
+
+    /// Starts or ends the hotkey screen's recording session so it lasts
+    /// exactly while the screen listens (#260): while it does, the hook
+    /// adapter holds the keys back from Windows — the Start menu the
+    /// Windows key alone opens stays closed — and reports what the user
+    /// presses, including the kinds no registration can express and
+    /// modifiers' sides, which the screen's own keystrokes cannot name.
+    /// The reports end when the recorder stops listening, the window
+    /// loses focus, or Pane quits; on a system whose adapter has no
+    /// session the screen records through its own keystrokes, as it
+    /// always has. Idempotent, so every screen change can call it.
+    fn sync_hotkey_recording(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let listening = matches!(self.launcher.screen(), Screen::Hotkey { .. });
+        if listening == self.hotkey_recording.is_some() {
+            return;
+        }
+        if !listening {
+            // The screen left: the session ends with the stop it owns.
+            self.hotkey_recording = None;
+            return;
+        }
+        let Some(session) = self.launcher.recording() else {
+            // No adapter session here: the keystroke path records, as it
+            // does today (macOS, X11).
+            return;
+        };
+        let (reports, stop) = session.split();
+        self.hotkey_recording = Some(stop);
+        cx.spawn_in(window, async move |this, cx| {
+            let mut reports = reports;
+            while let Some(shortcut) = reports.next().await {
+                // Still listening: the task ends with the screen it
+                // records for, and the session's stop ends the reports
+                // when the recorder stops listening without a press.
+                let listening = this
+                    .update_in(cx, |window, w, cx| {
+                        window.hotkey_recording_reported(shortcut, w, cx)
+                    })
+                    .unwrap_or(false);
+                if !listening {
+                    break;
+                }
+            }
+        })
+        .detach();
+    }
+
+    /// One binding a recording session reported, pressed on the hotkey
+    /// screen (#260): recorded as the screen's own keystrokes are — the
+    /// same checks, the same flow, the same refusals — and whether the
+    /// screen still listens for another try (a refusal keeps it
+    /// listening, a change that lands leaves it).
+    fn hotkey_recording_reported(
+        &mut self,
+        shortcut: Shortcut,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if !matches!(self.launcher.screen(), Screen::Hotkey { .. }) {
+            return false;
+        }
+        let pending = self.launcher.record_hotkey(shortcut);
+        self.motion.land_at_once();
+        self.show_until_done(pending, window, cx);
+        matches!(self.launcher.screen(), Screen::Hotkey { .. })
     }
 
     /// Freezes root search's selection against the pointer, or lets it
@@ -1464,6 +2324,7 @@ impl LauncherWindow {
         &mut self,
         index: usize,
         position: Point<Pixels>,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let moved = self.pointer.is_some_and(|last| last != position);
@@ -1471,7 +2332,7 @@ impl LauncherWindow {
             return;
         }
         if self.launcher.selected() != Some(index) {
-            self.select_under_pointer(index);
+            self.select_under_pointer(index, window, cx);
             cx.notify();
         }
     }
@@ -1482,9 +2343,11 @@ impl LauncherWindow {
     /// row under it, which the next small movement would select and
     /// scroll in turn. Only the keys' selection scrolls, as the
     /// reference's does.
-    fn select_under_pointer(&mut self, index: usize) {
+    fn select_under_pointer(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
         self.launcher.select(index);
         self.announcer.user_moved();
+        // The selected row's argument fields follow it (#205).
+        self.sync_arguments(window, cx);
         if let Some(scrolled_for) = self.scrolled_for.as_mut() {
             scrolled_for.selected = Some(index);
         }
@@ -1503,7 +2366,7 @@ impl LauncherWindow {
             self.activate_selected(window, cx);
             self.motion.pointer_open();
         } else {
-            self.select_under_pointer(index);
+            self.select_under_pointer(index, window, cx);
             cx.notify();
         }
     }
@@ -1519,6 +2382,12 @@ impl LauncherWindow {
         number: Option<(usize, f32)>,
         cx: &mut Context<Self>,
     ) -> Stateful<Div> {
+        // The choice's extension rows (#308): the extension's own icon, its
+        // version and its check mark; the Install row after them draws as
+        // any row does.
+        if let Some(drawn) = self.render_choice_row(index, row.clone(), selected, cx) {
+            return drawn;
+        }
         let visuals = crate::settings::launcher_visuals(cx);
         let theme = &visuals.theme;
         let reason = row.unavailable.as_ref().map(|u| u.reason().to_owned());
@@ -1548,11 +2417,19 @@ impl LauncherWindow {
             (Some(description), false) => Some(format!("{description}. {}", spoken.join(", "))),
             (None, false) => Some(spoken.join(", ")),
         };
-        // Its icon: an extension's, drawn bare, or Pane's tile (#139).
+        // Its icon: an extension's, drawn bare, or Pane's tile (#139) — a
+        // command's named built-in glyph on Pane's neutral command tile,
+        // which only a command's row draws (ADR 0035, #247).
         let icon = match &shown.icon {
-            Some(icon) => crate::ui::extension_icon::RowIcon::Drawn(crate::features::icons::drawn(
-                icon, theme,
-            )),
+            Some(icon) => {
+                let mut drawn = crate::features::icons::drawn(icon, theme);
+                // An application's, a file's or an item's icon draws bare,
+                // whatever it is: the tile is a command's own glyph's.
+                if !matches!(shown.kind, Some(RowKind::Command) | Some(RowKind::Fallback)) {
+                    drawn.tile_color = None;
+                }
+                crate::ui::extension_icon::RowIcon::Drawn(drawn)
+            }
             None => row_icon(&row.id).into(),
         };
         let accessories = shown
@@ -1586,6 +2463,15 @@ impl LauncherWindow {
         };
         // Presentation only: the shared row paints the chrome, and the
         // identity, accessibility and click behavior are attached here.
+        // The row's hover wash strength is read as it is drawn: on a
+        // screen whose hovering does not move the selection (a command's
+        // list, root search's rows under an open overlay) an unselected
+        // row under the pointer — or one its wash is still fading from —
+        // takes the fainter wash (#245).
+        let hover = self
+            .motion
+            .hover
+            .look(Spot::Row(index), cx.background_executor().now());
         result_row_with(
             RowContent {
                 title: row.title.clone().into(),
@@ -1593,12 +2479,20 @@ impl LauncherWindow {
                 unavailable_reason: reason.map(SharedString::from),
                 selected,
                 unavailable_id: ("unavailable", index).into(),
+                hover,
                 icon: Some(icon),
             },
             meta,
             theme,
         )
         .id(("row", index))
+        // The row reports the pointer's arrivals and departures for its
+        // wash (see `crate::app::hover_wash`): where hovering moves the
+        // selection — root search's free rows — the wash never shows, so
+        // reporting changes nothing there.
+        .on_hover(cx.listener(move |this, over: &bool, _, cx| {
+            this.motion.hover.set(Spot::Row(index), *over, cx);
+        }))
         // While held, the row takes the stronger wash of its hover, or of
         // its selected wash, at once.
         .active({
@@ -1610,9 +2504,11 @@ impl LauncherWindow {
         // rows also select under the moving pointer; a command's rows keep
         // their click-runs semantics.
         .when(root, |row| {
-            row.on_mouse_move(cx.listener(move |this, event: &MouseMoveEvent, _, cx| {
-                this.pointer_moved_over(index, event.position, cx);
-            }))
+            row.on_mouse_move(
+                cx.listener(move |this, event: &MouseMoveEvent, window, cx| {
+                    this.pointer_moved_over(index, event.position, window, cx);
+                }),
+            )
         })
         .debug_selector(|| format!("row-{}", row.title))
         // The selected row is not reported as focused: the focus stays in
@@ -1643,6 +2539,175 @@ impl LauncherWindow {
         )
     }
 
+    /// One row of the choice of a collection's extensions (#308): the
+    /// extension's own icon drawn bare, its title and description, its
+    /// version as a tag, what the run of the ticked ones came to for it
+    /// once it reaches it, and — at the row's right end — its check mark.
+    /// The row previews the extension, as Enter does; the check mark alone
+    /// ticks it, as Space does. `None` for the rows that are no
+    /// extension's (the Install row after them, which draws as any row
+    /// does).
+    fn render_choice_row(
+        &self,
+        index: usize,
+        row: Row,
+        selected: bool,
+        cx: &mut Context<Self>,
+    ) -> Option<Stateful<Div>> {
+        let Screen::Choice(choice) = self.launcher.screen() else {
+            return None;
+        };
+        let extension = choice.extensions.get(index)?;
+        let ticked = choice.ticked.get(index).copied().unwrap_or(false);
+        let outcome = choice.outcomes.get(index).cloned().flatten();
+        let id = extension.id.clone();
+        let tick = self.choice_tick(index, &id, &extension.title, ticked, cx);
+        let visuals = crate::settings::launcher_visuals(cx);
+        let theme = &visuals.theme;
+        let icon = crate::features::icons::drawn(&extension.icon, theme);
+        let tag = |text: String, color| crate::ui::result_row::AccessoryLook {
+            text: text.into(),
+            tag: true,
+            color,
+            icon: None,
+            tooltip: None,
+        };
+        // The version, and — once the run reaches this extension — what
+        // it came to for it.
+        let mut accessories = Vec::new();
+        if let Some(version) = &extension.version {
+            accessories.push(tag(version.clone(), theme.text_muted));
+        }
+        match &outcome {
+            Some(ChoiceOutcome::Installed) => {
+                accessories.push(tag("Installed".into(), theme.success));
+            }
+            Some(ChoiceOutcome::Installing) => {
+                accessories.push(tag("Installing…".into(), theme.warning));
+            }
+            Some(ChoiceOutcome::Refused(_)) => {
+                accessories.push(tag("Not installed".into(), theme.danger));
+            }
+            None => {}
+        }
+        // What a refusal came to, said under the title, never truncated.
+        let refused = match &outcome {
+            Some(ChoiceOutcome::Refused(why)) => Some(SharedString::from(why.clone())),
+            _ => None,
+        };
+        let description = row.subtitle.clone();
+        let debug_title = row.title.clone();
+        Some(
+            result_row_with(
+                RowContent {
+                    title: row.title.clone().into(),
+                    subtitle: row.subtitle.clone().map(SharedString::from),
+                    unavailable_reason: refused,
+                    selected,
+                    // The choice's rows take the selection wash only: they
+                    // do not report the pointer, so the hover wash never
+                    // rises (#289's RowContent gained the field).
+                    hover: 0.0,
+                    unavailable_id: ("choice-reason", index).into(),
+                    icon: Some(crate::ui::extension_icon::RowIcon::Drawn(icon)),
+                },
+                RowMeta {
+                    accessories,
+                    ..RowMeta::default()
+                },
+                theme,
+            )
+            .id(("row", index))
+            .active({
+                let press = crate::ui::result_row::pressed_wash(selected, theme);
+                move |row| row.bg(press)
+            })
+            // The check mark, inside the row at its right end: its own click
+            // target, taking the click from the row's.
+            .child(tick)
+            .debug_selector(move || format!("row-{debug_title}"))
+            .role(Role::ListBoxOption)
+            .aria_label(row.title.clone())
+            .aria_selected(selected)
+            .when_some(description, |row, description| {
+                row.aria_description(description)
+            })
+            .on_click(cx.listener(
+                move |this, event: &gpui::ClickEvent, window, cx| {
+                    if event.click_count() <= 1 {
+                        this.launcher.select(index);
+                        this.announcer.user_moved();
+                        this.activate_selected(window, cx);
+                        this.motion.pointer_open();
+                    }
+                },
+            )),
+        )
+    }
+
+    /// The check mark of the extension `id`, titled `title`, at the
+    /// choice's row `index` (#308): ticked or not, its own click target —
+    /// the row around it previews the extension — and the key Space ticks
+    /// what is selected.
+    fn choice_tick(
+        &self,
+        index: usize,
+        id: &str,
+        title: &str,
+        ticked: bool,
+        cx: &mut Context<Self>,
+    ) -> Stateful<Div> {
+        let theme = &crate::settings::launcher_visuals(cx).theme;
+        let mark = div()
+            .flex_none()
+            .size(px(16.))
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded(px(4.))
+            .border_1()
+            .border_color(if ticked {
+                theme.accent
+            } else {
+                theme.text_muted
+            })
+            .when(ticked, |mark| {
+                mark.bg(theme.accent)
+                    .child(div().size(px(6.)).rounded(px(2.)).bg(theme.text_title))
+            });
+        let label = if ticked {
+            format!("Untick {title}")
+        } else {
+            format!("Tick {title}")
+        };
+        let id = id.to_owned();
+        div()
+            .id(("choice-tick", index))
+            .debug_selector(move || format!("choice-tick-{title}"))
+            .flex_none()
+            .flex()
+            .items_center()
+            .cursor_pointer()
+            .role(Role::CheckBox)
+            .aria_label(label)
+            .aria_toggled(if ticked {
+                Toggled::True
+            } else {
+                Toggled::False
+            })
+            .aria_keyshortcuts("Space")
+            .on_click(cx.listener(move |this, _: &gpui::ClickEvent, _, cx| {
+                // The mark takes the click, so the row around it does not
+                // open the extension's preview.
+                cx.stop_propagation();
+                if this.launcher.toggle_choice_tick(&id) {
+                    this.announcer.user_moved();
+                    cx.notify();
+                }
+            }))
+            .child(mark)
+    }
+
     /// Root search's row `index`, a computed answer, drawn as the answer
     /// card (#96): the row's identity, selection, pointer and click are
     /// the result row's, and so are its accessibility — named for what
@@ -1666,16 +2731,22 @@ impl LauncherWindow {
             None => card,
         }
         .id(("row", index))
-        // While held, the card takes the stronger wash of its own fill: it
-        // has no hover or selected wash to derive one from (its selection
-        // is a ring).
+        // While held, the card takes the stronger wash of what it shows
+        // while selected — the selection wash, as a row does — or of its
+        // own fill, at once.
         .active({
-            let press = pressed(visuals.theme.results.card_fill);
+            let press = if selected {
+                pressed(visuals.theme.selection_wash)
+            } else {
+                pressed(visuals.theme.results.card_fill)
+            };
             move |card| card.bg(press)
         })
-        .on_mouse_move(cx.listener(move |this, event: &MouseMoveEvent, _, cx| {
-            this.pointer_moved_over(index, event.position, cx);
-        }))
+        .on_mouse_move(
+            cx.listener(move |this, event: &MouseMoveEvent, window, cx| {
+                this.pointer_moved_over(index, event.position, window, cx);
+            }),
+        )
         .debug_selector(|| format!("row-{}", row.title))
         .role(Role::ListBoxOption)
         .aria_label(root_search::layouts::answer_label(answer))
@@ -1706,7 +2777,18 @@ impl LauncherWindow {
         let keyboard = crate::settings::shared(cx).read(cx).keyboard().clone();
         let primary = (!action.label.is_empty() && !status).then(|| {
             let invoke = keyboard.binding(pane_core::KeyboardAction::InvokeSelectedAction);
-            action_button(action, invoke, theme)
+            // The button's hover wash, read as it is drawn, and reported
+            // by the button itself (#245).
+            let look = self.motion.hover.look(
+                Spot::Button("primary-action"),
+                cx.background_executor().now(),
+            );
+            action_button(action, invoke, look, theme)
+                .on_hover(cx.listener(move |this, over: &bool, _, cx| {
+                    this.motion
+                        .hover
+                        .set(Spot::Button("primary-action"), *over, cx);
+                }))
                 .on_click(cx.listener(|this, event: &gpui::ClickEvent, window, cx| {
                     // A double click's second click runs nothing more.
                     if event.click_count() <= 1 {
@@ -1862,9 +2944,11 @@ impl Render for LauncherWindow {
             self.drawn_over = self.actions.is_some() || self.launcher.confirmation().is_some();
             self.results.drawn_rows.clear();
         }
-        // The toast the footer shows, if any, and its time (#141).
+        // The toast the footer shows, if any, and its time (#141): an
+        // outcome of the status line is a toast too, timed here and
+        // cleared through the launcher when its time is up (#249).
         let toast = self.footer_toast(&view.status);
-        self.time_toast(toast.as_ref(), window, cx);
+        self.time_toast(toast.as_ref(), &view.status, window, cx);
         // Pane's Clipboard History and Search Files draw their own split
         // view (#102, #177), with a confirmation the command asks for over
         // it (#146).
@@ -1892,16 +2976,26 @@ impl Render for LauncherWindow {
         }
         self.keep_dates_current(listing.shows_a_date, cx);
         // What moves this frame — the arriving content, the footer menu
-        // popup's entrance or exit, the number hints' slide — and whether
-        // another frame is needed; see [`FrameMotion`] and
-        // `crate::ui::motion` for the whole policy.
+        // popup's entrance or exit, the number hints' slide, the loading
+        // bar — and whether another frame is needed; see [`FrameMotion`]
+        // and `crate::ui::motion` for the whole policy.
         let frame = self.motion.frame(
             discriminant(&view.screen),
             self.menu.is_some(),
+            self.launcher.pending_since(),
             cx.reduce_motion(),
             cx.background_executor().now(),
         );
-        let (arriving, menu_in_flight, numbers) = (frame.arriving, frame.menu_popup, frame.numbers);
+        let (arriving, menu_in_flight, numbers, loading) = (
+            frame.arriving,
+            frame.menu_popup,
+            frame.numbers,
+            frame.loading,
+        );
+        // Work still beneath the loading bar's threshold has one frame
+        // due when it passes, which nothing else draws (#248; see
+        // [`crate::features::loading`]).
+        self.wake_loading(loading.wake, cx);
         // The background image's backdrop, baked for this window's scale
         // (ADR 0028); the visuals below are over it once it is ready.
         let scale = window.scale_factor();
@@ -1916,14 +3010,18 @@ impl Render for LauncherWindow {
             // rows; one that names none keeps its content-only note.
             Screen::DesignedView(view) if view.list.is_some() => "This command has no items.",
             Screen::Package { .. } => "Nothing to install.",
+            Screen::Choice { .. } => "The collection lists no extensions.",
             Screen::PaneForm(_) => "",
             Screen::Extensions { .. } => "No extensions are installed.",
+            Screen::UpdateResults { .. } => "No update results yet.",
             Screen::DesignedView(_)
             | Screen::NetworkDetails { .. }
-            | Screen::ProgramDetails { .. } => "",
+            | Screen::ProgramDetails { .. }
+            | Screen::Crash { .. } => "",
             Screen::Confirm { .. }
             | Screen::Hotkey { .. }
             | Screen::PauseDetails { .. }
+            | Screen::WaitingDetails { .. }
             | Screen::RuntimeDetails { .. }
             | Screen::BuildDetails { .. }
             | Screen::ExtensionLog { .. } => "",
@@ -1931,11 +3029,18 @@ impl Render for LauncherWindow {
         // The footer's left at rest on a screen with no heading line: the
         // open command (#162). Read before the rows move out of the view.
         let footer_command = self.footer_command(&view, &theme);
-        // A confirmation, and a package preview offering Install or Update
-        // (an npm or Git package's has several more lines), keep their choices in
-        // view.
-        let preview = matches!(view.screen, Screen::Package { .. }) && !view.rows.is_empty();
-        let confirm = matches!(view.screen, Screen::Confirm { .. }) || preview;
+        // A confirmation, a package preview offering Install or Update
+        // (an npm or Git package's has several more lines), and the choice
+        // of a collection's extensions with its rows and its lines (#308)
+        // keep their choices in view.
+        let preview = (matches!(view.screen, Screen::Package { .. })
+            || matches!(view.screen, Screen::Choice(_)))
+            && !view.rows.is_empty();
+        // A confirmation, a preview and the error overlay keep their rows in
+        // view while their long lines of information scroll: the overlay's
+        // stack trace can be longer than the window.
+        let confirm =
+            matches!(view.screen, Screen::Confirm { .. } | Screen::Crash { .. }) || preview;
         // A preview has one or two rows (Install or Update) and more lines
         // to read, which may take more of the window than a confirmation's.
         let details_share = if preview { 0.62 } else { 0.4 };
@@ -1964,42 +3069,66 @@ impl Render for LauncherWindow {
         let row_numbers: Vec<Option<usize>> = (0..view.rows.len().min(9))
             .map(|index| row_number(&view, &slots, index))
             .collect();
-        // The footer's status: while the launcher runs, works, answers or
+        // The footer's status: while the launcher works, answers or
         // fails, the strip is that message; `None` while it is idle, when
-        // the strip becomes the selected action (below).
+        // the strip becomes the selected action (below). Waited-for work
+        // — the status running — says nothing in the strip: the loading
+        // bar under the search field's rule is what the user waits with
+        // (#248).
         // Whether an action runs or the status line has something to say:
         // the primary action steps aside then, toast or not.
         let status_busy = view.status != Status::Idle;
         let (status_selector, status, status_color): (&str, Option<SharedString>, Hsla) =
             match view.status.clone() {
-                // A toast speaks where the status line would (#141).
-                _ if toast.is_some() => ("status-toast", None, theme.text_body),
+                // An extension's toast speaks where the status line would
+                // (#141), while the launcher is idle or working.
+                Status::Idle | Status::Running { .. } if toast.is_some() => {
+                    ("status-toast", None, theme.text_body)
+                }
                 Status::Idle => ("status-idle", None, theme.text_muted),
-                Status::Running => ("status-running", Some("Running…".into()), theme.warning),
+                Status::Running { .. } => ("status-running", None, theme.text_muted),
                 Status::Progress(work) => ("status-progress", Some(work.into()), theme.warning),
+                // An outcome is the toast itself now (#249), drawn
+                // through the toast controls and timed to leave; the
+                // strip keeps the identity it always had, so a test or
+                // smoke still finds the footer where it was.
                 Status::Result(answer) => ("status-result", Some(answer.into()), theme.success),
                 Status::Error(message) => ("status-error", Some(message.into()), theme.danger),
             };
         // The strip's name for assistive technology: the status, or the
-        // toast's title and message.
-        let announced: Option<SharedString> = match &toast {
-            Some(shown) => Some(shown.toast.text().into()),
-            None => status.clone(),
-        };
+        // toast's title and message — or, only once waited-for work has
+        // outlasted the loading bar's threshold, the busy state, so a
+        // quick action is never announced as busy (#248). The busy state
+        // comes first: it is what is happening now, past the threshold,
+        // whatever outcome is still showing its time out in the strip.
+        let announced: Option<SharedString> =
+            loading
+                .busy
+                .then(|| "Running…".into())
+                .or_else(|| match &toast {
+                    Some(shown) => Some(shown.toast.text().into()),
+                    None => status.clone(),
+                });
         // The announcer says it too (#132), when it is a toast or an
-        // outcome; "Running…" and progress are the strip's own.
+        // outcome — or the busy state, past the threshold; progress stays
+        // the strip's own.
         let said = announced
             .as_ref()
-            .filter(|_| announcer::says_message(&view.status, toast.is_some()))
+            .filter(|_| announcer::says_message(&view.status, toast.is_some(), loading.busy))
             .map(SharedString::to_string);
-        // The toast's actions take the footer's buttons' place.
-        let toast_buttons = match &toast {
-            Some(shown) => self.toast_buttons(shown, &theme, cx),
-            None => Vec::new(),
-        };
-        let toast_middle = toast
-            .as_ref()
-            .map(|shown| self.render_toast(shown, &theme, cx).into_any_element());
+        // The toast in the footer's middle, in the hint's place, with
+        // the window as it is this frame: its size decides whether a
+        // toast's text fits on one line, and whether its controls have
+        // the focus decides the close button (#249). While a status
+        // shows, the primary action steps aside, which is what the
+        // one-line room accounts for.
+        let viewport = window.viewport_size();
+        let toast_middle = toast.as_ref().map(|shown| {
+            self.render_toast(shown, &theme, viewport, status_busy, window, cx)
+                .into_any_element()
+        });
+        // The toast's open details, above the strip (#249).
+        let toast_details = self.render_toast_details_layer(&theme, material, viewport, cx);
         // The selected action: the one definition ([`SelectedAction`])
         // that drives the idle strip's button — its label, its
         // availability — and the dispatch both the button and Enter take.
@@ -2086,7 +3215,7 @@ impl Render for LauncherWindow {
             )
             .children(
                 self.reveal_after_layout
-                    .and_then(|row| self.results.reveal_row_after_layout(row)),
+                    .and_then(|after| self.results.reveal_after(after)),
             );
         // The launcher decides what an item opens; its screen says which.
         // Root search has no title — the reference's launcher has none —
@@ -2155,12 +3284,8 @@ impl Render for LauncherWindow {
             // pins' row under it, where the Launcher page shows them.
             Screen::Root { query } if collapsed => {
                 let pins = self.render_compact_pins(numbers, &theme, cx);
-                self.render_search(
-                    query,
-                    root_search::ROOT_PLACEHOLDER,
-                    div().children(pins),
-                    cx,
-                )
+                let placeholder = self.search_placeholder();
+                self.render_search(query, &placeholder, loading.bar, div().children(pins), cx)
             }
             Screen::Root { query } => {
                 let results = actions_panel::dimmed(
@@ -2168,7 +3293,10 @@ impl Render for LauncherWindow {
                     self.actions.is_some(),
                     &theme,
                 );
-                self.render_search(query, root_search::ROOT_PLACEHOLDER, results, cx)
+                // While the selected row's argument fields show, the
+                // query field's placeholder is the command's title (#205).
+                let placeholder = self.search_placeholder();
+                self.render_search(query, &placeholder, loading.bar, results, cx)
             }
             // The opened command's own search field, the same control.
             Screen::CommandSearch { query } => {
@@ -2177,7 +3305,13 @@ impl Render for LauncherWindow {
                     self.actions.is_some(),
                     &theme,
                 );
-                self.render_search(query, root_search::COMMAND_PLACEHOLDER, results, cx)
+                self.render_search(
+                    query,
+                    root_search::COMMAND_PLACEHOLDER,
+                    loading.bar,
+                    results,
+                    cx,
+                )
             }
             // A package's Logs screen draws its lines itself, and holds the
             // keyboard focus (#213).
@@ -2185,16 +3319,38 @@ impl Render for LauncherWindow {
                 Some(log) => motion::arriving(log, arriving).into_any_element(),
                 None => div().into_any_element(),
             },
+            // The update results view: the search field above, its rows
+            // under it, drawn by the view.
+            Screen::UpdateResults { query } => {
+                let results = self.render_update_results(cx);
+                self.render_search(
+                    query,
+                    update_results::PLACEHOLDER,
+                    loading.bar,
+                    motion::arriving(results, arriving),
+                    cx,
+                )
+            }
             // The list holds keyboard focus, and is what assistive
             // technology reports as focused: the announcer says the
             // selected row (#132). Key actions bubble to the root. A
             // command's list is dimmed under its open Actions panel, as root
             // search is.
-            _ => actions_panel::dimmed(
-                motion::arriving(list.track_focus(&self.focus_handle), arriving).into_any_element(),
-                self.actions.is_some(),
-                &theme,
-            ),
+            _ => {
+                let list = list.track_focus(&self.focus_handle);
+                // The choice of a collection's extensions takes Space to
+                // tick the extension selected (#308), on its list alone.
+                let list = if matches!(view.screen, Screen::Choice(_)) {
+                    list.key_context(CHOICE_CONTEXT)
+                } else {
+                    list
+                };
+                actions_panel::dimmed(
+                    motion::arriving(list, arriving).into_any_element(),
+                    self.actions.is_some(),
+                    &theme,
+                )
+            }
         };
 
         // The confirmation a command waits on, over everything (#146),
@@ -2210,23 +3366,47 @@ impl Render for LauncherWindow {
             .on_action(cx.listener(Self::select_previous))
             .on_action(cx.listener(Self::select_next_page))
             .on_action(cx.listener(Self::select_previous_page))
+            .on_action(cx.listener(Self::tick_choice))
             .on_action(cx.listener(Self::confirm))
             .on_action(cx.listener(Self::back))
             .on_action(cx.listener(Self::return_to_root))
             .on_action(cx.listener(Self::dismiss))
             .on_action(cx.listener(Self::open_settings))
             .on_action(cx.listener(Self::toggle_actions))
-            .on_action(cx.listener(Self::focus_toast))
+            .on_action(cx.listener(Self::open_toast_details))
+            // The Back-a-level key, beneath every focused control but
+            // above the fields' own empty Backspace (#258). It is the
+            // first capture listener of them all: the keystroke gate
+            // ahead of the key bindings stops the key's dispatch when a
+            // back would act, and a stopped dispatch leaves the capture
+            // loop after its first listener, so the one the gate means to
+            // reach has to be it.
+            .capture_key_down(cx.listener(Self::backspace_back_keys))
             .map(|content| Self::on_quick_slot_keys(content, cx))
             // A toast's actions' shortcuts first: the toast is what was
             // said last (#141).
             .capture_key_down(cx.listener(Self::toast_action_keys))
             .capture_key_down(cx.listener(Self::item_action_keys))
             .capture_key_down(cx.listener(Self::designed_list_keys))
+            .capture_key_down(cx.listener(Self::held_typing_keys))
+            // The previous-result key pressed while it could be the
+            // history's, seen as the press itself (#206) — after the
+            // item actions' and the held keys' captures, which the key
+            // never matches.
+            .capture_key_down(cx.listener(Self::recall_key))
+            .on_action(cx.listener(Self::select_next_five))
+            .on_action(cx.listener(Self::select_previous_five))
+            .on_action(cx.listener(Self::select_next_section))
+            .on_action(cx.listener(Self::select_previous_section))
             .on_action(cx.listener(Self::focus_next))
             .on_action(cx.listener(Self::focus_previous))
             .on_modifiers_changed(cx.listener(Self::modifiers_changed))
             .on_key_down(cx.listener(Self::key_down))
+            // A scroll while the number hints show ends their look: the
+            // user is moving through the list, not choosing a number.
+            .on_scroll_wheel(cx.listener(|this, _: &ScrollWheelEvent, _, cx| {
+                this.end_numbers(cx);
+            }))
             // Bubbling after the rows' own handlers, so a row compares the
             // event against the position before it.
             .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _, _| {
@@ -2240,9 +3420,9 @@ impl Render for LauncherWindow {
             .font_features(theme.typography.features.clone())
             .text_color(theme.text_title)
             .when_some(heading, |content, heading| content.child(heading))
-            // A confirmation's or preview's long details scroll within 40%
-            // (a preview's 62%) of the window, leaving the rest to its
-            // choices, which stay visible.
+            // A confirmation's, preview's or error overlay's long details
+            // scroll within 40% (a preview's 62%) of the window, leaving the
+            // rest to its choices, which stay visible.
             .when(!details.is_empty(), |content| {
                 content.child(
                     div()
@@ -2266,10 +3446,13 @@ impl Render for LauncherWindow {
                     // The footer: the launcher's status strip (see
                     // [`crate::ui::footer`]). On the left, the Pane mark (the
                     // app menu's button) and the hint — or, while a status
-                    // shows (running, progress, a result or an error), the
-                    // message instead, wrapping, growing and scrolling as it
-                    // always has; on the right, the selected result's primary
-                    // action and, on root search, Actions. The strip keeps its
+                    // shows (progress, a result or an error), the message
+                    // instead, wrapping, growing and scrolling as it always
+                    // has; on the right, the selected result's primary
+                    // action and, on root search, Actions. Waited-for work
+                    // (the status running) shows no message: the loading bar
+                    // under the search field's rule is what the user waits
+                    // with (#248). The strip keeps its
                     // identity (id, role, status-* debug selectors) in every
                     // shape, so a test or a smoke can always find the
                     // launcher's footer where it was. The open menu's popup and
@@ -2292,6 +3475,9 @@ impl Render for LauncherWindow {
                         .when_some(self.render_actions_layer(window, cx), |strip, panel| {
                             strip.child(panel)
                         })
+                        // The open toast's details, above the strip as the
+                        // panel is (#249).
+                        .when_some(toast_details, |strip, details| strip.child(details))
                         // The strip is the live region: it carries the
                         // message as its name, so assistive technology
                         // announces it. While idle the strip carries no
@@ -2322,16 +3508,13 @@ impl Render for LauncherWindow {
                                 )
                                 .into_any_element(),
                             },
-                            // A toast's actions, when it has any. While a
-                            // status shows, the primary action steps aside —
-                            // nothing is dispatched again from a frame the
-                            // status has already overtaken (a double click on
-                            // a quick open) — and Actions stays.
-                            if toast_buttons.is_empty() {
-                                self.footer_buttons(&action, with_actions, status_busy, &theme, cx)
-                            } else {
-                                toast_buttons
-                            },
+                            // While a status shows — a toast now — the
+                            // primary action steps aside: nothing is
+                            // dispatched again from a frame the status has
+                            // already overtaken (a double click on a quick
+                            // open). A toast's actions are in its details
+                            // (#249), and Actions stays.
+                            self.footer_buttons(&action, with_actions, status_busy, &theme, cx),
                             &theme,
                         )),
                 )
@@ -2395,6 +3578,9 @@ impl Render for LauncherWindow {
 /// scrolls (ADR 0028).
 const HERO_SCROLL: f32 = 1.25;
 
+/// How many rows Alt+Up and Alt+Down move the selection by (#258).
+const FIVE_ROWS: isize = 5;
+
 /// The share of the panel's height the list scrolls by the time the
 /// background image has dissolved.
 const HERO_DISSOLVE: f32 = 0.5;
@@ -2415,18 +3601,21 @@ const HERO_GLASS_OPACITY: f32 = 0.84;
 /// install flow from a folder, npm or Git.
 pub(crate) fn open_settings_at(launcher: &Launcher, target: SettingsTarget, cx: &mut App) {
     use crate::features::settings::extensions::{InstallSource, TITLE};
-    let install = |source: InstallSource| source.target();
+    let install = |source: InstallSource| source.target().to_owned();
     let place = match target {
         SettingsTarget::Settings => {
             settings::open(launcher, cx);
             return;
         }
-        SettingsTarget::Extensions => "",
+        SettingsTarget::Extensions => String::new(),
+        // The extension's page; where it is not installed anymore, the
+        // group's own page, as `extension_of` resolves nothing.
+        SettingsTarget::Extension(identity) => identity.key(),
         SettingsTarget::InstallFromFolder => install(InstallSource::Folder),
         SettingsTarget::InstallFromNpm => install(InstallSource::Npm),
         SettingsTarget::InstallFromGit => install(InstallSource::Git),
     };
-    settings::open_at(launcher, TITLE, place, cx);
+    settings::open_at(launcher, TITLE, &place, cx);
 }
 
 pub(crate) fn launcher_changed_outside(cx: &mut App) {
@@ -2448,8 +3637,12 @@ pub(crate) fn launcher_changed_outside(cx: &mut App) {
 /// the action's label truncating beside the effective `invoke` binding's
 /// keys in the accent caps — the primary action's key — so a rebound
 /// Ctrl+Enter shows (and announces) Ctrl and the return key, never a bare
-/// Enter. Presentation only: the caller attaches the click (the
-/// launcher's [`LauncherWindow::press_primary_action`] path).
+/// Enter. `look` is the button's hover wash strength (see
+/// `crate::app::hover_wash`), which the caller reads from the window's
+/// hover state; the caller also attaches the pointer's arrivals and
+/// departures through the button's `.on_hover`. Presentation only: the
+/// caller attaches the click (the launcher's
+/// [`LauncherWindow::press_primary_action`] path).
 ///
 /// A click never dispatches what the definition says cannot run now, so
 /// an unavailable button is dimmed, marked for assistive technology, and
@@ -2458,6 +3651,7 @@ pub(crate) fn launcher_changed_outside(cx: &mut App) {
 pub(crate) fn action_button(
     action: &SelectedAction,
     invoke: &pane_core::Binding,
+    look: f32,
     theme: &Theme,
 ) -> Stateful<Div> {
     let keys = crate::keyboard::binding_keys(invoke);
@@ -2466,7 +3660,7 @@ pub(crate) fn action_button(
         action.label.clone(),
         &keys,
         CapStyle::Accent,
-        footer::ButtonWash::Hover,
+        footer::ButtonWash::Hover(look),
         theme,
     )
     .role(Role::Button)
@@ -2476,7 +3670,13 @@ pub(crate) fn action_button(
     .aria_keyshortcuts(keys.name())
     .when(action.available, |button| button.cursor_pointer())
     .when(!action.available, |button| {
-        button.opacity(0.5).cursor_default().aria_disabled(true)
+        // Disabled text is the ink at the tertiary strength (ADR 0035);
+        // the whole button dims with it, label and keys as one, as the
+        // reference's disabled fields do.
+        button
+            .opacity(TERTIARY_STRENGTH)
+            .cursor_default()
+            .aria_disabled(true)
     })
 }
 
@@ -2490,8 +3690,25 @@ fn window_size(size: Size<Pixels>) -> WindowSize {
 
 /// The launcher presentation's section labels, as the shared list draws
 /// them.
-fn section_labels(listing: &ListPresentation) -> Vec<shell::SectionLabel> {
+pub(crate) fn section_labels(listing: &ListPresentation) -> Vec<shell::SectionLabel> {
     listing.sections.iter().map(section_label).collect()
+}
+
+/// The first row of every section a list draws, in order, a section jump's
+/// stops (#258): the sections that begin past the last row are not drawn,
+/// and a list that draws no labels — a command's list — is one section
+/// of its own, from its first row.
+fn section_firsts(listing: &ListPresentation, rows: usize) -> Vec<usize> {
+    let mut firsts: Vec<usize> = listing
+        .sections
+        .iter()
+        .filter(|section| section.first < rows)
+        .map(|section| section.first)
+        .collect();
+    if !firsts.contains(&0) {
+        firsts.insert(0, 0);
+    }
+    firsts
 }
 
 /// A launcher section as the shared list labels it: the adapter between
@@ -2519,6 +3736,7 @@ pub(crate) fn row_icon(id: &str) -> (IconTone, Glyph) {
         "pane.install-from-folder" => (IconTone::Folder, Glyph::Folder),
         "pane.install-from-npm" => (IconTone::Web, Glyph::Blocks),
         "pane.install-from-git" => (IconTone::Term, Glyph::Terminal),
+        "pane.check-extensions" => (IconTone::Command, Glyph::Blocks),
         pane_core::MANAGE_EXTENSIONS => (IconTone::Command, Glyph::Blocks),
         "pane.settings" => (IconTone::Command, Glyph::Gear),
         pane_core::UNEXPECTED_QUIT => (IconTone::Folder, Glyph::Folder),

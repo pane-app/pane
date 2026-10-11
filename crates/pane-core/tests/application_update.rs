@@ -21,7 +21,7 @@ use std::time::{Duration, Instant};
 
 use futures::executor::block_on;
 use pane_core::defaults::ArtifactSource;
-use pane_core::{ApplicationUpdate, DefaultExtension, Launcher, Runtime, Status, Target};
+use pane_core::{ApplicationUpdate, Launcher, Runtime, Status, Target};
 use tempfile::TempDir;
 
 #[path = "support/artifacts.rs"]
@@ -29,21 +29,33 @@ mod artifacts;
 
 use artifacts::Artifacts;
 
+#[path = "support/defaults.rs"]
+mod defaults;
+#[path = "support/repo_server.rs"]
+mod repo_server;
+
+use defaults::from_sample;
+
 #[path = "support/rows.rs"]
 mod rows;
 
 use rows::{select_title, titles};
 
-/// Pane's install folder, data folder, compiled code cache and artifact
-/// source for one test. The install folder holds the program and, under
+/// Pane's install folder, data folder, compiled code cache, artifact
+/// source and the server the default extension's repository is served
+/// from, for one test. The install folder holds the program and, under
 /// `data`, Pane's own data — as `%LOCALAPPDATA%\Pane` does on Windows, so
 /// an update's swap works around the data it must not touch.
 struct Dirs {
     install: TempDir,
+    /// Where the default extension's repository work tree lives, which
+    /// the server reads it from.
+    repos: TempDir,
     /// Kept, not read: it holds the compiled code cache alive.
     _cache: TempDir,
     runtime: Runtime,
     artifacts: Artifacts,
+    server: repo_server::Server,
 }
 
 impl Dirs {
@@ -51,8 +63,10 @@ impl Dirs {
         let cache = tempfile::tempdir().unwrap();
         Dirs {
             install: tempfile::tempdir().unwrap(),
+            repos: tempfile::tempdir().unwrap(),
             runtime: Runtime::start_with_cache(cache.path().to_path_buf()).unwrap(),
             artifacts: Artifacts::start(),
+            server: repo_server::Server::start(),
             _cache: cache,
         }
     }
@@ -132,6 +146,21 @@ impl Dirs {
     /// The files in the install folder, sorted.
     fn installed(&self) -> Vec<String> {
         read_names(self.install.path(), "")
+    }
+
+    /// Makes and serves a default extension's repository — the Rust
+    /// sample's assembled package, tagged as its manifest's version — and
+    /// returns the pin that names it, as a Pane release pins its default
+    /// extensions: a stand-in, the default extensions' own repositories
+    /// living outside this one (#285).
+    fn sample(&self) -> pane_core::DefaultExtension {
+        from_sample(
+            &self.server,
+            self.repos.path(),
+            "sample-rust",
+            "Rust sample",
+            "sample-rust",
+        )
     }
 
     /// The names at the top of the install folder, sorted.
@@ -573,11 +602,14 @@ fn an_unreachable_source_is_explained_and_the_row_tries_again() {
     assert_eq!(
         titles(&launcher),
         [
-            "Install extension from folder…",
-            "Install extension from npm…",
-            "Install extension from Git…",
             "Check for a Pane update",
-            // Pane's own row, listed after every command.
+            // The authoring rows (ADR 0047, #222) ranked with the rest.
+            "Create Extension…",
+            "Import Extension…",
+            "Install extension from folder…",
+            "Install extension from Git…",
+            "Install extension from npm…",
+            // Pane's own row, ranked with the update rows by title (#199).
             "Settings…"
         ]
     );
@@ -620,36 +652,25 @@ fn a_check_the_source_answers_with_an_error_is_explained_until_it_answers() {
 }
 
 #[test]
-fn an_index_pane_cannot_take_is_explained_and_the_defaults_are_acquired() {
+fn an_index_pane_cannot_take_is_explained_and_the_defaults_are_set_up() {
     let dirs = Dirs::new();
-    // The calculator's payload is published, so the default extensions
-    // can still be acquired from the same index.
-    let calculator = package_files("calculator");
-    dirs.artifacts.publish(
-        "calculator",
-        &version_of(&calculator),
-        &borrowed(&calculator),
-    );
+    // The sample's repository is served, so the default extension is
+    // set up from it whatever the artifact source's index says of Pane's
+    // own update.
+    let sample = dirs.sample();
     dirs.running(b"the 0.1.0 program");
     // The index describes an application package for another system.
     let mut index: serde_json::Value = serde_json::from_str(&dirs.artifacts.index()).unwrap();
     index["application"] = serde_json::json!({
         "version": "99.0.0",
         "file": "pane-99.0.0.zip",
-        "integrity": integrity_of(b"whatever"),
+        "integrity": artifacts::integrity(b"whatever"),
         "size": 8,
         "target": "some-other-system",
     });
     dirs.artifacts.serve_index(index.to_string());
-    let defaults = vec![DefaultExtension {
-        id: "calculator".into(),
-        title: "Calculator".into(),
-    }];
     let launcher = Launcher::with_packages(Ok(dirs.runtime.clone()), vec![], dirs.packages_dir())
-        .with_defaults(
-            ArtifactSource::local(dirs.artifacts.url()).unwrap(),
-            defaults,
-        )
+        .with_defaults(vec![sample])
         .with_application_update(
             "0.1.0",
             ArtifactSource::local(dirs.artifacts.url()).unwrap(),
@@ -664,13 +685,13 @@ fn an_index_pane_cannot_take_is_explained_and_the_defaults_are_acquired() {
     assert_eq!(launcher.view().status, Status::Idle);
     block_on(launcher.acquire_defaults());
 
-    // The default extensions are still acquired from the same index: one
-    // part of Pane that cannot take an entry never stops the other. The
+    // The default extension is still set up from its repository: one part
+    // of Pane that cannot take an entry never stops the other. The
     // acquisition's own outcome takes the status line; the check's
     // explanation stays in its row.
     assert_eq!(
         launcher.view().status,
-        Status::Result("Set up the Calculator".into())
+        Status::Result("Set up the Rust sample".into())
     );
     assert_eq!(
         launcher
@@ -678,7 +699,7 @@ fn an_index_pane_cannot_take_is_explained_and_the_defaults_are_acquired() {
             .iter()
             .map(|p| p.title())
             .collect::<Vec<_>>(),
-        ["Calculator"]
+        ["Rust sample"]
     );
     // An index whose format version this Pane does not read is explained
     // as a broken source, for the update check as for the defaults.
@@ -752,24 +773,12 @@ fn an_install_keeps_pane_s_data() {
     let dirs = Dirs::new();
     dirs.publish_update("99.0.0", b"the 99.0.0 program");
     dirs.running(b"the 0.1.0 program");
-    // The calculator is acquired first: a default extension, installed in
+    // The sample is set up first: a default extension, installed in
     // Pane's data folder under the install folder, exactly as the Windows
     // install keeps it.
-    let calculator = package_files("calculator");
-    dirs.artifacts.publish(
-        "calculator",
-        &version_of(&calculator),
-        &borrowed(&calculator),
-    );
-    let defaults = vec![DefaultExtension {
-        id: "calculator".into(),
-        title: "Calculator".into(),
-    }];
+    let sample = dirs.sample();
     let launcher = Launcher::with_packages(Ok(dirs.runtime.clone()), vec![], dirs.packages_dir())
-        .with_defaults(
-            ArtifactSource::local(dirs.artifacts.url()).unwrap(),
-            defaults,
-        )
+        .with_defaults(vec![sample])
         .with_application_update(
             "0.1.0",
             ArtifactSource::local(dirs.artifacts.url()).unwrap(),
@@ -782,14 +791,14 @@ fn an_install_keeps_pane_s_data() {
             .iter()
             .map(|p| p.title())
             .collect::<Vec<_>>(),
-        ["Calculator"]
+        ["Rust sample"]
     );
     let data = read_all(&dirs.install.path().join("data"));
     block_on(launcher.check_application_update());
 
     // The user chooses to install; Pane keeps running; its data — the
-    // acquired extension, its record and the cache — is untouched by the
-    // swap, which changes only the program.
+    // installed extension and its record — is untouched by the swap,
+    // which changes only the program.
     select_title(&launcher, "Update Pane to 99.0.0");
     block_on(launcher.activate_selected());
     assert_eq!(
@@ -802,8 +811,8 @@ fn an_install_keeps_pane_s_data() {
     assert_eq!(dirs.top_level(), ["data", "pane", "pane.old"]);
 
     // A Pane starting with the new program still has its extensions: the
-    // calculator is installed, its record and cache where they were, and
-    // nothing of the update is left in the install folder.
+    // sample is installed, its record where it was, and nothing of
+    // the update is left in the install folder.
     drop(launcher);
     let launcher = dirs.launcher("99.0.0");
     assert_eq!(
@@ -812,74 +821,12 @@ fn an_install_keeps_pane_s_data() {
             .iter()
             .map(|p| p.title())
             .collect::<Vec<_>>(),
-        ["Calculator"]
+        ["Rust sample"]
     );
     assert_eq!(dirs.top_level(), ["data", "pane"]);
-    // The calculator still answers.
-    block_on(launcher.set_query("6*7"));
-    assert_eq!(titles(&launcher), ["42"]);
-}
-
-/// The files of the assembled package `package` under
-/// `target/guests/packages`, by their path in the package.
-fn package_files(package: &str) -> Vec<(String, Vec<u8>)> {
-    let folder = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../target/guests")
-        .join("packages")
-        .join(package);
-    assert!(
-        folder.is_dir(),
-        "{} is missing; run `cargo xtask guests`",
-        folder.display()
-    );
-    read_files(&folder, "")
-}
-
-fn read_files(folder: &Path, prefix: &str) -> Vec<(String, Vec<u8>)> {
-    let mut files = Vec::new();
-    let mut entries: Vec<_> = fs::read_dir(folder)
-        .unwrap()
-        .map(|entry| entry.unwrap())
-        .collect();
-    entries.sort_by_key(|entry| entry.file_name());
-    for entry in entries {
-        let path = entry.path();
-        let name = entry.file_name().into_string().unwrap();
-        let in_package = if prefix.is_empty() {
-            name.clone()
-        } else {
-            format!("{prefix}/{name}")
-        };
-        if path.is_dir() {
-            files.extend(read_files(&path, &in_package));
-        } else {
-            files.push((in_package, fs::read(&path).unwrap()));
-        }
-    }
-    files
-}
-
-fn borrowed(files: &[(String, Vec<u8>)]) -> Vec<(&str, Vec<u8>)> {
-    files
-        .iter()
-        .map(|(path, contents)| (path.as_str(), contents.clone()))
-        .collect()
-}
-
-/// The version a package's `pane.json` declares.
-fn version_of(files: &[(String, Vec<u8>)]) -> String {
-    let manifest = files
-        .iter()
-        .find(|(path, _)| path == "pane.json")
-        .map(|(_, contents)| contents.clone())
-        .expect("the package has a pane.json");
-    let manifest: serde_json::Value = serde_json::from_slice(&manifest).unwrap();
-    manifest["version"].as_str().unwrap().to_owned()
-}
-
-/// `sha512-<base64>` of `bytes`, as the index names integrity.
-fn integrity_of(bytes: &[u8]) -> String {
-    artifacts::integrity(bytes)
+    // The sample still answers.
+    block_on(launcher.set_query("reverse 42"));
+    assert_eq!(titles(&launcher), ["24"]);
 }
 
 /// Every file under `folder`, by its path and contents.

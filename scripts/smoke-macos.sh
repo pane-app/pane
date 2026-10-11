@@ -5,8 +5,10 @@
 # Requires Python 3 with Pillow for the screenshot checks. Pane keeps
 # installed packages in <output-dir>/data, not the user's data folder.
 # Settings is driven through its accessibility tree too (see `a11y`). The
-# clipboard phases serve the artifacts the #52 phase's package build leaves
-# in target/dist/artifacts, so they run after it.
+# phases that set the default extensions up serve their repositories
+# (made from the packages `cargo xtask guests` assembles) on 127.0.0.1, so
+# they run after it. The update phases serve the artifacts the #52 phase's
+# package build leaves in target/dist/artifacts, so they run after it too.
 # Usage: scripts/smoke-macos.sh <output-dir> [pane-binary]
 
 set -euo pipefail
@@ -17,6 +19,15 @@ pane=${2:-target/debug/pane}
 mkdir -p "$out"
 rm -rf "$out/data"
 export PANE_DATA_DIR=$out/data
+# A development build takes its default extensions' pins from PANE_DEFAULTS;
+# without it, the committed pins point at the real repositories, which no
+# check may reach. Until a phase names its own pins, the file names none:
+# first setup adds nothing, which the phases that install samples by hand
+# need (the phase that checks first setup points it at the repositories it
+# serves).
+no_default_pins=$out/no-default-pins.json
+printf '[]\n' >"$no_default_pins"
+export PANE_DEFAULTS=$no_default_pins
 { sw_vers; uname -m; } >"$out/system.txt"   # the tested OS version and architecture
 
 printf "%s\n" "theme=dark material=opaque (behavior smoke; not blur evidence)" >>"$out/system.txt"
@@ -507,25 +518,6 @@ check 23-color-click.png 1b5e20 3000   # dark green
 key 53; key 53; sleep 1
 stop_pane
 
-# The calculator, a default extension: an expression typed into root search
-# lists its answer first, selected, and Enter copies it. Pasting the copy
-# over the query and typing on shows exactly the screen typing the whole
-# expression shows, so the clipboard held the answer.
-start_pane --install target/guests/packages/calculator
-key 36; sleep 2   # Install
-type_text '6*7'; sleep 2
-capture 27-answer.png
-check 27-answer.png answer   # the selected answer card
-key 36; sleep 1
-capture 28-copied.png   # "Copied 42 to the clipboard"
-command_key a; type_text '42+1'; sleep 2
-capture 29-typed.png
-command_key a; command_key v; type_text '+1'; sleep 2
-capture 30-pasted.png
-python3 "$(dirname "$0")/check_screenshot.py" --distinct "$out"/{27-answer,28-copied,29-typed}.png
-python3 "$(dirname "$0")/check_screenshot.py" --same "$out/29-typed.png" "$out/30-pasted.png"
-stop_pane
-
 # Operations: install the JavaScript operations sample, then the Rust one,
 # whose command (Call from Rust, selected once installed) opens its form,
 # takes the JavaScript package's identity (local: and the folder's resolved
@@ -659,11 +651,12 @@ grep -q '"greeting-style": "formal"' "$out/data/extensions/settings.json" || { e
 grep -q '"note": "Water the plants"' "$out/data/extensions/content.json" || { echo "note lost"; exit 1; }
 grep -q '"token": "sample-token"' "$out/data/extensions/credentials.json" || { echo "credential lost"; exit 1; }
 
-# Applications, a default extension: an installed application is found by
-# name in root search and Enter opens it. The application is a bundle the
-# smoke adds in ~/Applications of a HOME of its own (for Pane only), whose
-# program writes a marker file, so nothing else is started; Pane still
-# searches the system's applications too.
+# Applications: an installed application is found by name in root search
+# and Enter opens it, through the JavaScript applications sample (the same
+# host import and results the Applications default extension holds). The
+# application is a bundle the smoke adds in ~/Applications of a HOME of its
+# own (for Pane only), whose program writes a marker file, so nothing else
+# is started; Pane still searches the system's applications too.
 apps=$(cd "$out" && pwd)/apps
 rm -rf "$apps"
 bundle="$apps/home/Applications/Pane Smoke App.app"
@@ -680,7 +673,7 @@ cat >"$bundle/Contents/Info.plist" <<EOF
 EOF
 printf '#!/bin/sh\necho launched > "%s"\n' "$apps/launched" >"$bundle/Contents/MacOS/smoke"
 chmod +x "$bundle/Contents/MacOS/smoke"
-HOME=$apps/home "$pane" --install target/guests/packages/applications 2>>"$out/stderr.log" &
+HOME=$apps/home "$pane" --install target/guests/packages/sample-applications-js 2>>"$out/stderr.log" &
 pid=$!
 sleep 8
 focus_pane
@@ -691,33 +684,10 @@ check 44-application.png selected 3000   # the selected application row
 key 36; sleep 3
 focus_pane
 capture 45-opened.png
-check 45-opened.png success   # "Opened Pane Smoke App"
+check 45-opened.png success   # "Opened Launch Pane Smoke App"
 for _ in $(seq 50); do [ -f "$apps/launched" ] && break; sleep 0.2; done
 [ -f "$apps/launched" ] || { echo "the application did not run"; exit 1; }
 python3 "$(dirname "$0")/check_screenshot.py" --distinct "$out"/{44-application,45-opened}.png
-stop_pane
-
-# Quicklinks, a default extension: installed, its Create Quicklink command,
-# found by typing its name, opens its form, which saves a quicklink and
-# returns to root search. After a restart, typing part of its name lists it,
-# selected. Enter would open the default browser, so this smoke stops there
-# (the Linux smoke opens it through a recording handler).
-start_pane --install target/guests/packages/quicklinks
-key 36; sleep 2   # Install
-type_text 'create quicklink'; sleep 2
-key 36; sleep 3   # open Create Quicklink's form
-type_text 'Pane issues'
-key 48
-type_text 'https://example.com/pane-issues'
-key 36; sleep 2
-capture 46-quicklink-saved.png
-check 46-quicklink-saved.png success   # "Created “Pane issues”"
-stop_pane
-start_pane
-type_text 'pane iss'; sleep 2
-capture 47-quicklink-found.png
-check 47-quicklink-found.png selected 3000   # the selected quicklink row
-python3 "$(dirname "$0")/check_screenshot.py" --distinct "$out"/{46-quicklink-saved,47-quicklink-found}.png
 stop_pane
 
 # Uninstall the settings sample, keeping its saved data: Uninstall, the last
@@ -980,6 +950,58 @@ stop_pane
 grep -q '"id": "greeter"' "$PANE_DATA_DIR/extensions/installed.json" || { echo "dependency not recorded"; exit 1; }
 [ "$(grep -c '"dir"' "$PANE_DATA_DIR/extensions/installed.json")" = 2 ] || { echo "not exactly two packages installed"; exit 1; }
 
+# Capabilities, waiting for one (#153, #156): the JavaScript greet provider
+# provides pane-samples:greet@1, which a copy of the TypeScript consumer
+# uses — its pane.json edited to a use of one provider, as it was before
+# the fan-out item made it "all", so its command waits while no provider
+# can serve. With the provider enabled, its item greets through the
+# capability; disabling the provider (its switch in Settings) leaves the
+# command waiting, Enter explains why and offers to enable it again, and
+# enabling it brings the command back with nothing done to the consumer.
+# A data folder of its own, and a second start for the consumer's install.
+export PANE_DATA_DIR=$out/capabilities-data
+rm -rf "$PANE_DATA_DIR"
+consumer=$out/capabilities-consumer
+rm -rf "$consumer"
+cp -r target/guests/packages/sample-capabilities-ts "$consumer"
+python3 - "$consumer/pane.json" <<'PY'
+import json, sys
+path = sys.argv[1]
+with open(path, encoding="utf-8") as file:
+    manifest = json.load(file)
+del manifest["uses"][0]["use"]
+with open(path, "w", encoding="utf-8") as file:
+    json.dump(manifest, file, indent=2)
+PY
+start_pane --install target/guests/packages/sample-greet-js
+key 36; sleep 3   # Install; JavaScript greet provider is selected
+stop_pane
+start_pane --install "$consumer"
+key 36; sleep 3   # Install; Greet from TypeScript is selected
+key 36; sleep 2   # open Greet from TypeScript
+key 36; sleep 1   # Greet through a capability
+capture_until 78-capability-answer.png success 20   # the JavaScript guest's answer, in a toast
+provider="JavaScript greet provider sample"
+open_extension "$provider"
+a11y toggle "$provider"   # disable it: the consumer waits for the capability
+a11y shown "Disabled $provider"
+capture 79-capability-provider-disabled.png
+close_settings
+capture 80-capability-waiting.png
+check 80-capability-waiting.png warning   # Greet from TypeScript: "Needs pane-samples:greet@1: …"
+key 36; sleep 1   # Enter: why Greet from TypeScript cannot run
+capture 81-capability-why.png
+check 81-capability-why.png details   # the reason, and the row that fixes it
+key 36; sleep 2   # Enable JavaScript greet provider sample
+capture 82-capability-back.png
+check 82-capability-back.png hint   # the command is back, listed as any other
+key 36; sleep 2   # open Greet from TypeScript again
+key 36; sleep 1   # Greet through a capability
+capture_until 83-capability-answer-again.png success 20   # the same answer, back by itself
+python3 "$(dirname "$0")/check_screenshot.py" --same "$out"/{78-capability-answer,83-capability-answer-again}.png
+python3 "$(dirname "$0")/check_screenshot.py" --distinct "$out"/{80-capability-waiting,82-capability-back}.png
+stop_pane
+
 # Native helpers: the helper sample's command runs pane-echo, the file its
 # package ships for this system (built by `cargo xtask guests`). Its first
 # item shows the helper's answer, naming the system; its third races the
@@ -1039,10 +1061,11 @@ key 36; sleep 2   # Install; Helper sample is selected
 key 36; sleep 2   # open Helper sample
 key 125; key 36; sleep 2   # Echo after waiting
 helpers_running || { echo "the waiting helper is not running"; exit 1; }
-# The helper can already be running while the compositor still shows the
-# prior idle footer (CI 36957014594). Require a frame showing Running before
-# quitting, within the helper's ten-second wait; never accept the idle frame.
-capture_until 94-helper-before-quit.png progress 5
+# The footer's "Running…" text is gone (#248): waited-for work is the late
+# loading bar under the search field's rule, and a command's list has no
+# rule, so there is nothing to check in the picture — the helper process
+# check above is the state check, and the capture below is for the record.
+capture 94-helper-before-quit.png
 helpers_running || { echo "the helper ended before the quit check"; exit 1; }
 alive=$(find "$PANE_DATA_DIR/extensions/packages" -name pane-echo.alive | head -1)
 [ -n "$alive" ] || { echo "the waiting helper does not beat"; exit 1; }
@@ -1241,6 +1264,53 @@ python3 "$(dirname "$0")/check_screenshot.py" --distinct "$out"/{140-disable-dep
 stop_pane
 [ "$(grep -c '"disabled": true' "$PANE_DATA_DIR/extensions/installed.json")" = 1 ] || { echo "not exactly the dependent left disabled"; exit 1; }
 
+# Choosing which extension provides a capability (#154): the JavaScript
+# and TypeScript greet providers of pane-samples:greet@1 are installed,
+# in that order, with the TypeScript capabilities sample, whose command
+# calls the capability by its name: the first provider installed serves
+# until the user chooses, so its answer names JavaScript. Settings'
+# Extensions page lists the capability with a dropdown of its providers;
+# choosing the TypeScript one there applies to the next call, with nothing
+# reloaded, and the answer names TypeScript. The dropdown is opened by
+# its trigger (named "Provider for <capability>"); its options are found
+# through the search field the popup holds, whose typing narrows them,
+# since the option's name is the provider's title, the same as its entry
+# in the installed list. The choice is Pane's own record, in the data
+# folder. A data folder of its own.
+export PANE_DATA_DIR=$out/capabilities-data
+rm -rf "$PANE_DATA_DIR"
+start_pane --install target/guests/packages/sample-greet-js
+focus_pane
+key 36; sleep 3   # Install
+stop_pane
+start_pane --install target/guests/packages/sample-greet-ts
+focus_pane
+key 36; sleep 3   # Install
+stop_pane
+start_pane --install target/guests/packages/sample-capabilities-ts
+focus_pane
+key 36; sleep 3   # Install; Greet from TypeScript is selected
+key 36; sleep 2   # open Greet from TypeScript
+key 36; sleep 0.5   # Greet through a capability
+capture_until 150-capabilities-default.png success 15   # the JavaScript provider's answer
+stop_pane
+start_pane
+manage_extensions
+a11y press "Provider for pane-samples:greet@1"   # the dropdown; its search field takes the keyboard
+focus_settings
+type_text "TypeScript"; sleep 0.5   # narrows the options to the TypeScript provider
+key 36; sleep 1   # commit it; the trigger shows it
+capture 151-capabilities-chosen.png
+close_settings
+type_text "greet"; sleep 1
+key 36; sleep 2   # open Greet from TypeScript
+key 36; sleep 0.5
+capture_until 152-capabilities-chosen-answer.png success 15   # the TypeScript provider's answer
+python3 "$(dirname "$0")/check_screenshot.py" --distinct "$out"/{150-capabilities-default,152-capabilities-chosen-answer}.png
+stop_pane
+grep -q "sample-greet-ts" "$PANE_DATA_DIR/extensions/capability-choices.json" \
+  || { echo "the chosen provider is not recorded"; exit 1; }
+
 # Recovering from a crash of Pane's extension runtime (#17): the runtime is
 # a thread of Pane, so the smoke has it panic on purpose through a fault
 # file (PANE_TEST_RUNTIME_FAULTS; nothing else sets it). With the settings
@@ -1290,7 +1360,10 @@ key 36; sleep 2   # open Helper sample
 key 125; key 36; sleep 2   # Echo after waiting
 helpers_running || { echo "the waiting helper is not running"; exit 1; }
 capture 201-runtime-helper-waiting.png
-check 201-runtime-helper-waiting.png progress   # "Running…"
+# The footer's "Running…" text is gone (#248): waited-for work is the late
+# loading bar under the search field's rule, and a command's list has no
+# rule, so there is nothing to check in the picture — the helper process
+# check above is the state check.
 alive=$(find "$PANE_DATA_DIR/extensions/packages" -name pane-echo.alive | head -1)
 [ -n "$alive" ] || { echo "the waiting helper does not beat"; exit 1; }
 inject crash
@@ -1543,17 +1616,20 @@ check 266-npm-command-ran.png success   # "Hello from the npm package"
 # #49: the update Pane applies by itself. A 0.2.0 of the sample is
 # published into the registry this phase serves (it reads its folder on
 # request, so publishing is dropping the tarball in), and Pane is stopped
-# and started again: the first check, a second after the start, finds the
-# newer version and replaces the installed copy — unpinned, and nothing
-# of it running, so the safe boundary is at once — saying so in the status
-# line. The new copy's command runs as the old one did.
+# and started again: the first check, a minute after the start (#256),
+# finds the newer version and replaces the installed copy — unpinned, and
+# nothing of it running, so the safe boundary is at once — quietly, its
+# say the record it writes and the new copy's code. The new copy's
+# command runs as the old one did.
 python3 "$(dirname "$0")/npm_publish.py" target/guests/npm/pane-samples-greeter-0.1.0.tgz 0.2.0
 stop_pane
 start_pane
-# The check a second after the start, then the download and the apply:
-# capture until the status line says the update landed, whenever that is,
-# so a slow runner is waited for rather than slept past.
-capture_until 267-npm-updated-automatically.png success 60   # "Updated Greeter from npm to 0.2.0"
+# The check a minute after the start, then the download and the apply:
+# wait for the record to say the update landed, whenever that is, so a
+# slow runner is waited for rather than slept past; the capture shows the
+# quiet window after it landed.
+wait_for "$PANE_DATA_DIR/extensions/installed.json" '"npmVersion": "0.2.0"' present 1800
+capture 267-npm-updated-automatically.png
 key 36; sleep 3   # open Greeter from npm, the new copy
 key 36; sleep 2   # "Say hello"
 capture 268-npm-new-copy-ran.png
@@ -1626,8 +1702,9 @@ python3 "$(dirname "$0")/check_git_record.py" "$PANE_DATA_DIR/extensions/install
 # from its tracked release branch -- `--install` naming the branch, so the
 # copy is tracked, not pinned -- with its command run; the branch then
 # moves to a 0.2.0 (repository_server.py move-sample) while Pane is
-# stopped, and the check a second after the restart replaces the installed
-# copy by itself, the new code running. Nothing reaches the network.
+# stopped, and the check a minute after the restart (#256) replaces the
+# installed copy by itself, quietly, the new code running. Nothing
+# reaches the network.
 export PANE_DATA_DIR=$out/git-update-data
 rm -rf "$PANE_DATA_DIR"
 python3 "$(dirname "$0")/repository_server.py" make-sample target/guests/git/greeter "$out/git-repositories/greeter-tracked"
@@ -1638,11 +1715,15 @@ key 36; sleep 3   # Install; Greeter from Git is selected
 capture 306-git-tracked-installed.png
 check 306-git-tracked-installed.png success   # "Installed Greeter from Git"
 python3 "$(dirname "$0")/repository_server.py" move-sample "$out/git-repositories/greeter-tracked" 0.2.0
+moved=$(python3 "$(dirname "$0")/repository_server.py" commit "$out/git-repositories/greeter-tracked" release)
 stop_pane
 start_pane
-# The check a second after the start, then the fetch and the apply: capture
-# until the status line says the update landed, whenever that is.
-capture_until 307-git-updated-automatically.png success 60   # "Updated Greeter from Git to 0.2.0"
+# The check a minute after the start, then the fetch and the apply: wait
+# for the record to name the moved branch's commit, whenever that is (the
+# update is quiet, its say the record and the new copy's code); the
+# capture shows the quiet window after it landed.
+wait_for "$PANE_DATA_DIR/extensions/installed.json" "$moved" present 1800
+capture 307-git-updated-automatically.png
 key 36; sleep 3   # open Greeter from Git, the new copy
 key 36; sleep 2   # "Say hello"
 capture 308-git-new-copy-ran.png
@@ -1650,15 +1731,17 @@ check 308-git-new-copy-ran.png success   # "Hello from the Git repository"
 python3 "$(dirname "$0")/check_screenshot.py" --distinct "$out"/{305-git-tracked-preview,306-git-tracked-installed,307-git-updated-automatically,308-git-new-copy-ran}.png
 stop_pane
 kill "$repository_server_pid"; wait "$repository_server_pid" 2>/dev/null || true; repository_server_pid=
-moved=$(python3 "$(dirname "$0")/repository_server.py" commit "$out/git-repositories/greeter-tracked" release)
+# The record was waited for above, before the new copy ran; the checks
+# name it in full.
 python3 "$(dirname "$0")/check_git_record.py" --ref refs/heads/release --unpinned "$PANE_DATA_DIR/extensions/installed.json" "$moved" || { echo "the tracked Git package was not recorded at its moved branch"; exit 1; }
 [ -z "$(ls -A "$PANE_DATA_DIR/extensions/downloads" 2>/dev/null)" ] || { echo "a Git download was left"; exit 1; }
 
-# File search (#29, #175): Files, a default extension (its data folder is
-# this phase's own), answers from Pane's file index, which covers the home
+# File search (#29, #175): the Rust files sample (the same contract the
+# Files default extension holds; its data folder is this phase's own),
+# answers from Pane's file index, which covers the home
 # folder; the smoke names a fixture folder for it to cover instead in
 # PANE_TEST_FILE_INDEX_HOME (a debug build's hook, which also keeps the index
-# in the data folder). Installing Files starts the index, and showing the
+# in the data folder). Installing it starts the index, and showing the
 # window lets its first walk start. The fixture folder's
 # path has spaces, and a file in it has non-ASCII letters too; typing "plan"
 # lists that file under "Files", selected, and Enter hands it to Pane's handler for files,
@@ -1683,10 +1766,10 @@ printf '#!/bin/sh\ntouch "%s/runner-ran"\n' "$files_fixture" >"$files_folder/not
 chmod +x "$files_folder/notes/runner.sh"
 rm -f "$out/opened-file.txt"
 export PANE_TEST_FILE_INDEX_HOME=$files_folder PANE_TEST_OPEN_FILE_LOG=$out/opened-file.txt
-start_pane --install target/guests/packages/files
+start_pane --install target/guests/packages/sample-files
 key 36; sleep 3   # Install; the index walks the fixture
 capture 220-files-installed.png
-check 220-files-installed.png success   # "Installed Files"
+check 220-files-installed.png success   # "Installed Rust files sample"
 # The install lands on a blank root search, where Escape hides the
 # launcher (release run 37698693722's Windows frame 221 was the desktop):
 # the return to root key keeps it.
@@ -1796,31 +1879,56 @@ python3 "$(dirname "$0")/check_screenshot.py" --distinct "$out"/{161-root-typed,
 stop_pane
 stop_service
 
-# Installing Pane and acquiring its calculator (#52): the package
-# `cargo xtask package-macos --dev` builds is installed on a clean machine
-# — a fresh home folder, a PATH that holds nothing at all, so no Rust,
-# Node, npm, Git or compiler can be reached — and Pane, started from the
-# Pane.app bundle the install script made in that home's ~/Applications,
-# acquires its default extensions (the five of #60; no sample is one,
-# #162) from the artifact source this smoke serves on 127.0.0.1
-# (scripts/artifact_server.py, the payloads `cargo xtask package-macos`
-# assembled; nothing reaches the network or Pane's published downloads).
-# The calculator answers "6*7" with 42, with no developer tool anywhere.
-# The package is the development profile, because only a
-# development build takes its artifact source from PANE_ARTIFACTS; a
-# release build uses Pane's published downloads, which no controlled
-# source may replace. The binaries are built on this machine, so they
-# carry no Gatekeeper quarantine mark (nothing is signed). (The program
-# files are removed again at the end of the phase: the uploaded evidence
-# is the screenshots and records, not the program.)
+# Installing Pane and setting its default extensions up (#52, #278): the
+# package `cargo xtask package-macos --dev` builds is installed on a clean
+# machine — a fresh home folder, a PATH that holds nothing at all, so no
+# Rust, Node, npm, Git or compiler can be reached — and Pane, started from
+# the Pane.app bundle the install script made in that home's ~/Applications,
+# fetches its default extensions (the five of #60; no sample is one,
+# #162) from the commits this release pins: their repositories, cloned
+# at those commits from their real addresses on GitHub (the smoke's own
+# setup on the runner) and served on
+# 127.0.0.1 over Git's smart HTTP protocol
+# (scripts/repository_server.py; the Pane under test reaches no network
+# address and no real Git host), named by the pins file the development
+# build reads through
+# PANE_DEFAULTS. The clones hold the release revisions' built components,
+# so the first setup installs exactly what a release installs. The
+# calculator answers "6*7" with 42, with no developer
+# tool anywhere. The package is the development profile, because only a
+# development build takes its pins from PANE_DEFAULTS; a release build
+# uses the committed pins, which no controlled source may replace. The
+# binaries are built on this machine, so they carry no Gatekeeper
+# quarantine mark (nothing is signed). (The program files are removed
+# again at the end of the phase: the uploaded evidence is the
+# screenshots and records, not the program.)
 artifact_server_pid=
+defaults_server_pid=
 # The whole smoke's cleanup in one place: this supersedes the traps the
 # earlier phases set (each had replaced the one before), keeping every
 # server's arm so nothing is lost whatever order the phases run in.
-trap '[ -n "$pid" ] && kill "$pid" 2>/dev/null; [ -n "$npm_registry_pid" ] && kill "$npm_registry_pid" 2>/dev/null; [ -n "$repository_server_pid" ] && kill "$repository_server_pid" 2>/dev/null; [ -n "$service_pid" ] && kill "$service_pid" 2>/dev/null; [ -n "$artifact_server_pid" ] && kill "$artifact_server_pid" 2>/dev/null || true' EXIT
+trap '[ -n "$pid" ] && kill "$pid" 2>/dev/null; [ -n "$npm_registry_pid" ] && kill "$npm_registry_pid" 2>/dev/null; [ -n "$repository_server_pid" ] && kill "$repository_server_pid" 2>/dev/null; [ -n "$defaults_server_pid" ] && kill "$defaults_server_pid" 2>/dev/null; [ -n "$service_pid" ] && kill "$service_pid" 2>/dev/null; [ -n "$artifact_server_pid" ] && kill "$artifact_server_pid" 2>/dev/null || true' EXIT
 cargo xtask package-macos --dev >/dev/null
 package=$(ls target/dist/pane-*-macos-*-dev.zip | head -1)
 [ -n "$package" ] || { echo "the package was not built"; exit 1; }
+# The default extensions' repositories, cloned at the commits the
+# committed pins name and served from this computer for the rest of the
+# smoke: the phases that check first setup point PANE_DEFAULTS at the
+# pins naming them.
+default_repositories=$PWD/$out/default-repositories
+default_pins=$PWD/$out/default-pins.json
+rm -rf "$default_repositories"
+mkdir -p "$default_repositories"
+rm -f "$out/default-repository-server.port"
+python3 "$(dirname "$0")/repository_server.py" serve "$default_repositories" \
+  "$out/default-repository-server.port" 2>>"$out/default-repository-server.log" &
+defaults_server_pid=$!
+for _ in $(seq 600); do [ -s "$out/default-repository-server.port" ] && break; kill -0 "$defaults_server_pid" 2>/dev/null || break; sleep 0.1; done
+[ -s "$out/default-repository-server.port" ] \
+  || { echo "the default extensions' repository server did not start (see $out/default-repository-server.log)"; exit 1; }
+python3 "$(dirname "$0")/repository_server.py" clone-defaults crates/pane/defaults.json \
+  "$default_repositories" "$default_pins" \
+  "http://127.0.0.1:$(cat "$out/default-repository-server.port")/"
 home=$out/clean-home
 unpack=$out/package-unpacked
 rm -rf "$home" "$unpack"
@@ -1844,6 +1952,7 @@ start_installed() {
   env -i HOME="$home" PATH="$clean_bin" \
     PANE_THEME=dark PANE_MATERIAL=opaque \
     PANE_ARTIFACTS="http://127.0.0.1:$(cat "$out/artifact-server.port")/" \
+    PANE_DEFAULTS="$default_pins" \
     "$home/Applications/Pane.app/Contents/MacOS/pane" "$@" 2>>"$out/installed-stderr.log" &
   pid=$!
   sleep 8
@@ -1852,7 +1961,7 @@ start_installed() {
 start_installed
 # Pane's own data in the clean home (its path holds a space, so it is quoted).
 installed=$home/Library/Application\ Support/Pane/extensions
-# Generous: a slow runner may take a while to check both payloads'
+# Generous: a slow runner may take a while to check the five revisions'
 # components (300 s each). A wait that fails records the screen and the
 # clean home's files — the artifact upload skips hidden folders, so the
 # records are copied out where it can see them.
@@ -1860,10 +1969,10 @@ record_setup_state() {
   rm -rf "$out/clean-home-records"
   mkdir -p "$out/clean-home-records"
   cp -f "$installed/installed.json" "$out/clean-home-records/" 2>/dev/null || true
-  cp -r "$installed/acquired" "$out/clean-home-records/" 2>/dev/null || true
   cp -r "$installed/downloads" "$out/clean-home-records/" 2>/dev/null || true
   cp -f "$out/installed-stderr.log" "$out/clean-home-records/" 2>/dev/null || true
   cp -f "$out/artifact-server.log" "$out/clean-home-records/" 2>/dev/null || true
+  cp -f "$out/default-repository-server.log" "$out/clean-home-records/" 2>/dev/null || true
 }
 record_setup_problem() {
   capture 499-setup-problem.png
@@ -1880,7 +1989,7 @@ wait_recorded() {
 }
 kill -0 "$pid" 2>/dev/null || { echo "the installed Pane exited during setup"; exit 1; }
 # The default set (#60): all five, in every build; no sample is
-# acquired (#162).
+# set up (#162).
 for default_ in calculator applications quicklinks files clipboard-history; do
   wait_recorded "\"default\": \"$default_\""
 done
@@ -1894,12 +2003,12 @@ key 36; sleep 1
 capture 502-calculator-copied.png
 check 502-calculator-copied.png success   # "Copied 42 to the clipboard"
 if grep -q '"default": "helper-sample"' "$installed/installed.json"; then
-  echo "a sample was acquired as a default extension"; exit 1
+  echo "a sample was set up as a default extension"; exit 1
 fi
-# The payload the calculator acquired is kept, exactly its one current
-# entry. macOS's wc pads its counts with spaces, which fails a string
-# comparison, so the padding is trimmed.
-[ "$(ls "$installed/acquired/calculator" | wc -l | tr -d ' ')" = 1 ] || { echo "the calculator's payload is not cached"; exit 1; }
+# Each default's record keeps the Git source it was fetched from: the
+# repository, the pin's release tag, its commit and that it is pinned.
+python3 "$(dirname "$0")/check_git_record.py" --defaults "$default_pins" "$installed/installed.json" \
+  || { echo "a default's record does not keep its Git source"; exit 1; }
 [ -z "$(ls -A "$installed/downloads" 2>/dev/null)" ] || { echo "downloads were left behind"; exit 1; }
 python3 "$(dirname "$0")/check_screenshot.py" --distinct "$out"/{500-installed-root,501-calculator-answer}.png
 stop_pane
@@ -1912,9 +2021,9 @@ rm -f "$home/Applications/Pane.app/Contents/MacOS/pane" "$unpack/pane/pane"
 # Clipboard history (#35, #37, #166, #167): Pane's own Clipboard History
 # records what is copied from the first start, with nothing to turn on.
 # Only the registered default extension does (a copy installed from its
-# folder starts off and shows the generic list), so this phase acquires
-# the default set from the artifact source the #52 phase built, served on
-# 127.0.0.1 as there, with the smoke's own build; Files' index covers an
+# folder starts off and shows the generic list), so this phase sets the
+# default set up from the pinned repositories the #52 phase serves, with
+# the smoke's own build; Files' index covers an
 # empty folder of the smoke's (PANE_TEST_FILE_INDEX_HOME), not the
 # runner's home. The text this smoke copies is kept; nothing is kept while
 # recording is paused (Pause Recording and Resume Recording, in the view's
@@ -1940,16 +2049,9 @@ export PANE_DATA_DIR=$out/clipboard-data
 rm -rf "$PANE_DATA_DIR" "$out/clipboard-home"
 mkdir -p "$out/clipboard-home"
 export PANE_TEST_FILE_INDEX_HOME=$(cd "$out/clipboard-home" && pwd)
+export PANE_DEFAULTS=$default_pins
 extensions=$PANE_DATA_DIR/extensions
 history=$extensions/clipboard-history.json
-rm -f "$out/clipboard-artifact-server.port"
-python3 "$(dirname "$0")/artifact_server.py" target/dist/artifacts "$out/clipboard-artifact-server.port" \
-  2>>"$out/clipboard-artifact-server.log" &
-artifact_server_pid=$!
-for _ in $(seq 600); do [ -s "$out/clipboard-artifact-server.port" ] && break; kill -0 "$artifact_server_pid" 2>/dev/null || break; sleep 0.1; done
-[ -s "$out/clipboard-artifact-server.port" ] \
-  || { echo "the clipboard phase's artifact source did not start (see $out/clipboard-artifact-server.log)"; exit 1; }
-export PANE_ARTIFACTS="http://127.0.0.1:$(cat "$out/clipboard-artifact-server.port")/"
 # The kept texts, newest first, joined by commas.
 kept_texts() { python3 "$(dirname "$0")/clipboard_history.py" texts "$extensions"; }
 # The newest kept text.
@@ -1960,8 +2062,12 @@ not_kept() { sleep 2; if kept_one "$1"; then echo "$1 was kept"; exit 1; fi; }
 # Copies `text`: AppleScript puts it on the pasteboard, as a program
 # copying text would (the watcher notices within its poll).
 copy() { osascript -e "set the clipboard to \"$1\""; sleep 1; }
-# Copies the file at path $1, as Finder's Copy does (a file URL).
-copy_file() { osascript -e "set the clipboard to (POSIX file \"$1\")"; sleep 1; }
+# Copies the file at path $1, as Finder's Copy does (a file URL). The copy's
+# process stays alive past the watcher's file-ready wait (FILE_READY_WAIT, 2 s):
+# the pasteboard serves a declared file URL's data from its living owner, and an
+# osascript that exits at once can leave the type declared but its data never
+# readable (#231).
+copy_file() { osascript -e "set the clipboard to (POSIX file \"$1\")" -e "delay 2"; sleep 1; }
 # Opens Pane's Clipboard History from wherever the smoke is: its split
 # view, the field ("Type to filter entries…") holding the keyboard.
 open_history() {
@@ -1978,7 +2084,7 @@ history_action() {
   key 36; sleep 1
 }
 start_pane
-# The default set (#60), acquired at this first start.
+# The default set (#60), set up at this first start.
 for default_ in calculator applications quicklinks files clipboard-history; do
   wait_for "$extensions/installed.json" "\"default\": \"$default_\"" present 1200
 done
@@ -2111,8 +2217,8 @@ python3 "$(dirname "$0")/check_screenshot.py" --distinct "$out"/{400-clipboard-e
 stop_pane
 [ "$(kept_texts)" = pane-smoke-after-clear ] || { echo "kept: $(kept_texts)"; exit 1; }
 [ "$(field retentionSeconds)" = 3600 ] || { echo "retention: $(field retentionSeconds)"; exit 1; }
-kill "$artifact_server_pid"; wait "$artifact_server_pid" 2>/dev/null || true; artifact_server_pid=
-unset PANE_ARTIFACTS PANE_TEST_FILE_INDEX_HOME
+unset PANE_TEST_FILE_INDEX_HOME
+export PANE_DEFAULTS=$no_default_pins
 
 # Installing a Pane application update by the user's choice (#55, the
 # macOS half of #54): a second package is built with --package-version
@@ -2133,7 +2239,7 @@ unset PANE_ARTIFACTS PANE_TEST_FILE_INDEX_HOME
 # beside it in Contents/MacOS, removed on a later start — so the new
 # version is used the next time Pane starts (Pane never restarts
 # itself). The new Pane, started again, reports 99.0.0, with the old
-# version's data (the calculator acquired at first setup) and the
+# version's data (the calculator set up at first setup) and the
 # extension the user disabled kept, and with nothing of the update left
 # in the bundle.
 update_server_pid=
@@ -2172,6 +2278,7 @@ start_updated() {
   env -i HOME="$update_home" PATH="$update_clean_bin" \
     PANE_THEME=dark PANE_MATERIAL=opaque \
     PANE_ARTIFACTS="http://127.0.0.1:$(cat "$out/update-artifact-server.port")/" \
+    PANE_DEFAULTS="$default_pins" \
     "$binary" "$@" 2>>"$out/update-stderr.log" &
   pid=$!
   sleep 8
@@ -2200,14 +2307,15 @@ start_updated
 kill -0 "$pid" 2>/dev/null || { echo "the installed Pane exited during setup"; exit 1; }
 update_recorded '"default": "calculator"'
 update_recorded '"default": "clipboard-history"'
-# The check has read the index (its request is the third, after the two
-# acquisitions): the offer is in root search. The status line tells what
+# The check has read the index (first setup fetches the pinned commits
+# from the repositories, so no request reaches the artifact source for
+# them): the offer is in root search. The status line tells what
 # it found; nothing has been downloaded.
 for _ in $(seq 100); do
-  [ "$(grep -c pane-defaults.json "$out/update-artifact-server.log")" -ge 3 ] && break
+  [ "$(grep -c pane-defaults.json "$out/update-artifact-server.log")" -ge 1 ] && break
   sleep 0.1
 done
-[ "$(grep -c pane-defaults.json "$out/update-artifact-server.log")" -ge 3 ] \
+[ "$(grep -c pane-defaults.json "$out/update-artifact-server.log")" -ge 1 ] \
   || { echo "Pane never checked for its own update"; exit 1; }
 sleep 2
 capture 600-notification.png

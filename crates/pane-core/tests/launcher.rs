@@ -2,6 +2,7 @@
 //! components built by `cargo xtask guests`.
 
 use std::path::PathBuf;
+use std::time::{Duration, Instant};
 
 use futures::executor::block_on;
 use std::future::Future;
@@ -29,6 +30,9 @@ fn command(id: &str, component: PathBuf) -> CommandRegistration {
         subtitle: None,
         component,
         takes_query: false,
+        keywords: Vec::new(),
+        when: pane_core::CommandWhen::Always,
+        matches: pane_core::CommandMatches::Title,
     }
 }
 
@@ -368,7 +372,7 @@ fn a_view_that_opens_after_the_user_left_is_closed_again() {
     launcher.select(index);
 
     let opening = launcher.activate_selected();
-    assert_eq!(launcher.view().status, Status::Running);
+    assert!(matches!(launcher.view().status, Status::Running { .. }));
     launcher.back();
     block_on(opening);
 
@@ -532,6 +536,29 @@ fn a_component_of_an_older_api_shape_is_refused_when_it_loads() {
         "{message}"
     );
     assert!(message.contains("it has no function `render`"), "{message}");
+}
+
+#[test]
+fn a_view_the_guest_refuses_to_open_is_an_error() {
+    let launcher = launcher(vec![command("faulty", guest("faulty"))]);
+    open_faulty_item(&launcher, "no-view");
+
+    block_on(launcher.activate_selected());
+
+    assert_eq!(launcher.view().screen, Screen::Command);
+    // The guest's refusal is shown once its answer reaches the launcher.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !matches!(launcher.view().status, Status::Error(_)) {
+        assert!(
+            Instant::now() < deadline,
+            "no error was shown for the refusal"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert_eq!(
+        error(&launcher),
+        "The extension reported an error: the guest refused the view"
+    );
 }
 
 #[test]

@@ -1,6 +1,6 @@
 //! The live application list through the launcher's public interface
-//! (ADR 0038), with the real Applications guest
-//! (`target/guests/packages/applications`) and the host's list
+//! (ADR 0038), with the JavaScript applications sample
+//! (`target/guests/packages/sample-applications-js`) and the host's list
 //! ([`Cached`]) over a fake system whose sources and watcher the tests
 //! drive, on the launcher's manual clock: an application installed while
 //! root search is on screen appears without leaving it; one uninstalled
@@ -20,7 +20,9 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use futures::executor::block_on;
-use pane_core::applications::{Cached, Change, Changes, Discovery, GRACE, Key, Source, Watch};
+use pane_core::applications::{
+    Application, Applications, Cached, Change, Changes, Discovery, GRACE, Key, Source, Watch,
+};
 use pane_core::clipboard::ManualClock;
 use pane_core::{
     Launcher, PackageIdentity, PinTarget, ResultAction, Runtime, Screen, SlotChange, Status,
@@ -45,7 +47,7 @@ fn built(path: &str) -> PathBuf {
 }
 
 fn applications() -> PathBuf {
-    built("packages/applications")
+    built("packages/sample-applications-js")
 }
 
 fn identity() -> PackageIdentity {
@@ -111,6 +113,45 @@ fn shortcut(name: &str) -> Source {
     )
 }
 
+/// The host's list of applications, counting each ask of it: the
+/// Applications provider calls `installed` once for each ask of its
+/// results (#202).
+struct Counted {
+    applications: Arc<dyn Applications>,
+    asks: Arc<AtomicUsize>,
+}
+
+impl Applications for Counted {
+    fn installed(&self) -> Result<Vec<Application>, String> {
+        self.asks.fetch_add(1, Ordering::SeqCst);
+        self.applications.installed()
+    }
+
+    fn open(&self, id: &str) -> Result<(), String> {
+        self.applications.open(id)
+    }
+
+    fn source(&self, id: &str) -> Option<String> {
+        self.applications.source(id)
+    }
+
+    fn current_id(&self, id: &str) -> Option<String> {
+        self.applications.current_id(id)
+    }
+
+    fn on_change(&self, changed: Arc<dyn Fn() + Send + Sync>) {
+        self.applications.on_change(changed);
+    }
+
+    fn release(&self) {
+        self.applications.release();
+    }
+
+    fn icon_source(&self, id: &str) -> Option<String> {
+        self.applications.icon_source(id)
+    }
+}
+
 impl Discovery for FakeSystem {
     fn sources(&self) -> Result<Vec<Source>, String> {
         self.scans.fetch_add(1, Ordering::SeqCst);
@@ -139,16 +180,24 @@ struct Pane {
 }
 
 impl Pane {
-    /// A launcher with the Applications package installed, whose host
+    /// A launcher with the applications sample installed, whose host
     /// lists `system`'s applications, at root search.
     fn new(system: &Arc<FakeSystem>) -> Pane {
+        let clock = ManualClock::at(1_000_000);
+        let list = Arc::new(
+            Cached::new(system.clone(), Duration::from_secs(3600)).with_clock(clock.clone()),
+        );
+        Pane::with_list(clock, list)
+    }
+
+    /// A launcher as [`Pane::new`], whose host's list of applications is
+    /// `list`: a test that counts the asks of the Applications provider
+    /// wraps one around the host's list (#202).
+    fn with_list(clock: Arc<ManualClock>, list: Arc<dyn Applications>) -> Pane {
         let data = tempfile::tempdir().unwrap();
         let cache = tempfile::tempdir().unwrap();
-        let clock = ManualClock::at(1_000_000);
         let runtime = Runtime::start_with_cache(cache.path().to_path_buf()).unwrap();
-        runtime.set_applications(Arc::new(
-            Cached::new(system.clone(), Duration::from_secs(3600)).with_clock(clock.clone()),
-        ));
+        runtime.set_applications(list);
         let launcher = Launcher::with_packages(Ok(runtime), vec![], data.path().join("extensions"))
             .with_quick_slots(data.path())
             .with_clock(clock.clone());
@@ -166,11 +215,12 @@ impl Pane {
     }
 
     /// The applications root search lists now, in order: the rows whose
-    /// title starts with "Zeta", as every application of these tests does.
+    /// title starts with "Launch Zeta", as every application of these tests
+    /// does through the sample, which titles its results "Launch <name>".
     fn listed(&self) -> Vec<String> {
         titles(&self.launcher)
             .into_iter()
-            .filter(|title| title.starts_with("Zeta"))
+            .filter(|title| title.starts_with("Launch Zeta"))
             .collect()
     }
 
@@ -254,7 +304,7 @@ fn nothing_is_watched_until_root_search_is_first_used() {
     assert_eq!((system.scans(), system.watching()), (0, 0));
 
     pane.search("zeta");
-    assert_eq!(pane.listed(), ["Zeta Editor"]);
+    assert_eq!(pane.listed(), ["Launch Zeta Editor"]);
     wait_until("watching", || system.watching() == 1);
 }
 
@@ -263,13 +313,13 @@ fn an_application_installed_while_root_search_shows_appears_without_leaving_it()
     let system = FakeSystem::with(&["Zeta Editor"]);
     let pane = Pane::new(&system);
     pane.search("zeta");
-    assert_eq!(pane.listed(), ["Zeta Editor"]);
+    assert_eq!(pane.listed(), ["Launch Zeta Editor"]);
     wait_until("watching", || system.watching() == 1);
 
     system.set(&["Zeta Editor", "Zeta Mail"]);
     system.report(Change::Changed);
 
-    pane.wait_for(&["Zeta Editor", "Zeta Mail"], ABOUT_A_SECOND);
+    pane.wait_for(&["Launch Zeta Editor", "Launch Zeta Mail"], ABOUT_A_SECOND);
     pane.still_searching("zeta");
 }
 
@@ -284,7 +334,10 @@ fn a_packaged_app_installed_appears_as_quickly_as_a_program() {
     system.set(&["Zeta Editor", "Zeta Calculator"]);
     system.report(Change::Completing);
 
-    pane.wait_for(&["Zeta Calculator", "Zeta Editor"], ABOUT_A_SECOND);
+    pane.wait_for(
+        &["Launch Zeta Calculator", "Launch Zeta Editor"],
+        ABOUT_A_SECOND,
+    );
     pane.still_searching("zeta");
 }
 
@@ -299,10 +352,10 @@ fn an_uninstalled_application_leaves_root_search_after_its_grace() {
     system.report(Change::Changed);
     wait_until("the rescan", || system.scans() == 2);
     settle();
-    assert_eq!(pane.sorted(), ["Zeta Editor", "Zeta Mail"]);
+    assert_eq!(pane.sorted(), ["Launch Zeta Editor", "Launch Zeta Mail"]);
 
     pane.clock.advance(GRACE);
-    pane.wait_for(&["Zeta Editor"], ABOUT_A_SECOND);
+    pane.wait_for(&["Launch Zeta Editor"], ABOUT_A_SECOND);
     pane.still_searching("zeta");
 }
 
@@ -323,7 +376,7 @@ fn an_application_reinstalled_by_its_update_never_leaves_root_search() {
 
     pane.clock.advance(GRACE * 4);
     settle();
-    assert_eq!(pane.sorted(), ["Zeta Editor", "Zeta Mail"]);
+    assert_eq!(pane.sorted(), ["Launch Zeta Editor", "Launch Zeta Mail"]);
 }
 
 #[test]
@@ -331,7 +384,7 @@ fn a_renamed_shortcut_changes_the_title_and_keeps_the_pin() {
     let system = FakeSystem::with(&["Zeta Editor"]);
     let pane = Pane::new(&system);
     pane.search("zeta");
-    select_title(&pane.launcher, "Zeta Editor");
+    select_title(&pane.launcher, "Launch Zeta Editor");
     let index = pane.launcher.view().selected.unwrap();
     let target = pane.launcher.view().rows[index].id.clone();
     let (change, recorded) = pane.launcher.change_quick_slots(&target, ResultAction::Pin);
@@ -348,9 +401,9 @@ fn a_renamed_shortcut_changes_the_title_and_keeps_the_pin() {
     *system.sources.lock().unwrap() = vec![renamed.clone()];
     system.report(Change::Changed);
 
-    pane.wait_for(&["Zeta Code"], ABOUT_A_SECOND);
+    pane.wait_for(&["Launch Zeta Code"], ABOUT_A_SECOND);
     let slots = pane.launcher.quick_slots();
-    assert_eq!(slots[0].title, "Zeta Code");
+    assert_eq!(slots[0].title, "Launch Zeta Code");
     assert!(slots[0].ready(), "{slots:?}");
     match &slots[0].target {
         PinTarget::Indexed { result, .. } => assert_eq!(*result, renamed.key.id()),
@@ -370,13 +423,20 @@ fn a_change_the_watcher_missed_is_reconciled() {
     // The watcher's buffer overflowed: it says changes were lost.
     system.set(&["Zeta Editor", "Zeta Mail"]);
     system.report(Change::Lost);
-    pane.wait_for(&["Zeta Editor", "Zeta Mail"], ABOUT_A_SECOND);
+    pane.wait_for(&["Launch Zeta Editor", "Launch Zeta Mail"], ABOUT_A_SECOND);
 
     // Nothing reported at all: the periodic rescan (an hour here, by the
     // launcher's clock) finds it.
     system.set(&["Zeta Editor", "Zeta Mail", "Zeta Notes"]);
     pane.clock.advance(Duration::from_secs(3600));
-    pane.wait_for(&["Zeta Editor", "Zeta Mail", "Zeta Notes"], ABOUT_A_SECOND);
+    pane.wait_for(
+        &[
+            "Launch Zeta Editor",
+            "Launch Zeta Mail",
+            "Launch Zeta Notes",
+        ],
+        ABOUT_A_SECOND,
+    );
 }
 
 #[test]
@@ -388,19 +448,25 @@ fn the_selected_row_stays_on_its_application_when_the_list_changes() {
     let first = pane.selected().unwrap();
     assert_eq!(pane.launcher.view().selected, Some(0));
 
-    // An application whose title is exactly the query ranks first.
+    // An application whose title is exactly the query ranks first (the
+    // sample titles its results "Launch <name>", so the query names that).
+    pane.search("launch zeta");
     system.set(&["Zeta Editor", "Zeta Mail", "Zeta"]);
     system.report(Change::Changed);
-    pane.wait_for(&["Zeta", "Zeta Editor", "Zeta Mail"], ABOUT_A_SECOND);
-    assert_eq!(pane.listed()[0], "Zeta");
+    pane.wait_for(
+        &["Launch Zeta", "Launch Zeta Editor", "Launch Zeta Mail"],
+        ABOUT_A_SECOND,
+    );
+    assert_eq!(pane.listed()[0], "Launch Zeta");
 
     assert_eq!(pane.selected(), Some(first), "the selection did not jump");
 
     // The selected application leaves: the selection stays where it was.
     let position = pane.launcher.view().selected.unwrap();
+    let selected = pane.selected().expect("a row is selected");
     let remaining: Vec<&str> = ["Zeta Editor", "Zeta Mail", "Zeta"]
         .into_iter()
-        .filter(|name| pane.selected().as_deref() != Some(*name))
+        .filter(|name| selected != format!("Launch {name}"))
         .collect();
     system.set(&remaining);
     system.report(Change::Changed);
@@ -425,7 +491,46 @@ fn a_change_while_the_query_is_blank_is_listed_by_the_next_query() {
 
     // The same visit of root search: the results are asked for again.
     pane.search("zeta");
-    assert_eq!(pane.sorted(), ["Zeta Editor", "Zeta Mail"]);
+    assert_eq!(pane.sorted(), ["Launch Zeta Editor", "Launch Zeta Mail"]);
+}
+
+#[test]
+fn a_show_of_root_search_that_changed_nothing_asks_applications_for_nothing() {
+    let system = FakeSystem::with(&["Zeta Editor"]);
+    let clock = ManualClock::at(1_000_000);
+    let asks = Arc::new(AtomicUsize::new(0));
+    let list = Arc::new(Counted {
+        applications: Arc::new(
+            Cached::new(system.clone(), Duration::from_secs(3600)).with_clock(clock.clone()),
+        ),
+        asks: asks.clone(),
+    });
+    let pane = Pane::with_list(clock, list);
+
+    // The first query that is not blank asks the provider for its
+    // results, which call the host's list once.
+    pane.search("zeta");
+    assert_eq!(pane.listed(), ["Zeta Editor"]);
+    wait_until("watching", || system.watching() == 1);
+    let asked = asks.load(Ordering::SeqCst);
+    assert!(asked >= 1, "the provider was asked for its results");
+
+    // Showing root search again and again — the reopening that pops to
+    // root — with no application change: the provider is not asked again
+    // (#202); the results kept are listed as they were.
+    for _ in 0..3 {
+        pane.launcher.show_root_search();
+        pane.search("zeta");
+        assert_eq!(pane.listed(), ["Zeta Editor"]);
+    }
+    assert_eq!(asks.load(Ordering::SeqCst), asked);
+
+    // An application change does ask it again, at once.
+    system.set(&["Zeta Editor", "Zeta Mail"]);
+    system.report(Change::Changed);
+    pane.wait_for(&["Zeta Editor", "Zeta Mail"], ABOUT_A_SECOND);
+    assert!(asks.load(Ordering::SeqCst) > asked);
+    pane.still_searching("zeta");
 }
 
 #[test]
@@ -446,11 +551,13 @@ fn disabling_applications_stops_every_watcher_and_drops_the_list() {
     assert_eq!(system.scans(), scans);
 
     // Enabled again: the next query looks, and watches, again ("zeta"
-    // again would be the same query, which searches nothing).
+    // again would be the same query, which searches nothing). The query
+    // names the one application it should list: through the sample every
+    // row's subtitle holds "sample", which a one-letter query would match.
     system.set(&["Zeta Editor", "Zeta Mail"]);
     block_on(pane.launcher.set_enabled(&identity(), true));
-    pane.search("zeta m");
-    assert_eq!(pane.listed(), ["Zeta Mail"]);
+    pane.search("zeta mai");
+    assert_eq!(pane.listed(), ["Launch Zeta Mail"]);
     assert_eq!(system.scans(), scans + 1);
     wait_until("watching again", || system.watching() == 1);
 }

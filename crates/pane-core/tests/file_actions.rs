@@ -1,7 +1,8 @@
 //! Search Files and the file actions Pane performs itself (#150), over
 //! Pane's file index (#175), through the launcher's public interface, with
-//! the real Files default extension and the Rust, JavaScript and TypeScript
-//! files samples, which give the same answers: the command owns the
+//! the Rust, JavaScript and TypeScript files samples, which give the same
+//! answers the Files default extension does (its own sources live in their
+//! repository, #285): the command owns the
 //! launcher's search field and lists what the index finds as the user
 //! types; a document's actions are Open (Enter), Show in Explorer
 //! (Ctrl+Enter), Open With…, Copy Path, Copy Name, Copy File and Move to Recycle Bin
@@ -42,12 +43,15 @@ mod artifacts;
 mod feedback;
 #[path = "support/rows.rs"]
 mod rows;
+#[path = "support/settle.rs"]
+mod settle;
 #[path = "support/system.rs"]
 mod system;
 
 use artifacts::Artifacts;
 use feedback::RecordingWindow;
 use rows::{select_title, titles};
+use settle::wait_for_merges;
 use system::{Done, RecordingSystem};
 
 /// The folder `cargo xtask guests` builds into.
@@ -90,12 +94,6 @@ struct Package {
     browses: bool,
 }
 
-const FILES: Package = Package {
-    package: "files",
-    title: "Files",
-    command: "Search Files",
-    browses: true,
-};
 const RUST: Package = Package {
     package: "sample-files",
     title: "Rust files sample",
@@ -346,6 +344,12 @@ impl Pane {
             self.launcher.back();
         }
         block_on(self.launcher.set_query(query));
+        // The JavaScript and TypeScript guests answer past the 200 ms
+        // budget while their engine starts, and a folder that was still
+        // being listed answers again once it is: the answer merges into
+        // the published list within 16 ms of the search's end (#201),
+        // which the rows read below wait out.
+        wait_for_merges(&self.launcher);
     }
 
     /// Selects the row `title`, with the window shown, as the user sees it.
@@ -832,9 +836,6 @@ fn a_file_created_while_pane_runs_is_found(fixture: &'static Package) {
 /// Declares one test per check for each language's files package.
 macro_rules! contract {
     ($($check:ident),* $(,)?) => {
-        mod files {
-            $(#[test] fn $check() { super::$check(&super::FILES) })*
-        }
         mod rust {
             $(#[test] fn $check() { super::$check(&super::RUST) })*
         }
@@ -856,35 +857,21 @@ contract!(
     a_file_created_while_pane_runs_is_found,
 );
 
-// The field itself is Files' alone: its own list and the "Search Files
-// for …" row that opens it with the query typed.
-mod field {
-    #[test]
-    fn search_files_lists_the_files_in_the_launchers_own_field() {
-        super::search_files_lists_the_files_in_the_launchers_own_field(&super::FILES)
-    }
-
-    #[test]
-    fn search_files_opens_from_root_search_with_the_query_typed() {
-        super::search_files_opens_from_root_search_with_the_query_typed(&super::FILES)
-    }
-}
-
 #[test]
 fn the_package_keeps_its_identity_across_the_rework() {
-    // The Files command keeps its id, so a hotkey, alias or pin given it
-    // before the rework still finds it.
-    let pane = Pane::new(&FILES);
+    // The sample's command keeps its id, so a hotkey, alias or pin given it
+    // before an update still finds it.
+    let pane = Pane::new(&RUST);
     let identity: PackageIdentity = pane.launcher.packages()[0].identity.clone();
-    let command = format!("{}#files", identity.key());
+    let command = format!("{}#find-files", identity.key());
     pane.launcher.show_root_search();
-    pane.search("search files");
+    pane.search("find files");
     assert!(
         pane.launcher
             .view()
             .rows
             .iter()
-            .any(|row| row.id == command && row.title == "Search Files"),
+            .any(|row| row.id == command && row.title == "Find files (Rust)"),
         "{:?}",
         pane.launcher.view().rows
     );

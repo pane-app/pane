@@ -13,16 +13,23 @@ enum ToPreview {
     Folder(PathBuf),
     /// `npm:<name>` or `npm:<name>@<version>`.
     Npm(String),
-    /// `git:<repository>` or `git:<repository>@<branch, tag or commit>`.
+    /// `git:<repository>[@<reference>]`, with `#<id>` naming one extension
+    /// of a collection the repository holds.
     Git(String),
+    /// One extension of a collection in a folder: `<folder>#<id>`.
+    Collection(PathBuf, String),
 }
 
-/// `pane [--install <folder> | --install npm:<package>[@<version>] |
-/// --install git:<repository>[@<reference>]]`: `--install` opens with the
-/// package in `<folder>` shown for installation, as if chosen with the
-/// folder picker, the npm package, as if named in "Install extension from
-/// npm…", or the Git repository, as if named in "Install extension from
-/// Git…". `pane --version` prints Pane's version and exits without opening
+/// `pane [--install <folder> | --install <folder>#<id> | --install
+/// npm:<package>[@<version>] | --install git:<repository>[@<reference>]]`:
+/// `--install` opens with the package in `<folder>` shown for installation,
+/// as if chosen with the folder picker, the npm package, as if named in
+/// "Install extension from npm…", or the Git repository, as if named in
+/// "Install extension from Git…". A `#<id>` names one extension of a
+/// collection (ADR 0044): a local folder's, after the last `#` of its path,
+/// or a repository's, before any `@<reference>`; without one, a folder or
+/// repository holding a collection opens the choice of its extensions
+/// (#308). `pane --version` prints Pane's version and exits without opening
 /// a window, so an installation can check what it installed.
 fn package_to_preview() -> Option<ToPreview> {
     let mut args = std::env::args_os().skip(1);
@@ -39,6 +46,12 @@ fn package_to_preview() -> Option<ToPreview> {
             }
             if let Some(spec) = text.and_then(|s| s.strip_prefix("git:")) {
                 return Some(ToPreview::Git(spec.to_owned()));
+            }
+            // A folder path may name one extension of a collection at it:
+            // the part after the last `#` is the id (a folder name may hold
+            // a `#` of its own, so an id is named after the last one).
+            if let Some((folder, id)) = text.and_then(|text| text.rsplit_once('#')) {
+                return Some(ToPreview::Collection(PathBuf::from(folder), id.to_owned()));
             }
             return Some(ToPreview::Folder(PathBuf::from(source)));
         }
@@ -74,6 +87,19 @@ fn smoke_system(log: PathBuf) {
 }
 
 fn main() {
+    // Pane's own program serves as the selected-text worker (#262) when
+    // it is started with the internal argument: checked before anything
+    // else, so the worker starts no window, no runtime, no settings and
+    // no tray — only the UI Automation reads it is asked for, ending when
+    // Pane ends it. The argument is Pane's own, never shown and never
+    // parsed as the user's interface.
+    #[cfg(windows)]
+    if std::env::args_os()
+        .skip(1)
+        .any(|arg| arg == pane_core::system::selected::WORKER_ARGUMENT)
+    {
+        pane_core::system::selected::serve();
+    }
     let preview = package_to_preview();
     // Pane's own log and crash record (#133), before anything else can
     // write a diagnostic or panic: the log keeps what standard error says,
@@ -129,7 +155,18 @@ fn main() {
         .with_link_opener(Arc::new(pane::SystemLinks))
         // What commands copy, open, reveal and recycle reaches the system's
         // own clipboard, handlers, file manager and Recycle Bin (#145).
-        .with_system(pane_core::system::native());
+        .with_system(pane_core::system::native())
+        // What commands run through the Run dialog's work reaches the
+        // shell, Windows' elevation prompt and the Run dialog's own
+        // history (#254).
+        .with_run(pane_core::run::native())
+        // What commands lock, log out, restart, shut down, sleep, hibernate,
+        // turn the displays off of and start the screen saver of reaches the
+        // system's own session and power (#255).
+        .with_system_commands(pane_core::system_commands::native())
+        // What commands list of the open windows and which one they bring
+        // to the front reaches the system's own windows (#263).
+        .with_switch_windows(pane_core::switch_windows::native());
         // That Pane quit unexpectedly last time, told in root search and on
         // the About page; a clean quit removes this run's marker.
         let launcher = match crash_record.clone() {
@@ -173,54 +210,81 @@ fn main() {
             }
             None => launcher,
         };
-        // Pane's default extensions are acquired at first setup from Pane's
-        // own downloads, which the installer carries none of. A release
-        // build acquires them from Pane's published downloads; a development
-        // build only where PANE_ARTIFACTS names a source on this computer
-        // (the tests' and smokes' own), so that a development checkout
-        // installs nothing over the network by itself.
+        // Pane's default extensions are set up at first setup from the
+        // commits this release pins, each fetched from its own repository
+        // with Pane's own Git client (ADR 0021, ADR 0045); the installer
+        // carries none of them. The committed pins name them; a development
+        // build can replace them with a file of its own through
+        // PANE_DEFAULTS (the tests' and smokes' own, pointing at
+        // repositories served on this computer), so that a development
+        // checkout reaches no real Git host unless it chooses to. A
+        // release build has no override.
         #[cfg(debug_assertions)]
-        let artifact_source = pane_core::defaults::ArtifactSource::from_dev_env();
-        #[cfg(not(debug_assertions))]
-        let artifact_source: Option<Result<pane_core::defaults::ArtifactSource, String>> =
-            Some(Ok(pane_core::defaults::ArtifactSource::published()));
-        let launcher = match artifact_source.as_ref() {
-            Some(Ok(source)) => launcher.with_defaults(source.clone(), pane::default_extensions()),
+        let pins = match pane_core::defaults::pins_from_dev_env() {
+            Some(Ok(pins)) => pins,
             Some(Err(why)) => {
-                pane_core::diagnostic!("PANE_ARTIFACTS: {why}");
-                launcher.show_error(format!("PANE_ARTIFACTS: {why}"));
-                launcher
+                pane_core::diagnostic!("PANE_DEFAULTS: {why}");
+                launcher.show_error(format!("PANE_DEFAULTS: {why}"));
+                pane::default_extensions()
             }
-            None => launcher,
+            None => pane::default_extensions(),
         };
+        #[cfg(not(debug_assertions))]
+        let pins = pane::default_extensions();
+        let launcher = launcher.with_defaults(pins);
         // Pane's own update (#54 wired the Windows half, #55 the macOS
         // one, #56 the Linux one): the program this Pane runs from is the
         // one an update replaces - pane.exe in the install folder on
         // Windows, the Pane.app bundle's own binary (Contents/MacOS/pane)
         // on macOS, pane in ~/.local/bin on Linux - and the artifact
-        // source the default extensions come from names the newer package
-        // in its index, the package built for this system (a zip on
-        // Windows and macOS, a gzipped tarball on Linux), unpacked by the
-        // same platform-independent machinery. Pane checks once, at
-        // start, and only the user's choice downloads and installs
-        // anything.
+        // source names the newer package in its index, the package built
+        // for this system (a zip on Windows and macOS, a gzipped tarball
+        // on Linux), unpacked by the same platform-independent machinery.
+        // Pane checks once, at start, and only the user's choice downloads
+        // and installs anything. A release build reads Pane's published
+        // downloads; a development build only where PANE_ARTIFACTS names a
+        // source on this computer (the tests' and smokes' own), so that a
+        // development checkout checks nothing over the network by itself.
         #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
-        let launcher = match (std::env::current_exe(), artifact_source.as_ref()) {
-            (Ok(exe), Some(Ok(source))) => {
-                launcher.with_application_update(pane::APP_VERSION, source.clone(), exe)
+        let launcher = {
+            #[cfg(debug_assertions)]
+            let artifact_source = pane_core::defaults::ArtifactSource::from_dev_env();
+            #[cfg(not(debug_assertions))]
+            let artifact_source: Option<
+                Result<pane_core::defaults::ArtifactSource, String>,
+            > = Some(Ok(pane_core::defaults::ArtifactSource::published()));
+            match (std::env::current_exe(), artifact_source.as_ref()) {
+                (Ok(exe), Some(Ok(source))) => {
+                    launcher.with_application_update(pane::APP_VERSION, source.clone(), exe)
+                }
+                (Err(why), _) => {
+                    pane_core::diagnostic!(
+                        "Pane's own program could not be found, so it checks for no update: {why}"
+                    );
+                    launcher
+                }
+                _ => launcher,
             }
-            (Err(why), _) => {
-                pane_core::diagnostic!(
-                    "Pane's own program could not be found, so it checks for no update: {why}"
-                );
-                launcher
-            }
-            _ => launcher,
         };
         // Global hotkeys: the system's adapter is made on the main thread,
         // whose run loop receives the presses on macOS.
         let (press_sender, mut presses) = pane_core::hotkeys::channel();
         let launcher = launcher.with_hotkeys(pane_core::hotkeys::native(press_sender));
+        // Game mode's foreground source (#125): the system's own
+        // foreground event hook on Windows, which the launcher
+        // subscribes to, deciding on each window that comes to the front
+        // whether a game is in it — so Pane's hotkeys pause and return by
+        // themselves while game mode is on. Everywhere else there is
+        // none: game mode is Windows only, and the Keyboard page says so.
+        let launcher = match pane_core::game_mode::native() {
+            Some(source) => launcher.with_foreground(source),
+            None => launcher,
+        };
+        // The taskbar while the launcher is open (#268): Windows' adapter
+        // — which shows a taskbar that hides itself and puts it back as
+        // the user had it — or none, and the General page explains the
+        // choice where the platform has no taskbar of the kind.
+        pane::settings::attach_taskbar(pane::taskbar::native(), cx);
         // The tray or menu-bar entry: Pane's item in the system's tray
         // (Windows) or menu bar (macOS), whose menu opens the launcher,
         // Settings and Quit — the entry the General page's visibility
@@ -257,12 +321,14 @@ fn main() {
         // enabled package keeps history the user turned on.
         let launcher = launcher.with_clipboard(pane_core::clipboard::native());
         // Development mode builds with the author's tools; a JavaScript or
-        // TypeScript package with this checkout's build unless
-        // PANE_COMPONENTIZE_JS names another.
+        // TypeScript package with this checkout's componentizer (which
+        // `cargo xtask guests` builds into target/guests/componentizer)
+        // unless PANE_COMPONENTIZER names another, else the package's own
+        // `@pane-app/cli` platform package.
         let (change_sender, changes) = pane_core::changes::channel();
-        let default_js = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../tools/componentize-js/pane_js.py");
-        let toolchains = Toolchains::from_env(Some(default_js));
+        let componentizer =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/guests/componentizer");
+        let toolchains = Toolchains::from_env(Some(componentizer));
         let launcher = launcher.with_development(Arc::new(toolchains), change_sender);
         // The window takes the launcher; acquiring the default extensions
         // and checking for Pane's own update keep clones, started below
@@ -298,6 +364,9 @@ fn main() {
                     match &preview {
                         Some(ToPreview::Folder(folder)) => {
                             launcher.preview_package(folder, window, cx)
+                        }
+                        Some(ToPreview::Collection(folder, id)) => {
+                            launcher.preview_collection(folder, id, window, cx)
                         }
                         Some(ToPreview::Npm(spec)) => launcher.preview_npm(spec, window, cx),
                         Some(ToPreview::Git(spec)) => launcher.preview_git(spec, window, cx),
@@ -365,18 +434,24 @@ fn main() {
         .detach();
         // `pane-ext dev` hands its builds to this Pane over the local
         // channel (#217), which asks the window to show the install preview
-        // of a folder Pane has not installed. It listens where PANE_CHANNEL
-        // says, if it says, as pane-ext looks there: a second Pane beside an
-        // installed one, and the tests.
+        // of a package Pane has not installed — the extension's own, where
+        // it develops one extension of a collection (ADR 0044). It listens
+        // where PANE_CHANNEL says, if it says, as pane-ext looks there: a
+        // second Pane beside an installed one, and the tests.
         let endpoint = local_channel::Endpoint::from_env();
         match endpoint.and_then(|endpoint| local_channel::serve(developing, &endpoint)) {
             Ok((server, mut previews)) => {
                 cx.spawn(async move |cx| {
                     // Pane listens for as long as it runs.
                     let _server = server;
-                    while let Some(folder) = previews.next().await {
-                        let shown = window.update(cx, |launcher, window, cx| {
-                            launcher.present_package(&folder, window, cx)
+                    while let Some(asked) = previews.next().await {
+                        let shown = window.update(cx, |launcher, window, cx| match &asked {
+                            local_channel::ToPreview::Folder(folder) => {
+                                launcher.present_package(folder, window, cx)
+                            }
+                            local_channel::ToPreview::Collection(folder, id) => {
+                                launcher.present_collection(folder, id, window, cx)
+                            }
                         });
                         if shown.is_err() {
                             break;

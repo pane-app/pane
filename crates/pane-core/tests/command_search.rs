@@ -10,7 +10,7 @@
 //! computer.
 //!
 //! While a command's call waits on the service, Pane serves other calls
-//! (#136): the calculator, another package, answers root search meanwhile.
+//! (#136): the Rust sample, another package, answers root search meanwhile.
 
 #[path = "support/feedback.rs"]
 mod feedback;
@@ -285,6 +285,238 @@ fn the_service_results_are_listed_and_open_their_details() {
             service.requests().last().map(String::as_str),
             Some("/search?q=no%20such%20thing")
         );
+
+        // A blank search shows the command's own list again, asking
+        // nothing.
+        let asked = service.requests().len();
+        pane.search("  ");
+        assert_eq!(
+            pane.titles(),
+            ["Type to search the package registry", "Service address"]
+        );
+        assert_eq!(service.requests().len(), asked);
+    }
+}
+
+#[test]
+fn a_cleared_search_lists_the_command_as_it_is_now() {
+    for fixture in &ALL {
+        let service = Service::start();
+        let pane = Pane::with(fixture);
+        pane.open();
+        // Its settings change while it is open...
+        pane.set_service(&service.url());
+        pane.search("aurora");
+        assert_eq!(pane.titles(), ["aurora-charts", "aurora-cli"]);
+
+        // ...and clearing the search lists what the command lists now.
+        pane.search("");
+        let view = pane.view();
+        assert_eq!(view.status, Status::Idle, "{}", fixture.package);
+        let address = view
+            .rows
+            .iter()
+            .find(|row| row.title == "Service address")
+            .and_then(|row| row.subtitle.clone());
+        assert_eq!(address, Some(service.url()), "{}", fixture.package);
+    }
+}
+
+/// The wait before a search starts, held by the test instead of the clock:
+/// it counts the searches that waited on it, and none ends until the test
+/// lets every wait end.
+#[derive(Default)]
+struct HeldWait {
+    state: Mutex<Waits>,
+    changed: Condvar,
+}
+
+#[derive(Default)]
+struct Waits {
+    reached: usize,
+    ended: bool,
+    wakers: Vec<Waker>,
+}
+
+impl HeldWait {
+    /// Has `runtime`'s searches wait on this.
+    fn hold(runtime: &Runtime) -> Arc<HeldWait> {
+        let held = Arc::new(HeldWait::default());
+        let timer = held.clone();
+        runtime.set_search_timer(move |_| {
+            let timer = timer.clone();
+            let mut reached = false;
+            // A search reaches the wait when it first waits on it, not when
+            // it is handed it.
+            Box::pin(std::future::poll_fn(move |context| {
+                let mut state = timer.state.lock().unwrap();
+                if !reached {
+                    reached = true;
+                    state.reached += 1;
+                    timer.changed.notify_all();
+                }
+                if state.ended {
+                    return Poll::Ready(());
+                }
+                state.wakers.push(context.waker().clone());
+                Poll::Pending
+            }))
+        });
+        held
+    }
+
+    /// Waits until `count` searches have reached the wait, for at most five
+    /// seconds.
+    fn wait_until_reached(&self, count: usize) {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut state = self.state.lock().unwrap();
+        while state.reached < count {
+            let left = deadline
+                .checked_duration_since(Instant::now())
+                .unwrap_or_else(|| panic!("{count} searches never waited: {}", state.reached));
+            state = self.changed.wait_timeout(state, left).unwrap().0;
+        }
+    }
+
+    /// Ends every wait, now and from now on.
+    fn end(&self) {
+        let mut state = self.state.lock().unwrap();
+        state.ended = true;
+        for waker in state.wakers.drain(..) {
+            waker.wake();
+        }
+    }
+}
+
+#[test]
+fn typing_on_asks_only_for_the_text_the_user_stops_at() {
+    for fixture in &ALL {
+        let service = Service::start();
+        let pane = Pane::with(fixture);
+        pane.use_service(&service.url());
+        pane.search("granite");
+        let asked = service.requests().len();
+
+        // The first keystroke's search waits before it asks anything (it
+        // reaches the wait, and the service has heard nothing)...
+        let held = HeldWait::hold(&pane.runtime);
+        let first = pane.launcher.set_query("a");
+        held.wait_until_reached(1);
+        assert_eq!(service.requests().len(), asked, "{}", fixture.package);
+        // ...so each keystroke typed on within it stops the one before
+        // before it asks the service; only the text the user stops at is
+        // asked for once the wait ends. No clock is involved.
+        let typed: Vec<_> = ["au", "aur", "auro", "auror", "aurora"]
+            .into_iter()
+            .map(|text| pane.launcher.set_query(text))
+            .collect();
+        held.end();
+        block_on(first);
+        for search in typed {
+            block_on(search);
+        }
+        assert_eq!(pane.titles(), ["aurora-charts", "aurora-cli"]);
+        assert_eq!(
+            service.requests()[asked..],
+            ["/search?q=aurora"],
+            "{}",
+            fixture.package
+        );
+    }
+}
+
+#[test]
+fn a_newer_search_stops_the_one_the_service_is_still_answering() {
+    for fixture in &ALL {
+        let service = Service::start();
+        let pane = Pane::with(fixture);
+        pane.use_service(&service.url());
+
+        // The service holds this one for ten seconds.
+        let slow = pane.launcher.set_query("slow");
+        wait_for_request(&service, "/search?q=slow");
+        assert!(matches!(pane.view().status, Status::Running { .. }));
+
+        let started = Instant::now();
+        pane.search("basalt");
+        assert_eq!(pane.titles(), ["basalt"], "{}", fixture.package);
+        assert_eq!(pane.view().status, Status::Idle);
+        // Not after the slow one's ten seconds: it was stopped, and the
+        // connection it waited on closed.
+        assert!(started.elapsed() < service::SLOW / 2);
+        assert!(service.wait_for_abandoned(Duration::from_secs(5)));
+        assert_eq!(service.abandoned(), ["/search?q=slow"]);
+
+        // Its answer, stopped, never replaces the newer one's.
+        block_on(slow);
+        assert_eq!(pane.titles(), ["basalt"]);
+        assert_eq!(pane.view().status, Status::Idle);
+
+        // And the extension carries on: stopping it was not its failure.
+        pane.search("cobalt");
+        assert_eq!(pane.titles(), ["cobalt-http"]);
+    }
+}
+
+#[test]
+fn an_answer_to_an_older_search_is_not_shown() {
+    for fixture in &ALL {
+        let service = Service::start();
+        let pane = Pane::with(fixture);
+        pane.use_service(&service.url());
+
+        let older = pane.launcher.set_query("aurora");
+        let newer = pane.launcher.set_query("ember");
+        // The newer answer is shown first, then the older one arrives.
+        block_on(newer);
+        block_on(older);
+        assert_eq!(pane.titles(), ["ember-tz"], "{}", fixture.package);
+        assert_eq!(
+            pane.view().screen,
+            Screen::CommandSearch {
+                query: "ember".into()
+            }
+        );
+    }
+}
+
+#[test]
+fn leaving_the_command_stops_its_search() {
+    for fixture in &ALL {
+        let service = Service::start();
+        let pane = Pane::with(fixture);
+        pane.use_service(&service.url());
+
+        let slow = pane.launcher.set_query("slow");
+        wait_for_request(&service, "/search?q=slow");
+        // Escape clears the search, which stops it...
+        pane.launcher.back();
+        assert_eq!(
+            pane.view().screen,
+            Screen::CommandSearch {
+                query: String::new()
+            }
+        );
+        assert_eq!(pane.view().status, Status::Idle);
+        assert!(service.wait_for_abandoned(Duration::from_secs(5)));
+        block_on(slow);
+        assert_eq!(
+            pane.titles(),
+            ["Type to search the package registry", "Service address"]
+        );
+
+        // ...and leaving the command stops one too.
+        let slow = pane.launcher.set_query("slower");
+        wait_for_request(&service, "/search?q=slower");
+        pane.to_root();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while service.abandoned().len() < 2 {
+            assert!(Instant::now() < deadline, "{:?}", service.abandoned());
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        block_on(slow);
+        assert!(matches!(pane.view().screen, Screen::Root { .. }));
+        assert_eq!(pane.view().status, Status::Idle, "{}", fixture.package);
     }
 }
 
@@ -521,5 +753,295 @@ fn the_extension_list_says_which_packages_use_the_network_and_what_they_reached(
         );
         pane.launcher.back();
         assert!(matches!(pane.view().screen, Screen::Extensions { .. }));
+    }
+}
+
+/// Starts a search the service holds, has `happen` while it waits, and
+/// checks that the search was stopped where it waited (the service saw
+/// Pane hang up) and that its end changes nothing on screen: the view
+/// after `happen` is the view once the search is done. The launcher, and
+/// the service, still serving.
+fn stopped_while_it_waits(fixture: &Fixture, happen: impl FnOnce(&Pane)) -> (Pane, Service) {
+    let service = Service::start();
+    let pane = Pane::with(fixture);
+    pane.use_service(&service.url());
+    let slow = pane.launcher.set_query("slow");
+    wait_for_request(&service, "/search?q=slow");
+
+    happen(&pane);
+    let after = pane.view();
+    assert!(
+        service.wait_for_abandoned(Duration::from_secs(5)),
+        "{}: the search was not stopped",
+        fixture.package
+    );
+    block_on(slow);
+    assert_eq!(pane.view(), after, "{}", fixture.package);
+    (pane, service)
+}
+
+/// Activates the details of `stall-details`, whose answer the service
+/// starts and never finishes, and returns the activation's thread once the
+/// command waits on it.
+fn waiting_on_the_service(pane: &Pane, service: &Service) -> std::thread::JoinHandle<()> {
+    pane.use_service(&service.url());
+    pane.search("misbehaving");
+    let waiting = pane.activate_in_background("stall-details");
+    wait_for_request(service, "/packages/stall-details");
+    waiting
+}
+
+/// While a command's call waits on a slow web request, another package's
+/// calls are served: the Rust sample answers root search ("reverse <text>").
+/// What the waiting
+/// call set up is on its generation's undo list, and disabling the package
+/// runs the list: the request is dropped (the service sees Pane hang up)
+/// and the list is empty.
+#[test]
+fn other_extensions_answer_while_a_call_waits_on_the_network() {
+    for fixture in &ALL {
+        let service = Service::start();
+        let pane = Pane::with(fixture);
+        pane.install("sample-rust");
+        let identity = pane.identity_of(fixture.title);
+        let waiting = waiting_on_the_service(&pane, &service);
+        #[cfg(debug_assertions)]
+        {
+            let listed = pane.launcher.undo_list(&identity);
+            assert!(
+                listed.contains(&"extension instance") && listed.contains(&"web request"),
+                "{}: {listed:?}",
+                fixture.package
+            );
+        }
+
+        pane.to_root();
+        pane.search("reverse 21");
+
+        assert_eq!(
+            pane.titles().first().map(String::as_str),
+            Some("12"),
+            "{}",
+            fixture.package
+        );
+        assert!(
+            !waiting.is_finished(),
+            "{}: the waiting call ended first",
+            fixture.package
+        );
+        assert!(service.abandoned().is_empty(), "{:?}", service.abandoned());
+        block_on(pane.launcher.set_enabled(&identity, false));
+        assert!(
+            service.wait_for_abandoned(Duration::from_secs(5)),
+            "{}: the request was not dropped",
+            fixture.package
+        );
+        waiting.join().unwrap();
+        #[cfg(debug_assertions)]
+        assert_eq!(
+            pane.launcher.undo_list(&identity),
+            Vec::<&str>::new(),
+            "{}",
+            fixture.package
+        );
+    }
+}
+
+/// Pane quitting while a call waits on the network ends the wait at once:
+/// the request is dropped, and the call answers.
+#[test]
+fn quitting_while_a_call_waits_on_the_network_ends_the_wait() {
+    let service = Service::start();
+    let pane = Pane::with(&RUST);
+    let waiting = waiting_on_the_service(&pane, &service);
+
+    pane.runtime.quit();
+
+    assert!(
+        service.wait_for_abandoned(Duration::from_secs(5)),
+        "the request was not dropped"
+    );
+    waiting.join().unwrap();
+    assert!(block_on(pane.runtime.running()).is_empty());
+}
+
+/// A system whose global hotkeys always register.
+#[derive(Default)]
+struct FakeHotkeys;
+
+impl Hotkeys for FakeHotkeys {
+    fn unavailable(&self) -> Option<String> {
+        None
+    }
+
+    fn register(&self, _shortcut: &Shortcut) -> Result<(), HotkeyError> {
+        Ok(())
+    }
+
+    fn unregister(&self, _shortcut: &Shortcut) {}
+}
+
+/// Every subsystem that sets something up for a package's generation puts
+/// it on the generation's undo list (#136): with one package whose
+/// commands search, run on a schedule and run a continuing service, one of
+/// them with a hotkey, the list holds the instances, the schedule, the
+/// service, the hotkey, a search in progress and its web request; the
+/// generation's end runs the list, which is empty after it.
+#[cfg(debug_assertions)]
+#[test]
+fn a_generation_s_undo_list_holds_every_subsystem_and_is_empty_after_its_end() {
+    let service = Service::start();
+    let sources = tempfile::tempdir().unwrap();
+    let data = tempfile::tempdir().unwrap();
+    // The search sample, with the schedule and service samples' commands.
+    let folder = package("sample-search", &sources.path().join("everything"));
+    for (assembled, component) in [
+        ("sample-schedule", "sample_schedule.wasm"),
+        ("sample-service", "sample_service.wasm"),
+    ] {
+        let from = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../target/guests/packages")
+            .join(assembled)
+            .join(component);
+        fs::copy(&from, folder.join(component)).unwrap();
+    }
+    let mut manifest: Value =
+        serde_json::from_str(&fs::read_to_string(folder.join("pane.json")).unwrap()).unwrap();
+    manifest["commands"].as_array_mut().unwrap().extend([
+        json!({
+            "id": "counting",
+            "title": "Counting",
+            "component": "sample_schedule.wasm",
+            "schedule": { "everySeconds": 60, "item": "count" }
+        }),
+        json!({
+            "id": "watching",
+            "title": "Watching",
+            "component": "sample_service.wasm",
+            "service": true
+        }),
+    ]);
+    fs::write(folder.join("pane.json"), manifest.to_string()).unwrap();
+    let runtime = Runtime::start().unwrap();
+    let launcher =
+        Launcher::with_packages(Ok(runtime.clone()), vec![], data.path().join("extensions"))
+            .with_hotkeys(Arc::new(FakeHotkeys));
+    block_on(launcher.install_package(&folder));
+    assert!(
+        matches!(launcher.view().status, Status::Result(_)),
+        "{:?}",
+        launcher.view().status
+    );
+    let pane = Pane {
+        launcher,
+        runtime,
+        _sources: sources,
+        _data: data,
+    };
+    let identity = pane.identity();
+    let counting = format!("{}#counting", identity.key());
+    let hotkey = pane
+        .launcher
+        .set_hotkey(&counting, Some(Shortcut::parse("ctrl+alt+g").unwrap()))
+        .unwrap();
+    block_on(hotkey);
+    assert!(pane.launcher.wait_for_schedules(Duration::from_secs(10)));
+    assert!(pane.launcher.wait_for_services(Duration::from_secs(10)));
+
+    // A search waits on the service.
+    pane.use_service(&service.url());
+    let slow = pane.launcher.set_query("slow");
+    wait_for_request(&service, "/search?q=slow");
+    let listed = pane.launcher.undo_list(&identity);
+    for what in [
+        "extension instance",
+        "schedule",
+        "service",
+        "hotkey",
+        "command search",
+        "web request",
+    ] {
+        assert!(listed.contains(&what), "no {what} in {listed:?}");
+    }
+
+    block_on(pane.launcher.set_enabled(&identity, false));
+    assert!(
+        service.wait_for_abandoned(Duration::from_secs(5)),
+        "the search was not stopped"
+    );
+    block_on(slow);
+    assert_eq!(pane.launcher.undo_list(&identity), Vec::<&str>::new());
+}
+
+#[test]
+fn disabling_the_package_stops_its_search() {
+    for fixture in &ALL {
+        let (pane, _service) = stopped_while_it_waits(fixture, |pane| {
+            block_on(pane.launcher.set_enabled(&pane.identity(), false));
+        });
+        assert!(!pane.launcher.packages()[0].enabled);
+    }
+}
+
+#[test]
+fn reloading_the_package_stops_its_search() {
+    for fixture in &ALL {
+        let (pane, _service) = stopped_while_it_waits(fixture, |pane| {
+            block_on(pane.launcher.reload(&pane.identity()));
+        });
+        // The reloaded code searches.
+        pane.open();
+        pane.search("ember");
+        assert_eq!(pane.titles(), ["ember-tz"], "{}", fixture.package);
+    }
+}
+
+#[test]
+fn uninstalling_the_package_stops_its_search() {
+    for fixture in &ALL {
+        let (pane, _service) = stopped_while_it_waits(fixture, |pane| {
+            block_on(pane.launcher.uninstall(&pane.identity(), SavedData::Keep));
+        });
+        assert!(pane.launcher.packages().is_empty());
+    }
+}
+
+#[test]
+fn a_crash_of_the_runtime_ends_a_search_with_an_error_not_its_results() {
+    for fixture in &ALL {
+        let service = Service::start();
+        let pane = Pane::with(fixture);
+        pane.use_service(&service.url());
+        let slow = pane.launcher.set_query("slow");
+        wait_for_request(&service, "/search?q=slow");
+
+        pane.runtime.inject(Fault::Crash);
+        // The search's answer is lost with the thread, which Pane restarts;
+        // the connection closed with it.
+        block_on(slow);
+        assert!(matches!(
+            pane.runtime.status(),
+            RuntimeStatus::Restarted { .. }
+        ));
+        assert!(service.wait_for_abandoned(Duration::from_secs(5)));
+        let view = pane.view();
+        assert_eq!(
+            view.screen,
+            Screen::CommandSearch {
+                query: "slow".into()
+            }
+        );
+        assert_eq!(view.rows, Vec::new(), "{}", fixture.package);
+        let Status::Error(message) = view.status else {
+            panic!("{}: {:?}", fixture.package, view.status);
+        };
+        assert!(
+            message.contains("it stopped before answering and was started again"),
+            "{message}"
+        );
+
+        // The restarted runtime searches.
+        pane.search("basalt");
+        assert_eq!(pane.titles(), ["basalt"], "{}", fixture.package);
     }
 }

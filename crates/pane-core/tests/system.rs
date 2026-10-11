@@ -12,7 +12,7 @@
 //! the window, Copy and Move to Recycle Bin with a HUD, or keep it open
 //! with a toast. A launcher given no system answers each function clearly,
 //! and that is never a reason to pause the package. Prior art:
-//! `quicklinks.rs` (a recording opener) and `feedback.rs` (the window).
+//! `paste.rs` (a recording system) and `feedback.rs` (the window).
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -247,10 +247,7 @@ impl Pane {
                 _ => None,
             })
             .collect();
-        let expected = hud.map(|title| Hud {
-            title: title.into(),
-            style: ToastStyle::Success,
-        });
+        let expected = hud.map(|title| Hud::new(ToastStyle::Success, title));
         assert_eq!(huds, expected.iter().collect::<Vec<_>>(), "{what}");
         assert_eq!(self.launcher.window_presence(), WindowPresence::Hidden);
         assert_eq!(self.launcher.view().screen, Screen::Command, "{what}");

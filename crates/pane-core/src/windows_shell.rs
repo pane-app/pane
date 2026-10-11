@@ -2,8 +2,8 @@
 //! COM on the calling thread ([`Com`]), and the shell's image of an item
 //! read as pixels ([`shell_image`], [`bitmap_pixels`]). System icons
 //! (`system_icons`), application icons (`applications::icons`), the Start
-//! menu's shortcuts, the system's file actions and elevated programs use
-//! them.
+//! menu's shortcuts, the system's file actions, the elevated programs and
+//! the system commands' audio endpoints use them.
 
 use std::ffi::{OsStr, c_void};
 
@@ -26,7 +26,8 @@ use crate::util::wide;
 /// COM initialized on this thread, single-threaded, for as long as it is
 /// held: the shell needs it to draw an item, read or open a shortcut,
 /// enumerate the Apps folder, move a file to the Recycle Bin or ask for
-/// elevation.
+/// elevation, and the system commands need it to reach the audio
+/// endpoints.
 pub(crate) struct Com {
     /// Whether this guard initialized COM and must uninitialize it: not
     /// when the thread already had it in another mode.

@@ -1,0 +1,19 @@
+{
+  "name": "pane-sample-registrations-ts",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Pane's registrations sample in TypeScript",
+  "license": "Apache-2.0 OR MIT",
+  "type": "module",
+  "main": "src/index.ts",
+  "pane": {
+    "operations": true,
+    "events": true,
+    "activate": true
+  },
+  "devDependencies": {
+    "@pane-app/extension": "file:../js",
+    "esbuild": "0.28.2",
+    "typescript": "7.0.2"
+  }
+}

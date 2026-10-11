@@ -520,7 +520,7 @@ fn reloading_one_package_leaves_another_running_with_its_state() {
 }
 
 #[test]
-fn reloading_closes_an_open_view_of_the_package_and_starts_the_new_code() {
+fn reloading_reopens_the_commands_root_view_not_the_one_it_pushed() {
     let dirs = Dirs::new();
     let runtime = Runtime::start().unwrap();
     let launcher = dirs.launcher_on(runtime.clone());
@@ -532,10 +532,12 @@ fn reloading_closes_an_open_view_of_the_package_and_starts_the_new_code() {
     rebuild(&folder, "sample_js");
     block_on(launcher.reload(&PackageIdentity::local(&folder).unwrap()));
 
-    // Its state is not carried over: the view closed with the old
-    // instance, and root search selects the reloaded command.
+    // The screen that was on display opens again: only the command's root
+    // view, not the view it had pushed, which the author restores from a
+    // state handoff if they want it back. Its state is not carried over:
+    // the view closed with the old instance.
     let view = launcher.view();
-    assert!(matches!(view.screen, Screen::Root { .. }));
+    assert_eq!(view.screen, Screen::Command);
     assert_eq!(view.status, Status::Result("Reloaded Dev".into()));
     assert_eq!(view.rows[view.selected.unwrap()].title, "Open Dev");
     assert_eq!(block_on(runtime.designed_view_count()), 0);

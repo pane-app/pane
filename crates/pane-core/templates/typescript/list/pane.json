@@ -1,0 +1,17 @@
+{
+  "$schema": "./node_modules/@pane-app/extension/schema/pane.schema.json",
+  "manifestVersion": 1,
+  "title": "__TITLE__",
+  "description": "A command that opens a list of items, each running an action.",
+  "version": "0.1.0",
+  "apiVersion": "0.1",
+  "icon": "icon.png",
+  "commands": [
+    {
+      "id": "__NAME__",
+      "title": "__TITLE__",
+      "subtitle": "Opens a list of items, each running an action",
+      "component": "dist/__NAME__.wasm"
+    }
+  ]
+}

@@ -2,7 +2,7 @@
 
 A small, extensible desktop launcher for Windows, macOS and Linux, inspired by Raycast and Pi.
 
-Pane is in early development. It is a native GPUI CE launcher with root search, a Settings window and a global hotkey, running Rust, JavaScript and TypeScript extensions through a WASI 0.3 component interface, installing local, npm and Git extension packages, and, on Linux, Windows and macOS, one package a clean machine installs whose first setup downloads Pane's default extensions itself ([installer](docs/installer.md)); the artifact source it downloads from is not deployed yet, so no published installer exists. JavaScript and TypeScript run on a pinned, patched componentize-qjs (QuickJS), which remains provisional.
+Pane is in early development. It is a native GPUI CE launcher with root search, a Settings window and a global hotkey, running Rust, JavaScript and TypeScript extensions through a WASI 0.3 component interface, installing local, npm and Git extension packages, and, on Linux, Windows and macOS, one package a clean machine installs whose first setup installs Pane's default extensions from the commits of their own repositories' release tags that the Pane release pins ([installer](docs/installer.md)); the artifact source that serves Pane's own application updates is not deployed yet, and no published installer exists. JavaScript and TypeScript run on a pinned, patched componentize-qjs (QuickJS), which remains provisional.
 
 ## Build, run and test
 
@@ -21,19 +21,25 @@ Commands, from the repository root:
 cargo xtask guests   # build the Rust guests; copy them and the prebuilt JS/TS samples into target/guests/
 cargo run -p pane    # open the launcher window
 cargo xtask ci       # build guests, check the prebuilt JS/TS samples, then formatting, lints and tests
-cargo xtask package-linux  # build Pane's Linux package and the default extensions' artifacts into target/dist/
+cargo xtask package-linux  # build Pane's Linux package and the artifacts of its own updates into target/dist/
 cargo xtask package-windows  # build the Windows package the same way (on Windows; see docs/installer.md)
 cargo xtask package-macos  # build the macOS package the same way (on macOS; see docs/installer.md)
 ```
 
-A development build of `pane` acquires the default extensions only where
-`PANE_ARTIFACTS` names an artifact source on this computer
+Every build sets up the default extensions at first setup from the commits
+this release pins, fetching them with Pane's own Git client: a development
+build takes its pins from `PANE_DEFAULTS` when that names a pins file of its
+own (the tests' and smokes' do, pointing at repositories served on this
+computer), and otherwise from the committed pins
 ([installer](docs/installer.md#trying-a-first-setup-by-hand)); a release
-build acquires them from Pane's published downloads.
+build always uses the committed pins. Pane checks for its own application
+updates at start; a development build checks only where `PANE_ARTIFACTS`
+names an artifact source on this computer, and otherwise not at all, while
+a release build reads Pane's published downloads.
 
 No JavaScript toolchain is needed for these: the JS and TS sample components are committed prebuilt in `guests/prebuilt/`. Rebuilding them from source with `cargo xtask js-guests` also needs Python 3.12+, git and Node.js 22+ on any of the three OSes; see [guests/README.md](guests/README.md#writing-a-javascript-or-typescript-command).
 
-In the window, use the arrow keys to select, Enter to open a command or run an item, and Escape to go back; clicking a row runs it too. An open command's view starts with its content, with no heading line above it; the footer's left shows the command's icon and title. Pane registers no sample command of its own: root search lists the commands of installed packages (the default extensions, once acquired), Pane's install rows and Settings…. To try the Rust, JavaScript and TypeScript samples, install them by hand (below). In each sample command, "Greet someone" opens a form: type a name, Tab to the greeting, arrow keys to choose, Enter to submit. "Choose a color", after it, opens a color picker the extension draws itself: arrow keys, Home and End, or a click or drag on the swatches, choose a color. The last two items are declared for some operating systems only; on another system they stay listed with the reason and do not run. **Install extension from folder…** installs a local extension package; see [Packaging and installing a local extension](guests/README.md#packaging-and-installing-a-local-extension). Extensions are managed in Settings (**Manage Extensions** in root search opens it there): each installed package has a page under the sidebar's Extensions group, whose switch disables or enables it — a disabled package keeps its settings across restarts — and whose **Reload** replaces its code with its source folder's current build while Pane stays open; see [Reloading a package](guests/README.md#reloading-a-package-while-pane-stays-open).
+In the window, use the arrow keys to select, Enter to open a command or run an item, and Escape to go back; clicking a row runs it too. An open command's view starts with its content, with no heading line above it; the footer's left shows the command's icon and title. Pane registers no sample command of its own: root search lists the commands of installed packages (the default extensions, once set up), Pane's install rows and Settings…. To try the Rust, JavaScript and TypeScript samples, install them by hand (below). In each sample command, "Greet someone" opens a form: type a name, Tab to the greeting, arrow keys to choose, Enter to submit. "Choose a color", after it, opens a color picker the extension draws itself: arrow keys, Home and End, or a click or drag on the swatches, choose a color. The last two items are declared for some operating systems only; on another system they stay listed with the reason and do not run. **Install extension from folder…** installs a local extension package; see [Packaging and installing a local extension](guests/README.md#packaging-and-installing-a-local-extension). Extensions are managed in Settings (**Manage Extensions** in root search opens it there): each installed package has a page under the sidebar's Extensions group, whose switch disables or enables it — a disabled package keeps its settings across restarts — and whose **Reload** replaces its code with its source folder's current build while Pane stays open; see [Reloading a package](guests/README.md#reloading-a-package-while-pane-stays-open).
 
 To try a package without the folder picker, open the launcher on its install screen, then press Enter to install it:
 

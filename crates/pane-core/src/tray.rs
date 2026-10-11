@@ -107,6 +107,19 @@ pub trait Tray: Send + Sync + 'static {
     /// was, so a preference is kept only for a change that really
     /// happened. Repeating the state in effect succeeds.
     fn set_visible(&self, visible: bool) -> Result<(), TrayError>;
+
+    /// Says in the entry's tooltip whether Pane's hotkeys are paused for
+    /// a game in front (game mode, #125): the entry's tooltip says so
+    /// while they are, and says only the application again once they
+    /// return, so a press that does nothing while a game has the keys
+    /// is understood. Where the system's entry shows no tooltip, the
+    /// choice is accepted and shows nothing; game mode is Windows only,
+    /// so only Windows' entry says it. The window's thread, as showing
+    /// and hiding are. Repeating the state in effect succeeds.
+    fn set_hotkeys_paused(&self, paused: bool) -> Result<(), TrayError> {
+        let _ = paused;
+        Ok(())
+    }
 }
 
 /// Where an adapter reports the native menu's selections.
@@ -235,6 +248,17 @@ mod tests {
             TrayError::Refused("the tray is full".into()).to_string(),
             "the system refused it: the tray is full"
         );
+    }
+
+    #[test]
+    fn saying_the_hotkeys_are_paused_is_accepted_where_nothing_shows_it() {
+        // The pause is the launcher's to say (game mode, #125); the
+        // entry's tooltip says it where the system's entry has one,
+        // which is Windows' alone. Elsewhere the choice is accepted and
+        // shows nothing, as the trait's default does.
+        let tray = Unavailable("Not available here".into());
+        assert_eq!(tray.set_hotkeys_paused(true), Ok(()));
+        assert_eq!(tray.set_hotkeys_paused(false), Ok(()));
     }
 
     #[test]

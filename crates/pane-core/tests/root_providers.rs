@@ -1,7 +1,11 @@
 //! Root providers (#164) through the launcher's public interface: a command
 //! whose `pane.json` entry says `"mode": "provider"` only answers root
-//! search. The calculator and Applications are providers: typing their
-//! names finds no row of theirs, while arithmetic is still answered; a
+//! search. The fixtures are copies of the Rust sample and the JavaScript
+//! applications sample, their command's entry rewritten to the provider
+//! mode, the shape the default extensions' manifests hold and no sample's
+//! does (their sources live in their own repositories, #285, which these
+//! tests cannot read): typing their names finds no row of theirs, while
+//! the Rust sample's root results are still answered; a
 //! provider cannot be aliased, given a hotkey or launched, and the
 //! Shortcuts catalog does not list it; disabling its package stops its
 //! results and enabling brings them back; a provider declaring no root
@@ -37,12 +41,32 @@ fn built(path: &str) -> PathBuf {
     path
 }
 
-fn calculator() -> PathBuf {
-    built("packages/calculator")
+/// A copy of the assembled sample package `sample` under the test's
+/// sources, its first command's entry in `pane.json` rewritten to a root
+/// provider's (`"mode": "provider"`): a package shaped as the default
+/// extensions are, which no sample is.
+fn provider(dirs: &Dirs, sample: &str) -> PathBuf {
+    let folder = dirs.sources.path().join(sample);
+    if folder.exists() {
+        return folder;
+    }
+    copy_folder(&built(&format!("packages/{sample}")), &folder);
+    let mut manifest = read(&folder, "pane.json");
+    manifest["commands"][0]["mode"] = serde_json::json!("provider");
+    fs::write(folder.join("pane.json"), manifest.to_string()).unwrap();
+    folder
 }
 
-fn applications() -> PathBuf {
-    built("packages/applications")
+/// The Rust sample made a provider: its root results ("reverse <text>")
+/// still answer.
+fn rust_provider(dirs: &Dirs) -> PathBuf {
+    provider(dirs, "sample-rust")
+}
+
+/// The JavaScript applications sample made a provider: the host's
+/// applications still reach root search as its indexed results.
+fn applications_provider(dirs: &Dirs) -> PathBuf {
+    provider(dirs, "sample-applications-js")
 }
 
 /// The command id of the command `command` of the package installed from
@@ -92,6 +116,8 @@ fn copy_folder(from: &Path, to: &Path) {
 struct Dirs {
     data: TempDir,
     cache: TempDir,
+    /// Where the provider package copies live, outliving restarts.
+    sources: TempDir,
 }
 
 impl Dirs {
@@ -99,6 +125,7 @@ impl Dirs {
         Dirs {
             data: tempfile::tempdir().unwrap(),
             cache: tempfile::tempdir().unwrap(),
+            sources: tempfile::tempdir().unwrap(),
         }
     }
 
@@ -115,11 +142,11 @@ impl Dirs {
             .with_quick_slots(self.data.path())
     }
 
-    /// A launcher with the calculator and Applications installed.
+    /// A launcher with both providers installed.
     fn with_providers(&self) -> Launcher {
         let launcher = self.start();
-        install(&launcher, &calculator());
-        install(&launcher, &applications());
+        install(&launcher, &rust_provider(self));
+        install(&launcher, &applications_provider(self));
         launcher.back();
         launcher
     }
@@ -149,10 +176,11 @@ fn read(dir: &Path, file: &str) -> serde_json::Value {
 }
 
 #[test]
-fn the_default_providers_declare_the_provider_mode() {
+fn the_fixture_providers_declare_the_provider_mode() {
+    let dirs = Dirs::new();
     for (folder, command) in [
-        (calculator(), "calculator"),
-        (applications(), "applications"),
+        (rust_provider(&dirs), "sample"),
+        (applications_provider(&dirs), "launch"),
     ] {
         let manifest = Manifest::read(&folder).unwrap();
         let declared = manifest
@@ -169,12 +197,12 @@ fn typing_a_providers_name_finds_no_row_while_its_results_still_answer() {
     let dirs = Dirs::new();
     let launcher = dirs.with_providers();
 
-    for query in ["calc", "calculator", "applications", "appl"] {
+    for query in ["rust", "sample", "javascript", "applications"] {
         search(&launcher, query);
         assert!(
-            titles(&launcher)
-                .iter()
-                .all(|title| title != "Calculator" && title != "Applications"),
+            titles(&launcher).iter().all(|title| {
+                title != "Rust sample" && title != "JavaScript applications sample"
+            }),
             "{query}: {:?}",
             titles(&launcher)
         );
@@ -184,28 +212,34 @@ fn typing_a_providers_name_finds_no_row_while_its_results_still_answer() {
     assert!(
         titles(&launcher)
             .iter()
-            .all(|title| title != "Calculator" && title != "Applications"),
+            .all(|title| { title != "Rust sample" && title != "JavaScript applications sample" }),
         "{:?}",
         titles(&launcher)
     );
     // Each application is still its own root result.
     search(&launcher, "fire");
-    assert_eq!(titles(&launcher), ["Firefox"]);
-    // The calculator still answers arithmetic, with its answer card.
-    search(&launcher, "6*7");
-    assert_eq!(titles(&launcher), ["42"]);
+    // Pane's install row matches the four letters fuzzily below the
+    // application's prefix match (#193); the calculator's arithmetic left
+    // with its sources (#285), the Rust sample answering in its place.
+    assert_eq!(
+        titles(&launcher),
+        ["Launch Firefox", "Install extension from Git…"]
+    );
+    // The Rust sample still answers from the query, with its answer card.
+    search(&launcher, "reverse 42");
+    assert_eq!(titles(&launcher), ["24"]);
     let answer = launcher.presentation().rows[0].answer.clone().unwrap();
-    assert_eq!(answer.command, "Calculator");
+    assert_eq!(answer.command, "Rust sample");
 }
 
 #[test]
 fn a_provider_cannot_be_aliased_given_a_hotkey_or_launched_and_shortcuts_do_not_list_it() {
     let dirs = Dirs::new();
     let launcher = dirs.with_providers();
-    let calculator = command_id(&calculator(), "calculator");
-    let applications = command_id(&applications(), "applications");
+    let rust = command_id(&rust_provider(&dirs), "sample");
+    let applications = command_id(&applications_provider(&dirs), "launch");
 
-    for id in [&calculator, &applications] {
+    for id in [&rust, &applications] {
         let Err(refusal) = launcher.set_alias(id, "c") else {
             panic!("{id} was given an alias");
         };
@@ -224,7 +258,7 @@ fn a_provider_cannot_be_aliased_given_a_hotkey_or_launched_and_shortcuts_do_not_
         .flat_map(|group| &group.commands)
         .map(|command| command.id.as_str())
         .collect();
-    assert!(!listed.contains(&calculator.as_str()), "{listed:?}");
+    assert!(!listed.contains(&rust.as_str()), "{listed:?}");
     assert!(!listed.contains(&applications.as_str()), "{listed:?}");
 
     // Nothing pins it: root search has no row of it to pin, and its
@@ -235,7 +269,7 @@ fn a_provider_cannot_be_aliased_given_a_hotkey_or_launched_and_shortcuts_do_not_
         .flat_map(|package| package.providers())
         .map(|provider| provider.title)
         .collect();
-    assert_eq!(providers, ["Calculator", "Applications"]);
+    assert_eq!(providers, ["Rust sample", "JavaScript applications sample"]);
     assert!(launcher.quick_slots().is_empty());
 }
 
@@ -243,24 +277,24 @@ fn a_provider_cannot_be_aliased_given_a_hotkey_or_launched_and_shortcuts_do_not_
 fn disabling_a_provider_stops_its_results_and_enabling_brings_them_back() {
     let dirs = Dirs::new();
     let launcher = dirs.with_providers();
-    let identity = PackageIdentity::local(&calculator()).unwrap();
-    search(&launcher, "6*7");
-    assert_eq!(titles(&launcher), ["42"]);
+    let identity = PackageIdentity::local(&rust_provider(&dirs)).unwrap();
+    search(&launcher, "reverse 42");
+    assert_eq!(titles(&launcher), ["24"]);
 
     block_on(launcher.set_enabled(&identity, false));
-    search(&launcher, "6*7 ");
+    search(&launcher, "reverse 42 ");
     assert!(titles(&launcher).is_empty(), "{:?}", titles(&launcher));
 
     block_on(launcher.set_enabled(&identity, true));
-    search(&launcher, "6*7");
-    assert_eq!(titles(&launcher), ["42"]);
+    search(&launcher, "reverse 42");
+    assert_eq!(titles(&launcher), ["24"]);
 }
 
-/// Installs a copy of the calculator whose command's entry `change`
+/// Installs a copy of the Rust provider whose command's entry `change`
 /// rewrites; the status line.
 fn install_changed(dirs: &Dirs, change: impl FnOnce(&mut serde_json::Value)) -> Status {
     let folder = dirs.data.path().join("source");
-    copy_folder(&calculator(), &folder);
+    copy_folder(&rust_provider(dirs), &folder);
     let mut manifest = read(&folder, "pane.json");
     change(&mut manifest["commands"][0]);
     fs::write(folder.join("pane.json"), manifest.to_string()).unwrap();
@@ -282,7 +316,7 @@ fn a_provider_declaring_no_root_results_is_refused_with_the_reason() {
     };
     assert!(
         error.contains(
-            "command `calculator` is a provider (\"mode\": \"provider\") but declares neither \
+            "command `sample` is a provider (\"mode\": \"provider\") but declares neither \
              `rootResults` nor `indexedResults`"
         ),
         "{error}"
@@ -324,15 +358,15 @@ fn a_provider_asking_for_what_only_a_launched_command_uses_is_refused() {
 fn what_was_recorded_for_a_command_that_became_a_provider_is_dropped_once_with_a_toast() {
     let dirs = Dirs::new();
     drop(dirs.with_providers());
-    let calculator = command_id(&calculator(), "calculator");
-    let applications = command_id(&applications(), "applications");
+    let rust = command_id(&rust_provider(&dirs), "sample");
+    let applications = command_id(&applications_provider(&dirs), "launch");
     let extensions = dirs.extensions();
     seed(
         &extensions,
         "aliases.json",
         serde_json::json!({
             "version": 1,
-            "aliases": { calculator.clone(): "c" },
+            "aliases": { rust.clone(): "c" },
             "fallbacks": [applications.clone()],
         }),
     );
@@ -341,7 +375,7 @@ fn what_was_recorded_for_a_command_that_became_a_provider_is_dropped_once_with_a
         "hotkeys.json",
         serde_json::json!({
             "version": 1,
-            "hotkeys": { calculator.clone(): "ctrl+alt+c" },
+            "hotkeys": { rust.clone(): "ctrl+alt+c" },
         }),
     );
     seed(
@@ -350,7 +384,7 @@ fn what_was_recorded_for_a_command_that_became_a_provider_is_dropped_once_with_a
         serde_json::json!({
             "version": 2,
             "pins": [
-                { "command": calculator.clone() },
+                { "command": rust.clone() },
                 { "command": applications.clone(), "result": "/apps/Firefox.app" },
                 { "command": applications.clone() },
             ],
@@ -380,13 +414,13 @@ fn what_was_recorded_for_a_command_that_became_a_provider_is_dropped_once_with_a
     assert_eq!(toast.style, ToastStyle::Success);
     assert_eq!(
         toast.title,
-        "Calculator and Applications now only answer root search"
+        "Rust sample and JavaScript applications sample now only answer root search"
     );
     assert_eq!(
         toast.message.as_deref(),
         Some(
             "They have no row of their own now, so Pane removed the pin, alias and hotkey of \
-             Calculator and the pin and fallback of Applications."
+             Rust sample and the pin and fallback of JavaScript applications sample."
         )
     );
     drop(launcher);

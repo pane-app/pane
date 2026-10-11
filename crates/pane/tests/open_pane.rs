@@ -49,11 +49,61 @@ use wait::until_record_holds;
 struct FakeSystem {
     registered: Mutex<Vec<Shortcut>>,
     taken: Mutex<Vec<Shortcut>>,
+    /// Whether this system's adapter has a keyboard hook of its own, as
+    /// Windows' does (#260, #268): the binding kinds #260 adds bind
+    /// here, and the recorder's sessions come from the hook. A system
+    /// without one — macOS, X11, and the fakes that model them — explains
+    /// the kinds and offers no session, and a fresh data folder keeps
+    /// today's Open Pane default rather than taking the Windows key.
+    hooks: bool,
+    /// The senders of the recording sessions handed out (#260), for the
+    /// test to feed what the user pressed, as the hook adapter would
+    /// report it.
+    reporters: Mutex<Vec<pane_core::hotkeys::PressSender>>,
+}
+
+impl FakeSystem {
+    /// A system whose adapter has a keyboard hook of its own, as Windows'
+    /// does: the binding kinds bind, the recorder's sessions come from
+    /// the hook, and a fresh data folder's Open Pane default on Windows
+    /// is the Windows key alone (#268).
+    fn hooking() -> FakeSystem {
+        FakeSystem {
+            hooks: true,
+            ..FakeSystem::default()
+        }
+    }
 }
 
 impl Hotkeys for FakeSystem {
     fn unavailable(&self) -> Option<String> {
         None
+    }
+
+    // A system whose adapter has a keyboard hook takes the binding kinds
+    // #260 adds; one without explains them, as the systems without one
+    // do. It names the platform it models: the current one where that
+    // has no hook, macOS standing in where the tests run on Windows — a
+    // platform whose kinds the pure half says work — so the kinds are
+    // refused wherever the tests run.
+    fn kind_unavailable(&self, shortcut: &Shortcut) -> Option<String> {
+        if self.hooks {
+            return None;
+        }
+        let modeled = match pane_core::Platform::current() {
+            Some(pane_core::Platform::Windows) => Some(pane_core::Platform::Macos),
+            platform => platform,
+        };
+        pane_core::hotkeys::kinds_unavailable(shortcut, modeled)
+    }
+
+    fn recording(&self) -> Option<pane_core::hotkeys::RecordingSession> {
+        if !self.hooks {
+            return None;
+        }
+        let (sender, presses) = pane_core::hotkeys::channel();
+        self.reporters.lock().unwrap().push(sender);
+        Some(pane_core::hotkeys::RecordingSession::of(presses, || {}))
     }
 
     fn register(&self, shortcut: &Shortcut) -> Result<(), HotkeyError> {
@@ -827,4 +877,243 @@ fn where_global_hotkeys_cannot_be_used_the_page_explains(cx: &mut TestAppContext
         "{:?}",
         view.screen
     );
+}
+
+#[gpui::test]
+fn the_open_pane_recorder_records_the_kinds_a_session_reports(cx: &mut TestAppContext) {
+    let data = tempfile::tempdir().unwrap();
+    let system = Arc::new(FakeSystem::hooking());
+    let launcher = Launcher::new(Runtime::start(), Vec::new()).with_hotkeys(system.clone());
+    init_settings(Some(data.path()), cx);
+    cx.executor().allow_parking();
+    cx.update(pane::bind_keys);
+    let (_window, cx) = cx.add_window_view(|window, cx| LauncherWindow::new(launcher, window, cx));
+    let (_settings, mut settings_cx) = open_settings(cx);
+    settings_cx.run_until_parked();
+
+    // The names the row shows for the kinds: the platform's own for a
+    // modifier (Control on macOS), "Right " before a side's.
+    let ctrl = if cfg!(target_os = "macos") {
+        "Control"
+    } else {
+        "Ctrl"
+    };
+    // Click the recorder: it listens, and a recording session starts with
+    // the adapter (#260) — the fake hands one whose reports the test feeds
+    // as the user's presses: the kinds the window's own keystrokes cannot
+    // name, pressed without the Start menu the Windows key alone opens. A
+    // side of a modifier records first: the row names it as Windows does,
+    // "Right Ctrl".
+    click(&mut settings_cx, "open-pane-recorder");
+    settings_cx.run_until_parked();
+    let reported = system.reporters.lock().unwrap().clone();
+    assert_eq!(reported.len(), 1, "the recorder asked for one session");
+    let right_ctrl = Shortcut::parse("tap:rctrl").unwrap();
+    reported[0].send(right_ctrl.clone());
+    settings_cx.run_until_parked();
+    assert_eq!(registered(&system), vec![right_ctrl.clone()]);
+    until_record(&mut settings_cx, data.path(), "tap:rctrl");
+    let tree = a11y(&mut settings_cx);
+    assert!(
+        tree.contains(&format!("Open Pane with Right {ctrl}")),
+        "the row names the side, {tree}"
+    );
+
+    // A double tap records the same way: "Ctrl Ctrl".
+    click(&mut settings_cx, "open-pane-recorder");
+    settings_cx.run_until_parked();
+    let reported = system.reporters.lock().unwrap().clone();
+    let double = Shortcut::parse("double:ctrl").unwrap();
+    reported[1].send(double.clone());
+    settings_cx.run_until_parked();
+    assert_eq!(registered(&system), vec![double.clone()]);
+    until_record(&mut settings_cx, data.path(), "double:ctrl");
+    assert!(
+        a11y(&mut settings_cx).contains(&format!("Open Pane with {ctrl} {ctrl}")),
+        "the row names the double tap"
+    );
+
+    // The Windows key alone: "Win" on Windows, the platform's own name
+    // elsewhere; the recorder shows the binding and the record holds its
+    // textual form.
+    click(&mut settings_cx, "open-pane-recorder");
+    settings_cx.run_until_parked();
+    let reported = system.reporters.lock().unwrap().clone();
+    let tap = Shortcut::parse("tap:win").unwrap();
+    reported[2].send(tap.clone());
+    settings_cx.run_until_parked();
+    assert_eq!(registered(&system), vec![tap.clone()]);
+    until_record(&mut settings_cx, data.path(), "tap:win");
+    assert!(
+        a11y(&mut settings_cx).contains(&format!("Open Pane with {tap}")),
+        "the row names the tap"
+    );
+
+    // Escape still cancels, session and all: the binding is kept, the
+    // recorder stops listening, and no fourth session outlives it.
+    click(&mut settings_cx, "open-pane-recorder");
+    settings_cx.run_until_parked();
+    assert_eq!(system.reporters.lock().unwrap().len(), 4);
+    settings_cx.simulate_keystrokes("escape");
+    settings_cx.run_until_parked();
+    assert_eq!(registered(&system), vec![tap.clone()]);
+    assert!(
+        !a11y(&mut settings_cx).contains("Recording;"),
+        "the recorder is no longer listening"
+    );
+    until_record_holds(&mut settings_cx, data.path(), "\"open_pane\": \"tap:win\"");
+}
+
+#[gpui::test]
+fn a_fresh_data_folder_starts_with_the_fresh_install_default(cx: &mut TestAppContext) {
+    let data = tempfile::tempdir().unwrap();
+    // The fake whose adapter has a keyboard hook, as Windows' does: a
+    // fresh data folder on Windows gets the Windows key alone as its Open
+    // Pane hotkey; the other systems, whose adapters have no hook to
+    // recognize the tap, keep today's default (#268, ADR 0039).
+    let system = Arc::new(FakeSystem::hooking());
+    let launcher = Launcher::new(Runtime::start(), Vec::new()).with_hotkeys(system.clone());
+    init_settings(Some(data.path()), cx);
+    cx.executor().allow_parking();
+    cx.update(pane::bind_keys);
+    let (window, cx) = cx.add_window_view(|window, cx| LauncherWindow::new(launcher, window, cx));
+
+    let fresh = if cfg!(target_os = "windows") {
+        Shortcut::parse("tap:win").unwrap()
+    } else {
+        Shortcut::open_pane_default()
+    };
+    assert_eq!(registered(&system), vec![fresh.clone()]);
+    // The resolution writes nothing: the folder stays as fresh on the
+    // disk as it was, so the next save of any preference is what records
+    // the binding the fresh install came to hold.
+    assert!(!data.path().join("settings.json").exists());
+
+    // The binding summons the launcher as today's default does: shown
+    // without focus, it takes the focus; focused, it hides.
+    press(&window, &fresh, cx);
+    cx.run_until_parked();
+    assert!(
+        is_active(&handle_of(cx), cx),
+        "the fresh default summons the launcher"
+    );
+    press(&window, &fresh, cx);
+    cx.run_until_parked();
+    assert!(hidden(&window, cx), "the focused launcher hid");
+}
+
+#[gpui::test]
+fn a_settings_record_keeps_its_hotkey_rather_than_taking_the_fresh_default(
+    cx: &mut TestAppContext,
+) {
+    let data = tempfile::tempdir().unwrap();
+    // A record an earlier Pane wrote: whatever it names is what this Pane
+    // registers, even where the adapter could take the Windows key — only
+    // a fresh data folder gets the fresh-install default (#268).
+    std::fs::write(
+        data.path().join("settings.json"),
+        r#"{ "version": 2, "open_pane": "ctrl+alt+b" }"#,
+    )
+    .unwrap();
+    let system = Arc::new(FakeSystem::hooking());
+    let launcher = Launcher::new(Runtime::start(), Vec::new()).with_hotkeys(system.clone());
+    init_settings(Some(data.path()), cx);
+    cx.executor().allow_parking();
+    cx.update(pane::bind_keys);
+    let (_window, cx) = cx.add_window_view(|window, cx| LauncherWindow::new(launcher, window, cx));
+    let (_settings, settings_cx) = open_settings(cx);
+    settings_cx.run_until_parked();
+
+    assert_eq!(
+        registered(&system),
+        vec![Shortcut::parse("ctrl+alt+b").unwrap()],
+        "the record's hotkey is registered, not the fresh default"
+    );
+}
+
+#[gpui::test]
+fn the_use_the_windows_key_choice_sets_it_in_one_step(cx: &mut TestAppContext) {
+    let data = tempfile::tempdir().unwrap();
+    let system = Arc::new(FakeSystem::hooking());
+    let launcher = Launcher::new(Runtime::start(), Vec::new()).with_hotkeys(system.clone());
+    init_settings(Some(data.path()), cx);
+    cx.executor().allow_parking();
+    cx.update(pane::bind_keys);
+    let (window, cx) = cx.add_window_view(|window, cx| LauncherWindow::new(launcher, window, cx));
+    let (_settings, mut settings_cx) = open_settings(cx);
+    settings_cx.run_until_parked();
+
+    // Another hotkey is set, so the choice shows beside the recorder —
+    // on Windows the fresh default would have been the Windows key, so
+    // one is recorded first; everywhere else the default already is
+    // another hotkey.
+    click(&mut settings_cx, "open-pane-recorder");
+    settings_cx.run_until_parked();
+    settings_cx.simulate_keystrokes("ctrl-alt-b");
+    settings_cx.run_until_parked();
+    until_record(&mut settings_cx, data.path(), "ctrl+alt+b");
+
+    // The choice is there, with the note that says where the Start menu
+    // remains and that only the lone tap changes.
+    let tree = a11y(&mut settings_cx);
+    assert!(tree.contains("Use the Windows key"), "{tree}");
+    assert!(tree.contains("Start menu stays reachable"), "{tree}");
+    assert!(tree.contains("Ctrl+Esc"), "{tree}");
+    assert!(tree.contains("Win+E, Win+D, Win+L"), "{tree}");
+
+    // One step: the Windows key alone replaces the binding — registered
+    // before the one it replaces is released — and the record holds its
+    // textual form.
+    click(&mut settings_cx, "general-use-windows-key");
+    settings_cx.run_until_parked();
+    let windows_key = Shortcut::parse("tap:win").unwrap();
+    assert_eq!(registered(&system), vec![windows_key.clone()]);
+    until_record_holds(&mut settings_cx, data.path(), "\"open_pane\": \"tap:win\"");
+    let tree = a11y(&mut settings_cx);
+    assert!(
+        tree.contains(&format!("Open Pane with {windows_key}")),
+        "the row names the binding, {tree}"
+    );
+    assert!(
+        !tree.contains("Use the Windows key"),
+        "the choice is gone once taken, {tree}"
+    );
+
+    // The Windows key alone summons the launcher.
+    press(&window, &windows_key, cx);
+    cx.run_until_parked();
+    assert!(is_active(&handle_of(cx), cx));
+}
+
+#[gpui::test]
+fn where_the_windows_key_alone_cannot_be_taken_the_choice_explains_itself(cx: &mut TestAppContext) {
+    let data = tempfile::tempdir().unwrap();
+    // The fake without a hook, as the other systems' adapters are: the
+    // choice is explained rather than offered — the reason under its
+    // name, the row dimmed — and today's default keeps working (which is
+    // also what a fresh install here falls back to registering, #268).
+    let system = Arc::new(FakeSystem::default());
+    let launcher = Launcher::new(Runtime::start(), Vec::new()).with_hotkeys(system.clone());
+    init_settings(Some(data.path()), cx);
+    cx.executor().allow_parking();
+    cx.update(pane::bind_keys);
+    let (_window, cx) = cx.add_window_view(|window, cx| LauncherWindow::new(launcher, window, cx));
+    let (_settings, mut settings_cx) = open_settings(cx);
+    settings_cx.run_until_parked();
+
+    // Another hotkey is set (today's default), so the choice shows,
+    // explained: the kinds the Windows key alone needs do not work here.
+    let tree = a11y(&mut settings_cx);
+    assert!(tree.contains("Use the Windows key"), "{tree}");
+    assert!(
+        tree.contains("lone modifier taps work only on Windows"),
+        "the reason is shown, {tree}"
+    );
+
+    // The choice takes no step: the click does nothing, the binding stays
+    // the default, and nothing is saved.
+    click(&mut settings_cx, "general-use-windows-key");
+    settings_cx.run_until_parked();
+    assert_eq!(registered(&system), vec![Shortcut::open_pane_default()]);
+    assert!(!data.path().join("settings.json").exists());
 }

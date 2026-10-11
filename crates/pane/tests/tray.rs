@@ -112,6 +112,19 @@ impl Hotkeys for FakeHotkeys {
         None
     }
 
+    fn kind_unavailable(&self, shortcut: &Shortcut) -> Option<String> {
+        // This fake models a system without Pane's own keyboard hook, as
+        // macOS' and X11's adapters are: the kinds only the hook
+        // recognizes are explained (macOS stands in where the test
+        // binary runs on Windows, so a fresh data folder keeps today's
+        // Open Pane default rather than taking the Windows key).
+        let modeled = match pane_core::Platform::current() {
+            Some(pane_core::Platform::Windows) => Some(pane_core::Platform::Macos),
+            platform => platform,
+        };
+        pane_core::hotkeys::kinds_unavailable(shortcut, modeled)
+    }
+
     fn register(&self, shortcut: &Shortcut) -> Result<(), HotkeyError> {
         self.registered.lock().unwrap().push(shortcut.clone());
         Ok(())

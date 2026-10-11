@@ -108,6 +108,14 @@ impl Repo {
         self.git(&["tag", "--annotate", "-m", name, name]);
     }
 
+    /// Allows the partial-clone filter (`uploadpack.allowFilter`), so the
+    /// server advertises `filter` and answers `filter blob:none`: a host
+    /// that serves partial clones, as GitHub's and GitLab's servers do
+    /// (#311, ADR 0044).
+    pub fn allow_filter(&self) {
+        self.git(&["config", "uploadpack.allowFilter", "true"]);
+    }
+
     /// Adds a tree entry of `mode` (`120000` a link, `160000` a submodule)
     /// named `path` pointing to `target`'s contents or commit, without a
     /// file in the work tree.
@@ -204,6 +212,101 @@ pub fn greeter_files(guests: &Path, built: bool) -> Vec<(&'static str, Vec<u8>)>
     files
 }
 
+/// The files of a collection offering that sample as one extension,
+/// `clock` (ADR 0044): the index `index` at its root, and the sample's
+/// package under `extensions/clock`, its titles saying the extension's id,
+/// with its built component only when `built` (else the revision holds the
+/// source only).
+pub fn collection_files(guests: &Path, index: &str, built: bool) -> Vec<(&'static str, Vec<u8>)> {
+    let sample = guests.join("git/greeter");
+    let read = |file: &str| {
+        std::fs::read(sample.join(file)).unwrap_or_else(|error| {
+            panic!("{}: {error}; run `cargo xtask guests`", sample.display())
+        })
+    };
+    let manifest = String::from_utf8(read("pane.json"))
+        .unwrap()
+        .replace("Greeter from Git", "Clock from Git");
+    let mut files = vec![
+        ("pane-collection.json", index.as_bytes().to_vec()),
+        ("extensions/clock/pane.json", manifest.into_bytes()),
+        ("extensions/clock/src/lib.rs", read("src/lib.rs")),
+        ("README.md", b"The collection".to_vec()),
+    ];
+    if built {
+        files.push((
+            "extensions/clock/dist/git_greeter.wasm",
+            read("dist/git_greeter.wasm"),
+        ));
+    }
+    files
+}
+
+/// The files of a collection offering the Git sample as the extensions
+/// `extensions` names, each by its id and by whether that one ships its
+/// built component (one that does not holds the source only, which an
+/// install of it explains), each manifest saying its own title,
+/// description and version — what the choice's rows read of it (#308) —
+/// and the first one shipping an icon its manifest names. The index is
+/// the caller's, naming the extensions by id and folder.
+pub fn extension_collection_files(
+    guests: &Path,
+    extensions: &[(&'static str, bool)],
+) -> Vec<(&'static str, Vec<u8>)> {
+    let sample = guests.join("git/greeter");
+    let read = |file: &str| {
+        std::fs::read(sample.join(file)).unwrap_or_else(|error| {
+            panic!("{}: {error}; run `cargo xtask guests`", sample.display())
+        })
+    };
+    let mut files: Vec<(&'static str, Vec<u8>)> = Vec::new();
+    for (at, (id, built)) in extensions.iter().enumerate() {
+        let title: String = id
+            .chars()
+            .enumerate()
+            .map(|(at, character)| {
+                if at == 0 {
+                    character.to_ascii_uppercase()
+                } else {
+                    character
+                }
+            })
+            .collect();
+        let icon = (at == 0).then(|| r#", "icon": "icon.svg""#).unwrap_or("");
+        let manifest = format!(
+            r#"{{ "manifestVersion": 1, "title": "{title} from Git",
+                 "description": "The {id} extension of the tools collection",
+                 "version": "0.1.0"{icon}, "apiVersion": "0.1",
+                 "commands": [{{ "id": "sample", "title": "{title} from Git",
+                                 "component": "dist/git_greeter.wasm" }}],
+                 "operations": [{{ "id": "greet", "version": 1,
+                                   "component": "dist/git_greeter.wasm" }}] }}"#
+        );
+        let folder: &'static str = Box::leak(format!("extensions/{id}").into_boxed_str());
+        files.push((
+            Box::leak(format!("{folder}/pane.json").into_boxed_str()),
+            manifest.into_bytes(),
+        ));
+        files.push((
+            Box::leak(format!("{folder}/src/lib.rs").into_boxed_str()),
+            read("src/lib.rs"),
+        ));
+        if *built {
+            files.push((
+                Box::leak(format!("{folder}/dist/git_greeter.wasm").into_boxed_str()),
+                read("dist/git_greeter.wasm"),
+            ));
+        }
+        if at == 0 {
+            files.push((
+                Box::leak(format!("{folder}/icon.svg").into_boxed_str()),
+                br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"/>"#.to_vec(),
+            ));
+        }
+    }
+    files
+}
+
 /// How the server answers.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Mode {
@@ -221,12 +324,22 @@ pub enum Mode {
     /// as a repository with very many tags might answer; the rest as
     /// `Normal`.
     LongListing,
+    /// Every answer comes `wait` later: a slow repository, whose fetch is
+    /// in flight long enough to watch the status line while it runs.
+    Slow(std::time::Duration),
 }
 
 struct Served {
     repositories: BTreeMap<String, PathBuf>,
     requests: Vec<String>,
+    /// Each `fetch` command received, as its argument lines (`want …`,
+    /// `filter …`, `deepen …`, `done`): what a test asks a partial fetch
+    /// to have taken, read from what the server was asked for (#311).
+    fetches: Vec<Vec<String>>,
     mode: Mode,
+    /// Answer the next fetch (`command=fetch`) by closing the connection
+    /// partway through its answer: a fetch interrupted.
+    drop_next: bool,
 }
 
 /// A smart HTTP server for the repositories a test adds, on a free port of
@@ -247,7 +360,9 @@ impl Server {
         let served = Arc::new(Mutex::new(Served {
             repositories: BTreeMap::new(),
             requests: Vec::new(),
+            fetches: Vec::new(),
             mode: Mode::Normal,
+            drop_next: false,
         }));
         let stop = Arc::new(AtomicBool::new(false));
         let thread = {
@@ -301,9 +416,25 @@ impl Server {
         self.served.lock().unwrap().mode = mode;
     }
 
+    /// Answers the next fetch (`command=fetch`) by sending part of its
+    /// answer and closing the connection: a fetch interrupted partway,
+    /// which Pane tries again.
+    pub fn drop_once(&self) {
+        self.served.lock().unwrap().drop_next = true;
+    }
+
     /// Every request received, as `METHOD /path?query`.
     pub fn requests(&self) -> Vec<String> {
         self.served.lock().unwrap().requests.clone()
+    }
+
+    /// Each `fetch` command received, as the lines it was sent (its `want`
+    /// lines, `filter blob:none` where it filtered, `deepen 1`, `done`):
+    /// what was asked of the server, so a test checks that a partial fetch
+    /// took the trees and the chosen extensions' folders' blobs, and
+    /// nothing else of the repository (#311).
+    pub fn fetches(&self) -> Vec<Vec<String>> {
+        self.served.lock().unwrap().fetches.clone()
     }
 }
 
@@ -348,30 +479,38 @@ fn answer(stream: TcpStream, served: &Mutex<Served>, home: &Path) {
     if reader.read_exact(&mut body).is_err() {
         return;
     }
-    let (mode, repositories) = {
+    // Whether this request is a fetch (`command=fetch` in its body): a
+    // fetch `drop_once` armed is answered by cutting the connection
+    // partway through, and the arming lasts until a fetch asks, so other
+    // requests leave it armed. Decided here, because the body is moved
+    // into the server below.
+    let is_fetch = body.windows(13).any(|part| part == b"command=fetch");
+    let (mode, repositories, interrupt) = {
         let mut served = served.lock().unwrap();
         served.requests.push(format!("{method} {target}"));
-        (served.mode, served.repositories.clone())
-    };
-    let mut stream = stream;
-    let mut respond = |status: &str, headers: &[(&str, String)], body: &[u8]| {
-        let mut head = format!("HTTP/1.1 {status}\r\nContent-Length: {}\r\n", body.len());
-        for (name, value) in headers {
-            head.push_str(&format!("{name}: {value}\r\n"));
+        if is_fetch {
+            served.fetches.push(arguments_of(&body));
         }
-        head.push_str("Connection: close\r\n\r\n");
-        let _ = stream.write_all(head.as_bytes());
-        let _ = stream.write_all(body);
+        (
+            served.mode,
+            served.repositories.clone(),
+            is_fetch && std::mem::take(&mut served.drop_next),
+        )
     };
+    if let Mode::Slow(wait) = mode {
+        std::thread::sleep(wait);
+    }
+    let mut stream = stream;
     match mode {
         Mode::Redirect => {
             return respond(
+                stream,
                 "301 Moved Permanently",
                 &[("Location", "https://elsewhere.invalid/".into())],
                 b"",
             );
         }
-        Mode::SignIn => return respond("401 Unauthorized", &[], b"sign in"),
+        Mode::SignIn => return respond(stream, "401 Unauthorized", &[], b"sign in"),
         _ => {}
     }
     let (path, query) = target.split_once('?').unwrap_or((&target, ""));
@@ -384,11 +523,11 @@ fn answer(stream: TcpStream, served: &Mutex<Served>, home: &Path) {
             (name, "advertise")
         }
         (_, Some(name)) if method == "POST" => (name, "upload-pack"),
-        _ => return respond("404 Not Found", &[], b""),
+        _ => return respond(stream, "404 Not Found", &[], b""),
     };
     let name = name.strip_suffix(".git").unwrap_or(name);
     let Some(dir) = repositories.get(name) else {
-        return respond("404 Not Found", &[], b"");
+        return respond(stream, "404 Not Found", &[], b"");
     };
     if mode == Mode::LongListing
         && service == "upload-pack"
@@ -402,6 +541,7 @@ fn answer(stream: TcpStream, served: &Mutex<Served>, home: &Path) {
         }
         out.extend(b"0000");
         return respond(
+            stream,
             "200 OK",
             &[(
                 "Content-Type",
@@ -443,7 +583,72 @@ fn answer(stream: TcpStream, served: &Mutex<Served>, home: &Path) {
     };
     out.extend(output.stdout);
     if !output.status.success() && out.is_empty() {
-        return respond("500 Internal Server Error", &[], &output.stderr);
+        return respond(stream, "500 Internal Server Error", &[], &output.stderr);
     }
-    respond("200 OK", &[("Content-Type", content_type.into())], &out);
+    // A fetch interrupted partway: the answer announces its whole length
+    // but the connection ends partway through it.
+    if interrupt {
+        let head = format!(
+            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: application/x-git-upload-pack-result\r\nConnection: close\r\n\r\n",
+            out.len()
+        );
+        let _ = stream.write_all(head.as_bytes());
+        let _ = stream.write_all(&out[..out.len() / 2]);
+        let _ = stream.flush();
+        let _ = stream.shutdown(std::net::Shutdown::Write);
+        return;
+    }
+    respond(
+        stream,
+        "200 OK",
+        &[("Content-Type", content_type.into())],
+        &out,
+    );
+}
+
+/// Writes one answer to `stream`: the status, headers and body, then the
+/// connection ends.
+fn respond(mut stream: TcpStream, status: &str, headers: &[(&str, String)], body: &[u8]) {
+    let mut head = format!("HTTP/1.1 {status}\r\nContent-Length: {}\r\n", body.len());
+    for (name, value) in headers {
+        head.push_str(&format!("{name}: {value}\r\n"));
+    }
+    head.push_str("Connection: close\r\n\r\n");
+    let _ = stream.write_all(head.as_bytes());
+    let _ = stream.write_all(body);
+}
+
+/// The argument lines of the protocol version 2 command in `body` (a
+/// `fetch`): the pkt-lines after its delimiter, each without its newline —
+/// `want <id>`, `filter blob:none`, `deepen 1`, `no-progress`, `done`.
+fn arguments_of(body: &[u8]) -> Vec<String> {
+    let mut arguments = Vec::new();
+    let mut at = 0;
+    let mut past = false;
+    while at + 4 <= body.len() {
+        let length = std::str::from_utf8(&body[at..at + 4])
+            .ok()
+            .and_then(|head| usize::from_str_radix(head, 16).ok());
+        let Some(length) = length else {
+            break;
+        };
+        match length {
+            0 => at += 4,
+            1 => {
+                at += 4;
+                past = true;
+            }
+            4.. => {
+                let Some(line) = body.get(at + 4..at + length) else {
+                    break;
+                };
+                if past {
+                    arguments.push(String::from_utf8_lossy(line).trim_end().to_owned());
+                }
+                at += length;
+            }
+            _ => break,
+        }
+    }
+    arguments
 }

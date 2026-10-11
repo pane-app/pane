@@ -35,10 +35,10 @@ use pane_core::clipboard_view::local_offset_ms;
 use pane_core::extension_log::{LogLevel, LogLine, LogSource};
 use pane_core::{Binding, Launcher, PackageIdentity, Screen, Status};
 
-use crate::app::LauncherWindow;
+use crate::app::{LauncherWindow, Spot};
 use crate::ui::footer::{self, ButtonWash};
 use crate::ui::keycap::{CapStyle, KeySequence};
-use crate::ui::theme::Theme;
+use crate::ui::theme::{Theme, faded};
 use crate::ui::virtual_list::{self, VirtualList};
 use crate::{Confirm, SelectNext, SelectNextPage, SelectPrevious, SelectPreviousPage};
 
@@ -424,6 +424,16 @@ impl LauncherWindow {
     /// holds the keyboard's focus. `None` until the screen is read
     /// ([`LauncherWindow::sync_extension_log`]).
     pub(crate) fn render_extension_log(&mut self, cx: &mut Context<Self>) -> Option<Stateful<Div>> {
+        // The buttons' hover looks are read before the log is borrowed: a
+        // button's wash fades behind the pointer, and the log's records
+        // are read (and scrolled) while the buttons are drawn.
+        let now = cx.background_executor().now();
+        let look = |id: &'static str| self.motion.hover.look(Spot::Button(id), now);
+        let (copy_all_look, clear_look, open_look) = (
+            look("log-copy-all"),
+            look("log-clear"),
+            look("log-open-file"),
+        );
         let theme = crate::settings::launcher_visuals(cx).theme;
         let log = self.log.as_mut()?;
         log.sync_following();
@@ -467,15 +477,27 @@ impl LauncherWindow {
                 "log-copy-all",
                 "Copy All",
                 "shift-c",
+                copy_all_look,
                 copy_all,
+                cx,
                 &theme,
             ))
-            .child(log_button("log-clear", "Clear", "l", clear, &theme))
+            .child(log_button(
+                "log-clear",
+                "Clear",
+                "l",
+                clear_look,
+                clear,
+                cx,
+                &theme,
+            ))
             .child(log_button(
                 "log-open-file",
                 "Open Log File",
                 "o",
+                open_look,
                 open,
+                cx,
                 &theme,
             ));
         let lines = if empty {
@@ -553,6 +575,10 @@ impl LauncherWindow {
         };
         let theme = crate::settings::launcher_visuals(cx).theme;
         let selected = log.selected == Some(index);
+        let hover = self
+            .motion
+            .hover
+            .look(Spot::Log(index), cx.background_executor().now());
         let pane = line.source == LogSource::Pane;
         let tone = level_tone(line.level, &theme);
         let time = clock(line.time, log.offset_ms);
@@ -584,8 +610,13 @@ impl LauncherWindow {
             })
             .whitespace_nowrap()
             .text_size(theme.typography.row_kind_size)
-            .when(selected, |row| row.bg(theme.row_selected))
-            .when(!selected, |row| row.hover(|row| row.bg(theme.row_hover)))
+            .when(selected, |row| row.bg(theme.selection_wash))
+            .when(!selected && hover > 0., |row| {
+                row.bg(faded(theme.hover_wash, hover))
+            })
+            .on_hover(cx.listener(move |this, over: &bool, _, cx| {
+                this.motion.hover.set(Spot::Log(index), *over, cx);
+            }))
             .child(
                 div()
                     .debug_selector(move || format!("log-time-{index}"))
@@ -639,26 +670,35 @@ impl LauncherWindow {
 
 /// A button over the log's lines: `label` and the keys of its
 /// [`chord`]`(key)`, in the footer buttons' chrome, doing `clicked`.
+/// `look` is the button's hover wash strength (see `crate::app::hover_wash`),
+/// read from the window's hover state; the button reports the pointer's
+/// arrivals and departures itself, by its `id`.
 fn log_button(
     id: &'static str,
     label: &'static str,
     key: &str,
+    look: f32,
     clicked: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+    cx: &Context<LauncherWindow>,
     theme: &Theme,
 ) -> Stateful<Div> {
     let keys = chord_keys(key);
+    let spot = Spot::Button(id);
     footer::footer_button(
         id,
         label,
         &keys,
         CapStyle::Regular,
-        ButtonWash::Hover,
+        ButtonWash::Hover(look),
         theme,
     )
     .role(Role::Button)
     .aria_label(label)
     .aria_keyshortcuts(keys.name())
     .cursor_pointer()
+    .on_hover(cx.listener(move |this, over: &bool, _, cx| {
+        this.motion.hover.set(spot, *over, cx);
+    }))
     .on_click(clicked)
 }
 

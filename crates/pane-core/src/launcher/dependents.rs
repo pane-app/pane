@@ -5,13 +5,22 @@
 //! packages require it, directly or through each other (the required
 //! dependent closure of `dependencies::required_dependents`, which leaves
 //! out optional dependencies and those needed only on other systems),
-//! nothing changes yet: a confirmation lists them, with Disable all and
-//! Cancel. Cancel (or Back) returns to the list with everything as it was.
-//! Disable all disables the package and exactly the dependents shown, in one
-//! record, as an ordinary disable of each: their commands leave root search,
-//! their instances stop, and their settings and data are kept. If an
-//! enabled dependent that was not shown has appeared meanwhile, nothing is
-//! disabled and the new set is shown instead.
+//! nothing changes yet: a confirmation lists them, with Disable all,
+//! Disable only and Cancel. Cancel (or Back) returns to the list with
+//! everything as it was. Disable all disables the package and exactly the
+//! dependents shown, in one record, as an ordinary disable of each: their
+//! commands leave root search, their instances stop, and their settings
+//! and data are kept. Disable only disables the package alone: the
+//! dependents wait for it (see `waiting`) and come back by itself when it
+//! is enabled again. If an enabled dependent that was not shown has
+//! appeared meanwhile, nothing is disabled and the new set is shown
+//! instead.
+//!
+//! The package may also be the last installed provider of a capability
+//! that enabled packages require: capabilities add no package to the
+//! closure (another provider may serve), and the question instead gains a
+//! line naming who will wait for a provider. With another provider left,
+//! there is no line.
 //!
 //! Enabling a package again enables it alone. Pane pausing a package after
 //! it failed is not this user action and disables nothing else.
@@ -50,6 +59,35 @@ pub(super) fn with_dependents(title: &str, dependents: &[String]) -> String {
     }
 }
 
+/// The lines the Disable all and Uninstall all questions gain for the
+/// capabilities the package with `identity` is the last installed provider
+/// of: who will wait for a provider. A package of the closure does not wait
+/// — it is disabled or uninstalled with the one asked about.
+fn waiting_lines(
+    installed: &[crate::packages::InstalledPackage],
+    identity: &PackageIdentity,
+    handled: &[PackageIdentity],
+) -> Vec<String> {
+    dependencies::last_provided(installed, identity)
+        .into_iter()
+        .filter_map(|last| {
+            let consumers: Vec<String> = last
+                .consumers
+                .iter()
+                .filter(|named| !handled.contains(&named.identity))
+                .map(|named| named.title.clone())
+                .collect();
+            (!consumers.is_empty()).then(|| {
+                format!(
+                    "{} will wait for {} until another extension provides it",
+                    platform::join(&consumers),
+                    last.capability
+                )
+            })
+        })
+        .collect()
+}
+
 impl Launcher {
     /// Asks whether to disable the installed package with `identity`
     /// together with the enabled packages of `closure`, its required
@@ -61,6 +99,12 @@ impl Launcher {
         closure: Vec<Dependent>,
     ) {
         let title = state.title_of(identity);
+        // The packages the question itself handles, which do not wait for a
+        // provider: disabled or uninstalled with the one asked about.
+        let handled: Vec<PackageIdentity> = closure
+            .iter()
+            .map(|dependent| dependent.package.identity.clone())
+            .collect();
         let (to_disable, already): (Vec<Dependent>, Vec<Dependent>) =
             closure.into_iter().partition(|dependent| dependent.enabled);
         let shown: Vec<PackageIdentity> = to_disable
@@ -86,6 +130,7 @@ impl Launcher {
                 dependent.package.title, dependent.requires.title
             )
         }));
+        details.extend(waiting_lines(&state.packages, identity, &handled));
         details.push(format!(
             "Each keeps its settings and saved data. Enabling {title} again does not enable \
              them: enable each in Settings."
@@ -106,10 +151,21 @@ impl Launcher {
                 format!("Disable all {}", to_disable.len() + 1),
                 format!("Disable {title} and {with}"),
             ),
+            choice(
+                "disable-only",
+                format!("Disable only {title}"),
+                "The extensions that require it wait for it, and come back when it is enabled \
+                 again"
+                    .into(),
+            ),
             choice("cancel", "Cancel".into(), "Keep them all enabled".into()),
         ];
         state.next_screen();
-        state.entries = vec![Entry::DisableAll(identity.clone(), shown), Entry::Cancel];
+        state.entries = vec![
+            Entry::DisableAll(identity.clone(), shown),
+            Entry::DisableOnly(identity.clone()),
+            Entry::Cancel,
+        ];
         let screen = Screen::Confirm {
             question: Question::DisableDependents(identity.clone()),
             details,
@@ -157,6 +213,37 @@ impl Launcher {
         self.begin_change(state, identities, false)
     }
 
+    /// Disables the package with `identity` alone, as the confirmation's
+    /// Disable only row chose: the enabled packages that require it wait
+    /// for it (see `waiting`) and come back when it is enabled again, so
+    /// nothing is asked about them. If it is not installed any more, or
+    /// disabled already, nothing changes and the list is shown again.
+    pub(super) fn begin_disable_only(
+        &self,
+        state: &mut State,
+        identity: PackageIdentity,
+    ) -> Option<Change> {
+        let Some(package) = state.package(&identity) else {
+            self.show_extensions(state);
+            state.view.status = Status::Error(PackageError::NotInstalled(identity).to_string());
+            return None;
+        };
+        let (title, enabled) = (package.title(), package.enabled);
+        if !enabled {
+            self.show_extensions_at(
+                state,
+                |entry| matches!(entry, Entry::Toggle(asked) if *asked == identity),
+            );
+            state.view.status = Status::Error(format!("{title} is disabled already"));
+            return None;
+        }
+        self.show_extensions_at(
+            state,
+            |entry| matches!(entry, Entry::Toggle(asked) if *asked == identity),
+        );
+        self.begin_change(state, vec![identity], false)
+    }
+
     /// Asks whether to uninstall the installed package with `identity`
     /// together with the packages of `closure`, its required dependents
     /// (disabled ones included), listing them with each one's saved data,
@@ -189,6 +276,11 @@ impl Launcher {
                 dependent.package.title, dependent.requires.title, dependent.package.identity
             )
         }));
+        let handled: Vec<PackageIdentity> = closure
+            .iter()
+            .map(|dependent| dependent.package.identity.clone())
+            .collect();
+        details.extend(waiting_lines(&state.packages, identity, &handled));
         let kept = installation.data.kept_now(&DataKind::SAVED);
         let named = std::iter::once((identity, title.clone())).chain(
             closure

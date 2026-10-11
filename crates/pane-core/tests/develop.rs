@@ -347,6 +347,9 @@ fn saving_builds_and_reloads_only_that_package() {
 
     save(&folder, "sample_ts");
     dev.finished(&identity, 1);
+    // The reload's outcome is kept while the reopened command screen
+    // shows, and appears when the author leaves it.
+    to_root(&dev.launcher);
     assert_eq!(
         dev.launcher.view().status,
         Status::Result("Reloaded Dev".into())
@@ -368,6 +371,53 @@ fn saving_builds_and_reloads_only_that_package() {
         Status::Result(JAVASCRIPT.into())
     );
     assert_eq!(dev.probe.runs(), 2);
+}
+
+#[test]
+fn a_successful_build_hands_the_state_over_and_reopens_the_screen() {
+    // The handoff sample in each language, built by the session's stand-in
+    // build: the sample's source is its built component.
+    for component in ["sample_handoff", "sample_handoff_js", "sample_handoff_ts"] {
+        let dev = Dev::new();
+        let (folder, identity) = dev.developing("Dev", component);
+
+        // The command's screen, with the state it keeps in memory: two
+        // counts.
+        assert_eq!(
+            run(&dev.launcher, "Open Dev", "Add one (0 so far)"),
+            Status::Result("Counted one more".into())
+        );
+        run(&dev.launcher, "Open Dev", "Add one (1 so far)");
+
+        // A save that builds reloads it (ADR 0041's state handoff): the
+        // old code is asked for its state, the new code restores it, and
+        // the screen that was open opens again — the author is back where
+        // they were, with what they had.
+        save(&folder, component);
+        dev.finished(&identity, 1);
+        assert!(
+            matches!(dev.launcher.view().screen, Screen::Command),
+            "the screen that was open reopens: {:?}",
+            dev.launcher.view()
+        );
+        assert_eq!(
+            dev.launcher.view().title,
+            "Handoff: 2 counted, draft nothing"
+        );
+        // The reload's own outcome is kept while the reopened screen
+        // shows, and appears when the author leaves it.
+        to_root(&dev.launcher);
+        assert_eq!(
+            dev.launcher.view().status,
+            Status::Result("Reloaded Dev".into())
+        );
+
+        // The new code carries on from the handed-over state.
+        assert_eq!(
+            run(&dev.launcher, "Open Dev", "Add one (2 so far)"),
+            Status::Result("Counted one more".into())
+        );
+    }
 }
 
 #[test]
@@ -457,12 +507,27 @@ fn a_build_that_fails_to_start_is_paused_with_retry_and_not_rolled_back() {
 
     save(&folder, "failing_start");
     dev.finished(&identity, 1);
-    let message = error(dev.launcher.view().status);
-    assert!(
-        message
-            .starts_with("Reloaded Dev, but it failed to start; its earlier code is not restored."),
-        "{message}"
+    // A developed package's failed start shows as the error overlay (#214):
+    // the crash and its backtrace, with rows that open its log, copy them,
+    // and start it again. The pause it records stays, in the extension list.
+    let view = dev.launcher.view();
+    assert!(matches!(view.screen, Screen::Crash { .. }));
+    assert_eq!(view.title, "Dev failed to start");
+    assert_eq!(
+        titles(&dev.launcher),
+        [
+            "Logs for Dev",
+            "Copy the message and trace",
+            "Retry starting Dev"
+        ]
     );
+    let details = view.details().to_vec();
+    assert!(details[0].starts_with("The extension crashed:"));
+    assert!(details.len() > 1, "the trap's backtrace: {details:?}");
+
+    // Back leaves the overlay; the pause's row is in the extension list.
+    dev.launcher.back();
+    assert!(matches!(dev.launcher.view().screen, Screen::Root { .. }));
     manage(&dev.launcher);
     assert!(titles(&dev.launcher).contains(&"Retry starting Dev".to_string()));
 
@@ -808,11 +873,35 @@ fn a_published_copy_keeps_its_own_identity_and_code() {
     save(&folder, "sample_js");
     dev.finished(&identity, 1);
     // Both are titled Dev: the first command is the published copy's.
-    to_root(&dev.launcher);
+    // The blank query lists the two "Open Dev" rows wherever the
+    // no-query order (#199) ranks them, so each is chosen as the copyth
+    // row of that title — the list ranks again after each run, the used
+    // copy first.
+    let open_dev = |copy: usize| {
+        dev.launcher
+            .view()
+            .rows
+            .iter()
+            .enumerate()
+            .filter(|(_, row)| row.title == "Open Dev")
+            .map(|(index, _)| index)
+            .nth(copy)
+            .unwrap_or_else(|| panic!("fewer than {} Open Dev rows", copy + 1))
+    };
+    assert_eq!(
+        dev.launcher
+            .view()
+            .rows
+            .iter()
+            .filter(|row| row.title == "Open Dev")
+            .count(),
+        2,
+        "both copies' commands are listed"
+    );
     let answers: Vec<Status> = (0..2)
-        .map(|index| {
+        .map(|copy| {
             to_root(&dev.launcher);
-            dev.launcher.select(index);
+            dev.launcher.select(open_dev(copy));
             block_on(dev.launcher.activate_selected());
             select_title(&dev.launcher, "Say hello");
             block_on(dev.launcher.activate_selected());

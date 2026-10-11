@@ -33,7 +33,9 @@ use bindings::pane::extension::programs as wit;
 
 mod elevated;
 pub(crate) mod runner;
-mod search;
+// Also read by Run's adapter (#254): a bare name it resolves on the
+// search path the registry names, as the programs module does.
+pub(crate) mod search;
 
 /// The interface a component imports to run system programs: a package
 /// whose component imports it runs system programs, as the extension list

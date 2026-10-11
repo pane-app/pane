@@ -1,10 +1,10 @@
 """A local artifact source for the native smokes: serves, on 127.0.0.1
 only, the files in a folder (such as target/dist/artifacts, where
 `cargo xtask package-linux`, `cargo xtask package-windows` or
-`cargo xtask package-macos` assembles
-Pane's default extensions' payloads and their index) as Pane's own downloads do: the index document
-pane-defaults.json and every payload file. Nothing reaches the network or
-Pane's published downloads.
+`cargo xtask package-macos` assembles the index of Pane's own
+application updates and the application package it names) as Pane's own
+downloads do: the index document pane-defaults.json and the package
+file. Nothing reaches the network or Pane's published downloads.
 
 Usage: artifact_server.py <artifact-folder> <port-file>
 It listens on a free port, writes it to <port-file> once it is listening
