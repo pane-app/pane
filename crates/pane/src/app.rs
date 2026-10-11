@@ -2446,6 +2446,10 @@ impl LauncherWindow {
                     subtitle: row.subtitle.clone().map(SharedString::from),
                     unavailable_reason: refused,
                     selected,
+                    // The choice's rows take the selection wash only: they
+                    // do not report the pointer, so the hover wash never
+                    // rises (#289's RowContent gained the field).
+                    hover: 0.0,
                     unavailable_id: ("choice-reason", index).into(),
                     icon: Some(crate::ui::extension_icon::RowIcon::Drawn(icon)),
                 },
