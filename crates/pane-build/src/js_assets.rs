@@ -20,7 +20,7 @@ use std::path::Path;
 /// needs of it, and the adapter and `console` the bundled entry imports.
 /// Staged at `<work>/js` beside the package, where its `file:../js`
 /// devDependency resolves.
-const SDK: [(&str, &str); 46] = [
+const SDK: [(&str, &str); 50] = [
     (
         "LICENSE-APACHE",
         include_str!("../../../guests/js/LICENSE-APACHE"),
@@ -82,6 +82,14 @@ const SDK: [(&str, &str); 46] = [
     ("http.js", include_str!("../../../guests/js/http.js")),
     ("icons.d.ts", include_str!("../../../guests/js/icons.d.ts")),
     ("icons.js", include_str!("../../../guests/js/icons.js")),
+    (
+        "jsx-runtime.d.ts",
+        include_str!("../../../guests/js/jsx-runtime.d.ts"),
+    ),
+    (
+        "jsx-runtime.js",
+        include_str!("../../../guests/js/jsx-runtime.js"),
+    ),
     ("look.js", include_str!("../../../guests/js/look.js")),
     (
         "operations.d.ts",
@@ -148,6 +156,8 @@ const SDK: [(&str, &str); 46] = [
         "typed-folder.d.ts",
         include_str!("../../../guests/js/typed-folder.d.ts"),
     ),
+    ("view.d.ts", include_str!("../../../guests/js/view.d.ts")),
+    ("view.js", include_str!("../../../guests/js/view.js")),
     (
         "windows.d.ts",
         include_str!("../../../guests/js/windows.d.ts"),
