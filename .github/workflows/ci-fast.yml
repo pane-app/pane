@@ -81,6 +81,10 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          # The WIT guard in `ci-lints` walks the repository's history
+          # to find the released extension API (#319).
+          fetch-depth: 0
       - uses: ./.github/actions/setup
       - name: Check formatting, prebuilt samples and lints
         run: cargo xtask ci-lints

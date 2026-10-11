@@ -495,8 +495,9 @@ fn name_char(c: char) -> bool {
     c.is_ascii_alphanumeric() || matches!(c, '-' | '.' | '/' | ':' | '@')
 }
 
-/// The `X.Y.Z` a version text names, if it is one.
-fn parse_version(text: &str) -> Option<(u64, u64, u64)> {
+/// The `X.Y.Z` a version text names, if it is one. `wit_guard` reads
+/// release tags with it, too.
+pub(crate) fn parse_version(text: &str) -> Option<(u64, u64, u64)> {
     let mut parts = text.split('.');
     let major = parts.next()?.parse::<u64>().ok()?;
     let minor = parts.next()?.parse::<u64>().ok()?;

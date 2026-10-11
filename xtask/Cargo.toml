@@ -26,3 +26,8 @@ serde_json.workspace = true
 # The zip's per-file digests (#51), already in the workspace's tree as
 # flate2's own dependency.
 crc32fast.workspace = true
+# Parsing the WIT of the extension API for the guard that refuses a
+# breaking change under a version that has already shipped (#319): the
+# same parser the vendored componentizer builds with, already in the
+# tree at this version.
+wit-parser = "0.258"
