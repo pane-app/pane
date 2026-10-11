@@ -109,7 +109,7 @@ fn open_installed<'a>(
 ) -> (
     Entity<LauncherWindow>,
     tempfile::TempDir,
-    &mut VisualTestContext,
+    &'a mut VisualTestContext,
 ) {
     let data = tempfile::tempdir().unwrap();
     let folder = PathBuf::from(env!("CARGO_MANIFEST_DIR"))

@@ -32,9 +32,7 @@ use settle::{settle, until};
 
 /// The launcher window with the Rust navigation sample installed, with the
 /// launcher's background changes wired to it, and its command open.
-fn open(
-    cx: &mut TestAppContext,
-) -> (TempDir, Entity<LauncherWindow>, &mut VisualTestContext) {
+fn open(cx: &mut TestAppContext) -> (TempDir, Entity<LauncherWindow>, &mut VisualTestContext) {
     let data = tempfile::tempdir().unwrap();
     cx.update(|cx| {
         pane::settings::init_with_overrides(None, pane::settings::Overrides::parse(None, None), cx)
