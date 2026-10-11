@@ -39,7 +39,7 @@ type Choose =
 use super::components::{self, FieldKind};
 use super::reconcile::Held;
 use super::tree::Draw;
-use super::{DATE_CONTEXT, PATHS_CONTEXT, TAGS_CONTEXT};
+use super::{BUTTON_CONTEXT, DATE_CONTEXT, PATHS_CONTEXT, Press, TAGS_CONTEXT};
 
 /// One field's chrome: its title over `control`, and the note and error
 /// under it — the Settings board's field family, as the typed form's
@@ -470,6 +470,12 @@ pub(super) fn form(
                 .track_focus(&focus)
                 .focus(move |button| button.shadow(ring))
         })
+        // Enter and Space press the focused button, as every designed
+        // button's do, both running the submission the click does.
+        .key_context(BUTTON_CONTEXT)
+        .on_action(cx.listener(|this, _: &Press, window, cx| {
+            this.submit_designed_form(window, cx);
+        }))
         .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
             this.submit_designed_form(window, cx);
         }));

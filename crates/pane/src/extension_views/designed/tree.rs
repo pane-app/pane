@@ -210,8 +210,20 @@ pub(super) fn list_paths(
 /// each segment is a child's key, else its index — the key preferred when
 /// both spell a segment, as a keyed child's place is.
 pub(super) fn node_at<'a>(tree: &'a DesignedTree, path: &str) -> Option<&'a Node> {
+    let mut segments = path.trim_start_matches('/').split('/');
+    // The path's first segment is the root's own place — the key it
+    // gave, or the index 0 the path builds a keyless root's from — not
+    // one of its children's.
+    let root = segments.next()?;
+    let named = match tree.root.key.as_deref() {
+        Some(key) => key == root,
+        None => root == "0",
+    };
+    if !named {
+        return None;
+    }
     let mut node = &tree.root;
-    for segment in path.trim_start_matches('/').split('/') {
+    for segment in segments {
         if segment.is_empty() {
             continue;
         }

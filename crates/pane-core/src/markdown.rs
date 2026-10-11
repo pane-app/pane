@@ -577,7 +577,9 @@ fn cells_of(line: &str) -> Vec<String> {
                 escaped = false;
             }
             (false, '\\') => escaped = true,
-            (false, '|') => cells.push(cell.clone()),
+            // The cell ends here: what follows the pipe is the next one,
+            // not a continuation of this.
+            (false, '|') => cells.push(std::mem::take(&mut cell)),
             _ => cell.push(character),
         }
     }
