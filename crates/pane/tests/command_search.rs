@@ -48,7 +48,7 @@ fn use_service(window: &Entity<LauncherWindow>, cx: &mut VisualTestContext, addr
             .identity
     });
     let saved = window.update(cx, |window, _| window.launcher().clone());
-    let saved = saved.set_preference(&identity, "service", Some(address));
+    let saved = saved.set_preference(identity, "service", Some(address));
     cx.foreground_executor().block_on(saved).expect("saved");
     settle(&window, cx);
 }

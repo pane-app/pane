@@ -217,7 +217,7 @@ impl View for Search {
                     match done {
                         Ok(details) => show_toast(Toast::success(details)),
                         Err(why) => show_toast(Toast::failure(why)),
-                    }
+                    };
                 }
                 // A blank text: nothing is searched, nothing listed.
                 if query.trim().is_empty() {

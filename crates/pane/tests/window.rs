@@ -134,12 +134,6 @@ fn open_installed<'a>(
     (window, data, cx)
 }
 
-/// The value of the open designed view's canvas: what it says for
-/// assistive technology.
-fn canvas_value(window: &LauncherWindow) -> Option<String> {
-    canvas_value_of(&window.launcher().view().screen)
-}
-
 fn open_with(
     cx: &mut TestAppContext,
     commands: Vec<CommandRegistration>,
@@ -281,7 +275,7 @@ fn the_keyboard_fills_in_and_submits_the_form(cx: &mut TestAppContext, sample: &
     assert!(
         nodes.contains(&(
             "Label".into(),
-            format!("Hello, Ada, from the {} guest", sample.language).into(),
+            format!("Hello, Ada, from the {} guest", sample.language),
             "".into()
         )),
         "{nodes:?}"
@@ -319,7 +313,7 @@ fn a_rejected_field_shows_its_error_and_takes_focus(cx: &mut TestAppContext, sam
     assert!(
         nodes.contains(&(
             "Label".into(),
-            format!("Hello, Grace, from the {} guest", sample.language).into(),
+            format!("Hello, Grace, from the {} guest", sample.language),
             "".into()
         )),
         "{nodes:?}"
@@ -1277,8 +1271,8 @@ fn the_pointer_chooses_and_drags_across_swatches(cx: &mut TestAppContext, sample
 /// "counter" designed command, a canvas counting the events it handled —
 /// open, and where its canvas starts. The window's data folder must
 /// outlive the window.
-fn open_counter<'a>(
-    cx: &'a mut TestAppContext,
+fn open_counter(
+    cx: &mut TestAppContext,
 ) -> (
     Entity<LauncherWindow>,
     tempfile::TempDir,

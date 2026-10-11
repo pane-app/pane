@@ -32,8 +32,8 @@ use settle::{settle, until};
 
 /// The launcher window with the Rust navigation sample installed, with the
 /// launcher's background changes wired to it, and its command open.
-fn open<'a>(
-    cx: &'a mut TestAppContext,
+fn open(
+    cx: &mut TestAppContext,
 ) -> (TempDir, Entity<LauncherWindow>, &'a mut VisualTestContext) {
     let data = tempfile::tempdir().unwrap();
     cx.update(|cx| {

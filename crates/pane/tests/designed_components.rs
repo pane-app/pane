@@ -40,7 +40,6 @@ const LIGHT_DANGER: u32 = 0xC9372FFF;
 /// The theme's dark and light panel solids: what a raw colour is
 /// corrected against.
 const DARK_PANEL: u32 = 0x16171AFF;
-const LIGHT_PANEL: u32 = 0xF6F6F8FF;
 /// The theme's accent in each appearance.
 const DARK_ACCENT: u32 = 0xC9EE6AFF;
 const LIGHT_ACCENT: u32 = 0x5C7A17FF;

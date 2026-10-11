@@ -5,7 +5,7 @@
 
 use core::cell::Cell;
 
-use pane_extension::alloc::{format, string::String, vec, vec::Vec};
+use pane_extension::alloc::{borrow::ToOwned, format, string::String, vec, vec::Vec};
 use pane_extension::commands::{self, CommandRef, LaunchRecord, LaunchType};
 use pane_extension::feedback::{Toast, show_toast};
 use pane_extension::view::{

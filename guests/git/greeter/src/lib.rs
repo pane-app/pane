@@ -41,7 +41,7 @@ impl Command for Greeter {
 }
 
 /// The operation the package publishes: `greet`.
-impl publish::Guest for Greeter {
+impl pane_extension::publish::Guest for Greeter {
     async fn run_operation(operation: String, input: String) -> Result<String, String> {
         if operation != "greet" {
             return Err(format!("unknown operation: {operation}"));
