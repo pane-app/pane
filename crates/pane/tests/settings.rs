@@ -2752,7 +2752,10 @@ fn a_collection_folder_chosen_from_the_plus_menu_opens_the_choice(cx: &mut TestA
     // The choice the run ended on stays in place of the page; Back leaves
     // it for the group's page, where an entry opens its extension's page.
     click_row(&mut settings_cx, "extension-back");
-    until_drawn(&mut settings_cx, "extension-row-Update extensions automatically");
+    until_drawn(
+        &mut settings_cx,
+        "extension-row-Update extensions automatically",
+    );
     open_page(&mut settings_cx, "Clock from Git");
 }
 
@@ -3238,7 +3241,7 @@ fn a_row_waiting_on_a_capability_offers_the_install_row_that_opens_the_install_f
         .iter()
         .position(|row| row.title == "Greet from Rust")
         .expect("the waiting command is listed");
-    cx.update_entity(&launcher, |launcher, _| launcher.select(greet));
+    cx.update_entity(&launcher, |window, _| window.launcher().select(greet));
     let view = cx.read_entity(&launcher, |launcher, _| launcher.launcher().view());
     assert_eq!(view.selected, Some(greet));
     assert_eq!(

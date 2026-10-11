@@ -198,9 +198,10 @@ impl Sources {
                                 root.display()
                             )));
                         }
-                        Ok(ChoiceRead::Choice(Box::new(
-                            choice::Listed::folder(&root, &collection),
-                        )))
+                        Ok(ChoiceRead::Choice(Box::new(choice::Listed::folder(
+                            &root,
+                            &collection,
+                        ))))
                     }
                     None => SourcePackage::read(folder)
                         .map(|package| ChoiceRead::Package(Box::new(package))),
@@ -240,9 +241,12 @@ impl Sources {
                                  repository is one extension or a collection, never both"
                             )));
                         }
-                        Ok(ChoiceRead::Choice(Box::new(
-                            choice::Listed::git(download, &origin, partial, &collection),
-                        )))
+                        Ok(ChoiceRead::Choice(Box::new(choice::Listed::git(
+                            download,
+                            &origin,
+                            partial,
+                            &collection,
+                        ))))
                     }
                     // A repository that is no collection is one extension
                     // as today, read from the revision fetched above.

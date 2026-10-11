@@ -107,7 +107,9 @@ impl Watchers {
             .name("pane-watchers".into())
             .spawn(move || until_stopped(launcher, watchers));
         if let Err(error) = started {
-            crate::diagnostic!("Pane cannot run extension folder watchers in the background: {error}");
+            crate::diagnostic!(
+                "Pane cannot run extension folder watchers in the background: {error}"
+            );
         }
     }
 

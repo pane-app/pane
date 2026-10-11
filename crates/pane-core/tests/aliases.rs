@@ -882,7 +882,11 @@ fn a_change_that_cannot_be_kept_never_brings_back_an_uninstalled_packages_choice
     // fuzzily, the update check's row above the install row (#193).
     assert_eq!(
         titles(&launcher),
-        ["Check for Extension Updates", "Echo", "Install extension from folder…"]
+        [
+            "Check for Extension Updates",
+            "Echo",
+            "Install extension from folder…"
+        ]
     );
 }
 
