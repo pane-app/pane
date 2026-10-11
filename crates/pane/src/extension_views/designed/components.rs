@@ -594,7 +594,7 @@ pub(super) fn grid_image(icon: &Icon, fit: Fit, path: &str, draw: &Draw) -> AnyE
     };
     div()
         .id(path.to_owned())
-        .debug_selector(move || format!("designed-cell-image"))
+        .debug_selector(move || "designed-cell-image".into())
         .size_full()
         .child(element)
         .into_any_element()

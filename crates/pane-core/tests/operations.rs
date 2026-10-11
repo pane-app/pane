@@ -269,7 +269,7 @@ fn a_target_starts_only_when_it_is_called() {
     assert_eq!(dirs.running(), ["sample_operations.wasm"]);
 
     block_on(launcher.submit_pane_form(vec![
-        ("source".to_owned(), (&dirs.source(JAVASCRIPT)).to_owned()),
+        ("source".to_owned(), dirs.source(JAVASCRIPT).to_owned()),
         ("name".to_owned(), ("Rust").to_owned()),
     ]));
     assert_eq!(
@@ -1153,10 +1153,8 @@ fn start_sample_wait(dirs: &Dirs, launcher: &Launcher, caller: &str, target: &st
         sample_titles(caller).1,
         "Wait in another extension",
     );
-    let submitting = launcher.submit_pane_form(vec![(
-        "source".to_owned(),
-        (&dirs.source(target)).to_owned(),
-    )]);
+    let submitting =
+        launcher.submit_pane_form(vec![("source".to_owned(), dirs.source(target).to_owned())]);
     let started = Instant::now();
     let thread = thread::spawn(move || block_on(submitting));
     while dirs.waiting().as_deref() != Some("started") {

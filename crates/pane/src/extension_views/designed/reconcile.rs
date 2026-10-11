@@ -53,10 +53,6 @@ pub(crate) struct DesignedControls {
     /// The keyed state of every stateful and focusable node the last tree
     /// named, by its path.
     pub(super) state: HashMap<String, KeyedState>,
-    /// The values the current tree named for its discrete controls, keyed
-    /// by the nodes' keys (#241): the baseline an unchanged value does
-    /// not move.
-    pub(super) rendered: HashMap<String, String>,
     /// The values those controls reported since the tree landed, keyed by
     /// the nodes' keys: a form's submission reads them while the answers
     /// that carry them have not landed (#241).
@@ -80,7 +76,6 @@ impl DesignedControls {
         let mut controls = DesignedControls {
             view,
             state: HashMap::new(),
-            rendered: HashMap::new(),
             sent: HashMap::new(),
             keys: None,
         };
@@ -589,7 +584,7 @@ impl Held {
                 let commit =
                     std::rc::Rc::new(move |value: &str, window: &mut Window, cx: &mut App| {
                         let place = place.clone();
-                        let _ = entity.update(cx, |this, cx| {
+                        entity.update(cx, |this, cx| {
                             this.designed_select_committed(&place, value, window, cx);
                         });
                     });
@@ -600,7 +595,7 @@ impl Held {
                 let query =
                     std::rc::Rc::new(move |text: &str, window: &mut Window, cx: &mut App| {
                         let place = place.clone();
-                        let _ = entity.update(cx, |this, cx| {
+                        entity.update(cx, |this, cx| {
                             this.designed_select_queried(&place, text, window, cx);
                         });
                     });
@@ -777,23 +772,6 @@ fn paths_of(node: &Node) -> Vec<String> {
 }
 
 /// The value a discrete control's tree names, keyed by its key: a
-/// dropdown's choice, a checkbox's or toggle's state, a tag picker's or
-/// picker-of-many's chosen — the baseline an unchanged value does not
-/// move and a submission's collection reads behind what the control
-/// reported (#241).
-fn discrete_value(node: &Node) -> Option<(String, String)> {
-    let key = node.key.clone()?;
-    let value = match &node.kind {
-        NodeKind::Select(select) => select.value.clone().unwrap_or_default(),
-        NodeKind::Toggle(toggle) => toggle.on.to_string(),
-        NodeKind::Checkbox(checkbox) => checkbox.checked.to_string(),
-        NodeKind::TagPicker(picker) => picker.tags.join("\u{1}"),
-        NodeKind::FilePicker(picker) | NodeKind::FolderPicker(picker) => picker.paths.join("\u{1}"),
-        _ => return None,
-    };
-    Some((key, value))
-}
-
 /// Which kind of state a node holds, `None` for one that holds none: a
 /// field, a select, a scroll region, or a control that is focusable or
 /// names a handler.

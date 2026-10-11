@@ -454,7 +454,7 @@ impl SlowPane {
         let calling = launcher.activate_selected();
         let started = Instant::now();
         let calling = thread::spawn(move || {
-            let _ = block_on(calling);
+            block_on(calling);
         });
         while self.waiting().as_deref() != Some("started") {
             assert!(

@@ -651,8 +651,6 @@ impl LauncherWindow {
         path: &str,
         value: &str,
         callback: Option<u32>,
-        key: &str,
-        seen: u64,
         window: &mut gpui::Window,
         cx: &mut Context<Self>,
     ) {
@@ -670,7 +668,7 @@ impl LauncherWindow {
         let Some(tags) = tags else {
             return;
         };
-        self.designed_tags_changed(path, tags, callback, key, seen, window, cx);
+        self.designed_tags_changed(path, tags, callback, window, cx);
     }
 
     /// Removes the tag `value` from the tag picker at `path`, telling the
@@ -680,8 +678,6 @@ impl LauncherWindow {
         path: &str,
         value: &str,
         callback: Option<u32>,
-        key: &str,
-        seen: u64,
         window: &mut gpui::Window,
         cx: &mut Context<Self>,
     ) {
@@ -696,7 +692,7 @@ impl LauncherWindow {
         let Some(tags) = tags else {
             return;
         };
-        self.designed_tags_changed(path, tags, callback, key, seen, window, cx);
+        self.designed_tags_changed(path, tags, callback, window, cx);
     }
 
     /// The tag picker at `path`'s query's Enter: the highlighted option is
@@ -707,7 +703,7 @@ impl LauncherWindow {
         window: &mut gpui::Window,
         cx: &mut Context<Self>,
     ) {
-        let Some((value, callback, key, seen)) = self.designed.as_ref().and_then(|controls| {
+        let Some((value, callback)) = self.designed.as_ref().and_then(|controls| {
             let entry = controls.state.get(path)?;
             let Held::Tags {
                 query, highlighted, ..
@@ -728,8 +724,7 @@ impl LauncherWindow {
             let options = fields::matching(&picker.options, &text);
             let at = highlighted.filter(|at| *at < options.len()).unwrap_or(0);
             let chosen = options.get(at).map(|option| option.value.clone())?;
-            let (callback, key, seen) = (picker.on_change, entry.key.clone(), entry.render);
-            Some((chosen, callback, key, seen))
+            Some((chosen, picker.on_change))
         }) else {
             return;
         };
@@ -745,7 +740,7 @@ impl LauncherWindow {
         if let Some(query) = query {
             query.update(cx, |query, cx| query.emplace("", cx));
         }
-        self.designed_tag_added(path, &value, callback, &key, seen, window, cx);
+        self.designed_tag_added(path, &value, callback, window, cx);
     }
 
     /// Tells the extension the tag picker at `path` now holds `tags`.
@@ -754,21 +749,28 @@ impl LauncherWindow {
         path: &str,
         tags: Vec<String>,
         callback: Option<u32>,
-        key: &str,
-        seen: u64,
         window: &mut gpui::Window,
         cx: &mut Context<Self>,
     ) {
-        let _ = path;
         cx.notify();
         let Some(callback) = callback else {
+            return;
+        };
+        // The event's key and render: what the entry the picker's state
+        // lives in holds, as the change is raised from its own row.
+        let Some((key, seen)) = self
+            .designed
+            .as_ref()
+            .and_then(|controls| controls.state.get(path))
+            .map(|entry| (entry.key.clone(), entry.render))
+        else {
             return;
         };
         let payload = list_payload(&tags);
         self.designed_event(
             DesignedHandler::Change,
             callback,
-            key.to_owned(),
+            key,
             seen,
             payload,
             window,
@@ -879,6 +881,7 @@ impl LauncherWindow {
     /// none, when the tree gave it none), on the tree of the render
     /// `seen` (the tree the user saw the node in) — and redraws when its
     /// answer arrives.
+    #[allow(clippy::too_many_arguments)]
     fn designed_event(
         &mut self,
         handler: DesignedHandler,
@@ -954,9 +957,7 @@ impl LauncherWindow {
                 events.placing = false;
                 return None;
             }
-            if events.on_input.is_none() {
-                return None;
-            }
+            events.on_input?;
             events.pending = Some(editing.read(cx).as_str().to_owned());
             Some(())
         });
@@ -1616,8 +1617,7 @@ pub(super) fn payload_value(payload: &str) -> String {
         .split_once("\"value\"")
         .map(|(_, rest)| rest.trim_start().trim_start_matches(':').trim_start())
         .unwrap_or("");
-    if value.starts_with('"') {
-        let rest = &value[1..];
+    if let Some(rest) = value.strip_prefix('"') {
         let mut result = String::new();
         let mut characters = rest.chars();
         while let Some(character) = characters.next() {

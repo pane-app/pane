@@ -1094,7 +1094,7 @@ fn the_form_in_root_search_asks_for_the_repository() {
     block_on(launcher.activate_selected());
     block_on(launcher.submit_pane_form(vec![(
         "repository".to_owned(),
-        (&format!(" {}@v0.1.0 ", greeter.url)).to_owned(),
+        format!(" {}@v0.1.0 ", greeter.url).to_owned(),
     )]));
     assert_eq!(launcher.view().title, "Greeter from Git");
     block_on(launcher.activate_selected());

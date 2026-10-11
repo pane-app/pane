@@ -447,7 +447,7 @@ fn open_color(launcher: &Launcher, command: &str) {
     select_title(launcher, "color picker");
     block_on(launcher.activate_selected());
     assert!(matches!(launcher.view().screen, Screen::DesignedView(_)));
-    send_right(&launcher);
+    send_right(launcher);
 }
 
 /// The open color view's value: what its canvas says for assistive

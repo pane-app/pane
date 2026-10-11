@@ -891,16 +891,3 @@ pub(crate) fn caption(text: impl Into<SharedString>, theme: &Theme) -> Div {
         .text_color(theme.text_muted)
         .child(text.into())
 }
-
-/// The host's frame around an extension's own view (#99): 4px of padding
-/// (a press there focuses the view without reaching it), radius 10, the
-/// field's white 6% inset ring — the focus color while the view has the
-/// keyboard. Layout-free: the ring is a shadow, not a border. The view's
-/// own drawing keeps the colors its extension gave it.
-pub(crate) fn frame(theme: &Theme) -> Div {
-    let controls = &theme.geometry.controls;
-    div()
-        .p(controls.frame_padding)
-        .rounded(controls.frame_radius)
-        .shadow(well_shadows(false, theme))
-}

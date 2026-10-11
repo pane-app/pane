@@ -31,6 +31,11 @@ use crate::ui::controls;
 use crate::ui::theme::Theme;
 use crate::ui::tokens;
 
+/// The callback a path picker's "Choose…" button runs: it opens the
+/// system dialog for the pick and fills the field with what it returns.
+type Choose =
+    Rc<dyn Fn(&mut LauncherWindow, &mut gpui::Window, &mut gpui::Context<LauncherWindow>)>;
+
 use super::components::{self, FieldKind};
 use super::reconcile::Held;
 use super::tree::Draw;
@@ -50,7 +55,7 @@ pub(super) fn field_group(
     let label_selector = format!("field-label-{key}");
     let error_selector = format!("field-error-{key}");
     let info_selector = format!("field-description-{key}");
-    let group = controls::field(theme)
+    controls::field(theme)
         .id(SharedString::from(format!("field-{key}")))
         .debug_selector(move || format!("field-{key}"))
         .when_some(
@@ -74,8 +79,7 @@ pub(super) fn field_group(
                 controls::field_description(info, theme.text_muted, theme)
                     .debug_selector(move || info_selector.clone()),
             )
-        });
-    group
+        })
 }
 
 /// The label a field names itself by to assistive technology: its title,
@@ -207,22 +211,10 @@ pub(super) fn tag_field(
         .px(tokens::space(pane_core::Space::Xs))
         .children(chosen.iter().map(|tag| {
             let (path, tag) = (path.to_owned(), tag.clone());
-            let (callback, node_key, seen) = (
-                picker.on_change,
-                node.key.clone().unwrap_or_default(),
-                draw.render,
-            );
+            let callback = picker.on_change;
             components::chosen_chip(tag.as_str(), theme).on_click(cx.listener(
                 move |this, _: &ClickEvent, window, cx| {
-                    this.designed_tag_removed(
-                        &path,
-                        &tag,
-                        callback,
-                        node_key.as_str(),
-                        seen,
-                        window,
-                        cx,
-                    );
+                    this.designed_tag_removed(&path, &tag, callback, window, cx);
                 },
             ))
         }))
@@ -245,8 +237,6 @@ pub(super) fn tag_field(
                 let path = path.to_owned();
                 let value = option.value.clone();
                 let callback = picker.on_change;
-                let node_key = node.key.clone().unwrap_or_default();
-                let seen = draw.render;
                 option_row(
                     SharedString::from(format!("{path}/{value}")),
                     &option.label.clone().unwrap_or_else(|| option.value.clone()),
@@ -257,15 +247,7 @@ pub(super) fn tag_field(
                 .aria_label(option.label.clone().unwrap_or_else(|| option.value.clone()))
                 .when(at == highlighted, |row| row.aria_active_descendant())
                 .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
-                    this.designed_tag_added(
-                        &path,
-                        &value,
-                        callback,
-                        node_key.as_str(),
-                        seen,
-                        window,
-                        cx,
-                    );
+                    this.designed_tag_added(&path, &value, callback, window, cx);
                 }))
                 .into_any_element()
             })
@@ -346,10 +328,7 @@ pub(super) fn path_field(
             multiple: picker.multiple,
         },
     );
-    let (well, choose): (
-        AnyElement,
-        Rc<dyn Fn(&mut LauncherWindow, &mut gpui::Window, &mut gpui::Context<LauncherWindow>)>,
-    ) = if picker.multiple {
+    let (well, choose): (AnyElement, Choose) = if picker.multiple {
         let Some(entry) = draw.state.get(path) else {
             return div().into_any_element();
         };

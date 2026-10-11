@@ -566,7 +566,7 @@ fn replacing_a_components_code_closes_its_views() {
         "{:?}",
         view.screen
     );
-    assert_eq!(error(&launcher), "The extension's view is no longer open");
+    assert_eq!(error(launcher), "The extension's view is no longer open");
     assert_eq!(block_on(runtime.designed_view_count()), 0);
 }
 

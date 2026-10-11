@@ -1142,7 +1142,7 @@ impl Render for Select {
 fn section_label(label: SharedString, theme: &Theme) -> AnyElement {
     let drawn = label.clone();
     div()
-        .id(SharedString::from(label.clone()))
+        .id(label.clone())
         .debug_selector(move || format!("{label}-section"))
         .px(theme.geometry.actions.empty_padding_x)
         .pt(theme.geometry.actions.list_padding)

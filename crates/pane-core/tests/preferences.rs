@@ -450,7 +450,7 @@ fn the_setup_screen_asks_only_for_required_unset_values_then_launches(fixture: &
         Some("No folder has this path")
     );
     let notes = pane.notes();
-    block_on(launcher.submit_pane_form(vec![("show#folder".to_owned(), (&notes).to_owned())]));
+    block_on(launcher.submit_pane_form(vec![("show#folder".to_owned(), notes.to_owned())]));
     let view = launcher.view();
     assert_eq!(view.screen, Screen::Command);
     assert_eq!(view.title, "Preferences");

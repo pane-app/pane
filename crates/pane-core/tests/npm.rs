@@ -345,7 +345,7 @@ fn the_form_in_root_search_asks_for_the_npm_package() {
     block_on(launcher.activate_selected());
     block_on(launcher.submit_pane_form(vec![(
         "package".to_owned(),
-        (&format!(" {GREETER}@0.1.0 ")).to_owned(),
+        format!(" {GREETER}@0.1.0 ").to_owned(),
     )]));
 
     assert_eq!(launcher.view().title, "Greeter from npm");

@@ -41,7 +41,7 @@ use gpui::prelude::*;
 use gpui::{
     AnyElement, Bounds, ContentMask, DispatchPhase, FillOptions, FontWeight, MouseButton,
     MouseDownEvent, MouseMoveEvent, MouseUpEvent, PathBuilder, PathStyle, Pixels, Point, Role,
-    ScrollWheelEvent, SharedString, StrokeOptions, WeakEntity, Window, div, px,
+    ScrollWheelEvent, SharedString, Size, StrokeOptions, WeakEntity, Window, div, px,
 };
 use lyon::tessellation::{LineCap, LineJoin};
 
@@ -269,9 +269,8 @@ pub(super) fn canvas(
     let (focus, bounds) = tracked.unwrap_or_else(|| (None, Rc::new(Cell::new(Bounds::default()))));
 
     // What the events the canvas raises carry: the node's key, the render
-    // whose tree is drawn (the tree the user saw), and the handlers the
-    // tree named, captured as the drawing is built, as a button's press
-    // captures its own.
+    // whose tree is drawn, and the handlers the tree named, captured as
+    // the drawing is built, as a button's press captures its own.
     let key = node.key.clone().unwrap_or_default();
     let render = draw.render;
     let handlers = held.handlers;
@@ -302,12 +301,13 @@ pub(super) fn canvas(
     let entity = cx.entity().downgrade();
     // The listeners name the canvas by its place in the tree, which is
     // unique; the event's `key` is the node's own, as every event's is.
-    let (down_at, secondary_at, wheel_at, hover_at) = (
-        path.to_owned(),
-        path.to_owned(),
-        path.to_owned(),
-        path.to_owned(),
-    );
+    let on = OnCanvas {
+        path: path.to_owned(),
+        handlers,
+        render,
+    };
+    let (down_on, secondary_on, wheel_on, hover_on) =
+        (on.clone(), on.clone(), on.clone(), on.clone());
     let (down_focus, secondary_focus) = (focus.clone(), focus.clone());
     let drawing = div()
         .id(format!("{path}/area"))
@@ -326,14 +326,12 @@ pub(super) fn canvas(
                 if let Some(focus) = down_focus.as_ref() {
                     window.focus(focus, cx);
                 }
-                if let Some(at) = this.designed_canvas_point(&down_at, event.position) {
+                if let Some(at) = this.designed_canvas_point(&down_on.path, event.position) {
                     this.designed_canvas_down(
-                        &down_at,
+                        &down_on,
                         at,
                         event.click_count,
                         &event.modifiers,
-                        &handlers,
-                        render,
                         window,
                         cx,
                     );
@@ -346,14 +344,12 @@ pub(super) fn canvas(
                 if let Some(focus) = secondary_focus.as_ref() {
                     window.focus(focus, cx);
                 }
-                if let Some(at) = this.designed_canvas_point(&secondary_at, event.position) {
+                if let Some(at) = this.designed_canvas_point(&secondary_on.path, event.position) {
                     this.designed_canvas_secondary(
-                        &secondary_at,
+                        &secondary_on,
                         at,
                         event.click_count,
                         &event.modifiers,
-                        &handlers,
-                        render,
                         window,
                         cx,
                     );
@@ -362,14 +358,12 @@ pub(super) fn canvas(
         )
         .on_scroll_wheel(
             cx.listener(move |this, event: &ScrollWheelEvent, window, cx| {
-                if let Some(at) = this.designed_canvas_point(&wheel_at, event.position) {
+                if let Some(at) = this.designed_canvas_point(&wheel_on.path, event.position) {
                     this.designed_canvas_wheel(
-                        &wheel_at,
+                        &wheel_on,
                         at,
                         &event.delta,
                         &event.modifiers,
-                        &handlers,
-                        render,
                         window,
                         cx,
                     );
@@ -377,13 +371,13 @@ pub(super) fn canvas(
             }),
         )
         .on_hover(cx.listener(move |this, over: &bool, window, cx| {
-            this.designed_canvas_hover(&hover_at, *over, &handlers, render, window, cx);
+            this.designed_canvas_hover(&hover_on, *over, window, cx);
         }));
 
     // The drag: a press over the canvas held, moves and the release sent
     // while it is, anywhere in the window; a move without the button
     // meaning it went up outside, which the window cannot otherwise see.
-    let (move_path, up_path) = (path.to_owned(), path.to_owned());
+    let (move_on, up_on) = (on.clone(), on.clone());
     let (moved, released) = (entity.clone(), entity);
     let element = div()
         .id(path.to_owned())
@@ -408,21 +402,21 @@ pub(super) fn canvas(
         .when(!value.is_empty(), |element| element.aria_value(value))
         .when_some(focus, |element, focus| element.track_focus(&focus))
         .on_action::<Increment>(cx.listener({
-            let path = path.to_owned();
+            let on = on.clone();
             move |this, _, window, cx| {
-                this.designed_canvas_semantic(&path, render, handlers.on_increment, window, cx);
+                this.designed_canvas_semantic(&on, on.handlers.on_increment, window, cx);
             }
         }))
         .on_action::<Decrement>(cx.listener({
-            let path = path.to_owned();
+            let on = on.clone();
             move |this, _, window, cx| {
-                this.designed_canvas_semantic(&path, render, handlers.on_decrement, window, cx);
+                this.designed_canvas_semantic(&on, on.handlers.on_decrement, window, cx);
             }
         }))
         .on_action::<Activate>(cx.listener({
-            let path = path.to_owned();
+            let on = on.clone();
             move |this, _, window, cx| {
-                this.designed_canvas_semantic(&path, render, handlers.on_activate, window, cx);
+                this.designed_canvas_semantic(&on, on.handlers.on_activate, window, cx);
             }
         }))
         .child(drawing)
@@ -433,12 +427,10 @@ pub(super) fn canvas(
             if let Some(moved) = moved.upgrade() {
                 moved.update(cx, |this, cx| {
                     this.designed_canvas_moved(
-                        &move_path,
+                        &move_on,
                         event.position,
                         event.pressed_button,
                         &event.modifiers,
-                        &handlers,
-                        render,
                         window,
                         cx,
                     );
@@ -451,14 +443,7 @@ pub(super) fn canvas(
             }
             if let Some(released) = released.upgrade() {
                 released.update(cx, |this, cx| {
-                    this.designed_canvas_released(
-                        &up_path,
-                        event.position,
-                        &handlers,
-                        render,
-                        window,
-                        cx,
-                    );
+                    this.designed_canvas_released(&up_on, event.position, window, cx);
                 });
             }
         });
@@ -516,7 +501,14 @@ fn layer_element(
             y,
             width,
             height,
-        } => image_element(image, x, y, width, height, index, path, draw),
+        } => image_element(
+            image,
+            gpui::point(px(x), px(y)),
+            gpui::size(px(width), px(height)),
+            index,
+            path,
+            draw,
+        ),
     }
 }
 
@@ -543,10 +535,8 @@ fn text_element(text: &Texted) -> AnyElement {
 /// loads (its fallback) or nothing, in the box its operation names.
 fn image_element(
     image: Option<pane_core::Icon>,
-    x: f32,
-    y: f32,
-    width: f32,
-    height: f32,
+    at: gpui::Point<Pixels>,
+    size: Size<Pixels>,
     index: usize,
     path: &str,
     draw: &Draw,
@@ -557,17 +547,17 @@ fn image_element(
     let drawn = components::drawn(&icon, draw);
     let inner = crate::ui::extension_icon::draw(
         &drawn,
-        IconSize::small(px(width.max(height))),
+        IconSize::small(size.width.max(size.height)),
         format!("{path}/image{index}"),
         "designed",
         draw.theme,
     );
     div()
         .absolute()
-        .left(px(x))
-        .top(px(y))
-        .w(px(width))
-        .h(px(height))
+        .left(at.x)
+        .top(at.y)
+        .w(size.width)
+        .h(size.height)
         .flex_none()
         .overflow_hidden()
         .child(inner.aria_hidden())
@@ -1048,6 +1038,21 @@ fn join_of(join: pane_core::StrokeJoin) -> LineJoin {
     }
 }
 
+/// The canvas an event is raised on: its path in the keyed state (which
+/// names it and the drag it holds), the handlers its tree named, and the
+/// render whose tree is drawn — the trio every canvas event's plumbing
+/// carries, captured as the drawing is built, as a button's press
+/// captures its own.
+#[derive(Clone)]
+struct OnCanvas {
+    /// The canvas's path in the keyed state.
+    path: String,
+    /// The handlers the tree named. Copy, so the clone is cheap.
+    handlers: CanvasHandlers,
+    /// The render whose tree is drawn.
+    render: u64,
+}
+
 impl LauncherWindow {
     /// The canvas at `path`'s drawing was laid out at `area`: the size is
     /// named in the view's render context from now on, and its change is
@@ -1079,10 +1084,10 @@ impl LauncherWindow {
             "resize",
             &[number("width", width), number("height", height)],
         );
-        self.designed_canvas_send(
+        self.designed_event(
             DesignedHandler::Resize,
             handler,
-            &key,
+            key,
             seen,
             payload,
             window,
@@ -1099,8 +1104,8 @@ impl LauncherWindow {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
-        if let Some((handlers, render, _)) = self.designed_canvas_of(path) {
-            self.designed_canvas_released_at(path, &handlers, render, window, cx);
+        if let Some(on) = self.designed_canvas_of(path) {
+            self.designed_canvas_released_at(&on, window, cx);
         }
     }
 
@@ -1126,7 +1131,7 @@ impl LauncherWindow {
 
     /// The canvas at `path`: the handlers its tree names (the tree now on
     /// screen's, whose render is drawn), and its own key.
-    fn designed_canvas_of(&self, path: &str) -> Option<(CanvasHandlers, u64, String)> {
+    fn designed_canvas_of(&self, path: &str) -> Option<OnCanvas> {
         let (_, entry) = self.canvas_entry(path)?;
         let key = entry.key.clone();
         let render = entry.render;
@@ -1134,7 +1139,11 @@ impl LauncherWindow {
             pane_core::Screen::DesignedView(view) => Some(view.tree),
             _ => None,
         };
-        Some((canvas_at(tree.as_ref(), &key)?, render, key))
+        Some(OnCanvas {
+            path: path.to_owned(),
+            handlers: canvas_at(tree.as_ref(), &key)?,
+            render,
+        })
     }
 
     /// The primary button was pressed over the canvas at `path` at `at`:
@@ -1142,38 +1151,27 @@ impl LauncherWindow {
     /// and a double one when it is.
     fn designed_canvas_down(
         &mut self,
-        path: &str,
+        on: &OnCanvas,
         at: (f32, f32),
         clicks: usize,
         modifiers: &gpui::Modifiers,
-        handlers: &CanvasHandlers,
-        render: u64,
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
         if let Some(controls) = self.designed.as_mut()
-            && let Some(entry) = controls.state.get_mut(path)
+            && let Some(entry) = controls.state.get_mut(&on.path)
             && let Held::Canvas { drag, .. } = &mut entry.held
         {
             let mut drag = drag.borrow_mut();
             drag.pressed = true;
             drag.last = at;
         }
-        let key = self.canvas_key(path);
-        if let Some(down) = handlers.on_pointer_down {
+        if let Some(down) = on.handlers.on_pointer_down {
             let payload = pointer("pointer-down", at, "left", clicks, modifiers);
-            self.designed_canvas_send(
-                DesignedHandler::Pointer,
-                down,
-                &key,
-                render,
-                payload,
-                window,
-                cx,
-            );
+            self.designed_canvas_send(DesignedHandler::Pointer, on, down, payload, window, cx);
         }
         if clicks >= 2 {
-            self.designed_canvas_double(path, at, modifiers, handlers, render, window, cx);
+            self.designed_canvas_double(on, at, modifiers, window, cx);
         }
     }
 
@@ -1181,23 +1179,19 @@ impl LauncherWindow {
     /// `at`.
     fn designed_canvas_secondary(
         &mut self,
-        path: &str,
+        on: &OnCanvas,
         at: (f32, f32),
         clicks: usize,
         modifiers: &gpui::Modifiers,
-        handlers: &CanvasHandlers,
-        render: u64,
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
-        if let Some(secondary) = handlers.on_secondary {
+        if let Some(secondary) = on.handlers.on_secondary {
             let payload = pointer("secondary", at, "right", clicks, modifiers);
-            let key = self.canvas_key(path);
             self.designed_canvas_send(
                 DesignedHandler::Secondary,
+                on,
                 secondary,
-                &key,
-                render,
                 payload,
                 window,
                 cx,
@@ -1209,22 +1203,18 @@ impl LauncherWindow {
     /// told, after the second press's own event.
     fn designed_canvas_double(
         &mut self,
-        path: &str,
+        on: &OnCanvas,
         at: (f32, f32),
         modifiers: &gpui::Modifiers,
-        handlers: &CanvasHandlers,
-        render: u64,
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
-        if let Some(double) = handlers.on_double_click {
+        if let Some(double) = on.handlers.on_double_click {
             let payload = pointer("double-click", at, "left", 2, modifiers);
-            let key = self.canvas_key(path);
             self.designed_canvas_send(
                 DesignedHandler::DoubleClick,
+                on,
                 double,
-                &key,
-                render,
                 payload,
                 window,
                 cx,
@@ -1239,23 +1229,21 @@ impl LauncherWindow {
     /// unseen, so the drag ends as a release would.
     fn designed_canvas_moved(
         &mut self,
-        path: &str,
+        on: &OnCanvas,
         position: Point<Pixels>,
         pressed: Option<MouseButton>,
         modifiers: &gpui::Modifiers,
-        handlers: &CanvasHandlers,
-        render: u64,
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
-        let at = self.designed_canvas_point(path, position);
+        let at = self.designed_canvas_point(&on.path, position);
         // Whether a drag is held, and whether this move means the button
         // went up outside the window: the release the window cannot see.
         let held = {
             let Some(controls) = self.designed.as_ref() else {
                 return;
             };
-            let Some(entry) = controls.state.get(path) else {
+            let Some(entry) = controls.state.get(&on.path) else {
                 return;
             };
             let Held::Canvas { drag, .. } = &entry.held else {
@@ -1279,13 +1267,13 @@ impl LauncherWindow {
         if pressed != Some(MouseButton::Left) {
             // The button went up outside the window: the drag ends where
             // the pointer was last seen.
-            self.designed_canvas_released_at(path, handlers, render, window, cx);
+            self.designed_canvas_released_at(on, window, cx);
             return;
         }
         let Some(at) = at else {
             return;
         };
-        self.designed_canvas_move(path, at, modifiers, handlers, render, window, cx);
+        self.designed_canvas_move(on, at, modifiers, window, cx);
     }
 
     /// A drag's move over the canvas at `path` at `at`, coalesced: while
@@ -1293,22 +1281,20 @@ impl LauncherWindow {
     /// moves in flight are answered.
     fn designed_canvas_move(
         &mut self,
-        path: &str,
+        on: &OnCanvas,
         at: (f32, f32),
         modifiers: &gpui::Modifiers,
-        handlers: &CanvasHandlers,
-        render: u64,
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
         let send = self.designed.as_mut().and_then(|controls| {
-            let entry = controls.state.get_mut(path)?;
+            let entry = controls.state.get_mut(&on.path)?;
             let Held::Canvas { drag, .. } = &mut entry.held else {
                 return None;
             };
             let mut drag = drag.borrow_mut();
             drag.last = at;
-            let movement = handlers.on_pointer_move?;
+            let movement = on.handlers.on_pointer_move?;
             if drag.in_flight > 0 {
                 drag.waiting = Some((at, *modifiers));
                 return None;
@@ -1320,15 +1306,15 @@ impl LauncherWindow {
             return;
         };
         let payload = pointer("pointer-move", at, "left", 0, modifiers);
-        let key = self.canvas_key(path);
+        let key = self.canvas_key(&on.path);
         let pending = self.launcher.send_designed_seen(
             DesignedHandler::Pointer,
             movement,
             (!key.is_empty()).then_some(key.as_str()),
-            Some(render),
+            Some(on.render),
             payload,
         );
-        let path = path.to_owned();
+        let path = on.path.clone();
         cx.spawn_in(window, async move |this, cx| {
             pending.await;
             let _ = this.update_in(cx, |this, window, cx| {
@@ -1363,9 +1349,8 @@ impl LauncherWindow {
         if let Some((at, modifiers)) = waiting {
             // The handlers of the tree now on screen, as the waiting move
             // is raised on it.
-            if let Some((handlers, render, key)) = self.designed_canvas_of(path) {
-                self.designed_canvas_move(path, at, &modifiers, &handlers, render, window, cx);
-                let _ = key;
+            if let Some(on) = self.designed_canvas_of(path) {
+                self.designed_canvas_move(&on, at, &modifiers, window, cx);
             }
         }
     }
@@ -1374,16 +1359,14 @@ impl LauncherWindow {
     /// and its handler is told, wherever the release happened.
     fn designed_canvas_released(
         &mut self,
-        path: &str,
+        on: &OnCanvas,
         position: Point<Pixels>,
-        handlers: &CanvasHandlers,
-        render: u64,
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
-        let at = self.designed_canvas_point(path, position);
+        let at = self.designed_canvas_point(&on.path, position);
         let released = self.designed.as_mut().and_then(|controls| {
-            let entry = controls.state.get_mut(path)?;
+            let entry = controls.state.get_mut(&on.path)?;
             let Held::Canvas { drag, .. } = &mut entry.held else {
                 return None;
             };
@@ -1398,19 +1381,17 @@ impl LauncherWindow {
         if !released.unwrap_or(false) {
             return;
         }
-        if let (Some(at), Some(up)) = (at, handlers.on_pointer_up) {
-            let key = self.canvas_key(path);
+        if let (Some(at), Some(up)) = (at, on.handlers.on_pointer_up) {
             self.designed_canvas_send(
                 DesignedHandler::Pointer,
+                on,
                 up,
-                &key,
-                render,
                 pointer("pointer-up", at, "left", 0, &gpui::Modifiers::none()),
                 window,
                 cx,
             );
         } else {
-            self.designed_canvas_released_at(path, handlers, render, window, cx);
+            self.designed_canvas_released_at(on, window, cx);
         }
     }
 
@@ -1418,15 +1399,12 @@ impl LauncherWindow {
     /// release: its handler is told at the point last seen.
     fn designed_canvas_released_at(
         &mut self,
-        path: &str,
-        handlers: &CanvasHandlers,
-        render: u64,
+        on: &OnCanvas,
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
-        let key = self.canvas_key(path);
         let last = self.designed.as_mut().and_then(|controls| {
-            let entry = controls.state.get_mut(path)?;
+            let entry = controls.state.get_mut(&on.path)?;
             let Held::Canvas { drag, .. } = &mut entry.held else {
                 return None;
             };
@@ -1435,14 +1413,13 @@ impl LauncherWindow {
             drag.pressed = false;
             Some(last)
         });
-        let (Some(last), Some(up)) = (last, handlers.on_pointer_up) else {
+        let (Some(last), Some(up)) = (last, on.handlers.on_pointer_up) else {
             return;
         };
         self.designed_canvas_send(
             DesignedHandler::Pointer,
+            on,
             up,
-            &key,
-            render,
             pointer("pointer-up", last, "left", 0, &gpui::Modifiers::none()),
             window,
             cx,
@@ -1454,17 +1431,15 @@ impl LauncherWindow {
     /// hover before it sees a position — and neither is a drag.
     fn designed_canvas_hover(
         &mut self,
-        path: &str,
+        on: &OnCanvas,
         over: bool,
-        handlers: &CanvasHandlers,
-        render: u64,
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
         let handler = if over {
-            handlers.on_pointer_enter
+            on.handlers.on_pointer_enter
         } else {
-            handlers.on_pointer_leave
+            on.handlers.on_pointer_leave
         };
         let Some(handler) = handler else {
             return;
@@ -1477,31 +1452,20 @@ impl LauncherWindow {
             },
             &[],
         );
-        let key = self.canvas_key(path);
-        self.designed_canvas_send(
-            DesignedHandler::Pointer,
-            handler,
-            &key,
-            render,
-            payload,
-            window,
-            cx,
-        );
+        self.designed_canvas_send(DesignedHandler::Pointer, on, handler, payload, window, cx);
     }
 
     /// The wheel turned over the canvas at `path` at `at`.
     fn designed_canvas_wheel(
         &mut self,
-        path: &str,
+        on: &OnCanvas,
         at: (f32, f32),
         delta: &gpui::ScrollDelta,
         modifiers: &gpui::Modifiers,
-        handlers: &CanvasHandlers,
-        render: u64,
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
-        let Some(wheel) = handlers.on_wheel else {
+        let Some(wheel) = on.handlers.on_wheel else {
             return;
         };
         let (unit, (dx, dy)) = match delta {
@@ -1521,24 +1485,14 @@ impl LauncherWindow {
                 boolean("shift", modifiers.shift),
             ],
         );
-        let key = self.canvas_key(path);
-        self.designed_canvas_send(
-            DesignedHandler::Wheel,
-            wheel,
-            &key,
-            render,
-            payload,
-            window,
-            cx,
-        );
+        self.designed_canvas_send(DesignedHandler::Wheel, on, wheel, payload, window, cx);
     }
 
     /// One of the canvas at `path`'s semantic handlers ran: increment on
     /// the up arrow, decrement on the down one, activate on Space.
     fn designed_canvas_semantic(
         &mut self,
-        path: &str,
-        render: u64,
+        on: &OnCanvas,
         handler: Option<u32>,
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
@@ -1546,12 +1500,10 @@ impl LauncherWindow {
         let Some(handler) = handler else {
             return;
         };
-        let key = self.canvas_key(path);
         self.designed_canvas_send(
             DesignedHandler::Press,
+            on,
             handler,
-            &key,
-            render,
             "{}".to_owned(),
             window,
             cx,
@@ -1568,23 +1520,20 @@ impl LauncherWindow {
             .unwrap_or_default()
     }
 
-    /// Sends one event of the canvas at `path` — the handler id its tree
-    /// named, of `handler`'s kind, on the tree of the render `seen`, the
-    /// node's own key naming it — and redraws when its answer arrives.
+    /// Sends one event of the canvas `on` names — the handler id its tree
+    /// named, of `handler`'s kind, with `payload` — and redraws when its
+    /// answer arrives.
     fn designed_canvas_send(
         &mut self,
         handler: DesignedHandler,
+        on: &OnCanvas,
         callback: u32,
-        key: &str,
-        seen: u64,
         payload: String,
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
-        let key = (!key.is_empty())
-            .then(|| key.to_owned())
-            .unwrap_or_default();
-        self.designed_event(handler, callback, key, seen, payload, window, cx);
+        let key = self.canvas_key(&on.path);
+        self.designed_event(handler, callback, key, on.render, payload, window, cx);
     }
 }
 
@@ -1594,7 +1543,7 @@ fn canvas_at(tree: Option<&pane_core::DesignedTree>, key: &str) -> Option<Canvas
     fn held(node: &pane_core::Node, key: &str) -> Option<CanvasHandlers> {
         match &node.kind {
             pane_core::NodeKind::Canvas(canvas) if node.key.as_deref() == Some(key) => {
-                Some(canvas.handlers.clone())
+                Some(canvas.handlers)
             }
             _ => node
                 .fallback
@@ -1707,7 +1656,7 @@ fn escaped(text: &str) -> String {
 /// appearance).
 pub(crate) fn measures_of(
     system: std::sync::Arc<gpui::WindowTextSystem>,
-) -> std::sync::Arc<dyn Fn(&str, &str) -> (f32, f32) + Send + Sync> {
+) -> pane_core::TextMeasures {
     std::sync::Arc::new(move |text: &str, style: &str| {
         let theme = crate::ui::theme::Theme::dark();
         // The style names what a canvas text operation does — a token
@@ -1751,7 +1700,7 @@ pub(crate) fn measures_of(
                 for line in &lines {
                     let line = line.size(line_height);
                     extent.width = extent.width.max(line.width);
-                    extent.height = extent.height + line.height;
+                    extent.height += line.height;
                 }
                 (extent.width.as_f32(), extent.height.as_f32())
             }

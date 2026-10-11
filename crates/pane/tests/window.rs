@@ -2089,9 +2089,18 @@ fn the_footer_button_submits_the_form_like_enter(cx: &mut TestAppContext) {
     open_form(&window, cx);
     cx.simulate_input("Ada");
 
+    // The footer's primary action is the form's own submission: the
+    // label its tree named, as its own submit button says — the sample
+    // says "Greet" there, so two buttons answer that name.
     let nodes = accessible_nodes(cx);
-    node(&nodes, "Button", "Submit");
-    node(&nodes, "Button", "Greet");
+    assert_eq!(
+        nodes
+            .iter()
+            .filter(|node| node["role"] == "Button" && node["label"] == "Greet")
+            .count(),
+        2,
+        "{nodes:?}"
+    );
     let button = cx
         .debug_bounds("primary-action")
         .expect("the action button is rendered");

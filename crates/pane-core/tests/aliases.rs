@@ -180,10 +180,10 @@ fn manage(launcher: &Launcher) {
 /// The value the open alias form's field starts with.
 fn form_value(launcher: &Launcher, key: &str) -> String {
     fn at(node: &pane_core::Node, key: &str) -> Option<String> {
-        if node.key.as_deref() == Some(key) {
-            if let pane_core::NodeKind::TextInput(input) = &node.kind {
-                return Some(input.value.clone());
-            }
+        if node.key.as_deref() == Some(key)
+            && let pane_core::NodeKind::TextInput(input) = &node.kind
+        {
+            return Some(input.value.clone());
         }
         node.children.iter().find_map(|child| at(child, key))
     }
@@ -195,10 +195,10 @@ fn form_value(launcher: &Launcher, key: &str) -> String {
 /// The error the open alias form's field carries, if one was set.
 fn form_error(launcher: &Launcher, key: &str) -> Option<String> {
     fn at(node: &pane_core::Node, key: &str) -> Option<String> {
-        if node.key.as_deref() == Some(key) {
-            if let pane_core::NodeKind::TextInput(input) = &node.kind {
-                return input.field.error.clone();
-            }
+        if node.key.as_deref() == Some(key)
+            && let pane_core::NodeKind::TextInput(input) = &node.kind
+        {
+            return input.field.error.clone();
         }
         node.children.iter().find_map(|child| at(child, key))
     }

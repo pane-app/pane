@@ -856,8 +856,7 @@ fn styled(node: &Node, path: &mut String, draw: Draw, element: AnyElement) -> An
 /// the `hover` and `pressed` variants of that surface Pane applies
 /// without calling the extension.
 fn apply(div: Stateful<Div>, node: &Node, draw: &Draw) -> Stateful<Div> {
-    let div = div
-        .map(|div| sized(div, &node.style.sizing))
+    div.map(|div| sized(div, &node.style.sizing))
         .map(|div| surface(div, &node.style.surface, draw.theme))
         .map(|div| {
             let variant = node.style.hover.clone();
@@ -872,8 +871,7 @@ fn apply(div: Stateful<Div>, node: &Node, draw: &Draw) -> Stateful<Div> {
             div.when_some(variant, move |div, variant| {
                 div.active(move |style| restyle(style, &variant, theme))
             })
-        });
-    div
+        })
 }
 
 /// The surface a variant restates, applied to the style refinement a
