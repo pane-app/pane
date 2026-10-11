@@ -863,12 +863,17 @@ impl Updates {
         // The revision to fetch: the default's identity and title, its
         // repository, and the newer tag with the commit it points to —
         // a pin in the update's shape, staged as first setup acquires one.
+        // No platform is named: the update fetches a default this system
+        // already set up, so the pins file's platform gate is not its
+        // business (a default of another system is never installed, so
+        // never updated).
         let request = install::Request::Default(DefaultExtension {
             id: id.to_owned(),
             title: package.title(),
             repository: default.repository.clone(),
             tag: found.tag.clone(),
             commit: found.commit.clone(),
+            platform: None,
         });
         if let Some(staged) = self.stage(launcher, request, package, pass) {
             self.lock().staged.push(staged);

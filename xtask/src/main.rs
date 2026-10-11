@@ -220,9 +220,6 @@ fn guests() -> Result<(), String> {
             &[
                 "sample_rust",
                 "sample_settings",
-                "run",
-                "system_commands",
-                "switch_windows",
                 "sample_operations",
                 "sample_dependencies",
                 "sample_greet",
@@ -510,19 +507,14 @@ fn git_sample(root: &Path, out: &Path) -> Result<(), String> {
 /// (package folder in `guests/packages`, component) of each sample package.
 /// The default extensions' packages are not here: their sources left this
 /// repository for their own (#285), and a Pane release installs them from
-/// the commits its pins name (`crates/pane/defaults.json`) — except the
-/// Windows power features' three (#125), which this repository still
-/// builds until their own repositories release.
-const SAMPLE_PACKAGES: [(&str, &str); 84] = [
+/// the commits its pins name (`crates/pane/defaults.json`).
+const SAMPLE_PACKAGES: [(&str, &str); 81] = [
     ("sample-rust", "sample_rust"),
     ("sample-settings", "sample_settings"),
     ("sample-js", "sample_js"),
     ("sample-ts", "sample_ts"),
     ("sample-settings-js", "sample_settings_js"),
     ("sample-settings-ts", "sample_settings_ts"),
-    ("run", "run"),
-    ("system-commands", "system_commands"),
-    ("switch-windows", "switch_windows"),
     ("sample-operations", "sample_operations"),
     ("sample-operations-js", "sample_operations_js"),
     ("sample-operations-ts", "sample_operations_ts"),

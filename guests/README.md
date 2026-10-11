@@ -8,13 +8,16 @@ Rust's standard library on `wasm32-wasip2`) is rejected with an explanation.
 This tree holds Pane's **samples** — small extensions that exercise the
 whole contract in Rust, JavaScript and TypeScript, which the tests install
 as fixtures and the smokes drive — and the SDKs and fixtures they build
-against. Pane's five **default extensions** (the Calculator, Applications,
-Quicklinks, Files and Clipboard History) are not here: each lives in its
-own repository under the `pane-app` organization
-(`https://github.com/pane-app/<id>`), and a Pane release installs them
-from the release commits this build pins
+against. Pane's **default extensions** are not here: the five that run on
+every system (the Calculator, Applications, Quicklinks, Files and
+Clipboard History) and the three Windows-only ones (Run, System Commands
+and Switch Windows), each in its own repository under the `pane-app`
+organization (`https://github.com/pane-app/<id>`), and a Pane release
+installs them from the release commits this build pins
 ([`crates/pane/defaults.json`](../crates/pane/defaults.json); see
-[ADR 0045](../docs/adr/0045-official-extensions-live-in-their-own-repositories.md)).
+[ADR 0045](../docs/adr/0045-official-extensions-live-in-their-own-repositories.md)),
+the Windows three's pins naming `"platform": "windows"`, so only a
+Windows first setup acquires them.
 To work on one, clone its repository: its own CI builds the component, and
 `cargo xtask guests` here builds the samples only. Until the Rust SDK is
 published to crates.io (#128), build a default extension's repository
@@ -2735,9 +2738,9 @@ let history = run::history()?; // newest first, as typed
 
 A command that takes a query is the natural shape for it: the text typed
 in root search is the command line, sent when the user invokes it through
-its alias or as a fallback. The [Run](run) default extension does exactly
-that (ADR 0040), with "Run as Administrator" and a "Run History" list
-beside it. The run samples are a
+its alias or as a fallback. The [Run](https://github.com/pane-app/run)
+default extension does exactly that (ADR 0040), with "Run as Administrator"
+and a "Run History" list beside it. The run samples are a
 [Rust](sample-run/src/lib.rs), a
 [JavaScript](sample-run-js/src/index.js) and a
 [TypeScript](sample-run-ts/src/index.ts) command answering the same; a
@@ -2829,7 +2832,8 @@ for (const window of listWindows()) {
 
 A JavaScript or TypeScript command's package.json sets
 `"pane": { "windows": true }` to import the interface. The [Switch
-Windows](switch-windows) default extension is the one that lists them
+Windows](https://github.com/pane-app/switch-windows) default extension is
+the one that lists them
 (ADR 0040); the windows samples are a
 [Rust](sample-switch-windows/src/lib.rs), a
 [JavaScript](sample-switch-windows-js/src/index.js) and a

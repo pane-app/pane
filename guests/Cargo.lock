@@ -310,14 +310,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "run"
-version = "0.1.0"
-dependencies = [
- "pane-extension",
- "serde",
-]
-
-[[package]]
 name = "sample-actions"
 version = "0.1.0"
 dependencies = [
@@ -561,13 +553,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "switch_windows"
-version = "0.1.0"
-dependencies = [
- "pane-extension",
-]
-
-[[package]]
 name = "syn"
 version = "3.0.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -576,13 +561,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "unicode-ident",
-]
-
-[[package]]
-name = "system_commands"
-version = "0.1.0"
-dependencies = [
- "pane-extension",
 ]
 
 [[package]]

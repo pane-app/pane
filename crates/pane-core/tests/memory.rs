@@ -152,16 +152,11 @@ fn language(name: &str) -> &'static str {
 /// Every sample, started and asked for its list, stays under the cap; the
 /// log shows each one's peak. Their own suites run under the cap too,
 /// which is what shows that they fit; this tells by how much. (The
-/// default extensions' own components live in their repositories, #285.)
+/// default extensions' own components live in their repositories, #285,
+/// #305.)
 #[test]
 fn memory_peaks_of_the_samples() {
     let mut names: Vec<String> = [
-        // The three default extensions this repository still builds
-        // (#125): the five a release pins live in their own repositories
-        // (#285), whose own suites measure their peaks.
-        "run",
-        "system_commands",
-        "switch_windows",
         "sample_rust",
         "sample_settings",
         "sample_operations",
