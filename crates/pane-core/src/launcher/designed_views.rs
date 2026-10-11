@@ -400,7 +400,7 @@ impl Launcher {
         form: Option<&str>,
         values: Vec<(String, FormValue)>,
     ) -> impl Future<Output = ()> + Send + 'static {
-        let state = self.lock();
+        let mut state = self.lock();
         let form = state
             .designed_view
             .as_ref()
@@ -411,6 +411,10 @@ impl Launcher {
             // tree no longer holds does.
             return async {}.boxed();
         };
+        // The status line is about the submission from now on, as it is
+        // about any action: what the answer lands replaces it — the
+        // view's own tree, a toast, or the error an answer carries.
+        state.view.status = Status::Running;
         // The remembered values, written as the form's own settings while
         // its answer is on its way.
         let component = state.open.clone().unwrap_or_default();
