@@ -24,6 +24,7 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Instant;
 
 use super::install::{self, Request};
 use super::{
@@ -433,7 +434,9 @@ impl Launcher {
         let Some(request) = choice.request(id) else {
             return Pending::Nothing;
         };
-        state.view.status = Status::Running;
+        state.view.status = Status::Running {
+            since: Instant::now(),
+        };
         Pending::PreviewChoice(request)
     }
 
@@ -467,7 +470,9 @@ impl Launcher {
             outcomes: vec![None; count],
             details: Vec::new(),
         });
-        state.view.status = Status::Running;
+        state.view.status = Status::Running {
+            since: Instant::now(),
+        };
         self.choice_view(state);
         Pending::ChoiceRun(Begun { source, ids })
     }
