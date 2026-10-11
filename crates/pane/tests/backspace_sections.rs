@@ -638,7 +638,12 @@ fn a_command_search_moves_five_rows(cx: &mut TestAppContext) {
 fn ctrl_arrows_cross_root_searches_sections_scrolling_the_label_into_view(cx: &mut TestAppContext) {
     let data = tempfile::tempdir().unwrap();
     let commands: Vec<_> = (1..=20)
-        .map(|index| command(&format!("command-{index:02}"), &format!("reverse 42 {index:02}")))
+        .map(|index| {
+            command(
+                &format!("command-{index:02}"),
+                &format!("reverse 42 {index:02}"),
+            )
+        })
         .collect();
     let launcher =
         Launcher::with_packages(Runtime::start(), commands, data.path().join("extensions"));

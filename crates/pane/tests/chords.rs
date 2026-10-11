@@ -355,7 +355,11 @@ fn ctrl_c_copies_a_selection_and_without_one_runs_the_rows_copy_action(cx: &mut 
     // action on the same chord does not run.
     cx.simulate_keystrokes(SELECT_ALL);
     cx.simulate_keystrokes(COPY);
-    assert_eq!(clipboard(cx), "reverse 42", "the field's selection was copied");
+    assert_eq!(
+        clipboard(cx),
+        "reverse 42",
+        "the field's selection was copied"
+    );
     let view = settle(&window, cx);
     assert_ne!(
         view.status,

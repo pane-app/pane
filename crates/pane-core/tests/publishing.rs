@@ -343,7 +343,10 @@ fn late_answers_arriving_close_together_merge_into_one_update() {
         "the late answers are coalescing"
     );
     clock.advance(Duration::from_millis(16));
-    assert_eq!(titles(&launcher), ["Slow answer", "Quick answer", "Sum 0 + 0"]);
+    assert_eq!(
+        titles(&launcher),
+        ["Slow answer", "Quick answer", "Sum 0 + 0"]
+    );
     assert_eq!(selected_title(&launcher).as_deref(), Some("Slow answer"));
     assert!(launcher.list_published());
 }

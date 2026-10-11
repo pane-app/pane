@@ -201,7 +201,11 @@ fn enter_pressed_at_once_with_typing_runs_the_published_first_row(cx: &mut TestA
         cx.read_from_clipboard().and_then(|item| item.text()),
         Some("1+24".into())
     );
-    assert_eq!(view.query(), Some("reverse 42+1"), "root search stays as it was");
+    assert_eq!(
+        view.query(),
+        Some("reverse 42+1"),
+        "root search stays as it was"
+    );
 }
 
 #[gpui::test]
@@ -225,7 +229,11 @@ fn the_open_actions_chord_waits_for_the_querys_list(cx: &mut TestAppContext) {
             .then_some(())
     });
     let view = settle(&window, cx);
-    assert_eq!(view.query(), Some("reverse 42+1"), "root search stays as it was");
+    assert_eq!(
+        view.query(),
+        Some("reverse 42+1"),
+        "root search stays as it was"
+    );
 }
 
 #[gpui::test]
