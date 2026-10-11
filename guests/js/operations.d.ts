@@ -4,8 +4,8 @@
 // calling an operation another installed package publishes, and calling a
 // capability by its name (ADR 0041), through Pane.
 
-/** `pane:extension/operations@0.1.0`. */
-declare module "pane:extension/operations@0.1.0" {
+/** `pane:extension/operations@0.2.0`. */
+declare module "pane:extension/operations@0.2.0" {
   /**
    * Why a call did not produce the operation's result: a lifecycle failure,
    * or `failed`, the operation's own error.

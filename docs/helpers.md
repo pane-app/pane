@@ -22,7 +22,7 @@ component; Pane never compiles a helper.
   it exits with success. Rust commands call it as
   `pane_extension::helpers::run` ([pane-extension](../guests/pane-extension/src/lib.rs));
   JavaScript and TypeScript commands import `run` from
-  `pane:extension/helpers@0.1.0` ([declarations](../guests/js/helpers.d.ts)),
+  `pane:extension/helpers@0.2.0` ([declarations](../guests/js/helpers.d.ts)),
   whose promise rejects with the error as its `payload`.
 - **Package declaration**, under `helpers` in `pane.json`: each helper's
   `id` and its file for each **target** it is built for, `<os>-<arch>` with

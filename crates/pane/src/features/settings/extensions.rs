@@ -80,9 +80,10 @@ use gpui::{
 use gpui_elements::editable_text::{EditableTextState, StringStorage, TextChanged, text_input};
 use pane_core::clipboard::{Clock as _, SystemClock};
 use pane_core::{
-    ExtensionDetails, ExtensionMark, ExtensionOperation, InstalledPackage, Launcher, LauncherView,
-    OperationKind, PackageIdentity, PackagePreferences, PathKind, PreferenceField, PreferenceKind,
-    ProvidedCapability, RequirementCycle, RequirementFix, Screen, ShortcutCommand, Status,
+    EXTENSION_API, ExtensionDetails, ExtensionMark, ExtensionOperation, InstalledPackage, Launcher,
+    LauncherView, OperationKind, PackageIdentity, PackagePreferences, PathKind, PreferenceField,
+    PreferenceKind, ProvidedCapability, RequirementCycle, RequirementFix, Screen, ShortcutCommand,
+    Status,
 };
 
 use super::{Page, SettingsWindow, search};
@@ -538,6 +539,19 @@ pub(crate) fn source_line(package: &InstalledPackage) -> String {
         Some(folder) => format!("Folder · {}", folder.display()),
         None => identity.to_string(),
     }
+}
+
+/// The window's line for an extension built for the previous extension
+/// API version, which this Pane still runs (ADR 0046): the version from
+/// its `apiVersion`, this Pane from its own. `None` for an extension of
+/// the current version.
+pub(crate) fn previous_api_line(package: &InstalledPackage) -> Option<String> {
+    package.previous_api().map(|api| {
+        format!(
+            "Built for extension API {api}; Pane {}.{} runs it until its next release",
+            EXTENSION_API.0, EXTENSION_API.1
+        )
+    })
 }
 
 /// What an extension's page says under its title: its manifest's
@@ -2017,6 +2031,17 @@ fn header(
                         .debug_selector(|| "extension-page-source".into())
                         .truncate(),
                 )
+                // A previous-version extension's page carries the window's
+                // line (ADR 0046): the mark of a working extension, not a
+                // warning — commands, aliases, hotkeys and data are all
+                // unchanged, and nothing else on the page differs.
+                .children(previous_api_line(package).map(|line| {
+                    controls::field_description(line.clone(), theme.text_muted, theme)
+                        .id("extension-page-previous-api")
+                        .debug_selector(|| "extension-page-previous-api".into())
+                        .truncate()
+                        .aria_label(line)
+                }))
                 .children(mark),
         )
         .into_any_element()

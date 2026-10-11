@@ -2,7 +2,7 @@
   "manifestVersion": 1,
   "title": "Run",
   "version": "0.2.0",
-  "apiVersion": "0.1",
+  "apiVersion": "0.2",
   "platforms": ["windows"],
   "icon": "icon.svg",
   "preferences": [

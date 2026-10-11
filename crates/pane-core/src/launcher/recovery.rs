@@ -356,7 +356,7 @@ mod tests {
         std::fs::create_dir_all(&source).unwrap();
         std::fs::write(
             source.join("pane.json"),
-            r#"{ "manifestVersion": 1, "title": "Broken", "apiVersion": "0.1",
+            r#"{ "manifestVersion": 1, "title": "Broken", "apiVersion": "0.2",
                 "commands": [{ "id": "open", "title": "Open", "component": "c.wasm" }] }"#,
         )
         .unwrap();

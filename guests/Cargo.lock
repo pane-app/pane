@@ -253,7 +253,7 @@ dependencies = [
 
 [[package]]
 name = "pane-extension"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "dlmalloc",
  "serde",
@@ -307,6 +307,14 @@ name = "refusing-view"
 version = "0.1.0"
 dependencies = [
  "pane-extension",
+]
+
+[[package]]
+name = "previous-api"
+version = "0.1.0"
+dependencies = [
+ "dlmalloc",
+ "wit-bindgen",
 ]
 
 [[package]]

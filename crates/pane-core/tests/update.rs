@@ -120,6 +120,31 @@ fn sample_component() -> Vec<u8> {
     fs::read(guest("packages/sample-settings-js/sample_settings_js.wasm")).unwrap()
 }
 
+/// The previous API fixture's built component (`cargo xtask guests`
+/// builds it from `wit/previous`): a real 0.1-built component, what an
+/// update for a version this Pane still runs is made of (ADR 0046).
+fn previous_component() -> Vec<u8> {
+    fs::read(guest("previous_api")).unwrap()
+}
+
+/// The files of the sample at `version` built for the previous extension
+/// API, with `component` in place of its built one: the manifest names
+/// the version the component was built for, which this Pane runs.
+fn previous_files_of(version: &str, component: Vec<u8>) -> Vec<(&'static str, Vec<u8>)> {
+    let manifest = format!(
+        r#"{{ "manifestVersion": 1, "title": "Settings from npm", "version": "{version}",
+             "apiVersion": "0.1",
+             "commands": [{{ "id": "greeting", "title": "Greeting",
+                             "component": "previous_api.wasm" }}] }}"#
+    );
+    let package = format!(r#"{{ "name": "{NAME}", "version": "{version}" }}"#);
+    vec![
+        ("package.json", package.into_bytes()),
+        ("pane.json", manifest.into_bytes()),
+        ("previous_api.wasm", component),
+    ]
+}
+
 /// The JavaScript handoff sample's built component: it keeps a counter in
 /// memory and opts in to handing it to its new code (ADR 0041, #159).
 fn handoff_component() -> Vec<u8> {
@@ -184,13 +209,13 @@ impl Dirs {
         self.registry.publish(
             NAME,
             version,
-            pack(&settings_files_of(version, "0.1", "", component)),
+            pack(&settings_files_of(version, "0.2", "", component)),
         );
     }
 
     /// Installs the sample at `version`, unpinned.
     fn install(&self, launcher: &Launcher, version: &str) {
-        self.publish(version, "0.1");
+        self.publish(version, "0.2");
         block_on(launcher.install_npm(NAME));
         assert_eq!(
             launcher.view().status,
@@ -520,7 +545,8 @@ fn short_commit(commit: &str) -> String {
 
 /// The files of a default extension's package: the settings sample's
 /// component under a `pane.json` titled `title`, at `version`, asking for
-/// the API version `api` (the version this Pane provides is 0.1), with
+/// the API version `api` (this Pane provides 0.2, running 0.1 too while
+/// its window lasts, ADR 0046), with
 /// the dependency declarations `dependencies` (JSON, already quoted) —
 /// the package a default extension's repository holds as a release, as
 /// the samples stand in for the defaults' own repositories (#285).
@@ -573,7 +599,7 @@ fn run_default(launcher: &Launcher, id: &str, item: &str) -> Status {
 /// publishes them: the `package.json` renamed to match the name the
 /// registry holds, so the tarball holds the package asked for.
 fn named_files(name: &str, version: &str) -> Vec<(&'static str, Vec<u8>)> {
-    let mut files = settings_files(version, "0.1", "");
+    let mut files = settings_files(version, "0.2", "");
     for (path, contents) in &mut files {
         if *path == "package.json" {
             let package = format!("{{ \"name\": \"{name}\", \"version\": \"{version}\" }}");
@@ -626,7 +652,7 @@ fn local_package_as(sources: &Path, name: &str, title: &str, command: &str) -> P
         folder.join("pane.json"),
         format!(
             r#"{{ "manifestVersion": 1, "title": "{title}", "version": "0.1.0",
-             "apiVersion": "0.1",
+             "apiVersion": "0.2",
              "commands": [{{ "id": "greeting", "title": "{command}",
                              "component": "sample_settings_js.wasm" }}] }}"#
         ),
@@ -652,7 +678,7 @@ fn files_as(
 ) -> Vec<(&'static str, Vec<u8>)> {
     let manifest = format!(
         r#"{{ "manifestVersion": 1, "title": "{title}", "version": "{version}",
-             "apiVersion": "0.1",
+             "apiVersion": "0.2",
              "commands": [{{ "id": "greeting", "title": "Greeting",
                              "component": "sample_settings_js.wasm" }}] }}"#
     );
@@ -686,7 +712,7 @@ fn a_newer_version_updates_the_package_by_itself_keeping_its_data() {
     let old = component_of(&launcher);
     assert!(block_on(dirs.runtime.running()).contains(&old));
 
-    dirs.publish("0.2.0", "0.1");
+    dirs.publish("0.2.0", "0.2");
     dirs.check(&launcher);
 
     // The update is recorded as its outcome, and the status line stays
@@ -749,7 +775,7 @@ fn a_command_that_is_running_finishes_before_the_update_replaces_it() {
     // Published before the command starts: packing the tarball is the
     // test's own work, and the save below runs for a fixed ten seconds,
     // which the check that finds this must fit inside.
-    dirs.publish("0.2.0", "0.1");
+    dirs.publish("0.2.0", "0.2");
 
     // "Save after waiting", run on another thread: its call is pending,
     // with the command's screen open.
@@ -793,12 +819,12 @@ fn a_command_that_is_running_finishes_before_the_update_replaces_it() {
 fn a_pinned_package_is_never_updated_automatically() {
     let dirs = Dirs::new();
     let launcher = dirs.launcher();
-    dirs.publish("0.1.0", "0.1");
+    dirs.publish("0.1.0", "0.2");
     block_on(launcher.install_npm(&format!("{NAME}@0.1.0")));
     assert_eq!(dirs.record()["pinned"], serde_json::json!(true));
     let asked = dirs.registry.requests().len();
 
-    dirs.publish("0.2.0", "0.1");
+    dirs.publish("0.2.0", "0.2");
     dirs.check(&launcher);
 
     // Not even asked about: a pinned version is not a candidate. Nothing
@@ -829,7 +855,7 @@ fn an_opted_out_package_is_not_updated_until_the_user_turns_updates_back_on() {
     );
     assert!(titles(&launcher).contains(&"Update Settings from npm automatically".to_owned()));
 
-    dirs.publish("0.2.0", "0.1");
+    dirs.publish("0.2.0", "0.2");
     let asked = dirs.registry.requests().len();
     dirs.check(&launcher);
     assert_eq!(dirs.installed_version(), "0.1.0");
@@ -859,7 +885,7 @@ fn turning_updates_off_everywhere_stops_them_all() {
         Status::Result("Automatic updates of extensions are off".into())
     );
 
-    dirs.publish("0.2.0", "0.1");
+    dirs.publish("0.2.0", "0.2");
     let asked = dirs.registry.requests().len();
     dirs.check(&launcher);
     assert_eq!(dirs.installed_version(), "0.1.0");
@@ -885,7 +911,7 @@ fn an_incompatible_new_version_is_refused_with_its_explanation() {
     // The new version needs an API this Pane does not provide: skipped
     // with that reason, so skipping never looks like a fault — nothing
     // failed, and the record holds the row under Skipped.
-    dirs.publish("0.2.0", "0.2");
+    dirs.publish("0.3.0", "0.3");
     dirs.check(&launcher);
 
     let recorded = launcher.update_results();
@@ -893,7 +919,8 @@ fn an_incompatible_new_version_is_refused_with_its_explanation() {
     let detail = &recorded.skipped[0].detail;
     assert!(
         detail.starts_with(
-            "Incompatible package: it needs Pane extension API 0.2, but this Pane provides 0.1."
+            "Incompatible package: it needs Pane extension API 0.3, but this Pane provides 0.2 \
+             and 0.1."
         ),
         "{detail}"
     );
@@ -910,6 +937,48 @@ fn an_incompatible_new_version_is_refused_with_its_explanation() {
 }
 
 #[test]
+fn an_update_built_for_the_previous_api_is_offered_and_runs_adapted() {
+    let dirs = Dirs::new();
+    let launcher = dirs.launcher();
+    dirs.install(&launcher, "0.1.0");
+
+    // The new release is built for the previous version, a version this
+    // Pane runs through its adapter (ADR 0046): offered and applied, not
+    // skipped — the window keeps released extensions nobody can rebuild
+    // working through their updates.
+    dirs.registry.publish(
+        NAME,
+        "0.2.0",
+        pack(&previous_files_of("0.2.0", previous_component())),
+    );
+    dirs.check(&launcher);
+
+    let recorded = launcher.update_results();
+    assert!(
+        recorded.skipped.is_empty() && recorded.failed.is_empty(),
+        "{recorded:#?}"
+    );
+    assert_eq!(recorded.updated.len(), 1, "{recorded:#?}");
+    assert_eq!(recorded.updated[0].detail, "0.1.0 → 0.2.0");
+    wait_until("the update applied", Duration::from_secs(30), || {
+        dirs.installed_version() == "0.2.0"
+    });
+
+    // The updated copy runs adapted: the same command answers, through
+    // the previous world's bindings.
+    to_root(&launcher);
+    activate(&launcher, "Greeting");
+    assert_eq!(launcher.view().screen, Screen::Command);
+    select_title(&launcher, "Show a HUD");
+    block_on(launcher.run_item_action("hud", 0));
+    assert_eq!(
+        shown(&launcher),
+        Status::Idle,
+        "the action tells the user in a HUD, not the status line"
+    );
+}
+
+#[test]
 fn an_installed_copy_too_new_for_this_pane_resolves_when_a_runnable_version_arrives() {
     let dirs = Dirs::new();
     let launcher = dirs.launcher();
@@ -921,8 +990,8 @@ fn an_installed_copy_too_new_for_this_pane_resolves_when_a_runnable_version_arri
     let location = launcher.packages()[0].location.clone();
     let manifest = fs::read_to_string(location.join("pane.json"))
         .unwrap()
-        .replace(r#""apiVersion": "0.1""#, r#""apiVersion": "0.2""#);
-    assert!(manifest.contains("0.2"), "the manifest was seeded");
+        .replace(r#""apiVersion": "0.2""#, r#""apiVersion": "0.3""#);
+    assert!(manifest.contains("0.3"), "the manifest was seeded");
     fs::write(location.join("pane.json"), manifest).unwrap();
     drop(launcher);
 
@@ -936,7 +1005,7 @@ fn an_installed_copy_too_new_for_this_pane_resolves_when_a_runnable_version_arri
 
     // A newer version built for the API this Pane runs: the update path
     // replaces the copy, and the state goes by itself.
-    dirs.publish("0.2.0", "0.1");
+    dirs.publish("0.2.0", "0.2");
     dirs.check(&restarted);
     assert_eq!(dirs.installed_version(), "0.2.0");
     assert_eq!(restarted.extension_mark(&identity), None);
@@ -956,7 +1025,7 @@ fn a_new_version_whose_dependency_cannot_be_installed_is_refused() {
 
     dirs.publish_with(
         "0.2.0",
-        "0.1",
+        "0.2",
         r#", "dependencies": [{ "id": "nobody", "source": "npm:nobody",
                                   "operations": [{ "id": "nothing", "version": 1 }] }]"#,
     );
@@ -1038,7 +1107,7 @@ fn the_check_repeats_on_its_cadence() {
 
     // A newer version is published; a day passes on the clock, and the
     // next check finds it.
-    dirs.publish("0.2.0", "0.1");
+    dirs.publish("0.2.0", "0.2");
     dirs.clock.advance(Duration::from_secs(24 * 3600 + 10));
     assert!(
         launcher.wait_for_updates(Duration::from_secs(30)),
@@ -1057,7 +1126,7 @@ fn a_disabled_package_is_not_updated() {
     dirs.install(&launcher, "0.1.0");
     block_on(launcher.set_enabled(&PackageIdentity::npm(NAME), false));
 
-    dirs.publish("0.2.0", "0.1");
+    dirs.publish("0.2.0", "0.2");
     let asked = dirs.registry.requests().len();
     dirs.check(&launcher);
 
@@ -1073,7 +1142,7 @@ fn after_a_restart_the_first_check_updates_the_package() {
     dirs.install(&launcher, "0.1.0");
     drop(launcher);
 
-    dirs.publish("0.2.0", "0.1");
+    dirs.publish("0.2.0", "0.2");
     // A new Pane, on the same data: its first check comes a minute after
     // it starts, by the clock it follows, and updates the package —
     // quietly, as a successful background update is.
@@ -1156,7 +1225,7 @@ fn an_action_asked_while_the_update_applies_is_refused_not_stopped() {
     let launcher = dirs.launcher();
     dirs.install(&launcher, "0.1.0");
 
-    dirs.publish("0.2.0", "0.1");
+    dirs.publish("0.2.0", "0.2");
 
     // An action of the package's command, asked for but not sent yet: as
     // the deferral test holds a command running by not resolving it, this
@@ -1466,7 +1535,7 @@ fn a_pass_records_what_it_updated_skipped_and_failed_in_order() {
     block_on(launcher.install_git(&format!("{}@release", greeter.url)));
     to_root(&launcher);
 
-    dirs.publish("0.2.0", "0.1");
+    dirs.publish("0.2.0", "0.2");
     greeter.move_release_to_source();
     dirs.check(&launcher);
 
@@ -1514,7 +1583,7 @@ fn the_record_persists_across_a_restart_and_a_quiet_pass_keeps_it() {
     let folder = local_package(sources.path());
     block_on(launcher.install_package(&folder));
 
-    dirs.publish("0.2.0", "0.1");
+    dirs.publish("0.2.0", "0.2");
     dirs.check(&launcher);
     let recorded = launcher.update_results();
     assert_eq!(recorded.updated.len(), 1);
@@ -1593,7 +1662,7 @@ fn the_first_check_comes_a_minute_after_pane_starts() {
     let dirs = Dirs::new();
     let launcher = dirs.launcher();
     dirs.install(&launcher, "0.1.0");
-    dirs.publish("0.2.0", "0.1");
+    dirs.publish("0.2.0", "0.2");
     let asked = dirs.registry.requests().len();
 
     // Before the minute is up, nothing is checked: no request is made and
@@ -1622,7 +1691,7 @@ fn the_update_results_screen_shows_the_groups_and_settings_opens_it() {
     let dirs = Dirs::new();
     let launcher = dirs.launcher();
     dirs.install(&launcher, "0.1.0");
-    dirs.publish("0.2.0", "0.1");
+    dirs.publish("0.2.0", "0.2");
     dirs.check(&launcher);
 
     // The extension list offers the record as an operation of the
@@ -1714,7 +1783,7 @@ fn the_root_search_row_and_the_public_call_start_a_pass_at_once() {
     let dirs = Dirs::new();
     let launcher = dirs.launcher();
     dirs.install(&launcher, "0.1.0");
-    dirs.publish("0.2.0", "0.1");
+    dirs.publish("0.2.0", "0.2");
 
     // The row is listed among Pane's own rows; no check has run yet (the
     // first automatic one comes a minute after Pane starts).
@@ -1817,7 +1886,7 @@ fn a_pass_the_user_asked_for_includes_off_disabled_and_paused_extensions() {
     // the automatic pass that follows runs over everything as it stands:
     // it updates none but the plain one, and skips the rest with their
     // reasons.
-    dirs.publish("0.2.0", "0.1");
+    dirs.publish("0.2.0", "0.2");
     dirs.publish_as(OFF, "Off settings", "0.2.0");
     dirs.publish_as(DISABLED, "Disabled settings", "0.2.0");
     dirs.publish_as(PAUSED, "Paused settings", "0.2.0");
@@ -1837,7 +1906,7 @@ fn a_pass_the_user_asked_for_includes_off_disabled_and_paused_extensions() {
     // updated — turned off, disabled and paused ones too — and the
     // pinned, local and development copies are skipped with their
     // reasons.
-    dirs.publish("0.3.0", "0.1");
+    dirs.publish("0.3.0", "0.2");
     block_on(launcher.check_extension_updates());
     assert_eq!(dirs.installed_version(), "0.3.0");
     assert_eq!(dirs.version_of(OFF), "0.2.0");
@@ -1905,7 +1974,7 @@ fn a_pass_the_user_asked_for_shows_its_progress_and_ends_with_its_summary() {
     let dirs = Dirs::new();
     let launcher = dirs.launcher();
     dirs.install(&launcher, "0.1.0");
-    dirs.publish("0.2.0", "0.1");
+    dirs.publish("0.2.0", "0.2");
 
     // The registry holds the metadata answer back: the pass stays in its
     // checking phase, its toast saying so.
@@ -1956,7 +2025,7 @@ fn an_asked_pass_that_failed_something_ends_with_its_failures() {
     block_on(launcher.install_git(&format!("{}@release", greeter.url)));
     to_root(&launcher);
 
-    dirs.publish("0.2.0", "0.1");
+    dirs.publish("0.2.0", "0.2");
     dirs.publish_as(SECOND_NAME, "Second settings", "0.2.0");
     greeter.move_release_to_source();
     block_on(launcher.check_extension_updates());
@@ -1991,7 +2060,7 @@ fn a_package_in_use_waits_and_is_listed_until_it_is_quiet() {
     let dirs = Dirs::new();
     let launcher = dirs.launcher();
     dirs.install(&launcher, "0.1.0");
-    dirs.publish("0.2.0", "0.1");
+    dirs.publish("0.2.0", "0.2");
 
     // "Save after waiting", run on another thread with the command's
     // screen open: the package is in use (the deferral test's shape).
@@ -2072,7 +2141,7 @@ fn retry_checks_that_extension_alone() {
     // row checks that extension alone — only its metadata is asked for,
     // and it updates — while the other stays as it was, its failure gone
     // from the record (the retry's pass replaced it).
-    dirs.publish("0.2.0", "0.1");
+    dirs.publish("0.2.0", "0.2");
     dirs.publish_as(SECOND_NAME, "Second settings", "0.2.0");
     let launcher = dirs.launcher();
     let asked = dirs.registry.requests().len();
@@ -2117,7 +2186,7 @@ fn update_now_updates_an_extension_skipped_only_for_the_users_switch() {
     // automatic updates are turned off — the toggle checks at once, so
     // the automatic pass that follows updates the first and records the
     // second as skipped for the user's switch.
-    dirs.publish("0.2.0", "0.1");
+    dirs.publish("0.2.0", "0.2");
     dirs.publish_as(SECOND_NAME, "Second settings", "0.2.0");
     manage(&launcher);
     activate(&launcher, "Update Second settings automatically");
@@ -2173,7 +2242,7 @@ fn a_newer_release_tag_updates_the_default_extension_by_itself_keeping_its_data(
     // The calculator as a default extension: the settings sample's
     // package in a repository of its own, tagged v0.1.0 and pinned as a
     // Pane release pins it.
-    let files = default_files("Calculator", "0.1.0", "0.1", "", sample_component());
+    let files = default_files("Calculator", "0.1.0", "0.2", "", sample_component());
     let (repo, pin) = dirs.default_extension("calculator", "Calculator", "v0.1.0", &files);
     // The address the pin names, which the record keeps as the update's
     // source too.
@@ -2191,7 +2260,7 @@ fn a_newer_release_tag_updates_the_default_extension_by_itself_keeping_its_data(
 
     // The repository releases 0.2.0, tagged; the launcher's clock drives
     // a pass.
-    let files = default_files("Calculator", "0.2.0", "0.1", "", sample_component());
+    let files = default_files("Calculator", "0.2.0", "0.2", "", sample_component());
     let released = release(&repo, &files, "0.2.0");
     dirs.check(&launcher);
 
@@ -2233,7 +2302,7 @@ fn a_newer_release_tag_updates_the_default_extension_by_itself_keeping_its_data(
 #[test]
 fn a_new_default_release_that_needs_a_newer_pane_is_skipped() {
     let dirs = Dirs::new();
-    let files = default_files("Calculator", "0.1.0", "0.1", "", sample_component());
+    let files = default_files("Calculator", "0.1.0", "0.2", "", sample_component());
     let (repo, pin) = dirs.default_extension("calculator", "Calculator", "v0.1.0", &files);
     let launcher = dirs.launcher_with(vec![pin]);
     block_on(launcher.acquire_defaults());
@@ -2246,8 +2315,8 @@ fn a_new_default_release_that_needs_a_newer_pane_is_skipped() {
     // The new release needs an API this Pane does not provide: skipped
     // with that reason, so skipping never looks like a fault — nothing
     // failed, and the record holds the row under Skipped.
-    let files = default_files("Calculator", "0.2.0", "0.2", "", sample_component());
-    release(&repo, &files, "0.2.0");
+    let files = default_files("Calculator", "0.3.0", "0.3", "", sample_component());
+    release(&repo, &files, "0.3.0");
     dirs.check(&launcher);
 
     let recorded = launcher.update_results();
@@ -2259,7 +2328,8 @@ fn a_new_default_release_that_needs_a_newer_pane_is_skipped() {
     let detail = &recorded.skipped[0].detail;
     assert!(
         detail.starts_with(
-            "Incompatible package: it needs Pane extension API 0.2, but this Pane provides 0.1."
+            "Incompatible package: it needs Pane extension API 0.3, but this Pane provides 0.2 \
+             and 0.1."
         ),
         "{detail}"
     );
@@ -2279,7 +2349,7 @@ fn a_new_default_release_that_needs_a_newer_pane_is_skipped() {
 #[test]
 fn an_unreachable_default_repository_is_recorded_and_leaves_the_installed_copy_alone() {
     let dirs = Dirs::new();
-    let files = default_files("Calculator", "0.1.0", "0.1", "", sample_component());
+    let files = default_files("Calculator", "0.1.0", "0.2", "", sample_component());
     let (_, pin) = dirs.default_extension("calculator", "Calculator", "v0.1.0", &files);
     let launcher = dirs.launcher_with(vec![pin]);
     block_on(launcher.acquire_defaults());
@@ -2343,7 +2413,7 @@ fn rewrite_default_url(dirs: &Dirs, id: &str, url: &str) {
 #[test]
 fn a_new_default_release_whose_dependency_cannot_be_installed_changes_nothing() {
     let dirs = Dirs::new();
-    let files = default_files("Calculator", "0.1.0", "0.1", "", sample_component());
+    let files = default_files("Calculator", "0.1.0", "0.2", "", sample_component());
     let (repo, pin) = dirs.default_extension("calculator", "Calculator", "v0.1.0", &files);
     let launcher = dirs.launcher_with(vec![pin]);
     block_on(launcher.acquire_defaults());
@@ -2357,7 +2427,7 @@ fn a_new_default_release_whose_dependency_cannot_be_installed_changes_nothing() 
     let files = default_files(
         "Calculator",
         "0.2.0",
-        "0.1",
+        "0.2",
         r#", "dependencies": [{ "id": "nobody", "source": "npm:nobody",
                                   "operations": [{ "id": "nothing", "version": 1 }] }]"#,
         sample_component(),
@@ -2396,7 +2466,7 @@ fn a_disabled_turned_off_or_uninstalled_default_is_not_updated_automatically() {
     // data, and one plain one the pass updates, so the record says what
     // became of the rest.
     let of = |id: &str, title: &str| {
-        let files = default_files(title, "0.1.0", "0.1", "", sample_component());
+        let files = default_files(title, "0.1.0", "0.2", "", sample_component());
         dirs.default_extension(id, title, "v0.1.0", &files)
     };
     let (disabled_repo, disabled) = of("disabled", "Disabled calculator");
@@ -2443,7 +2513,7 @@ fn a_disabled_turned_off_or_uninstalled_default_is_not_updated_automatically() {
         (gone_repo, "Gone calculator"),
         (moving_repo, "Moving calculator"),
     ] {
-        let files = default_files(title, "0.2.0", "0.1", "", sample_component());
+        let files = default_files(title, "0.2.0", "0.2", "", sample_component());
         release(&repo, &files, "0.2.0");
     }
     let asked = dirs.server.requests().len();
@@ -2528,7 +2598,7 @@ fn a_disabled_turned_off_or_uninstalled_default_is_not_updated_automatically() {
 #[test]
 fn turning_updates_off_everywhere_stops_a_default_extension_too() {
     let dirs = Dirs::new();
-    let files = default_files("Calculator", "0.1.0", "0.1", "", sample_component());
+    let files = default_files("Calculator", "0.1.0", "0.2", "", sample_component());
     let (repo, pin) = dirs.default_extension("calculator", "Calculator", "v0.1.0", &files);
     let launcher = dirs.launcher_with(vec![pin]);
     block_on(launcher.acquire_defaults());
@@ -2547,7 +2617,7 @@ fn turning_updates_off_everywhere_stops_a_default_extension_too() {
 
     // A newer release exists; a day passes on the clock and a check
     // runs: the global choice keeps the default as it is.
-    let files = default_files("Calculator", "0.2.0", "0.1", "", sample_component());
+    let files = default_files("Calculator", "0.2.0", "0.2", "", sample_component());
     release(&repo, &files, "0.2.0");
     dirs.check_next_day(&launcher);
     assert_eq!(dirs.default_version("calculator"), "0.1.0");
@@ -2571,7 +2641,7 @@ fn a_pass_the_user_asked_for_updates_off_disabled_and_paused_defaults() {
     // are turned off, one disabled, and one paused after crashing — the
     // pass the user asks for looks at all of them.
     let of = |id: &str, title: &str| {
-        let files = default_files(title, "0.1.0", "0.1", "", sample_component());
+        let files = default_files(title, "0.1.0", "0.2", "", sample_component());
         dirs.default_extension(id, title, "v0.1.0", &files)
     };
     let (moving_repo, moving) = of("moving", "Moving calculator");
@@ -2625,7 +2695,7 @@ fn a_pass_the_user_asked_for_updates_off_disabled_and_paused_defaults() {
         (disabled_repo, "Disabled calculator"),
         (paused_repo, "Paused calculator"),
     ] {
-        let files = default_files(title, "0.2.0", "0.1", "", sample_component());
+        let files = default_files(title, "0.2.0", "0.2", "", sample_component());
         release(&repo, &files, "0.2.0");
     }
     block_on(launcher.check_extension_updates());
@@ -2687,7 +2757,7 @@ fn a_pass_the_user_asked_for_updates_off_disabled_and_paused_defaults() {
 #[test]
 fn a_new_default_release_that_fails_to_start_is_paused_not_rolled_back() {
     let dirs = Dirs::new();
-    let files = default_files("Calculator", "0.1.0", "0.1", "", sample_component());
+    let files = default_files("Calculator", "0.1.0", "0.2", "", sample_component());
     let (repo, pin) = dirs.default_extension("calculator", "Calculator", "v0.1.0", &files);
     let launcher = dirs.launcher_with(vec![pin]);
     block_on(launcher.acquire_defaults());
@@ -2703,7 +2773,7 @@ fn a_new_default_release_that_fails_to_start_is_paused_not_rolled_back() {
     // version is restored (Q31, ADR 0004): the extension is paused with
     // Retry, and the record's row moves to Failed with the pause's
     // explanation.
-    let files = default_files("Calculator", "0.2.0", "0.1", "", sample_component());
+    let files = default_files("Calculator", "0.2.0", "0.2", "", sample_component());
     release(&repo, &files, "0.2.0");
     dirs.check(&launcher);
     assert_eq!(dirs.default_version("calculator"), "0.2.0");
@@ -2769,9 +2839,9 @@ fn a_default_an_older_pane_acquired_from_the_artifact_source_is_skipped_not_upda
     let dirs = Dirs::new();
     // The repository a Pane release pins, holding a newer release:
     // nothing of it is ever asked for.
-    let files = default_files("Calculator", "0.1.0", "0.1", "", sample_component());
+    let files = default_files("Calculator", "0.1.0", "0.2", "", sample_component());
     let (repo, pin) = dirs.default_extension("calculator", "Calculator", "v0.1.0", &files);
-    let newer = default_files("Calculator", "0.2.0", "0.1", "", sample_component());
+    let newer = default_files("Calculator", "0.2.0", "0.2", "", sample_component());
     release(&repo, &newer, "0.2.0");
     // The record an older Pane wrote, which acquired the calculator as a
     // default from its own downloads: the default identity and a version,

@@ -13,8 +13,8 @@
 // started it returns.
 // @ts-check
 import { showToast } from "@pane-app/extension/feedback";
-import { run } from "pane:extension/helpers@0.1.0";
-import { set } from "pane:extension/settings@0.1.0";
+import { run } from "pane:extension/helpers@0.2.0";
+import { set } from "pane:extension/settings@0.2.0";
 import { waitFor } from "wasi:clocks/monotonic-clock@0.3.0";
 
 /** The helper's name in the package's pane.json. */
@@ -38,7 +38,7 @@ async function helperRun(helper, args, input) {
   try {
     return await run(helper, args, input);
   } catch (error) {
-    /** @type {import("pane:extension/helpers@0.1.0").HelperError} */
+    /** @type {import("pane:extension/helpers@0.2.0").HelperError} */
     const { kind, message } = /** @type {any} */ (error).payload;
     throw new Error(`${kind}: ${message}`);
   }

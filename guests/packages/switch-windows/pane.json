@@ -2,7 +2,7 @@
   "manifestVersion": 1,
   "title": "Switch Windows",
   "version": "0.1.0",
-  "apiVersion": "0.1",
+  "apiVersion": "0.2",
   "platforms": ["windows"],
   "icon": "icon.svg",
   "commands": [

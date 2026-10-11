@@ -1,0 +1,124 @@
+package pane:extension@0.1.0;
+
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+//
+// How a command was launched, and launching another command (ADR 0037).
+// Every command receives one launch record on every way in: a view command
+// through `render`, a no-view command through `run` (wit/extension.wit).
+// Every command may also launch another command, of its own package or of
+// another, with `launch`. Rust commands use them through pane-extension
+// (`pane_extension::launch`), JavaScript and TypeScript ones through the
+// `launch` argument of `render` and `run` and
+// `pane:extension/commands@0.1.0`'s `launch`. The header follows `package`:
+// comments above it would document the package, which extension.wit
+// already does.
+
+/// The launch record, and launching another command.
+interface commands {
+  /// Whether the user launched the command, or Pane did in the background
+  /// (a schedule, or another command's background launch). A background
+  /// launch shows no window.
+  enum launch-type {
+    user-initiated,
+    background,
+  }
+
+  /// Where a launch came from.
+  enum launch-source {
+    /// Enter (or a click) on the command's row in root search.
+    root-search,
+    /// The command's alias typed in root search: alone, or followed by
+    /// text sent as the fallback text.
+    alias,
+    /// The command chosen as a fallback for the text typed in root search,
+    /// sent as the fallback text.
+    fallback,
+    /// The command's global hotkey.
+    hotkey,
+    /// The quick slot the command is pinned to.
+    quick-slot,
+    /// Another command, through `launch`.
+    command,
+    /// The command's own schedule (`"schedule"` without an `item`).
+    schedule,
+  }
+
+  /// The value of one of the command's arguments, by its name.
+  record argument-value {
+    name: string,
+    value: string,
+  }
+
+  /// What a command receives on every way in: how it was launched, and
+  /// with what.
+  record launch-record {
+    launch-type: launch-type,
+    source: launch-source,
+    /// The values of the command's arguments (`"arguments"` in its
+    /// `pane.json` entry) by name, in the order it declares them. An
+    /// argument without a value (an optional one left empty) is absent.
+    arguments: list<argument-value>,
+    /// The text sent through the command's alias ("ec hello" sends
+    /// "hello") or to it as a fallback, trimmed and never empty; none
+    /// otherwise. Only a command that takes a query (`"takesQuery": true`),
+    /// or whose first argument is text and every other optional, is sent
+    /// text; it also fills the first text or password argument that has no
+    /// value.
+    fallback-text: option<string>,
+    /// The JSON value another command passed when it launched this one,
+    /// as JSON text; none otherwise.
+    context: option<string>,
+    /// The command launched, by its id in `pane.json`, so that a component
+    /// serving several view commands draws the screen of the one opened
+    /// (`run` also receives it as its first argument).
+    command: string,
+  }
+
+  /// A command to launch by its id in its package's `pane.json`: one of
+  /// the caller's own package (`source` is none), or one of another
+  /// installed package, whose `source` is its package identity as Pane
+  /// shows it (`local:` followed by the absolute folder it was installed
+  /// from, `npm:` followed by its npm package name, or `git:` followed by
+  /// its repository), as an operation call names it.
+  record command-ref {
+    source: option<string>,
+    command: string,
+  }
+
+  /// Launches the command `target`, passing it `context` (JSON text, at
+  /// most 1 MiB) in its launch record, and asking nothing: extensions are
+  /// trusted. `arguments` are values of the target's arguments by name; a
+  /// dropdown's must be one of its options.
+  ///
+  /// A user-initiated launch that leaves a required argument without a
+  /// value shows Pane's argument form, which asks for it first.
+  ///
+  /// `user-initiated` opens it as if the user had invoked it: a view
+  /// command's screen replaces the one shown, and a no-view command runs
+  /// and its answer is shown. `background` runs a no-view command without
+  /// a window and shows nothing; it is refused for a view command, and for
+  /// a command with a required argument it passes no value for.
+  ///
+  /// Answers once the launch has started, not when the target has run:
+  /// the target runs after the caller's call, or beside it. Refused, with
+  /// the reason, when the target is not installed, has no such command, is
+  /// disabled, paused or unavailable on this system, an argument is not
+  /// the target's (or a dropdown's value not among its options), or the
+  /// context is not JSON. A refusal is an answer, never a failure of the
+  /// caller.
+  launch: func(target: command-ref, launch-type: launch-type, arguments: list<argument-value>, context: option<string>) -> result<_, string>;
+
+  /// Replaces the subtitle the calling command's row shows in root search
+  /// (such as "3 unread"), which root search also matches, until it is set
+  /// again; none gives back the subtitle its `pane.json` entry declares.
+  /// Pane keeps it as its own record, across restarts and updates, and
+  /// forgets it when the package is uninstalled. Refused when Pane does not
+  /// know which command the call is for (an operation's or a root search's
+  /// call).
+  set-subtitle: func(subtitle: option<string>) -> result<_, string>;
+}
+
+/// The commands import alone, for guest bindings.
+world commands-user {
+  import commands;
+}

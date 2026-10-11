@@ -477,7 +477,7 @@ Copy-Item "target/guests/sample_rust.wasm" $elsewhere
 {
   "manifestVersion": 1,
   "title": "Elsewhere",
-  "apiVersion": "0.1",
+  "apiVersion": "0.2",
   "platforms": ["macos", "linux"],
   "commands": [{ "id": "sample", "title": "Elsewhere sample", "component": "sample_rust.wasm" }]
 }
@@ -588,7 +588,7 @@ Copy-Item "target/guests/sample_rust.wasm" (Join-Path $dev "command.wasm")
 {
   "manifestVersion": 1,
   "title": "Dev",
-  "apiVersion": "0.1",
+  "apiVersion": "0.2",
   "commands": [{ "id": "sample", "title": "Dev sample", "component": "command.wasm" }]
 }
 '@ | Set-Content -Encoding ascii (Join-Path $dev "pane.json")

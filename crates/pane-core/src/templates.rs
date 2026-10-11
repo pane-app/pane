@@ -996,7 +996,7 @@ mod tests {
         let folder = tempfile::tempdir().unwrap();
         fs::write(
             folder.path().join(MANIFEST_FILE),
-            r#"{ "manifestVersion": 1, "title": "Hello", "apiVersion": "0.1",
+            r#"{ "manifestVersion": 1, "title": "Hello", "apiVersion": "0.2",
                  "commands": [ { "id": "hello", "title": "Hello", "component": "hello.wasm" } ] }"#,
         )
         .unwrap();

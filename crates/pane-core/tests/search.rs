@@ -599,7 +599,7 @@ fn manifest(title: &str, command: &str, platforms: Option<&str>) -> String {
         .map(|list| format!(r#", "platforms": {list}"#))
         .unwrap_or_default();
     format!(
-        r#"{{ "manifestVersion": 1, "title": "{title}", "apiVersion": "0.1",
+        r#"{{ "manifestVersion": 1, "title": "{title}", "apiVersion": "0.2",
   "commands": [{{ "id": "hello", "title": "{command}", "component": "hello.wasm"{platforms} }}] }}"#
     )
 }
@@ -691,7 +691,7 @@ fn manifest_with_keywords(title: &str, command: &str, subtitle: &str, keywords: 
         .collect::<Vec<_>>()
         .join(", ");
     format!(
-        r#"{{ "manifestVersion": 1, "title": "{title}", "apiVersion": "0.1",
+        r#"{{ "manifestVersion": 1, "title": "{title}", "apiVersion": "0.2",
   "commands": [{{ "id": "hello", "title": "{command}", "subtitle": "{subtitle}",
     "keywords": [{keywords}], "component": "hello.wasm" }}] }}"#
     )
@@ -701,7 +701,7 @@ fn manifest_with_keywords(title: &str, command: &str, subtitle: &str, keywords: 
 /// `command` whose own subtitle is `subtitle`.
 fn manifest_with_subtitle(title: &str, command: &str, subtitle: &str) -> String {
     format!(
-        r#"{{ "manifestVersion": 1, "title": "{title}", "apiVersion": "0.1",
+        r#"{{ "manifestVersion": 1, "title": "{title}", "apiVersion": "0.2",
   "commands": [{{ "id": "hello", "title": "{command}", "subtitle": "{subtitle}", "component": "hello.wasm" }}] }}"#
     )
 }

@@ -15,7 +15,7 @@ import {
   history,
   run,
   terminal,
-} from "pane:extension/run@0.1.0";
+} from "pane:extension/run@0.2.0";
 
 /** What the no-view commands say when they are sent no command line. */
 const NOTHING =
@@ -130,7 +130,7 @@ async function deleteLine(line) {
 
 /**
  * What a completion's source says, as its row's subtitle.
- * @param {import("pane:extension/run@0.1.0").CompletionSource} source
+ * @param {import("pane:extension/run@0.2.0").CompletionSource} source
  * @returns {string}
  */
 function subtitleOf(source) {
@@ -256,7 +256,7 @@ export const commandSearch = {
         title: `Run “${text}”`,
         subtitle: "Enter runs it as typed",
       },
-      ...found.map((/** @type {import("pane:extension/run@0.1.0").Completion} */ completion) => ({
+      ...found.map((/** @type {import("pane:extension/run@0.2.0").Completion} */ completion) => ({
         id: `${LINE}${completion.line}`,
         title: completion.line,
         subtitle: subtitleOf(completion.source),

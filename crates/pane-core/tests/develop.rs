@@ -163,7 +163,7 @@ fn package(folder: &Path, title: &str, source: &str) -> PathBuf {
             r#"{{
   "manifestVersion": 1,
   "title": "{title}",
-  "apiVersion": "0.1",
+  "apiVersion": "0.2",
   "commands": [{{ "id": "open", "title": "Open {title}", "component": "command.wasm" }}]
 }}"#
         ),

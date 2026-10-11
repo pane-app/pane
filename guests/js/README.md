@@ -47,8 +47,8 @@ export const command: Command = {
 
 ## Versions
 
-The package's version follows the extension API it targets: 0.1.x is for
-API 0.1 (`"apiVersion": "0.1"` in a package's `pane.json`). A new API
+The package's version follows the extension API it targets: 0.2.x is for
+API 0.2 (`"apiVersion": "0.2"` in a package's `pane.json`). A new API
 version is a new minor version before 1.0, and a new major version from 1.0.
 
 ## More

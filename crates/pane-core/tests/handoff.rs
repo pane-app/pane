@@ -126,7 +126,7 @@ impl Pane {
         fs::write(
             folder.join("pane.json"),
             r#"{ "manifestVersion": 1, "title": "Handoff fixture", "version": "0.1.0",
-                "apiVersion": "0.1",
+                "apiVersion": "0.2",
                 "commands": [{ "id": "handoff", "title": "Handoff fixture",
                                 "component": "fixture.wasm" }] }"#,
         )

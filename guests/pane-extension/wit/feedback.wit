@@ -1,4 +1,4 @@
-package pane:extension@0.1.0;
+package pane:extension@0.2.0;
 
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 //
@@ -9,7 +9,7 @@ package pane:extension@0.1.0;
 // use them through pane-extension (`pane_extension::window`,
 // `pane_extension::feedback`), JavaScript and TypeScript ones through
 // `@pane-app/extension/feedback` or the modules
-// "pane:extension/window@0.1.0" and "pane:extension/feedback@0.1.0"
+// "pane:extension/window@0.2.0" and "pane:extension/feedback@0.2.0"
 // (guests/js/feedback.d.ts). None of them is a reason to pause an
 // extension: a refusal is an answer, and the time spent in them is not
 // the guest's computing. The header follows `package`: comments above it
@@ -49,16 +49,26 @@ interface window {
 /// Telling the user what happened: a toast in the launcher's footer, or a
 /// HUD over other applications; and asking the user to confirm.
 interface feedback {
-  /// How a toast or a HUD is drawn.
+  /// How a toast is drawn.
   enum toast-style {
     /// Work in progress, with a spinner: a toast in this style stays until
     /// it is updated or hidden, or the window deactivates.
     animated,
     /// The work succeeded. A toast hides after 3 seconds (pausing while
-    /// the pointer is over it or it has the focus); a HUD after 1.2.
+    /// the pointer is over it or it has the focus).
     success,
-    /// The work failed. A toast hides after 3 seconds, as a success does;
-    /// a HUD after 3.
+    /// The work failed. A toast hides after 3 seconds, as a success does.
+    failure,
+  }
+
+  /// How a HUD is drawn: a HUD has no actions and never queues, and
+  /// hides by itself sooner than a toast does.
+  enum hud-style {
+    /// Work in progress, with a spinner.
+    animated,
+    /// The work succeeded. A HUD hides after 1.2 seconds.
+    success,
+    /// The work failed. A HUD hides after 3 seconds.
     failure,
   }
 
@@ -110,7 +120,7 @@ interface feedback {
   /// near the bottom of the screen the launcher was on, over other
   /// applications, which never takes the focus: for 1.2 seconds, or 3 for
   /// the failure style.
-  show-hud: func(title: string, style: toast-style);
+  show-hud: func(title: string, style: hud-style);
 
   /// What a command asks the user to confirm before it does something it
   /// cannot undo.

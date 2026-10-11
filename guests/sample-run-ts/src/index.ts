@@ -16,14 +16,14 @@ import type {
 import { showToast } from "@pane-app/extension/feedback";
 import { getPreferenceValues } from "@pane-app/extension/preferences";
 import { run as runProgram } from "@pane-app/extension/programs";
-import type { Completion, CompletionSource } from "pane:extension/run@0.1.0";
+import type { Completion, CompletionSource } from "pane:extension/run@0.2.0";
 import {
   completions,
   deleteFromHistory,
   history,
   run,
   terminal,
-} from "pane:extension/run@0.1.0";
+} from "pane:extension/run@0.2.0";
 
 /** What the no-view commands say when they are sent no command line. */
 const NOTHING =

@@ -12,7 +12,7 @@
   },
   "devDependencies": {
     "@pane-app/cli": "0.1.0",
-    "@pane-app/extension": "0.1.0",
+    "@pane-app/extension": "0.2.0",
     "@biomejs/biome": "2.5.15",
     "esbuild": "0.28.2",
     "typescript": "7.0.2"

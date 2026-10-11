@@ -55,7 +55,9 @@ impl<T> feedback_host::HostWithStore<T> for Confirms {
 impl GuestState {
     /// Hands `confirmation` to the launcher, which shows it, answers it from
     /// a remembered answer, or refuses it; what to await for the answer.
-    fn ask_to_confirm(&self, confirmation: feedback_host::Confirmation) -> Asking {
+    // pub(super): the previous world's adapter hands its own
+    // confirmations here too (see `runtime::previous`).
+    pub(super) fn ask_to_confirm(&self, confirmation: feedback_host::Confirmation) -> Asking {
         let refused = |why: String| -> Asking { Box::pin(std::future::ready(Err(why))) };
         let _host = self.host();
         if let Some(end) = self.stopped() {
@@ -91,7 +93,10 @@ impl GuestState {
 
     /// The launcher's host functions, unless the instance's code is
     /// stopped or no launcher drives this runtime.
-    fn host_functions(&self) -> Option<Arc<dyn HostFunctions>> {
+    ///
+    /// pub(super): the previous world's adapter calls it too (see
+    /// `runtime::previous`).
+    pub(super) fn host_functions(&self) -> Option<Arc<dyn HostFunctions>> {
         if self.stopped().is_some() {
             return None;
         }
@@ -166,10 +171,10 @@ impl feedback_host::Host for GuestState {
         }
     }
 
-    fn show_hud(&mut self, title: String, style: feedback_host::ToastStyle) {
+    fn show_hud(&mut self, title: String, style: feedback_host::HudStyle) {
         let _host = self.host();
         if let Some(host) = self.host_functions() {
-            host.show_hud(&self.caller(), Hud::new(style_of(style), title));
+            host.show_hud(&self.caller(), Hud::new(hud_style_of(style), title));
         }
     }
 }
@@ -195,5 +200,16 @@ fn style_of(style: feedback_host::ToastStyle) -> ToastStyle {
         feedback_host::ToastStyle::Animated => ToastStyle::Animated,
         feedback_host::ToastStyle::Success => ToastStyle::Success,
         feedback_host::ToastStyle::Failure => ToastStyle::Failure,
+    }
+}
+
+/// A HUD's `hud-style` as the host draws it (extension API 0.2 gave HUDs
+/// a style of their own, which hides sooner than a toast does and never
+/// queues): the host's one style, shared with toasts.
+fn hud_style_of(style: feedback_host::HudStyle) -> ToastStyle {
+    match style {
+        feedback_host::HudStyle::Animated => ToastStyle::Animated,
+        feedback_host::HudStyle::Success => ToastStyle::Success,
+        feedback_host::HudStyle::Failure => ToastStyle::Failure,
     }
 }

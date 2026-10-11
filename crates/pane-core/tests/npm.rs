@@ -102,7 +102,7 @@ impl Dirs {
         )
         .unwrap();
         let manifest = format!(
-            r#"{{ "manifestVersion": 1, "title": "Caller", "apiVersion": "0.1",
+            r#"{{ "manifestVersion": 1, "title": "Caller", "apiVersion": "0.2",
                  "commands": [{{ "id": "greet", "title": "Greet through dependencies",
                                  "component": "caller.wasm" }}],
                  "dependencies": [{dependencies}] }}"#
@@ -565,7 +565,7 @@ fn an_npm_dependency_that_can_reach_the_network_is_recorded_as_using_it() {
     let package_json = json!({ "name": "net-search", "version": "1.0.0" }).to_string();
     let manifest = json!({
         "manifestVersion": 1, "title": "Search with greet", "version": "1.0.0",
-        "apiVersion": "0.1",
+        "apiVersion": "0.2",
         "commands": [{ "id": "packages", "title": "Package search",
                        "component": "sample_search.wasm", "search": true }],
         "operations": [{ "id": "greet", "version": 1, "component": "sample_operations.wasm" }]
@@ -1087,7 +1087,7 @@ fn a_package_published_without_its_built_component_is_explained_and_its_scripts_
         "devDependencies": { "typescript": "5" }
     });
     let manifest = json!({
-        "manifestVersion": 1, "title": "From source", "apiVersion": "0.1",
+        "manifestVersion": 1, "title": "From source", "apiVersion": "0.2",
         "commands": [{ "id": "c", "title": "From source", "component": "dist/command.wasm" }]
     });
     dirs.registry.publish(

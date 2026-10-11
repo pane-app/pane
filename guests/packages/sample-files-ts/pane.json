@@ -2,7 +2,7 @@
   "manifestVersion": 1,
   "title": "TypeScript files sample",
   "version": "0.3.0",
-  "apiVersion": "0.1",
+  "apiVersion": "0.2",
   "commands": [
     {
       "id": "find-files",

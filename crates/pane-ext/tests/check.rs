@@ -53,7 +53,7 @@ fn manifest(extra: &str) -> String {
   "manifestVersion": 1,
   "title": "Hello",
   "version": "1.0.0",
-  "apiVersion": "0.1",
+  "apiVersion": "0.2",
   "commands": [
     {{
       "id": "hello",
@@ -122,7 +122,7 @@ fn an_invalid_manifest_fails_with_panes_message() {
 "#,
     );
     let keywords = format!(
-        r#"{{ "manifestVersion": 1, "title": "Hello", "apiVersion": "0.1", "keywords": {:?}, "commands": [{{ "id": "hello", "title": "Say hello", "component": "hello.wasm" }}] }}"#,
+        r#"{{ "manifestVersion": 1, "title": "Hello", "apiVersion": "0.2", "keywords": {:?}, "commands": [{{ "id": "hello", "title": "Say hello", "component": "hello.wasm" }}] }}"#,
         vec!["word"; 21]
     );
     let cases: [(&str, String, &str); 4] = [
@@ -166,7 +166,7 @@ fn the_same_invalid_package_is_refused_alike_by_pane_and_pane_ext_check() {
   "manifestVersion": 1,
   "title": "Hello",
   "version": "1.0.0",
-  "apiVersion": "0.1",
+  "apiVersion": "0.2",
   "commands": [
     { "id": "hello", "title": "Say hello", "component": "dist/hello.wasm" }
   ]
@@ -178,13 +178,20 @@ fn the_same_invalid_package_is_refused_alike_by_pane_and_pane_ext_check() {
             "sample_rust",
         ),
         ("source-only package", source_only.to_owned(), "sample_rust"),
-        ("older api shape", manifest(""), "old_api"),
+        (
+            // The negative control keeps naming the previous version,
+            // which this Pane runs: the shape check refuses it against
+            // the previous world (ADR 0046).
+            "older api shape",
+            manifest("").replace(r#""apiVersion": "0.2""#, r#""apiVersion": "0.1""#),
+            "old_api",
+        ),
         ("wasi 0.2 component", manifest(""), "mixed_p2"),
         (
             // The same explanation as an install's refusal: the versions
             // and the remedy, as Pane says it (#318, ADR 0046).
             "unsupported extension API",
-            manifest("").replace(r#""apiVersion": "0.1""#, r#""apiVersion": "0.2""#),
+            manifest("").replace(r#""apiVersion": "0.2""#, r#""apiVersion": "0.3""#),
             "sample_rust",
         ),
     ];
@@ -210,7 +217,7 @@ fn every_lint_rule_has_a_fixture_that_triggers_it() {
   "manifestVersion": 1,
   "title": "my little tool",
   "version": "1.0.0",
-  "apiVersion": "0.1",
+  "apiVersion": "0.2",
   "commands": [
     { "id": "go", "title": "run it", "component": "hello.wasm" }
   ],

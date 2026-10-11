@@ -446,7 +446,7 @@ cat >"$out/elsewhere/pane.json" <<'JSON'
 {
   "manifestVersion": 1,
   "title": "Elsewhere",
-  "apiVersion": "0.1",
+  "apiVersion": "0.2",
   "platforms": ["windows", "linux"],
   "commands": [{ "id": "sample", "title": "Elsewhere sample", "component": "sample_rust.wasm" }]
 }
@@ -551,7 +551,7 @@ cat >"$out/dev/pane.json" <<'JSON'
 {
   "manifestVersion": 1,
   "title": "Dev",
-  "apiVersion": "0.1",
+  "apiVersion": "0.2",
   "commands": [{ "id": "sample", "title": "Dev sample", "component": "command.wasm" }]
 }
 JSON

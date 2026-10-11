@@ -6,13 +6,13 @@
 // `using`) undoes it, as the host does when the instance that made it
 // goes or the package's code is replaced. Bundled into the command that
 // imports it, like any npm module. The underlying functions are also
-// importable directly from "pane:extension/registrations@0.1.0" as
+// importable directly from "pane:extension/registrations@0.2.0" as
 // `addRootItem`, `timerAfter`, `timerEvery`, `watchFolder` and
 // `provideCapability`, the handles as their resources; the events entry
 // point keeps this module's callback table, as the adapter keeps a list's
 // (adapt.js).
 
-import * as registrations from "pane:extension/registrations@0.1.0";
+import * as registrations from "pane:extension/registrations@0.2.0";
 
 export { rootItem, after, every, watchFolder, provide, handleEvent };
 
@@ -84,7 +84,7 @@ function wired(item) {
  * Registers a dynamic root item under the command with manifest id
  * `command`, from `item`. The handle the host returns is wrapped, so
  * `update` takes an item and `dispose` undoes the registration (the
- * underlying resource is `pane:extension/registrations@0.1.0`'s
+ * underlying resource is `pane:extension/registrations@0.2.0`'s
  * `RootItem`).
  * @param {string} command
  * @param {import("./registrations.d.ts").Item} item

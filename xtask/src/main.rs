@@ -260,6 +260,7 @@ fn guests() -> Result<(), String> {
                 "handoff_fixture",
                 "old_api",
                 "mismatched_api",
+                "previous_api",
                 "failing_start",
                 "refusing_view",
                 "tree_fixture",
@@ -519,7 +520,7 @@ fn git_sample(root: &Path, out: &Path) -> Result<(), String> {
 /// the commits its pins name (`crates/pane/defaults.json`) — except the
 /// Windows power features' three (#125), which this repository still
 /// builds until their own repositories release.
-const SAMPLE_PACKAGES: [(&str, &str); 84] = [
+const SAMPLE_PACKAGES: [(&str, &str); 85] = [
     ("sample-rust", "sample_rust"),
     ("sample-settings", "sample_settings"),
     ("sample-js", "sample_js"),
@@ -555,6 +556,7 @@ const SAMPLE_PACKAGES: [(&str, &str); 84] = [
     ("sample-keywords-js", "sample_keywords_js"),
     ("sample-keywords-ts", "sample_keywords_ts"),
     ("sample-matches", "sample_matches"),
+    ("previous-api", "previous_api"),
     ("sample-matches-js", "sample_matches_js"),
     ("sample-matches-ts", "sample_matches_ts"),
     ("sample-no-view", "sample_no_view"),
@@ -744,7 +746,15 @@ fn ci_lints() -> Result<(), String> {
 /// a person's step, never CI's (#128).
 fn sdks() -> Result<(), String> {
     let root = root();
-    same_files(&root.join("wit"), &root.join("guests/pane-extension/wit"))?;
+    // The previous world (wit/previous/, ADR 0046) is the host's alone:
+    // the SDK builds components for the current API, so the comparison
+    // skips it rather than demanding the SDK ship the world it cannot
+    // target — `same_files` takes it as the folder to leave out.
+    same_files(
+        &root.join("wit"),
+        &root.join("guests/pane-extension/wit"),
+        &root.join("wit/previous"),
+    )?;
     let guests = root.join("guests");
     run(cargo().current_dir(&guests).args([
         "publish",
@@ -771,9 +781,10 @@ fn sdks() -> Result<(), String> {
 }
 
 /// Checks that the folder `copy` holds the files `original` holds, with the
-/// same contents, and nothing else.
-fn same_files(original: &Path, copy: &Path) -> Result<(), String> {
-    if files_under(original)? == files_under(copy)? {
+/// same contents, and nothing else — besides `skip`, a folder under
+/// `original` the copy does not carry.
+fn same_files(original: &Path, copy: &Path, skip: &Path) -> Result<(), String> {
+    if files_under(original, skip)? == files_under(copy, skip)? {
         Ok(())
     } else {
         Err(format!(
@@ -784,8 +795,10 @@ fn same_files(original: &Path, copy: &Path) -> Result<(), String> {
     }
 }
 
-/// Every file under `dir`, by its path relative to `dir`, with its contents.
-fn files_under(dir: &Path) -> Result<BTreeMap<PathBuf, Vec<u8>>, String> {
+/// Every file under `dir` except those under `skip` — a folder the caller
+/// named as not the copy's to carry — by its path relative to `dir`, with
+/// its contents.
+fn files_under(dir: &Path, skip: &Path) -> Result<BTreeMap<PathBuf, Vec<u8>>, String> {
     let mut files = BTreeMap::new();
     let mut folders = vec![dir.to_path_buf()];
     while let Some(folder) = folders.pop() {
@@ -794,7 +807,11 @@ fn files_under(dir: &Path) -> Result<BTreeMap<PathBuf, Vec<u8>>, String> {
         for entry in entries {
             let path = entry.map_err(|error| error.to_string())?.path();
             if path.is_dir() {
-                folders.push(path);
+                // The skipped folder is never walked: a copy that carries
+                // nothing of it is the copy the caller asked to check.
+                if path != skip {
+                    folders.push(path);
+                }
             } else {
                 let contents = std::fs::read(&path)
                     .map_err(|error| format!("read {} failed: {error}", path.display()))?;

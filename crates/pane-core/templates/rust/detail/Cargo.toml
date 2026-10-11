@@ -14,7 +14,7 @@ crate-type = ["cdylib"]
 
 [dependencies]
 # Pane's Rust SDK, from crates.io.
-pane-extension = "0.1"
+pane-extension = "0.2"
 
 # A package of its own, built in its own folder with the documented
 # command `cargo build --release --target wasm32-wasip2`, so that its

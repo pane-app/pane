@@ -8,13 +8,22 @@
 //! the templates' `apiVersion` and SDK pins, and every in-repo manifest
 //! built from the current WIT. The fixtures that model builds of another
 //! shape carry their own WIT copies and no manifest of this repository,
-//! so nothing checks them. Every disagreeing place is named at once, so
-//! a version bump is one change, not a hunt.
+//! so nothing checks them; the previous world's positive fixtures name
+//! the version they were built for on purpose, and are exempt by name.
+//! Every disagreeing place is named at once, so a version bump is one
+//! change, not a hunt.
 
 use std::collections::BTreeMap;
 use std::path::Path;
 
 use serde_json::Value;
+
+/// The previous world's positive fixtures under `guests/packages`, by
+/// folder name: components built from `wit/previous` (ADR 0046), whose
+/// manifests name the version they were built for, which this Pane runs
+/// through the host's adapter. A fixture is added here as deliberately as
+/// the negative controls' own WIT copies are kept.
+const PREVIOUS_PACKAGES: [&str; 1] = ["previous-api"];
 
 /// Checks that the `pane:extension` WIT package's version is the one
 /// number the extension API has: every file and constant that names the
@@ -111,11 +120,16 @@ pub(crate) fn check() -> Result<(), String> {
     }
 
     // The in-repo manifests: every package built from the current WIT.
+    // The previous world's positive fixtures are exempt by name: they are
+    // built from `wit/previous` on purpose and name the version they were
+    // built for, exactly as the negative controls under `guests/fixtures/`
+    // carry their own WIT and no manifest of this repository, so nothing
+    // checks them.
     for folder in package_folders(&root, &mut problems) {
         let path = format!("guests/packages/{folder}/pane.json");
         // A folder without a manifest is no package of this walk's to
         // read; one with it is checked like every other manifest.
-        if root.join(&path).is_file() {
+        if root.join(&path).is_file() && !PREVIOUS_PACKAGES.contains(&folder.as_str()) {
             api.check_manifest(&root, &path, &mut problems);
         }
     }

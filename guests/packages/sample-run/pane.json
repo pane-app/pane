@@ -2,7 +2,7 @@
   "manifestVersion": 1,
   "title": "Run sample",
   "version": "0.2.0",
-  "apiVersion": "0.1",
+  "apiVersion": "0.2",
   "preferences": [
     {
       "name": "shell",

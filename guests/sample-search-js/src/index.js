@@ -14,7 +14,7 @@
 
 import { showToast } from "@pane-app/extension/feedback";
 import { get as fetchUrl } from "@pane-app/extension/http";
-import { get, set } from "pane:extension/settings@0.1.0";
+import { get, set } from "pane:extension/settings@0.2.0";
 
 /** The address used until the user sets another. */
 const DEFAULT_SERVICE = "http://127.0.0.1:8740";

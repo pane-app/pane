@@ -308,7 +308,7 @@ impl Dirs {
             r#"{{
                 "manifestVersion": 1,
                 "title": "Package {name}",
-                "apiVersion": "0.1",
+                "apiVersion": "0.2",
                 "commands": [{commands}],
                 "operations": [{operations}]
             }}"#
@@ -858,7 +858,7 @@ fn a_component_that_serves_no_operations_cannot_publish_one() {
         matches!(&status, Status::Error(text) if text.starts_with(
             "\"operation `echo`\": Incompatible extension: it does not implement Pane's \
              extension interface: its manifest publishes operations it serves, but it does \
-             not export pane:extension/published-operations@0.1.0"
+             not export pane:extension/published-operations@0.2.0"
         )),
         "{status:?}"
     );

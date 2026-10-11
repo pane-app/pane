@@ -2,7 +2,7 @@
   "manifestVersion": 1,
   "title": "Matches sample",
   "version": "0.1.0",
-  "apiVersion": "0.1",
+  "apiVersion": "0.2",
   "commands": [
     {
       "id": "url",

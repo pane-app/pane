@@ -5,7 +5,7 @@
 // provider of a use that says "use": "all", and asking which providers
 // can serve one now.
 
-import type { Provider, ProviderAnswer } from "pane:extension/operations@0.1.0";
+import type { Provider, ProviderAnswer } from "pane:extension/operations@0.2.0";
 
 export type { Provider, ProviderAnswer };
 
@@ -39,7 +39,7 @@ export {
    * @param {string} capability
    * @param {string} operation
    * @param {string} input
-   * @returns {Promise<import("pane:extension/operations@0.1.0").ProviderAnswer[]>}
+   * @returns {Promise<import("pane:extension/operations@0.2.0").ProviderAnswer[]>}
    */
   callEvery,
   /**
@@ -50,7 +50,7 @@ export {
    * @returns {Provider[]}
    */
   providers,
-} from "pane:extension/operations@0.1.0";
+} from "pane:extension/operations@0.2.0";
 
 /**
  * The provider of `capability` that a call reaches, with its `source` and

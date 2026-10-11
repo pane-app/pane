@@ -25,8 +25,8 @@
 // counts that as a crash too. "Ask for a 0-second cadence" and "Ask for a
 // 31-day cadence" make the next cycle answer cadences beyond Pane's
 // bounds, which it clamps to its 1-second minimum and 30-day maximum.
-import { get, set } from "pane:extension/settings@0.1.0";
-import * as content from "pane:extension/content@0.1.0";
+import { get, set } from "pane:extension/settings@0.2.0";
+import * as content from "pane:extension/content@0.2.0";
 import { waitFor } from "wasi:clocks/monotonic-clock@0.3.0";
 import type { Cycle, Item, List, Service } from "@pane-app/extension";
 import type { Lifecycle } from "@pane-app/extension/state";

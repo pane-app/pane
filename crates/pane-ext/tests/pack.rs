@@ -53,7 +53,7 @@ fn manifest(icon: bool, extra: &str) -> String {
   "manifestVersion": 1,
   "title": "Hello Rust",
   "version": "{VERSION}",
-  "apiVersion": "0.1",
+  "apiVersion": "0.2",
   {icon}
   "commands": [
     {{

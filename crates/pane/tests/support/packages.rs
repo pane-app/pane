@@ -27,7 +27,7 @@ pub fn package(folder: &Path) -> PathBuf {
   "manifestVersion": 1,
   "title": "Hello",
   "version": "1.0.0",
-  "apiVersion": "0.1",
+  "apiVersion": "0.2",
   "commands": [{ "id": "hello", "title": "Say hello", "component": "hello.wasm" }]
 }"#,
     )
@@ -47,7 +47,7 @@ pub fn glyph_package(folder: &Path) -> PathBuf {
   "manifestVersion": 1,
   "title": "Star",
   "version": "1.0.0",
-  "apiVersion": "0.1",
+  "apiVersion": "0.2",
   "commands": [{
     "id": "star",
     "title": "Star command",
@@ -80,7 +80,7 @@ pub fn slow_provider(folder: &Path) -> PathBuf {
   "manifestVersion": 1,
   "title": "Slow",
   "version": "1.0.0",
-  "apiVersion": "0.1",
+  "apiVersion": "0.2",
   "commands": [{
     "id": "command",
     "title": "Slow answers",

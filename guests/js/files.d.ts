@@ -7,8 +7,8 @@
 // package's pane.json sets `"folderAccess": true`, so that Pane offers its
 // own "Choose folder…" row; the command never sees the folder's path.
 
-/** `pane:extension/files@0.1.0`. */
-declare module "pane:extension/files@0.1.0" {
+/** `pane:extension/files@0.2.0`. */
+declare module "pane:extension/files@0.2.0" {
   /** One file Pane found. */
   export interface FoundFile {
     /** Identifies the file to an `open-file` result: an opaque id, not a path. */

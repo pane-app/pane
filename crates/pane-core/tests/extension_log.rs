@@ -122,7 +122,7 @@ impl Pane {
             r#"{
   "manifestVersion": 1,
   "title": "Dev",
-  "apiVersion": "0.1",
+  "apiVersion": "0.2",
   "commands": [{ "id": "open", "title": "Open Dev", "component": "command.wasm" }]
 }"#,
         )

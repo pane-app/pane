@@ -20,7 +20,7 @@
 // titles.
 import type { Command } from "@pane-app/extension";
 import { available, call, callEvery, providers } from "@pane-app/extension/capabilities";
-import type { CallError, Provider, ProviderAnswer } from "pane:extension/operations@0.1.0";
+import type { CallError, Provider, ProviderAnswer } from "pane:extension/operations@0.2.0";
 import { showToast } from "@pane-app/extension/feedback";
 
 /** The capabilities this package uses, as its pane.json declares them. */

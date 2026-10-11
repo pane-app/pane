@@ -34,7 +34,7 @@ use pane_extension::alloc::{
     vec,
     vec::Vec,
 };
-use pane_extension::feedback::{Toast, ToastStyle, show_hud, show_toast};
+use pane_extension::feedback::{HudStyle, Toast, ToastStyle, show_hud, show_toast};
 use pane_extension::programs::{self, Options};
 use pane_extension::run::{self, CompletionSource, RunError};
 use pane_extension::search::SearchResult;
@@ -100,7 +100,7 @@ async fn run_line(
         } else {
             format!("Ran {line}")
         };
-        show_hud(&title, ToastStyle::Success);
+        show_hud(&title, HudStyle::Success);
     }
     Ok(())
 }
@@ -187,7 +187,7 @@ async fn run_in_terminal(line: &str, launch_type: LaunchType) -> Result<(), Stri
         }
     }
     if launch_type != LaunchType::Background {
-        show_hud(&format!("Ran {line} in the terminal"), ToastStyle::Success);
+        show_hud(&format!("Ran {line} in the terminal"), HudStyle::Success);
     }
     Ok(())
 }

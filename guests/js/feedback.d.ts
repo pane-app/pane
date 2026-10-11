@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 //
 // Declarations for `@pane-app/extension/feedback` (feedback.js): what a
-// command does after it acts, through `pane:extension/feedback@0.1.0` and
-// `pane:extension/window@0.1.0` (feedback-host.d.ts, wit/feedback.wit).
+// command does after it acts, through `pane:extension/feedback@0.2.0` and
+// `pane:extension/window@0.2.0` (feedback-host.d.ts, wit/feedback.wit).
 // Pane shows nothing of what an action, a run or a search result resolves
 // with: the command tells the user what happened with a toast or a HUD, or
 // closes the window.
@@ -10,11 +10,18 @@
 import type { Shortcut } from "./pane";
 
 /**
- * How a toast or a HUD is drawn: `"animated"` is work in progress, with a
- * spinner, and stays until it is updated or hidden; `"success"` and
- * `"failure"` hide after 3 seconds (a HUD after 1.2, or 3 for a failure).
+ * How a toast is drawn: `"animated"` is work in progress, with a spinner,
+ * and stays until it is updated or hidden; `"success"` and `"failure"`
+ * hide after 3 seconds.
  */
 export type ToastStyle = "animated" | "success" | "failure";
+
+/**
+ * How a HUD is drawn: a HUD has no actions and never queues, and hides by
+ * itself sooner than a toast does (after 1.2 seconds, or 3 for the
+ * `"failure"` style).
+ */
+export type HudStyle = "animated" | "success" | "failure";
 
 /**
  * One of a toast's actions. Choosing it (with the pointer, from the
@@ -64,7 +71,7 @@ export function showToast(options: ToastOptions): Toast;
  * Closes the launcher, then shows `title` in a small window of its own
  * over other applications, which never takes the focus.
  */
-export function showHUD(title: string, style?: ToastStyle): void;
+export function showHUD(title: string, style?: HudStyle): void;
 
 /** What {@link confirmAlert} asks. */
 export interface ConfirmOptions {

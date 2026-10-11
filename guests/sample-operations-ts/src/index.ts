@@ -27,8 +27,8 @@ import type {
   List,
   PublishedOperations,
 } from "@pane-app/extension";
-import { call, type CallError } from "pane:extension/operations@0.1.0";
-import { set } from "pane:extension/settings@0.1.0";
+import { call, type CallError } from "pane:extension/operations@0.2.0";
+import { set } from "pane:extension/settings@0.2.0";
 import { waitFor } from "wasi:clocks/monotonic-clock@0.3.0";
 
 /** `greet`'s input and result, version 1. */

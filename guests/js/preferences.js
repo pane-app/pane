@@ -7,7 +7,7 @@
 // card in Settings). Pane stores them; a command only reads them. Bundled
 // into the command that imports it, like any npm module.
 
-import { values } from "pane:extension/preferences@0.1.0";
+import { values } from "pane:extension/preferences@0.2.0";
 
 /**
  * The effective preference values of the command Pane is running, or of

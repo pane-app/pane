@@ -1185,7 +1185,7 @@ fn a_manifest_saying_a_command_searches_needs_the_search_export() {
     assert!(
         message.contains(
             "its manifest says it searches as the user types, but it does not export \
-             pane:extension/command-search@0.1.0"
+             pane:extension/command-search@0.2.0"
         ),
         "{message}"
     );

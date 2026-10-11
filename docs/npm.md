@@ -120,9 +120,9 @@ refusals below cover), reading the `pane.json` (the manifest, the
 extension API it needs, its platforms and its helpers for this system)
 and working out its dependencies as a plan. A newer version that cannot
 be taken is skipped in the pass's update results with that reason — "Incompatible
-package: it needs Pane extension API 0.2, but this Pane
-provides 0.1. Update Pane to run it. It keeps running its installed
-code." — and the installed copy is left exactly as it is; the next check
+package: it needs Pane extension API 0.3, but this Pane
+provides 0.2 and 0.1. Update Pane to run it. It keeps running its
+installed code." — and the installed copy is left exactly as it is; the next check
 tries it again. What was downloaded stays staged, holding its download
 folder, until it is applied.
 

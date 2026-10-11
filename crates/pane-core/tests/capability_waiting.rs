@@ -183,7 +183,7 @@ impl Dirs {
             r#"{{
                 "manifestVersion": 1,
                 "title": "Package {name}",
-                "apiVersion": "0.1",
+                "apiVersion": "0.2",
                 "commands": [{commands}]{members}
             }}"#
         );
@@ -481,7 +481,7 @@ fn a_commands_narrowed_use_gates_only_those_commands() {
         r#"{{
             "manifestVersion": 1,
             "title": "Narrowed",
-            "apiVersion": "0.1",
+            "apiVersion": "0.2",
             "commands": [
                 {{ "id": "greeted", "title": "Greeted", "component": "narrowed.wasm" }},
                 {{ "id": "free", "title": "Free", "component": "narrowed.wasm" }}

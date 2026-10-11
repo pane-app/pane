@@ -4,7 +4,7 @@
   "title": "__TITLE__",
   "description": "A command that shows the detail of the text root search sends it.",
   "version": "0.1.0",
-  "apiVersion": "0.1",
+  "apiVersion": "0.2",
   "icon": "icon.png",
   "commands": [
     {

@@ -8,7 +8,7 @@
 // mute, and the bin, appearance and device commands — the Recycle Bin
 // (opening and emptying it), the system's appearance, HDR, the desktop,
 // the file manager's hidden files, the removable drives and Bluetooth —
-// through `pane:extension/system-commands@0.1.0`
+// through `pane:extension/system-commands@0.2.0`
 // (system-commands-host.d.ts, wit/system-commands.wit). Each function
 // answers what it ended in, never throwing for an operation that cannot
 // happen on this system, or failed: show the text in a HUD

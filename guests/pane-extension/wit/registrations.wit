@@ -1,4 +1,4 @@
-package pane:extension@0.1.0;
+package pane:extension@0.2.0;
 
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 //
@@ -29,7 +29,7 @@ package pane:extension@0.1.0;
 // pane-extension (`pane_extension::registrations`,
 // `pane_extension::registrations::export_events!(Events)`,
 // `pane_extension::lifecycle::export!`); JS/TS commands as the module
-// "pane:extension/registrations@0.1.0" (guests/js/registrations.d.ts)
+// "pane:extension/registrations@0.2.0" (guests/js/registrations.d.ts)
 // and the `"pane"` options `"events"`, `"activate"` and `"snapshot"` in
 // package.json. The header follows `package`: comments above it would
 // document the package, which extension.wit already does.

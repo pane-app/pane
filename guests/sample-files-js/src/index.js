@@ -19,8 +19,8 @@
 // File, Move to Recycle Bin; for a program, Enter shows it and only Run
 // runs it), which it performs itself.
 // @ts-check
-import { search, status } from "pane:extension/file-index@0.1.0";
-import { listEntries } from "pane:extension/typed-folder@0.1.0";
+import { search, status } from "pane:extension/file-index@0.2.0";
+import { listEntries } from "pane:extension/typed-folder@0.2.0";
 
 /** The most entries one query lists. */
 const MAX_RESULTS = 20;
@@ -39,7 +39,7 @@ async function act(itemId) {
  * `query` is a path ending in a separator (#204): `null` when it is not
  * one, or the folder cannot be listed — a missing folder lists nothing.
  * @param {string} query
- * @returns {import("pane:extension/typed-folder@0.1.0").FolderEntry[] | null}
+ * @returns {import("pane:extension/typed-folder@0.2.0").FolderEntry[] | null}
  */
 function typed(query) {
   const path = query.trim();

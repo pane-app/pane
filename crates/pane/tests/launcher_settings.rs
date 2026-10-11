@@ -1340,7 +1340,7 @@ fn pythons(folder: &Path) -> PathBuf {
         "manifestVersion": 1,
         "title": "Pythons",
         "version": "0.1.0",
-        "apiVersion": "0.1",
+        "apiVersion": "0.2",
         "commands": [
             { "id": "a", "title": "Python", "component": "component.wasm", "mode": "no-view" },
             { "id": "b", "title": "Python", "component": "component.wasm", "mode": "no-view" }

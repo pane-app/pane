@@ -86,8 +86,10 @@ pub(crate) const SAMPLES: [(&str, &str); 53] = [
     ),
 ];
 
-/// Pane's WIT, copied beside the world in `guests/js/wit`.
-const PANE_WIT: [&str; 16] = [
+/// Pane's WIT, copied beside the world in `guests/js/wit`: all of it, so
+/// a component's digest changes with any part of the contract it is
+/// built against.
+const PANE_WIT: [&str; 21] = [
     "extension.wit",
     "commands.wit",
     "feedback.wit",
@@ -104,6 +106,11 @@ const PANE_WIT: [&str; 16] = [
     "service.wit",
     "programs.wit",
     "file-index.wit",
+    "registrations.wit",
+    "run.wit",
+    "system-commands.wit",
+    "typed-folder.wit",
+    "windows.wit",
 ];
 
 /// Toolchain inputs that decide what a component contains: the wasm parts

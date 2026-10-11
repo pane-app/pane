@@ -527,7 +527,7 @@ impl Item {
 ///     type CustomView = pane_extension::NoCustomView;
 ///
 ///     async fn run(command: String, launch: LaunchRecord) -> Result<(), String> {
-///         pane_extension::feedback::show_hud("Toggled", ToastStyle::Success);
+///         pane_extension::feedback::show_hud("Toggled", HudStyle::Success);
 ///         Ok(())
 ///     }
 /// }

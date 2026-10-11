@@ -55,6 +55,7 @@ pub(crate) mod deadlines;
 mod faults;
 mod host_functions;
 mod memory;
+mod previous;
 mod run_functions;
 mod supervisor;
 mod system_command_functions;
@@ -235,39 +236,38 @@ use crate::launch::{LaunchRecord, LaunchRequest, LaunchSource, LaunchType, Launc
 use crate::operations::{
     self, Addressed, Directory, OperationAnswer, OperationCall, OperationError, Target,
 };
-use crate::packages::EXTENSION_API;
 use crate::registrations::Registrations;
 
 /// Interface-version prefix every imported WASI interface must carry.
 const WASI_VERSION: &str = "@0.3.";
 
 /// The interface an extension command exports.
-const COMMAND_INTERFACE: &str = "pane:extension/command@0.1.0";
+const COMMAND_INTERFACE: &str = "pane:extension/command@0.2.0";
 
 /// The interface a command that computes root results also exports.
-const ROOT_RESULTS_INTERFACE: &str = "pane:extension/root-results@0.1.0";
+const ROOT_RESULTS_INTERFACE: &str = "pane:extension/root-results@0.2.0";
 
 /// The interface a command that supplies root results ahead of the query
 /// also exports.
-const INDEXED_RESULTS_INTERFACE: &str = "pane:extension/indexed-results@0.1.0";
+const INDEXED_RESULTS_INTERFACE: &str = "pane:extension/indexed-results@0.2.0";
 
 /// The interface a component serving published operations also exports.
-const OPERATIONS_INTERFACE: &str = "pane:extension/published-operations@0.1.0";
+const OPERATIONS_INTERFACE: &str = "pane:extension/published-operations@0.2.0";
 
 /// The interface a command that searches as the user types also exports.
-const COMMAND_SEARCH_INTERFACE: &str = "pane:extension/command-search@0.1.0";
+const COMMAND_SEARCH_INTERFACE: &str = "pane:extension/command-search@0.2.0";
 
 /// The interface a command that runs a continuing service also exports.
-const SERVICE_INTERFACE: &str = "pane:extension/service@0.1.0";
+const SERVICE_INTERFACE: &str = "pane:extension/service@0.2.0";
 
 /// The interface a component that registers timers or watchers also
 /// exports, which their firings are delivered to.
-const EVENTS_INTERFACE: &str = "pane:extension/events@0.1.0";
+const EVENTS_INTERFACE: &str = "pane:extension/events@0.2.0";
 
 /// The interface a component that opts in to the state handoff exports,
 /// as the activation entry point its package's `pane.json` names under
 /// `activate` does (ADR 0041): `pane:extension/lifecycle`.
-const LIFECYCLE_INTERFACE: &str = "pane:extension/lifecycle@0.1.0";
+const LIFECYCLE_INTERFACE: &str = "pane:extension/lifecycle@0.2.0";
 
 /// How long the runtime waits for the `snapshot` answer of an instance
 /// whose code is being replaced (ADR 0041's state handoff): a snapshot
@@ -756,9 +756,17 @@ pub enum CallError {
     /// The component does not implement Pane's extension interface.
     Interface(String),
     /// The component exports Pane's extension interface, but with functions
-    /// or types of another shape of the same API version: it was built
-    /// against an older contract, and must be rebuilt.
-    OlderApiShape(String),
+    /// or types of another shape of the API version it was built for: it
+    /// was built against an older contract, and must be rebuilt for the
+    /// version [`api`](OlderApiShape::api) names.
+    OlderApiShape {
+        /// The API version whose shape check refused the component: the
+        /// current one, or the previous one while its window lasts (ADR
+        /// 0046) — the one a rebuild targets.
+        api: (u64, u64),
+        /// The first mismatch, in Pane's words.
+        reason: String,
+    },
     /// The guest ran and reported an error.
     Guest(String),
     /// The guest did not accept a submitted form.
@@ -819,11 +827,11 @@ impl fmt::Display for CallError {
                 f,
                 "Incompatible extension: it does not implement Pane's extension interface: {reason}"
             ),
-            CallError::OlderApiShape(reason) => write!(
+            CallError::OlderApiShape { api, reason } => write!(
                 f,
                 "Incompatible extension: it was built for an older extension API shape: \
-                 rebuild it against Pane's current extension API {}.{} ({reason})",
-                EXTENSION_API.0, EXTENSION_API.1
+                 rebuild it against Pane's extension API {}.{} ({reason})",
+                api.0, api.1
             ),
             CallError::Guest(message) => write!(f, "The extension reported an error: {message}"),
             CallError::Form(error) => f.write_str(&error.message),
@@ -2514,6 +2522,10 @@ macro_rules! data_host {
     };
 }
 
+// Re-exported for the previous world's adapter, which implements the
+// previous bindgen's data interfaces over the same data with the same
+// macro (`runtime::previous`).
+pub(crate) use data_host;
 data_host!(settings, DataKind::Settings);
 data_host!(content, DataKind::Content);
 data_host!(cache, DataKind::Cache);
@@ -2525,62 +2537,70 @@ impl preference_values::Host for GuestState {
     /// the package's manifest and Pane's record of the values, a short
     /// host call.
     fn values(&mut self, command: Option<String>) -> Result<String, String> {
-        let _host = self.host();
-        if let Some(end) = self.stopped() {
-            return Err(stopped_code(end));
-        }
-        let owner = self.owner().ok_or(
-            "only installed packages declare preferences; this command is built into Pane",
-        )?;
-        let directory = lock(&self.directory)
-            .clone()
-            .ok_or("this Pane keeps no preferences")?;
-        let installed = directory();
-        let package = installed
-            .packages
-            .iter()
-            .find(|package| package.identity.key() == owner)
-            .ok_or("the extension is no longer installed")?;
-        let manifest = package
-            .manifest
-            .as_ref()
-            .map_err(|error| format!("{} cannot load: {error}", package.title()))?;
-        let command = match command
-            .or_else(|| self.call.command.clone())
-            .or_else(|| self.command.clone())
-        {
-            Some(command) => command,
-            None => {
-                let mut serving = manifest.commands.iter().filter(|declared| {
-                    package.location.join(&declared.component) == self.component
-                });
-                match (serving.next(), serving.next()) {
-                    (Some(only), None) => only.id.clone(),
-                    _ => {
-                        return Err(
-                            "this component serves several commands; name the command whose \
-                             preferences to read"
-                                .into(),
-                        );
-                    }
+        preference_values_of(self, command)
+    }
+}
+
+/// The preferences read behind both worlds' `preferences` interfaces: the
+/// shared half of the interface, which the previous world's adapter
+/// delegates to as the current one's impl does (see `runtime::previous`).
+fn preference_values_of(state: &GuestState, command: Option<String>) -> Result<String, String> {
+    let _host = state.host();
+    if let Some(end) = state.stopped() {
+        return Err(stopped_code(end));
+    }
+    let owner = state
+        .owner()
+        .ok_or("only installed packages declare preferences; this command is built into Pane")?;
+    let directory = lock(&state.directory)
+        .clone()
+        .ok_or("this Pane keeps no preferences")?;
+    let installed = directory();
+    let package = installed
+        .packages
+        .iter()
+        .find(|package| package.identity.key() == owner)
+        .ok_or("the extension is no longer installed")?;
+    let manifest = package
+        .manifest
+        .as_ref()
+        .map_err(|error| format!("{} cannot load: {error}", package.title()))?;
+    let command = match command
+        .or_else(|| state.call.command.clone())
+        .or_else(|| state.command.clone())
+    {
+        Some(command) => command,
+        None => {
+            let mut serving = manifest
+                .commands
+                .iter()
+                .filter(|declared| package.location.join(&declared.component) == state.component);
+            match (serving.next(), serving.next()) {
+                (Some(only), None) => only.id.clone(),
+                _ => {
+                    return Err(
+                        "this component serves several commands; name the command whose \
+                         preferences to read"
+                            .into(),
+                    );
                 }
             }
-        };
-        if !manifest
-            .commands
-            .iter()
-            .any(|declared| declared.id == command)
-        {
-            return Err(format!("{} has no command `{command}`", manifest.title));
         }
-        let stored = installed
-            .data
-            .as_ref()
-            .map(|data| data.preference_values(&package.identity))
-            .unwrap_or_default();
-        let declared = crate::preferences::declared(manifest, &command);
-        Ok(crate::preferences::values_json(&declared, &stored))
+    };
+    if !manifest
+        .commands
+        .iter()
+        .any(|declared| declared.id == command)
+    {
+        return Err(format!("{} has no command `{command}`", manifest.title));
     }
+    let stored = installed
+        .data
+        .as_ref()
+        .map(|data| data.preference_values(&package.identity))
+        .unwrap_or_default();
+    let declared = crate::preferences::declared(manifest, &command);
+    Ok(crate::preferences::values_json(&declared, &stored))
 }
 
 impl launching::Host for GuestState {
@@ -2638,41 +2658,7 @@ impl registering::Host for GuestState {
         command: String,
         item: String,
     ) -> wasmtime::Result<Result<Resource<crate::registrations::RootItemHandle>, String>> {
-        Ok(self
-            .add_registration(
-                "dynamic root item",
-                crate::registrations::MAX_ROOT_ITEMS,
-                |kind| matches!(kind, crate::registrations::Kind::RootItem { .. }),
-                |state, installed| {
-                    let manifest = state.command_manifest(installed, &command)?;
-                    let declared = manifest
-                        .commands
-                        .iter()
-                        .find(|declared| declared.id == command)
-                        .ok_or_else(|| format!("{} has no command `{command}`", manifest.title))?;
-                    if state.component != state.location_of(installed).join(&declared.component) {
-                        return Err(format!(
-                            "command `{command}` is not served by this component; a dynamic \
-                             root item is under a command this component serves"
-                        ));
-                    }
-                    if declared.mode == crate::packages::CommandMode::Provider {
-                        return Err(format!(
-                            "command `{command}` only answers root search; a dynamic root item \
-                             is under a command with a row of its own"
-                        ));
-                    }
-                    Ok(crate::registrations::Kind::RootItem {
-                        command,
-                        item: state.read_item(&item)?,
-                    })
-                },
-            )
-            .and_then(|id| {
-                self.table
-                    .push(crate::registrations::RootItemHandle(id))
-                    .map_err(|error| error.to_string())
-            }))
+        self.add_root_item(command, item)
     }
 
     /// Registers a timer that fires once, `seconds` from now.
@@ -2702,32 +2688,7 @@ impl registering::Host for GuestState {
         recursive: bool,
         tag: String,
     ) -> wasmtime::Result<Result<Resource<crate::registrations::WatcherHandle>, String>> {
-        Ok(self
-            .add_registration(
-                "folder watcher",
-                crate::registrations::MAX_WATCHERS,
-                |kind| matches!(kind, crate::registrations::Kind::Watcher { .. }),
-                |state, _| {
-                    state.wants_events()?;
-                    let path = PathBuf::from(&path);
-                    if !path.exists() {
-                        return Err(format!(
-                            "Pane cannot watch {}: there is nothing there",
-                            path.display()
-                        ));
-                    }
-                    Ok(crate::registrations::Kind::Watcher {
-                        path,
-                        recursive,
-                        tag,
-                    })
-                },
-            )
-            .and_then(|id| {
-                self.table
-                    .push(crate::registrations::WatcherHandle(id))
-                    .map_err(|error| error.to_string())
-            }))
+        self.watch_folder(path, recursive, tag)
     }
 
     /// Registers a provision of `capability`: the package provides it
@@ -2736,40 +2697,7 @@ impl registering::Host for GuestState {
         &mut self,
         capability: String,
     ) -> wasmtime::Result<Result<Resource<crate::registrations::ProvisionHandle>, String>> {
-        let provided = capability.clone();
-        Ok(self
-            .add_registration(
-                "run-time provision",
-                crate::registrations::MAX_PROVISIONS,
-                |kind| matches!(kind, crate::registrations::Kind::Provision { .. }),
-                |state, installed| {
-                    let manifest = state.manifest_of(installed)?;
-                    match manifest
-                        .provides
-                        .iter()
-                        .find(|provides| provides.capability == provided)
-                    {
-                        None => Err(format!(
-                            "{} declares no `provides` entry for `{provided}` in its pane.json; \
-                             declare it there, marked `atRunTime`, to provide it at run time",
-                            manifest.title
-                        )),
-                        Some(provides) if !provides.at_run_time => Err(format!(
-                            "{} provides `{provided}` whenever it can run; mark the entry \
-                             `atRunTime` in its pane.json to provide it at run time",
-                            manifest.title
-                        )),
-                        Some(_) => Ok(crate::registrations::Kind::Provision {
-                            capability: provided,
-                        }),
-                    }
-                },
-            )
-            .and_then(|id| {
-                self.table
-                    .push(crate::registrations::ProvisionHandle(id))
-                    .map_err(|error| error.to_string())
-            }))
+        self.provide_capability(capability)
     }
 }
 
@@ -2780,18 +2708,7 @@ impl registering::HostRootItem for GuestState {
         own: Resource<crate::registrations::RootItemHandle>,
         item: String,
     ) -> wasmtime::Result<Result<(), String>> {
-        let _host = self.host();
-        // Read first, so a handle that is no longer held says that rather
-        // than what is wrong with the item.
-        let read = self.read_item(&item);
-        match self.table.get(&own) {
-            Ok(handle) => Ok(match read {
-                Ok(item) => self.registrations.update_root_item(handle.0, item),
-                Err(error) => Err(error),
-            }),
-            // A handle the table no longer holds: its registration ended.
-            Err(_) => Ok(Err("its registration was undone".into())),
-        }
+        self.update_root_item(own, item)
     }
 
     /// The handle is gone: so is the registration, and its entry on the
@@ -2920,6 +2837,154 @@ impl GuestState {
                 .push(crate::registrations::TimerHandle(id))
                 .map_err(|error| error.to_string())
         })
+    }
+
+    /// Registers a dynamic root item under `command`, from `item`: the
+    /// shared half of the registrations interface, which the previous
+    /// world's adapter delegates to as the current one's impl does (see
+    /// `runtime::previous`).
+    fn add_root_item(
+        &mut self,
+        command: String,
+        item: String,
+    ) -> wasmtime::Result<Result<Resource<crate::registrations::RootItemHandle>, String>> {
+        Ok(self
+            .add_registration(
+                "dynamic root item",
+                crate::registrations::MAX_ROOT_ITEMS,
+                |kind| matches!(kind, crate::registrations::Kind::RootItem { .. }),
+                |state, installed| {
+                    let manifest = state.command_manifest(installed, &command)?;
+                    let declared = manifest
+                        .commands
+                        .iter()
+                        .find(|declared| declared.id == command)
+                        .ok_or_else(|| format!("{} has no command `{command}`", manifest.title))?;
+                    if state.component != state.location_of(installed).join(&declared.component) {
+                        return Err(format!(
+                            "command `{command}` is not served by this component; a dynamic \
+                             root item is under a command this component serves"
+                        ));
+                    }
+                    if declared.mode == crate::packages::CommandMode::Provider {
+                        return Err(format!(
+                            "command `{command}` only answers root search; a dynamic root item \
+                             is under a command with a row of its own"
+                        ));
+                    }
+                    Ok(crate::registrations::Kind::RootItem {
+                        command,
+                        item: state.read_item(&item)?,
+                    })
+                },
+            )
+            .and_then(|id| {
+                self.table
+                    .push(crate::registrations::RootItemHandle(id))
+                    .map_err(|error| error.to_string())
+            }))
+    }
+
+    /// Registers a watcher of `path`, recursive or not, reporting with
+    /// `tag`: the shared half of the registrations interface, as
+    /// [`add_root_item`] is.
+    fn watch_folder(
+        &mut self,
+        path: String,
+        recursive: bool,
+        tag: String,
+    ) -> wasmtime::Result<Result<Resource<crate::registrations::WatcherHandle>, String>> {
+        Ok(self
+            .add_registration(
+                "folder watcher",
+                crate::registrations::MAX_WATCHERS,
+                |kind| matches!(kind, crate::registrations::Kind::Watcher { .. }),
+                |state, _| {
+                    state.wants_events()?;
+                    let path = PathBuf::from(&path);
+                    if !path.exists() {
+                        return Err(format!(
+                            "Pane cannot watch {}: there is nothing there",
+                            path.display()
+                        ));
+                    }
+                    Ok(crate::registrations::Kind::Watcher {
+                        path,
+                        recursive,
+                        tag,
+                    })
+                },
+            )
+            .and_then(|id| {
+                self.table
+                    .push(crate::registrations::WatcherHandle(id))
+                    .map_err(|error| error.to_string())
+            }))
+    }
+
+    /// Registers a provision of `capability`: the package provides it
+    /// while this is held. The shared half of the registrations
+    /// interface, as [`add_root_item`] is.
+    fn provide_capability(
+        &mut self,
+        capability: String,
+    ) -> wasmtime::Result<Result<Resource<crate::registrations::ProvisionHandle>, String>> {
+        let provided = capability.clone();
+        Ok(self
+            .add_registration(
+                "run-time provision",
+                crate::registrations::MAX_PROVISIONS,
+                |kind| matches!(kind, crate::registrations::Kind::Provision { .. }),
+                |state, installed| {
+                    let manifest = state.manifest_of(installed)?;
+                    match manifest
+                        .provides
+                        .iter()
+                        .find(|provides| provides.capability == provided)
+                    {
+                        None => Err(format!(
+                            "{} declares no `provides` entry for `{provided}` in its pane.json; \
+                             declare it there, marked `atRunTime`, to provide it at run time",
+                            manifest.title
+                        )),
+                        Some(provides) if !provides.at_run_time => Err(format!(
+                            "{} provides `{provided}` whenever it can run; mark the entry \
+                             `atRunTime` in its pane.json to provide it at run time",
+                            manifest.title
+                        )),
+                        Some(_) => Ok(crate::registrations::Kind::Provision {
+                            capability: provided,
+                        }),
+                    }
+                },
+            )
+            .and_then(|id| {
+                self.table
+                    .push(crate::registrations::ProvisionHandle(id))
+                    .map_err(|error| error.to_string())
+            }))
+    }
+
+    /// Replaces the item the registration `own` owns with `item`: the
+    /// shared half of the root-item resource's methods, as
+    /// [`add_root_item`] is.
+    fn update_root_item(
+        &mut self,
+        own: Resource<crate::registrations::RootItemHandle>,
+        item: String,
+    ) -> wasmtime::Result<Result<(), String>> {
+        let _host = self.host();
+        // Read first, so a handle that is no longer held says that rather
+        // than what is wrong with the item.
+        let read = self.read_item(&item);
+        match self.table.get(&own) {
+            Ok(handle) => Ok(match read {
+                Ok(item) => self.registrations.update_root_item(handle.0, item),
+                Err(error) => Err(error),
+            }),
+            // A handle the table no longer holds: its registration ended.
+            Err(_) => Ok(Err("its registration was undone".into())),
+        }
     }
 
     /// The manifest of the guest's own package, as `installed` holds it.
@@ -3223,22 +3288,28 @@ impl WasiHttpView for GuestState {
 /// A running guest instance of one component.
 struct Instance {
     store: Store<GuestState>,
-    bindings: bindings::ExtensionWithTypedFolder,
-    /// Its root results export, if it has one.
-    root_results: Option<root_bindings::RootResultsProvider>,
-    /// Its indexed results export, if it has one.
-    indexed_results: Option<indexed_bindings::IndexedResultsProvider>,
-    /// Its published operations export, if it has one.
-    operations: Option<operations_bindings::OperationsProvider>,
-    /// Its search export, if it searches as the user types.
-    command_search: Option<search_bindings::CommandSearchProvider>,
-    /// Its continuing-service export, if it runs one.
-    service: Option<service_bindings::ServiceProvider>,
-    /// Its events export, if it registers timers or watchers.
-    events: Option<events_bindings::EventsProvider>,
+    /// The world the component was built for, and its bindings: the
+    /// current API's, or the previous one's through the adapter (see
+    /// `previous`). The accessor and call names are the current world's,
+    /// so no call site branches on the version.
+    bindings: previous::World,
+    /// Its root results export, if it has one, of either world.
+    root_results: Option<previous::WorldRootResults>,
+    /// Its indexed results export, if it has one, of either world.
+    indexed_results: Option<previous::WorldIndexedResults>,
+    /// Its published operations export, if it has one, of either world.
+    operations: Option<previous::WorldOperations>,
+    /// Its search export, if it searches as the user types, of either
+    /// world.
+    command_search: Option<previous::WorldCommandSearch>,
+    /// Its continuing-service export, if it runs one, of either world.
+    service: Option<previous::WorldService>,
+    /// Its events export, if it registers timers or watchers, of either
+    /// world.
+    events: Option<previous::WorldEvents>,
     /// Its activation entry point export, if its package's `pane.json`
-    /// names it under `activate`.
-    lifecycle: Option<lifecycle_bindings::LifecycleProvider>,
+    /// names it under `activate`, of either world.
+    lifecycle: Option<previous::WorldLifecycle>,
     /// The operation calls its guest makes, which the call it runs serves
     /// ([`Host::run_guest`]); taken out while it runs one.
     calls: Option<mpsc::UnboundedReceiver<OperationCall>>,
@@ -3509,6 +3580,12 @@ impl Code {
             wasmtime::component::HasSelf<_>,
         >(&mut linker, |state| state)
         .expect("registering owned registrations in a fresh linker cannot conflict");
+        // The previous world's interfaces, served through the adapter:
+        // their instance names carry `@0.1.0`, so they cannot conflict
+        // with the current ones' (`@0.2.0`) in the one linker, and a
+        // component of either world instantiates against it (ADR 0046).
+        previous::add_to_linker(&mut linker)
+            .expect("registering the previous world in a fresh linker cannot conflict");
         Code { engine, linker }
     }
 
@@ -3525,15 +3602,21 @@ impl Code {
         if !unsupported.is_empty() {
             return Err(CallError::Incompatible(unsupported));
         }
-        self.check_exports(&component)?;
+        // The world the component's own exports name decides which
+        // world's shape check runs: the current one's, or the previous
+        // one's while its window lasts (see `previous`).
+        match previous::Which::of(&component, &self.engine) {
+            previous::Which::Current => self.check_exports(&component)?,
+            previous::Which::Previous => previous::check_exports(&component, &self.engine)?,
+        }
         Ok(component)
     }
 
     /// Type-checks the functions of the component's command interface
     /// against those Pane calls, from the component's type alone, so no
     /// guest code runs. Instantiating checks the same, but only when a
-    /// command opens; a component built for an older shape of the same API
-    /// version is refused here instead. A component without the interface
+    /// command opens; a component built for an older shape of the version
+    /// it names is refused here instead. A component without the interface
     /// is left to [`Host::check`], which says so.
     fn check_exports(&self, component: &Component) -> Result<(), CallError> {
         use wasmtime::component::types::{ComponentFunc, ComponentItem};
@@ -3547,7 +3630,10 @@ impl Code {
             return Ok(());
         };
         let cx = ty.instance_type();
-        let older = |problem: String| CallError::OlderApiShape(problem);
+        let older = |problem: String| CallError::OlderApiShape {
+            api: crate::packages::EXTENSION_API,
+            reason: problem,
+        };
         let func = |name: &str| match interface.get_export(&self.engine, name).map(|e| e.ty) {
             Some(ComponentItem::ComponentFunc(func)) => Ok(func),
             _ => Err(older(format!("it has no function `{name}`"))),
@@ -3558,7 +3644,10 @@ impl Code {
             cx: &wasmtime::component::__internal::InstanceType<'_>,
         ) -> Result<(), CallError> {
             func.typecheck::<P, R>(cx)
-                .map_err(|error| CallError::OlderApiShape(format!("`{name}`: {error:#}")))
+                .map_err(|error| CallError::OlderApiShape {
+                    api: crate::packages::EXTENSION_API,
+                    reason: format!("`{name}`: {error:#}"),
+                })
         }
         check::<(launching::LaunchRecord,), (Result<String, String>,)>(
             "render",
@@ -3596,6 +3685,12 @@ impl Code {
     /// so no guest code runs.
     fn check(&self, path: &Path, exports: Exports) -> Result<Checked, CallError> {
         let component = self.compile(path)?;
+        // A component built for the previous version is checked against
+        // that world, in `previous`: the one place its twin of everything
+        // below lives.
+        if previous::Which::of(&component, &self.engine) == previous::Which::Previous {
+            return previous::check(&self.linker, &self.engine, &component, exports);
+        }
         let ty = component.component_type();
         let network = ty
             .imports(&self.engine)
@@ -4352,7 +4447,11 @@ impl Host {
         let result = self
             .run_guest(&path, &chain, async |instance| {
                 instance.store.data_mut().set_call(CallFor::in_window(None));
-                let custom_view = instance.bindings.pane_extension_command().custom_view();
+                // The handle is bound before the view it lends is taken:
+                // the view borrows it, as the current world's does the
+                // bindings' own.
+                let command = instance.bindings.pane_extension_command();
+                let custom_view = command.custom_view();
                 instance
                     .store
                     .run_concurrent(async |store| {
@@ -4371,7 +4470,8 @@ impl Host {
         let (path, resource) = (&open.component, open.resource);
         let result = self
             .run_guest(path, chain, async |instance| {
-                let custom_view = instance.bindings.pane_extension_command().custom_view();
+                let command = instance.bindings.pane_extension_command();
+                let custom_view = command.custom_view();
                 instance
                     .store
                     .run_concurrent(async |store| custom_view.call_render(store, resource).await)
@@ -5687,28 +5787,112 @@ impl Host {
             }
             started => started?,
         };
-        let bindings =
-            bindings::ExtensionWithTypedFolder::new(&mut store, &instance).map_err(load)?;
+        // The world the component's own exports name decides which
+        // world's bindings this instance is: the current one's, or the
+        // previous one's, served through the adapter (see `previous`).
+        let which = previous::Which::of(&component, &self.code.engine);
+        let bindings = match which {
+            previous::Which::Current => previous::World::Current(
+                bindings::ExtensionWithTypedFolder::new(&mut store, &instance).map_err(load)?,
+            ),
+            previous::Which::Previous => previous::World::Previous(
+                previous::bindings::ExtensionWithTypedFolder::new(&mut store, &instance)
+                    .map_err(load)?,
+            ),
+        };
         // Only a command that computes root results exports them.
-        let root_results = root_bindings::RootResultsProvider::new(&mut store, &instance).ok();
+        let root_results = match which {
+            previous::Which::Current => {
+                root_bindings::RootResultsProvider::new(&mut store, &instance)
+                    .ok()
+                    .map(previous::WorldRootResults::Current)
+            }
+            previous::Which::Previous => {
+                previous::root_bindings::RootResultsProvider::new(&mut store, &instance)
+                    .ok()
+                    .map(previous::WorldRootResults::Previous)
+            }
+        };
         // Only a command that supplies results ahead of the query exports
         // them.
-        let indexed_results =
-            indexed_bindings::IndexedResultsProvider::new(&mut store, &instance).ok();
+        let indexed_results = match which {
+            previous::Which::Current => {
+                indexed_bindings::IndexedResultsProvider::new(&mut store, &instance)
+                    .ok()
+                    .map(previous::WorldIndexedResults::Current)
+            }
+            previous::Which::Previous => {
+                previous::indexed_bindings::IndexedResultsProvider::new(&mut store, &instance)
+                    .ok()
+                    .map(previous::WorldIndexedResults::Previous)
+            }
+        };
 
         // Only a component serving published operations exports them.
-        let operations = operations_bindings::OperationsProvider::new(&mut store, &instance).ok();
+        let operations = match which {
+            previous::Which::Current => {
+                operations_bindings::OperationsProvider::new(&mut store, &instance)
+                    .ok()
+                    .map(previous::WorldOperations::Current)
+            }
+            previous::Which::Previous => {
+                previous::operations_bindings::OperationsProvider::new(&mut store, &instance)
+                    .ok()
+                    .map(previous::WorldOperations::Previous)
+            }
+        };
         // Only a command that searches as the user types exports it.
-        let command_search =
-            search_bindings::CommandSearchProvider::new(&mut store, &instance).ok();
+        let command_search = match which {
+            previous::Which::Current => {
+                search_bindings::CommandSearchProvider::new(&mut store, &instance)
+                    .ok()
+                    .map(previous::WorldCommandSearch::Current)
+            }
+            previous::Which::Previous => {
+                previous::search_bindings::CommandSearchProvider::new(&mut store, &instance)
+                    .ok()
+                    .map(previous::WorldCommandSearch::Previous)
+            }
+        };
         // Only a command that runs a continuing service exports it.
-        let service = service_bindings::ServiceProvider::new(&mut store, &instance).ok();
+        let service = match which {
+            previous::Which::Current => {
+                service_bindings::ServiceProvider::new(&mut store, &instance)
+                    .ok()
+                    .map(previous::WorldService::Current)
+            }
+            previous::Which::Previous => {
+                previous::service_bindings::ServiceProvider::new(&mut store, &instance)
+                    .ok()
+                    .map(previous::WorldService::Previous)
+            }
+        };
         // Only a component that registers timers or watchers exports the
         // events they are delivered to.
-        let events = events_bindings::EventsProvider::new(&mut store, &instance).ok();
+        let events = match which {
+            previous::Which::Current => events_bindings::EventsProvider::new(&mut store, &instance)
+                .ok()
+                .map(previous::WorldEvents::Current),
+            previous::Which::Previous => {
+                previous::events_bindings::EventsProvider::new(&mut store, &instance)
+                    .ok()
+                    .map(previous::WorldEvents::Previous)
+            }
+        };
         // Only the component a package's `pane.json` names under
         // `activate` exports the activation entry point.
-        let lifecycle = lifecycle_bindings::LifecycleProvider::new(&mut store, &instance).ok();
+        let lifecycle = match which {
+            previous::Which::Current => {
+                lifecycle_bindings::LifecycleProvider::new(&mut store, &instance)
+                    .ok()
+                    .map(previous::WorldLifecycle::Current)
+            }
+            previous::Which::Previous => {
+                previous::lifecycle_bindings::LifecycleProvider::new(&mut store, &instance)
+                    .ok()
+                    .map(previous::WorldLifecycle::Previous)
+            }
+        };
         // The instance's identity, which tags what it registers, and
         // whether events can be delivered to it.
         let serial = self.next_serial.get();

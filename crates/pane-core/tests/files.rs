@@ -157,7 +157,7 @@ impl Pane {
         fs::create_dir_all(&folder).unwrap();
         fs::write(
             folder.join("pane.json"),
-            r#"{ "manifestVersion": 1, "title": "Files", "version": "0.6.0", "apiVersion": "0.1",
+            r#"{ "manifestVersion": 1, "title": "Files", "version": "0.6.0", "apiVersion": "0.2",
   "folderAccess": true,
   "commands": [{ "id": "files", "title": "Search Files", "component": "folder_files.wasm",
     "search": true, "rootResults": true }] }"#,
@@ -627,7 +627,7 @@ fn a_guest_cannot_name_a_file_or_retitle_one() {
     fs::create_dir_all(&folder).unwrap();
     fs::write(
         folder.join("pane.json"),
-        r#"{ "manifestVersion": 1, "title": "Faulty", "apiVersion": "0.1",
+        r#"{ "manifestVersion": 1, "title": "Faulty", "apiVersion": "0.2",
   "folderAccess": true,
   "commands": [{ "id": "command", "title": "Faulty answers", "component": "command.wasm",
     "rootResults": true }] }"#,

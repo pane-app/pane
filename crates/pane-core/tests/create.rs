@@ -403,7 +403,7 @@ fn package(folder: &Path) -> PathBuf {
         r#"{
   "manifestVersion": 1,
   "title": "Hello",
-  "apiVersion": "0.1",
+  "apiVersion": "0.2",
   "commands": [{ "id": "hello", "title": "Say hello", "component": "command.wasm" }]
 }"#,
     )

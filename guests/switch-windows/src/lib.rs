@@ -15,7 +15,7 @@ use pane_extension::alloc::{
     string::{String, ToString},
     vec::Vec,
 };
-use pane_extension::feedback::{ToastStyle, show_hud};
+use pane_extension::feedback::{HudStyle, show_hud};
 use pane_extension::search::SearchResult;
 use pane_extension::window::{PopToRootType, close};
 use pane_extension::windows::{self, Window};
@@ -64,7 +64,7 @@ fn subtitle(window: &Window) -> String {
 async fn switch(id: String) -> Result<(), String> {
     close(false, PopToRootType::Default);
     if let Err(error) = windows::activate(&id) {
-        show_hud(error.message(), ToastStyle::Failure);
+        show_hud(error.message(), HudStyle::Failure);
     }
     Ok(())
 }

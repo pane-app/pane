@@ -778,7 +778,7 @@ fn a_manifest_declaring_a_service_the_component_does_not_export_is_refused(_fixt
         refusal.starts_with(
             "\"Greeting\": Incompatible extension: it does not implement Pane's extension \
              interface: its manifest says it runs a continuing service, but it does not export \
-             pane:extension/service@0.1.0 with the functions Pane calls: "
+             pane:extension/service@0.2.0 with the functions Pane calls: "
         ),
         "{refusal}"
     );

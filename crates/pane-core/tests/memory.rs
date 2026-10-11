@@ -94,7 +94,7 @@ fn a_command_that_grows_past_the_cap_runs_out_of_memory_and_is_paused_like_any_c
         r#"{
   "manifestVersion": 1,
   "title": "Faulty",
-  "apiVersion": "0.1",
+  "apiVersion": "0.2",
   "commands": [{ "id": "faulty", "title": "Faulty", "component": "faulty.wasm" }]
 }"#,
     )

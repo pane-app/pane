@@ -280,7 +280,7 @@ fn hello_package(folder: &Path) -> PathBuf {
   "manifestVersion": 1,
   "title": "Hello",
   "version": "1.0.0",
-  "apiVersion": "0.1",
+  "apiVersion": "0.2",
   "commands": [{ "id": "hello", "title": "Say hello", "component": "hello.wasm" }]
 }"#,
     )
@@ -289,6 +289,33 @@ fn hello_package(folder: &Path) -> PathBuf {
     // The source the fake development builder reads: the guest it copies
     // on a successful save, or an error it fails on.
     fs::write(folder.join("source.txt"), "sample_rust").unwrap();
+    folder.to_path_buf()
+}
+
+/// Writes a package folder whose one command is the previous API
+/// fixture's guest (`cargo xtask guests` builds it from `wit/previous`),
+/// with a manifest naming the version it was built for.
+fn previous_package(folder: &Path) -> PathBuf {
+    let guest =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/guests/previous_api.wasm");
+    assert!(
+        guest.exists(),
+        "{} is missing; run `cargo xtask guests`",
+        guest.display()
+    );
+    fs::create_dir_all(folder).unwrap();
+    fs::write(
+        folder.join("pane.json"),
+        r#"{
+  "manifestVersion": 1,
+  "title": "Previous API",
+  "version": "0.1.0",
+  "apiVersion": "0.1",
+  "commands": [{ "id": "previous", "title": "Previous API", "component": "previous_api.wasm" }]
+}"#,
+    )
+    .unwrap();
+    fs::copy(guest, folder.join("previous_api.wasm")).unwrap();
     folder.to_path_buf()
 }
 
@@ -318,7 +345,7 @@ fn operations_package(folder: &Path, title: &str, dependencies: &str) -> PathBuf
         r#"{{
             "manifestVersion": 1,
             "title": "{title}",
-            "apiVersion": "0.1",
+            "apiVersion": "0.2",
             "operations": [{{ "id": "echo", "version": 1, "component": "fixture.wasm" }}],
             "dependencies": [{dependencies}]
         }}"#
@@ -2090,8 +2117,8 @@ fn an_extension_built_for_a_version_this_pane_cannot_run_keeps_its_page_and_says
     drop(installing);
     let manifest = fs::read_to_string(location.join("pane.json"))
         .unwrap()
-        .replace(r#""apiVersion": "0.1""#, r#""apiVersion": "0.2""#);
-    assert!(manifest.contains("0.2"), "the manifest was seeded");
+        .replace(r#""apiVersion": "0.2""#, r#""apiVersion": "0.3""#);
+    assert!(manifest.contains("0.3"), "the manifest was seeded");
     fs::write(location.join("pane.json"), manifest).unwrap();
 
     let launcher =
@@ -2131,8 +2158,8 @@ fn an_extension_built_for_a_version_this_pane_cannot_run_keeps_its_page_and_says
         has_node(
             &mut settings_cx,
             "Status",
-            "Incompatible package: it needs Pane extension API 0.2, but this Pane provides 0.1. \
-             Update Pane to run it"
+            "Incompatible package: it needs Pane extension API 0.3, but this Pane provides 0.2 \
+             and 0.1. Update Pane to run it"
         ),
         "the page says the refusal in full"
     );
@@ -2143,6 +2170,36 @@ fn an_extension_built_for_a_version_this_pane_cannot_run_keeps_its_page_and_says
             .debug_bounds("extension-commands-refused")
             .is_some(),
         "the Commands section says they are not offered"
+    );
+}
+
+#[gpui::test]
+fn a_previous_version_extension_s_page_says_what_runs_it(cx: &mut TestAppContext) {
+    let (sources, data) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let folder = previous_package(&sources.path().join("previous"));
+    let (_launcher, cx) = open_installed(cx, &data, &folder);
+    let (_settings, mut settings_cx) = open_extensions(cx);
+
+    // The page carries the window's line (ADR 0046) beside its source:
+    // the mark of a working extension, not a warning — no sidebar word,
+    // and nothing else about it differs, its commands and data included.
+    open_page(&mut settings_cx, "Previous API");
+    assert!(
+        settings_cx
+            .debug_bounds("extension-page-previous-api")
+            .is_some(),
+        "the page says what runs it"
+    );
+    let (_, json) = accessibility(&mut settings_cx);
+    assert!(
+        json.contains("Built for extension API 0.1; Pane 0.2 runs it until its next release"),
+        "the line says the extension's version and this Pane's: {json}"
+    );
+    assert!(
+        settings_cx
+            .debug_bounds("extension-entry-mark-Previous API")
+            .is_none(),
+        "a working extension carries no sidebar mark"
     );
 }
 
@@ -5325,7 +5382,7 @@ fn waiting_package(folder: &Path, title: &str, dependencies: &str) -> PathBuf {
             "manifestVersion": 1,
             "title": "{title}",
             "version": "0.1.0",
-            "apiVersion": "0.1",
+            "apiVersion": "0.2",
             "commands": [{{ "id": "call", "title": "Call", "component": "fixture.wasm" }}],
             "operations": [{{ "id": "echo", "version": 1, "component": "fixture.wasm" }}],
             "dependencies": [{dependencies}]

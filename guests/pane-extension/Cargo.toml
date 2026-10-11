@@ -1,11 +1,11 @@
 [package]
 name = "pane-extension"
-# The version follows the extension API it targets (ADR 0046): 0.1.x builds
-# components for `pane:extension@0.1.0`, the `apiVersion` "0.1" a package's
+# The version follows the extension API it targets (ADR 0046): 0.2.x builds
+# components for `pane:extension@0.2.0`, the `apiVersion` "0.2" a package's
 # pane.json names, writing version 1 of the list tree. A new API version
 # is a new minor (a new major from 1.0); a release that keeps the API is a
 # new patch.
-version = "0.1.0"
+version = "0.2.0"
 description = "Write Pane extensions in Rust: the bindings, host functions, extension UI builder and logging"
 repository = "https://github.com/pane-app/pane"
 homepage = "https://github.com/pane-app/pane"

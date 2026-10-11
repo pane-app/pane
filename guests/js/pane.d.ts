@@ -25,7 +25,7 @@
 /// <reference path="./run.d.ts" />
 /// <reference path="./windows.d.ts" />
 
-import type { LaunchRecord } from "pane:extension/commands@0.1.0";
+import type { LaunchRecord } from "pane:extension/commands@0.2.0";
 
 export type {
   ArgumentValue,
@@ -33,7 +33,7 @@ export type {
   LaunchRecord,
   LaunchSource,
   LaunchType,
-} from "pane:extension/commands@0.1.0";
+} from "pane:extension/commands@0.2.0";
 
 /**
  * One entry in a command's list. Choosing it opens its form, else its
@@ -556,10 +556,10 @@ export interface SearchResult {
   subtitle?: string;
   /**
    * An entry of Pane's file index, by the `id` `search()` of
-   * "pane:extension/file-index@0.1.0" gave it, a file of the folder
+   * "pane:extension/file-index@0.2.0" gave it, a file of the folder
    * granted to the command's package, by the `id` `listFolder()` gave it,
    * or an entry of the folder the user typed, by the `id` `listEntries()`
-   * of "pane:extension/typed-folder@0.1.0" gave it, when the result is
+   * of "pane:extension/typed-folder@0.2.0" gave it, when the result is
    * that file (as Search Files' are): Pane lists it
    * with the file's own name and folder, and gives it
    * Pane's own file actions (Open, Reveal, Open With…, Copy Path, Copy
@@ -607,7 +607,7 @@ export interface CommandSearch {
 /**
  * What invoking an indexed result does; Pane performs it.
  * `{ tag: "open-application", val: id }` opens the installed application
- * with `id`, as `open` in `pane:extension/applications@0.1.0` does;
+ * with `id`, as `open` in `pane:extension/applications@0.2.0` does;
  * `{ tag: "open", val: { target, application } }` opens `target` (a URL of
  * any scheme, a file, a folder or an application) with the system's
  * handler, or with `application`, as `open` in `@pane-app/extension/system`

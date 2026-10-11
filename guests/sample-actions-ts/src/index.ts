@@ -74,7 +74,7 @@ import {
   type Toast,
   type ToastOptions,
 } from "@pane-app/extension/feedback";
-import { launch } from "pane:extension/commands@0.1.0";
+import { launch } from "pane:extension/commands@0.2.0";
 import {
   copy,
   copyAction,

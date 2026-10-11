@@ -156,14 +156,14 @@ export function provide(capability: string): Handle;
 export function handleEvent(event: Event): Promise<void>;
 
 /**
- * `pane:extension/events@0.1.0`, as the events entry point receives it:
+ * `pane:extension/events@0.2.0`, as the events entry point receives it:
  * a timer's firing or a watcher's coalesced changes. The command's
  * package.json sets `"pane": { "events": true }` and exports `events =
  * { handleEvent }` (see the registrations sample); `@pane-app/extension`
  * keeps the callbacks, so authors pass them to `every` and
  * `watchFolder` instead.
  */
-declare module "pane:extension/events@0.1.0" {
+declare module "pane:extension/events@0.2.0" {
   /** One change of a folder watcher: its tag, and the paths that changed
    * or a rescan. */
   export interface WatcherEvent {

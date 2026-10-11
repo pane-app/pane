@@ -116,7 +116,7 @@ impl Dirs {
             r#"{{
                 "manifestVersion": 1,
                 "title": "Caller",
-                "apiVersion": "0.1",
+                "apiVersion": "0.2",
                 "commands": [
                     {{ "id": "call", "title": "Call from JavaScript", "component": "caller.wasm" }}
                 ],
@@ -143,7 +143,7 @@ impl Dirs {
             r#"{{
                 "manifestVersion": 1,
                 "title": "Package {name}",
-                "apiVersion": "0.1",
+                "apiVersion": "0.2",
                 "operations": [
                     {{ "id": "echo", "version": {version}, "component": "fixture.wasm" }}
                 ],
@@ -484,8 +484,8 @@ fn a_required_dependency_that_cannot_be_installed_leaves_nothing_installed() {
                 let folder = dirs.fixture("b", 1, "");
                 let manifest = fs::read_to_string(folder.join("pane.json")).unwrap();
                 let manifest = manifest.replacen(
-                    r#""apiVersion": "0.1","#,
-                    &format!(r#""apiVersion": "0.1", "platforms": ["{}"],"#, other.id()),
+                    r#""apiVersion": "0.2","#,
+                    &format!(r#""apiVersion": "0.2", "platforms": ["{}"],"#, other.id()),
                     1,
                 );
                 fs::write(folder.join("pane.json"), manifest).unwrap();
@@ -781,7 +781,7 @@ fn dot_dot_and_dot_resolve_like_the_folder_they_name() {
     fs::copy(guest("operations_fixture.wasm"), a.join("fixture.wasm")).unwrap();
     fs::write(
         a.join("pane.json"),
-        r#"{ "manifestVersion": 1, "title": "Package a", "apiVersion": "0.1",
+        r#"{ "manifestVersion": 1, "title": "Package a", "apiVersion": "0.2",
              "operations": [{ "id": "echo", "version": 1, "component": "fixture.wasm" }],
              "dependencies": [{ "id": "b", "source": "local:./../x/../../b",
                                 "operations": [{ "id": "echo", "version": 1 }] }] }"#,
@@ -1232,7 +1232,7 @@ impl Dirs {
             r#"{{
                 "manifestVersion": 1,
                 "title": "Package {name}",
-                "apiVersion": "0.1",
+                "apiVersion": "0.2",
                 "commands": [
                     {{ "id": "fixture", "title": "{command}",
                        "component": "fixture.wasm" }}

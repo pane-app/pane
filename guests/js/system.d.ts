@@ -4,7 +4,7 @@
 // opening anything, revealing a path in the file manager, moving paths to
 // the Recycle Bin, pasting into the application that was in front before
 // Pane, that application and its selected text, through
-// `pane:extension/system@0.1.0`
+// `pane:extension/system@0.2.0`
 // (system-host.d.ts, wit/system.wit); and the standard actions built from
 // them, which close the window after they act, as Raycast's built-in ones
 // do.

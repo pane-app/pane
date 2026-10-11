@@ -15,8 +15,8 @@
 // of its own computing and counts that as a crash too.
 import type { Command, CustomView, Item, List } from "@pane-app/extension";
 import { showToast } from "@pane-app/extension/feedback";
-import { get, set } from "pane:extension/settings@0.1.0";
-import * as content from "pane:extension/content@0.1.0";
+import { get, set } from "pane:extension/settings@0.2.0";
+import * as content from "pane:extension/content@0.2.0";
 import { waitFor } from "wasi:clocks/monotonic-clock@0.3.0";
 
 /** The content key holding how many runs the command counted. */

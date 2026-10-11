@@ -878,7 +878,7 @@ fn operations_package(folder: &Path, title: &str, dependencies: &str) -> PathBuf
         r#"{{
             "manifestVersion": 1,
             "title": "{title}",
-            "apiVersion": "0.1",
+            "apiVersion": "0.2",
             "operations": [{{ "id": "echo", "version": 1, "component": "fixture.wasm" }}],
             "dependencies": [{dependencies}]
         }}"#
@@ -985,7 +985,7 @@ fn command_package(folder: &Path, title: &str, dependencies: &str) -> PathBuf {
         r#"{{
             "manifestVersion": 1,
             "title": "{title}",
-            "apiVersion": "0.1",
+            "apiVersion": "0.2",
             "commands": [{{ "id": "call", "title": "Call", "component": "fixture.wasm" }}],
             "operations": [{{ "id": "echo", "version": 1, "component": "fixture.wasm" }}],
             "dependencies": [{dependencies}]
@@ -1079,10 +1079,10 @@ fn capability_package(folder: &Path, title: &str, command: &str, members: &str) 
     fs::create_dir_all(folder).unwrap();
     fs::copy(guest, folder.join("fixture.wasm")).unwrap();
     let manifest = if command.is_empty() {
-        format!(r#"{{ "manifestVersion": 1, "title": "{title}", "apiVersion": "0.1"{members} }}"#)
+        format!(r#"{{ "manifestVersion": 1, "title": "{title}", "apiVersion": "0.2"{members} }}"#)
     } else {
         format!(
-            r#"{{ "manifestVersion": 1, "title": "{title}", "apiVersion": "0.1",
+            r#"{{ "manifestVersion": 1, "title": "{title}", "apiVersion": "0.2",
                  "commands": [{{ "id": "fixture", "title": "{command}",
                                  "component": "fixture.wasm" }}]{members} }}"#
         )

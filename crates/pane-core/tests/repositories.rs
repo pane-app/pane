@@ -154,7 +154,7 @@ impl Dirs {
         )
         .unwrap();
         let manifest = format!(
-            r#"{{ "manifestVersion": 1, "title": "Caller", "apiVersion": "0.1",
+            r#"{{ "manifestVersion": 1, "title": "Caller", "apiVersion": "0.2",
                  "commands": [{{ "id": "greet", "title": "Greet through dependencies",
                                  "component": "caller.wasm" }}],
                  "dependencies": [{dependencies}] }}"#
@@ -779,7 +779,7 @@ fn a_dependency_naming_another_revision_than_the_installed_one_is_a_conflict() {
 fn a_git_package_naming_a_local_folder_is_refused() {
     let dirs = Dirs::new();
     let (repo, url) = dirs.repo("caller");
-    let manifest = r#"{ "manifestVersion": 1, "title": "Caller", "apiVersion": "0.1",
+    let manifest = r#"{ "manifestVersion": 1, "title": "Caller", "apiVersion": "0.2",
         "commands": [{ "id": "greet", "title": "Greet", "component": "caller.wasm" }],
         "dependencies": [{ "id": "helper", "source": "local:../helper",
                            "operations": [{ "id": "greet", "version": 1 }] }] }"#;
@@ -868,7 +868,7 @@ fn escaped_under(dir: &Path) -> Vec<PathBuf> {
 fn a_tree_entry_naming_another_folder_writes_nothing_outside_its_download() {
     let dirs = Dirs::new();
     let (repo, url) = dirs.repo("hostile");
-    let manifest: &[u8] = br#"{ "manifestVersion": 1, "title": "Hostile", "apiVersion": "0.1",
+    let manifest: &[u8] = br#"{ "manifestVersion": 1, "title": "Hostile", "apiVersion": "0.2",
         "commands": [] }"#;
     // Names `git` refuses to put in a tree, made directly: each would be
     // written above the download (`..`), anywhere (an absolute path replaces

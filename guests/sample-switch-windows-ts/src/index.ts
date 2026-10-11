@@ -11,8 +11,8 @@
 // Rust sample (guests/sample-switch-windows) and the JavaScript one.
 import type { Command, CommandSearch, List, SearchResult } from "@pane-app/extension";
 import { showToast } from "@pane-app/extension/feedback";
-import { activate, listWindows } from "pane:extension/windows@0.1.0";
-import type { Window } from "pane:extension/windows@0.1.0";
+import { activate, listWindows } from "pane:extension/windows@0.2.0";
+import type { Window } from "pane:extension/windows@0.2.0";
 
 /** The command's id in `pane.json`. */
 const SWITCH = "switch-windows";

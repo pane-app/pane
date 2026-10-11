@@ -886,7 +886,7 @@ fn the_mouse_wheel_scrolls_away_until_the_rows_reload(cx: &mut TestAppContext) {
     std::fs::create_dir_all(&folder).unwrap();
     std::fs::write(
         folder.join("pane.json"),
-        r#"{ "manifestVersion": 1, "title": "Hello", "apiVersion": "0.1",
+        r#"{ "manifestVersion": 1, "title": "Hello", "apiVersion": "0.2",
   "commands": [{ "id": "hello", "title": "Say hello", "component": "hello.wasm" }] }"#,
     )
     .unwrap();
@@ -2395,7 +2395,7 @@ fn installed_hello(
     std::fs::create_dir_all(&folder).unwrap();
     std::fs::write(
         folder.join("pane.json"),
-        r#"{ "manifestVersion": 1, "title": "Hello", "apiVersion": "0.1",
+        r#"{ "manifestVersion": 1, "title": "Hello", "apiVersion": "0.2",
   "commands": [{ "id": "hello", "title": "Say hello", "component": "hello.wasm" }] }"#,
     )
     .unwrap();
@@ -3345,7 +3345,7 @@ fn an_installed_commands_alias_action_opens_its_alias_form(cx: &mut TestAppConte
     std::fs::create_dir_all(&folder).unwrap();
     std::fs::write(
         folder.join("pane.json"),
-        r#"{ "manifestVersion": 1, "title": "Hello", "apiVersion": "0.1",
+        r#"{ "manifestVersion": 1, "title": "Hello", "apiVersion": "0.2",
   "commands": [{ "id": "hello", "title": "Say hello", "component": "hello.wasm" }] }"#,
     )
     .unwrap();
@@ -3683,7 +3683,7 @@ mod clipboard_split {
   "manifestVersion": 1,
   "title": "Clipboard History",
   "version": "0.1.0",
-  "apiVersion": "0.1",
+  "apiVersion": "0.2",
   "preferences": [
     {
       "name": "keepHistoryFor",

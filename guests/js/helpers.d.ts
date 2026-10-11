@@ -4,8 +4,8 @@
 // native helper, a prebuilt program the command's own package ships for
 // each system (under `helpers` in its pane.json), through Pane.
 
-/** `pane:extension/helpers@0.1.0`. */
-declare module "pane:extension/helpers@0.1.0" {
+/** `pane:extension/helpers@0.2.0`. */
+declare module "pane:extension/helpers@0.2.0" {
   /**
    * Why a helper run did not produce the helper's output.
    *

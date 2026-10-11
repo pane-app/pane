@@ -4,7 +4,7 @@
   "title": "__TITLE__",
   "description": "A command that opens a form and answers what was filled in.",
   "version": "0.1.0",
-  "apiVersion": "0.1",
+  "apiVersion": "0.2",
   "icon": "icon.png",
   "commands": [
     {

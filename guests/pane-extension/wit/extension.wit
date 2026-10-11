@@ -12,7 +12,7 @@
 // recycle them (wit/system.wit). This
 // is not the full Pane SDK: the SDKs (`pane-extension`, `@pane-app/extension`) hide
 // the JSON and the callback ids.
-package pane:extension@0.1.0;
+package pane:extension@0.2.0;
 
 interface command {
   use commands.{launch-record};
