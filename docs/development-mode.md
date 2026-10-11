@@ -325,7 +325,17 @@ answer.
 `pane-ext dev [folder]` ([#217](https://github.com/pane-app/pane/issues/217),
 [ADR 0047](adr/0047-extensions-are-built-from-the-app-first-with-pane-ext-beside-it.md))
 develops the package in `folder` (the current folder by default) from the
-author's terminal. It runs the same session as Pane's own development (the
+author's terminal. A `#<id>` after the folder names one extension of a
+collection there ([ADR 0044](adr/0044-a-git-repository-holds-one-extension-or-a-collection.md)):
+that extension alone is developed — it is a package of its own, built in
+its own folder, with the collection's identity — while the collection's
+other extensions are untouched. A collection folder named without an id
+is explained: name one of its extensions; a `#<id>` naming an id the
+collection does not list is refused, as an install naming it is. A
+subfolder of a collection developed directly is a package folder of its
+own, and develops as that.
+
+It runs the same session as Pane's own development (the
 `pane-build` crate's), so the build command, the obsolete builds and the
 copying of components into the source folder are the same; the difference
 is where the builds run and print:
@@ -350,12 +360,14 @@ is where the builds run and print:
 3. It builds the package in the terminal, printing what the build prints,
    cargo's errors included, and stages it in a folder of its own in the
    user's cache folder (`pane-ext/<hash of the folder>`).
-4. It hands the first build that succeeds to Pane. A folder Pane has not
+4. It hands the first build that succeeds to Pane. A package Pane has not
    installed is first shown in Pane's ordinary install preview, with this
-   build (its components are copied into the folder), and the author
-   chooses **Install** there; leaving the preview refuses the build, and
-   `pane-ext` exits. Pane then develops the package without watching or
-   building it: the rows, the status line, **Why <title> did not build**,
+   build (its components are copied into the package's source folder), and
+   the author chooses **Install** there; leaving the preview refuses the
+   build, and `pane-ext` exits. One extension of a collection gets its
+   own preview, the extension's, and its build's components are copied
+   into the extension's folder. Pane then develops the package without
+   watching or building it: the rows, the status line, **Why <title> did not build**,
    the extension log and its file are as for its own development, the
    status saying "Developing <title> with pane-ext". An installed folder is
    developed at once, from this build; a development already going on,
@@ -373,11 +385,11 @@ is where the builds run and print:
    `pane-ext dev`.
 
 The channel's requests are JSON, one a line, each naming the channel's
-version (1), as `pane_core::local_channel` documents: `subscribe`,
-`develop` (a folder and a staged build), `building` and `failed` (later
-builds) and `stop`. Pane answers with `previewing`, `developing`,
-`refused`, `build`, `log` and `ended` events. A request of another version
-is refused, saying so.
+version (2), as `pane_core::local_channel` documents: `subscribe`,
+`develop` (a folder and a staged build, with the id of one extension of a
+collection), `building` and `failed` (later builds) and `stop`. Pane
+answers with `previewing`, `developing`, `refused`, `build`, `log` and
+`ended` events. A request of another version is refused, saying so.
 
 Rust packages work end to end, and so do JavaScript and TypeScript ones:
 `pane-ext dev` builds them with pane-build's JavaScript build and the
@@ -525,7 +537,12 @@ These are implementation choices of #12/#13, not user decisions:
   log, Pane's messages, a failure kept as Pane's own, a later build
   reloaded), and closing the connection stops the development; a preview
   left refuses the build; an installed folder is developed at once, and
-  stopping it in Pane ends the connection's; an unknown folder is refused.
+  stopping it in Pane ends the connection's; an unknown folder is refused;
+  one extension of a collection is previewed, developed, reloaded and
+  developed again alone, with its identity, log and preview its own while
+  the collection's other extension is untouched; a collection without an
+  id is explained, an id it does not list refused, and a `#<id>` on a
+  one-extension folder refused.
   Unit tests in [`local_channel.rs`](../crates/pane-core/src/local_channel.rs):
   the requests' and events' JSON, other versions refused, a second Pane
   cannot listen on the endpoint, and the endpoint is open to this user only
@@ -535,10 +552,13 @@ These are implementation choices of #12/#13, not user decisions:
   listening as the running Pane: the build's output, the install preview,
   Pane's messages and the package's log line in the terminal; a compile
   error printed there while Pane keeps the working code; a fix reloaded;
-  the development stopped when `pane-ext` is killed. With no Pane listening
-  and none to start, it says where it looked. Its unit
-  tests: waiting for a Pane that starts listening, and giving up on one
-  that does not.
+  the development stopped when `pane-ext` is killed. One extension of a
+  collection is developed alone — its own preview and identity, the
+  collection's other extension untouched — and a collection named without
+  an id, or naming an id it does not list, is explained without building.
+  With no Pane listening and none to start, it says where it looked. Its
+  unit tests: waiting for a Pane that starts listening, and giving up on
+  one that does not.
 - The native smokes' development phase (screenshots 110 to 136; see the
   [platform notes](platforms/linux.md#development-mode-12-13)).
 

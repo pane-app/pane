@@ -786,7 +786,9 @@ impl Launcher {
     }
 
     /// Develops the installed package with `identity` with the builds
-    /// `pane-ext` hands over the local channel, built with `command`: Pane
+    /// `pane-ext` hands over the local channel, built with `command` in
+    /// `folder` — the package's source folder, which `pane-ext` watches:
+    /// the extension's, for one extension of a collection (ADR 0044). Pane
     /// neither watches nor builds it, and `build` asks `pane-ext` to build it
     /// now, as the row "Build <title> again" does. A development of the
     /// package already going on, Pane's own or another `pane-ext`'s, ends
@@ -797,6 +799,7 @@ impl Launcher {
     pub(crate) fn develop_remotely(
         &self,
         identity: &PackageIdentity,
+        folder: &Path,
         command: &str,
         build: BuildNow,
     ) -> Result<(Remote, Receiver<LogLine>), String> {
@@ -806,10 +809,12 @@ impl Launcher {
         if let Some(busy) = state.changing.get(identity) {
             return Err(format!("{title} {}", busy.doing()));
         }
-        let Some(folder) = identity.local_folder().map(Path::to_path_buf) else {
+        if identity.local_folder().is_none() {
             let message = format!("Cannot develop {title}: it has no local source folder");
             return Err(message);
-        };
+        }
+        // The folder the package is built in, as the report names it.
+        let folder = folder.to_path_buf();
         let installation = self
             .installation
             .as_ref()

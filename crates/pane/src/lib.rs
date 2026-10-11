@@ -46,7 +46,8 @@ actions!(
         OpenSettings,
         OpenActions,
         ReturnToRoot,
-        DismissLauncher
+        DismissLauncher,
+        TickChoice
     ]
 );
 
@@ -78,6 +79,10 @@ pub(crate) fn bind_keys_with(
         // registered after.
         KeyBinding::new("pagedown", SelectNextPage, Some(app::KEY_CONTEXT)),
         KeyBinding::new("pageup", SelectPreviousPage, Some(app::KEY_CONTEXT)),
+        // Space ticks and unticks the extension selected on the choice of
+        // a collection's extensions (#308), whose list alone carries the
+        // context.
+        KeyBinding::new("space", TickChoice, Some(app::CHOICE_CONTEXT)),
     ]);
     let text_editing = ui::input::bind_text_editing(cx);
     extension_views::form::bind_keys(cx, &text_editing);

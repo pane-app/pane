@@ -426,16 +426,18 @@ fn focus(
 }
 
 /// Whether the launcher's screen is one an extension's operation opened:
-/// a confirmation, a package's preview, pause, build, network, program or
-/// runtime details, or the update results. While it is, the pages draw it
-/// from the launcher's live view, so its confirmations show and are
-/// answered here; otherwise they read the launcher, whose screen stays
-/// wherever the user left it.
+/// a confirmation, a package's preview, the choice of a collection's
+/// extensions (#308), pause, build, network, program or runtime details,
+/// or the update results. While it is, the pages draw it from the
+/// launcher's live view, so its confirmations show and are answered here;
+/// otherwise they read the launcher, whose screen stays wherever the user
+/// left it.
 pub(crate) fn in_extension_flow(screen: &Screen) -> bool {
     matches!(
         screen,
         Screen::Confirm { .. }
             | Screen::Package { .. }
+            | Screen::Choice { .. }
             | Screen::PauseDetails { .. }
             | Screen::BuildDetails { .. }
             | Screen::RuntimeDetails { .. }
@@ -446,7 +448,8 @@ pub(crate) fn in_extension_flow(screen: &Screen) -> bool {
 }
 
 /// Whether the screen offers no Cancel row of its own (a confirmation's
-/// is its own): the details screens and a preview, where the page offers
+/// is its own): the details screens, a preview, the choice of a
+/// collection's extensions and the update results, where the page offers
 /// the way out the launcher window's Escape is.
 fn details_screen(screen: &Screen) -> bool {
     matches!(
@@ -457,6 +460,7 @@ fn details_screen(screen: &Screen) -> bool {
             | Screen::NetworkDetails { .. }
             | Screen::ProgramDetails { .. }
             | Screen::Package { .. }
+            | Screen::Choice { .. }
             | Screen::UpdateResults { .. }
     )
 }
@@ -532,7 +536,12 @@ pub(crate) fn source_line(package: &InstalledPackage) -> String {
         };
     }
     if let Some(git) = &package.git {
-        return format!("Git · {}", git.url);
+        // One extension of a collection is named by its id, after `#` in
+        // the repository's address (ADR 0044).
+        return match identity.extension_id() {
+            Some(id) => format!("Git · {}#{id}", git.url),
+            None => format!("Git · {}", git.url),
+        };
     }
     match identity.local_folder() {
         Some(folder) => format!("Folder · {}", folder.display()),
@@ -915,6 +924,8 @@ fn render(
     let body = if flow {
         if matches!(live.screen, Screen::UpdateResults { .. }) {
             update_results_screen(this, &live, &theme, cx)
+        } else if matches!(live.screen, Screen::Choice(_)) {
+            choice_screen(&live, &theme, cx)
         } else {
             flow_screen(&live, &theme, cx)
         }
@@ -1008,12 +1019,253 @@ fn flow_screen(
     ]
 }
 
+/// The choice of a collection's extensions in place of the page (#308,
+/// ADR 0043): drawn where a package preview is, from the launcher's live
+/// view. One row per extension — its own icon, title, description and
+/// version, and its check mark at the row's right end — none ticked at
+/// first; what the run of the ticked ones came to for each once it ends.
+/// Clicking a row previews that extension (as Enter does in the launcher
+/// window); the check mark alone ticks it. The Install row after them
+/// runs the ticked extensions, each as its own package.
+fn choice_screen(
+    live: &LauncherView,
+    theme: &Theme,
+    cx: &mut Context<SettingsWindow>,
+) -> Vec<AnyElement> {
+    let inset = theme.geometry.settings.section_label_inset;
+    // What the launcher's status line says of the choice — the run's
+    // progress and what it came to — on the page, which the flow draws in
+    // place of the page's own status.
+    let status = status_tone(&live.status, theme).map(|(text, color)| {
+        controls::field_description(text.clone(), color, theme)
+            .px(inset)
+            .id("extensions-choice-status")
+            .debug_selector(|| "extensions-choice-status".into())
+            .role(Role::Status)
+            .aria_label(text)
+            .into_any_element()
+    });
+    let details = live
+        .details()
+        .iter()
+        .enumerate()
+        .map(|(index, line)| {
+            let selector = format!("extension-detail-{line}");
+            controls::field_description(line.clone(), theme.text_body, theme)
+                .px(inset)
+                .id(("extension-detail", index))
+                .debug_selector(move || selector)
+                .into_any_element()
+        })
+        .collect::<Vec<_>>();
+    let Screen::Choice(choice) = &live.screen else {
+        return flow_screen(live, theme, cx);
+    };
+    let mut rows: Vec<AnyElement> = Vec::new();
+    for (index, row) in live.rows.iter().enumerate().take(choice.extensions.len()) {
+        let extension = &choice.extensions[index];
+        let ticked = choice.ticked.get(index).copied().unwrap_or(false);
+        let outcome = choice.outcomes.get(index).cloned().flatten();
+        let id = row.id.clone();
+        let title = row.title.clone();
+        // What the run came to for it, under its description, once it
+        // reaches it.
+        let refusal = match &outcome {
+            Some(pane_core::ChoiceOutcome::Refused(why)) => Some(why.clone()),
+            _ => None,
+        };
+        let outcome_word = match &outcome {
+            Some(pane_core::ChoiceOutcome::Installed) => Some("Installed".to_owned()),
+            Some(pane_core::ChoiceOutcome::Installing) => Some("Installing…".to_owned()),
+            Some(pane_core::ChoiceOutcome::Refused(_)) => Some("Not installed".to_owned()),
+            None => None,
+        };
+        let mut lines: Vec<AnyElement> = Vec::new();
+        if let Some(description) = &extension.description {
+            lines.push(
+                controls::field_description(description.clone(), theme.text_muted, theme)
+                    .truncate()
+                    .into_any_element(),
+            );
+        }
+        if let Some(version) = &extension.version {
+            lines.push(
+                controls::field_description(format!("Version {version}"), theme.text_muted, theme)
+                    .into_any_element(),
+            );
+        }
+        if let Some(word) = &outcome_word {
+            lines.push(
+                controls::field_description(
+                    word.clone(),
+                    match &outcome {
+                        Some(pane_core::ChoiceOutcome::Installed) => theme.success,
+                        Some(pane_core::ChoiceOutcome::Refused(_)) => theme.danger,
+                        _ => theme.warning,
+                    },
+                    theme,
+                )
+                .into_any_element(),
+            );
+        }
+        if let Some(refusal) = &refusal {
+            lines.push(
+                controls::field_description(refusal.clone(), theme.danger, theme)
+                    .truncate()
+                    .into_any_element(),
+            );
+        }
+        let icon = crate::features::icons::drawn(&extension.icon, theme);
+        let scope = format!("extension-{title}");
+        let tick = settings_choice_tick(index, &id, &title, ticked, theme, cx);
+        let selector = format!("extension-row-{title}");
+        rows.push(
+            controls::list_item(
+                ("extension-row", index),
+                Some(row_icon_at(
+                    &RowIcon::Drawn(icon),
+                    TileSize::Row,
+                    "extension-item-icon",
+                    &scope,
+                    theme,
+                )),
+                title.clone(),
+                lines,
+                theme,
+            )
+            .debug_selector(move || selector)
+            .role(Role::Button)
+            .aria_label(title.clone())
+            .child(tick)
+            .on_click(cx.listener(move |this, _: &gpui::ClickEvent, _, cx| {
+                answer(this, &id, cx);
+            }))
+            .into_any_element(),
+        );
+    }
+    // The Install row, after the extensions, while no run is going: the
+    // last of the choice's rows, as the launcher's own rows list it.
+    for (index, row) in live.rows.iter().enumerate().skip(choice.extensions.len()) {
+        let id = row.id.clone();
+        let title = row.title.clone();
+        let subtitle = row.subtitle.clone().unwrap_or_default();
+        let selector = format!("extension-row-{title}");
+        rows.push(
+            controls::list_item(
+                ("extension-row", index),
+                None,
+                title.clone(),
+                vec![
+                    controls::field_description(subtitle, theme.text_muted, theme)
+                        .truncate()
+                        .into_any_element(),
+                ],
+                theme,
+            )
+            .debug_selector(move || selector)
+            .role(Role::Button)
+            .aria_label(title.clone())
+            .on_click(cx.listener(move |this, _: &gpui::ClickEvent, _, cx| {
+                answer(this, &id, cx);
+            }))
+            .into_any_element(),
+        );
+    }
+    let back = details_screen(&live.screen).then(|| {
+        let back = controls::button("extension-back", "Back", true, theme)
+            .debug_selector(|| "extension-back".into())
+            .role(Role::Button)
+            .aria_label("Back")
+            .on_click(cx.listener(|this, _: &gpui::ClickEvent, _, cx| {
+                // The way out of the choice the page shows, as the
+                // launcher window's Escape is there.
+                this.launcher.back();
+                launcher_changed_outside(cx);
+                cx.notify();
+            }));
+        div().flex().child(back)
+    });
+    let body = div()
+        .flex()
+        .flex_col()
+        .gap(theme.geometry.settings.section_label_gap)
+        .children(status)
+        .children(details)
+        .children((!rows.is_empty()).then(|| controls::list_card(rows, theme)))
+        .children(back);
+    vec![
+        controls::section(Some(live.title.clone().into()), body, theme)
+            .debug_selector(|| "extensions-title".into())
+            .into_any_element(),
+    ]
+}
+
+/// The check mark of one extension's row on the page's choice (#308):
+/// ticked or not, its own click target — the row around it previews the
+/// extension.
+fn settings_choice_tick(
+    index: usize,
+    id: &str,
+    title: &str,
+    ticked: bool,
+    theme: &Theme,
+    cx: &mut Context<SettingsWindow>,
+) -> Stateful<Div> {
+    let mark = div()
+        .flex_none()
+        .size(px(16.))
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(px(4.))
+        .border_1()
+        .border_color(if ticked {
+            theme.accent
+        } else {
+            theme.text_muted
+        })
+        .when(ticked, |mark| {
+            mark.bg(theme.accent)
+                .child(div().size(px(6.)).rounded(px(2.)).bg(theme.text_title))
+        });
+    let label = if ticked {
+        format!("Untick {title}")
+    } else {
+        format!("Tick {title}")
+    };
+    let id = id.to_owned();
+    div()
+        .id(("extension-tick", index))
+        .debug_selector(move || format!("extension-tick-{title}"))
+        .flex_none()
+        .flex()
+        .items_center()
+        .cursor_pointer()
+        .role(Role::CheckBox)
+        .aria_label(label)
+        .aria_toggled(if ticked {
+            Toggled::True
+        } else {
+            Toggled::False
+        })
+        .on_click(cx.listener(move |this, _: &gpui::ClickEvent, _, cx| {
+            // The mark takes the click, so the row around it does not
+            // preview the extension.
+            cx.stop_propagation();
+            if this.launcher.toggle_choice_tick(&id) {
+                cx.notify();
+            }
+        }))
+        .child(mark)
+}
+
 /// The update results screen in place of the page (#256): the launcher's
 /// record of the latest pass that recorded, its groups in the order
-/// Updated, Skipped, Failed, the empty ones hidden, each row the
-/// extension's icon, title and outcome, opening that extension's page —
-/// as the screen's own rows do in the launcher window. The way back is
-/// the page's own Back button, as a details screen's is.
+/// Updated, Skipped, No longer offered, Failed, the empty ones hidden,
+/// each row the extension's icon, title and outcome, opening that
+/// extension's page — as the screen's own rows do in the launcher
+/// window. The way back is the page's own Back button, as a details
+/// screen's is.
 fn update_results_screen(
     this: &mut SettingsWindow,
     live: &LauncherView,
@@ -1027,6 +1279,9 @@ fn update_results_screen(
         ("Updated", &results.updated),
         ("Waiting", &results.waiting),
         ("Skipped", &results.skipped),
+        // A notice, not a fault: the extensions of collections the pass
+        // found no longer offered by them (ADR 0044, #310).
+        ("No longer offered", &results.removed),
         ("Failed", &results.failed),
     ] {
         if group.is_empty() {

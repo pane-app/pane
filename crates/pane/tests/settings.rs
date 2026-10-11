@@ -2651,6 +2651,107 @@ fn an_extension_is_installed_from_a_folder_through_the_plus_menu(cx: &mut TestAp
     open_page(&mut settings_cx, "Hello");
 }
 
+/// Writes a local collection in `folder` (#308): two extensions of the
+/// Git sample guest, each its own package with its own manifest, listed
+/// by the index at the root (ADR 0044).
+fn choice_collection(folder: &Path) -> PathBuf {
+    let guests = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/guests");
+    let extensions = [("clock", true), ("timers", true)];
+    let mut files = repo_server::extension_collection_files(&guests, &extensions);
+    files.push((
+        "pane-collection.json",
+        r#"{ "extensions": [ { "id": "clock", "path": "extensions/clock" },
+            { "id": "timers", "path": "extensions/timers" } ] }"#
+            .as_bytes()
+            .to_vec(),
+    ));
+    for (path, contents) in files {
+        let path = folder.join(path);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, contents).unwrap();
+    }
+    folder.to_path_buf()
+}
+
+#[gpui::test]
+fn a_collection_folder_chosen_from_the_plus_menu_opens_the_choice(cx: &mut TestAppContext) {
+    let (sources, data) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let folder = choice_collection(&sources.path().join("tools"));
+    cx.executor().allow_parking();
+    cx.update(pane::bind_keys);
+    let launcher =
+        Launcher::with_packages(Runtime::start(), vec![], data.path().join("extensions"));
+    let (_launcher, cx) =
+        cx.add_window_view(|window, cx| LauncherWindow::new(launcher, window, cx));
+    let (_settings, mut settings_cx) = open_extensions(cx);
+
+    // The folder the picker chooses opens the choice in place of the page
+    // (#308), where a package preview is drawn: one row per extension, its
+    // own icon, description and version, nothing ticked, the Install row
+    // after them.
+    click_row(&mut settings_cx, "extensions-add");
+    click_row(&mut settings_cx, "extensions-add-Install from Folder…");
+    assert!(settings_cx.did_prompt_for_paths(), "a folder picker opened");
+    let chosen = folder.clone();
+    settings_cx.simulate_path_prompt_response(move |options| {
+        assert!(options.directories && !options.files && !options.multiple);
+        Some(vec![chosen])
+    });
+    until_drawn(&mut settings_cx, "extension-row-Install");
+    for drawn in [
+        "extension-row-Clock from Git",
+        "extension-row-Timers from Git",
+        "extension-tick-Clock from Git",
+        "extension-detail-Tick the extensions to install: each one installs on its own, with its \
+         own preview and record",
+    ] {
+        assert!(
+            settings_cx.debug_bounds(drawn).is_some(),
+            "{drawn} is drawn"
+        );
+    }
+    // Nothing is ticked: choosing Install is refused, and nothing runs.
+    click_row(&mut settings_cx, "extension-row-Install");
+    until_text(
+        &mut settings_cx,
+        "No extensions are ticked: tick the ones to install",
+    );
+
+    // The pointer ticks two by their check marks.
+    click_row(&mut settings_cx, "extension-tick-Clock from Git");
+    click_row(&mut settings_cx, "extension-tick-Timers from Git");
+    until_text(&mut settings_cx, "Untick Clock from Git");
+    until_text(&mut settings_cx, "Untick Timers from Git");
+
+    // A row previews its extension, as Enter does in the launcher window,
+    // and the page's Back returns to the choice.
+    click_row(&mut settings_cx, "extension-row-Timers from Git");
+    until_drawn(
+        &mut settings_cx,
+        "extension-detail-Extension: timers, one of the extensions its collection lists",
+    );
+    click_row(&mut settings_cx, "extension-back");
+    until_drawn(&mut settings_cx, "extension-tick-Clock from Git");
+
+    // Choosing Install installs each ticked extension as its own package,
+    // and the choice lists what was installed.
+    click_row(&mut settings_cx, "extension-row-Install");
+    until_text(
+        &mut settings_cx,
+        "Installed Clock from Git and Timers from Git",
+    );
+    for entry in [
+        "extension-entry-Clock from Git",
+        "extension-entry-Timers from Git",
+    ] {
+        assert!(
+            settings_cx.debug_bounds(entry).is_some(),
+            "{entry} is listed"
+        );
+    }
+    open_page(&mut settings_cx, "Clock from Git");
+}
+
 #[gpui::test]
 fn the_npm_and_git_sources_ask_for_their_package_on_the_page(cx: &mut TestAppContext) {
     let data = tempfile::tempdir().unwrap();

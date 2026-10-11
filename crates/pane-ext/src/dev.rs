@@ -1,5 +1,10 @@
 //! `pane-ext dev [folder]`: developing a package in the running Pane from
-//! the terminal (ADR 0047, #217).
+//! the terminal (ADR 0047, #217). A `#<id>` after the folder names one
+//! extension of the collection at it (ADR 0044): that extension alone is
+//! developed, as the package it is — built in its own folder, given to
+//! Pane as the package with the collection's identity — and the
+//! collection's other extensions are untouched; a collection folder named
+//! without an id is explained.
 //!
 //! It runs development mode's session, the `pane-build` crate's as Pane's
 //! own development mode does, so the builds run here and print here, the
@@ -7,8 +12,9 @@
 //! the local channel (`pane_core::local_channel`), starting Pane if none
 //! answers (see `start`), and stops if there is none to start. The first
 //! build that succeeds is handed to Pane; if Pane has not installed the
-//! folder, it shows its install preview first, which the author confirms in
-//! Pane. After that each save builds the package here again, and Pane
+//! package, it shows its install preview first — the extension's own, for
+//! one extension of a collection — which the author confirms in Pane.
+//! After that each save builds the package here again, and Pane
 //! reloads each build that succeeds, while a build that fails leaves it
 //! running the working code.
 //!
@@ -53,8 +59,19 @@ fn develop(folder: Option<PathBuf>) -> Result<String, String> {
         None => std::env::current_dir()
             .map_err(|error| format!("the current folder cannot be read: {error}"))?,
     };
-    let folder = pane_build::canonical(&folder)
-        .map_err(|error| format!("{} cannot be developed: {error}", folder.display()))?;
+    // A `#` names one extension of the collection at the folder (ADR 0044):
+    // everything after the last `#` is the id, as `pane --install
+    // <folder>#<id>` names one (a folder name may hold a `#` of its own).
+    let (root, extension) = named(&folder);
+    let root = pane_build::canonical(&root)
+        .map_err(|error| format!("{} cannot be developed: {error}", root.display()))?;
+    // What is developed: the extension's folder, for one extension of a
+    // collection; a collection named without an id is explained, and every
+    // other way the name cannot be taken is refused as an install of one
+    // extension is.
+    let target = pane_core::develop::target(&root, extension.as_deref())
+        .map_err(|why| format!("{} cannot be developed: {why}", root.display()))?;
+    let folder = target.folder;
     if !folder.join(pane_build::MANIFEST_FILE).is_file() {
         return Err(format!(
             "{} has no {}, so it is not a package folder",
@@ -97,7 +114,8 @@ fn develop(folder: Option<PathBuf>) -> Result<String, String> {
             .map_err(|error| format!("a thread could not start: {error}"))?;
     }
     worker.start(Handing {
-        folder,
+        root,
+        extension,
         command,
         pane: None,
         reached,
@@ -112,6 +130,17 @@ fn develop(folder: Option<PathBuf>) -> Result<String, String> {
     match ending {
         Ending::Stopped(message) => Ok(message),
         Ending::Failed(message) => Err(message),
+    }
+}
+
+/// The folder `asked` names, and the id of the extension of the
+/// collection at it, where it names one: everything after the last `#`
+/// (ADR 0044, as `pane --install <folder>#<id>` names one; a folder name
+/// may hold a `#` of its own, so an id follows the last one).
+fn named(asked: &Path) -> (PathBuf, Option<String>) {
+    match asked.to_str().and_then(|text| text.rsplit_once('#')) {
+        Some((folder, id)) => (PathBuf::from(folder), Some(id.to_owned())),
+        None => (asked.to_path_buf(), None),
     }
 }
 
@@ -179,7 +208,11 @@ struct Reached {
 
 /// The session's host: hands each build that succeeds to the running Pane.
 struct Handing {
-    folder: PathBuf,
+    /// How the developed package is named to Pane: the collection's
+    /// folder with the id of the extension of it (ADR 0044), or the
+    /// package folder with no id.
+    root: PathBuf,
+    extension: Option<String>,
     command: String,
     /// Pane, once reached; it comes on `reached`.
     pane: Option<Reached>,
@@ -246,7 +279,8 @@ impl Host for Handing {
             return false;
         };
         let develop = Request::Develop {
-            folder: self.folder.clone(),
+            folder: self.root.clone(),
+            extension: self.extension.clone(),
             staging: staging.to_path_buf(),
             command: self.command.clone(),
         };
@@ -385,6 +419,21 @@ mod tests {
             "info [hello] saying hello"
         );
         assert_eq!(log_line("stderr", "error", None, "oops"), "error oops");
+    }
+
+    #[test]
+    fn a_hash_names_one_extension_of_a_collection_and_no_hash_names_a_folder() {
+        let (folder, id) = named(Path::new("/src/tools#clock"));
+        assert_eq!(folder, Path::new("/src/tools"));
+        assert_eq!(id.as_deref(), Some("clock"));
+        // The last `#` names the id; a folder name may hold one of its own.
+        let (folder, id) = named(Path::new("/src/my#tools#clock"));
+        assert_eq!(folder, Path::new("/src/my#tools"));
+        assert_eq!(id.as_deref(), Some("clock"));
+        // A path with no `#` names a package folder, with no id.
+        let (folder, id) = named(Path::new("/src/hello-rust"));
+        assert_eq!(folder, Path::new("/src/hello-rust"));
+        assert_eq!(id, None);
     }
 
     #[test]

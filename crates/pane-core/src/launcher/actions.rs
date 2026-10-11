@@ -443,6 +443,10 @@ pub(in crate::launcher) fn selected_action(state: &State) -> SelectedAction {
         (_, Some(Entry::StopSharingFolder(_))) => acting("Stop sharing"),
         (_, Some(Entry::Install(_, Mode::Install, _))) => acting("Install"),
         (_, Some(Entry::Install(_, Mode::Update(_), _))) => acting("Update"),
+        // The choice of a collection's extensions (#308): a row previews
+        // its extension, and the Install row runs the ticked ones.
+        (_, Some(Entry::PreviewChoice(_))) => acting("Show package"),
+        (_, Some(Entry::InstallChoice)) => acting("Install"),
         // A confirmation's rows are its answers; the direction a toggle
         // turns in comes from the state it acts on, not from a title.
         (_, Some(Entry::Toggle(identity))) => {
@@ -532,5 +536,8 @@ pub(in crate::launcher) fn selected_action(state: &State) -> SelectedAction {
         (Screen::ExtensionLog { .. }, None) => acting("Copy line"),
         // The update results view: a row opens its extension's page.
         (Screen::UpdateResults { .. }, None) => unusable("Show extension"),
+        // The choice of a collection's extensions (#308): Enter installs
+        // what is ticked.
+        (Screen::Choice { .. }, None) => unusable("Install"),
     }
 }

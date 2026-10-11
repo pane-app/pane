@@ -6,11 +6,14 @@
 //! 0043: Settings draws it in place of the page).
 //!
 //! The launcher holds the screen ([`pane_core::Screen::UpdateResults`])
-//! and its rows — the groups Updated, Skipped, Failed, each row the
-//! extension's own, searched by what the user types through the search
-//! field root search's is ([`pane_core::Launcher::set_query`]) — and the
+//! and its rows — the groups Updated, Skipped, No longer offered, Failed,
+//! each row the extension's own, searched by what the user types through
+//! the search field root search's is ([`pane_core::Launcher::set_query`])
+//! — and the
 //! window draws them here: each row the extension's icon, its title, its
-//! detail and a status tag, the groups' labels over their rows. The
+//! detail and a status tag, the groups' labels over their rows — a
+//! No longer offered row tagged Removed in the muted tone, a notice, no
+//! fault (ADR 0044, #310). The
 //! list works as any list does (see `docs/root-search.md`): the arrows
 //! move the selection, Enter opens the selected extension's page in
 //! Settings, and the Actions panel offers that and copying the row's
@@ -34,8 +37,8 @@ use crate::ui::virtual_list::{self, ListChild, VirtualList};
 pub(crate) const PLACEHOLDER: &str = "Search update results…";
 
 /// What the view says while no results are recorded at all.
-const NONE_YET: &str = "No update results yet. The next check that updates, skips or fails \
-                        anything records them here.";
+const NONE_YET: &str = "No update results yet. The next check that updates, skips, fails or \
+                        reports one no longer offered records them here.";
 
 /// The update results view's state, owned by the launcher window while
 /// the launcher shows the screen. The rows, their order and the
@@ -235,9 +238,12 @@ impl LauncherWindow {
             .motion
             .hover
             .look(Spot::Row(index), cx.background_executor().now());
-        // The row's status tag: the group its row is listed under.
+        // The row's status tag: the group its row is listed under. A
+        // notice — the collection no longer offers the extension (ADR
+        // 0044, #310) — is tagged Removed in the muted tone, no fault.
         let (tag, tone) = match section_at(sections, index).as_deref() {
             Some("Skipped") => ("Skipped", theme.text_muted),
+            Some("No longer offered") => ("Removed", theme.text_muted),
             Some("Failed") => ("Failed", theme.danger),
             _ => ("Updated", theme.success),
         };

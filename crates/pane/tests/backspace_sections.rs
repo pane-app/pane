@@ -96,9 +96,9 @@ const VIM_NEXT: &str = if cfg!(target_os = "macos") {
     "alt-j"
 };
 
-/// The calculator's assembled package, for its computed answers.
-fn calculator() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/guests/packages/calculator")
+/// The Rust sample's assembled package, for its computed answers.
+fn rust_sample() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/guests/packages/sample-rust")
 }
 
 /// The actions sample as a root command, titled "Actions sample": the
@@ -630,7 +630,7 @@ fn a_command_search_moves_five_rows(cx: &mut TestAppContext) {
 }
 
 /// Ctrl+Down and Ctrl+Up cross root search's result sections: from the
-/// computed answer's "Calculator" to the matches' "Results", the first
+/// computed answer's "Rust sample" to the matches' "Results", the first
 /// row of the next section and of the previous one, the last row when
 /// there is no next section, and the section's label scrolling into view
 /// over the row the jump lands on.
@@ -638,27 +638,32 @@ fn a_command_search_moves_five_rows(cx: &mut TestAppContext) {
 fn ctrl_arrows_cross_root_searches_sections_scrolling_the_label_into_view(cx: &mut TestAppContext) {
     let data = tempfile::tempdir().unwrap();
     let commands: Vec<_> = (1..=20)
-        .map(|index| command(&format!("command-{index:02}"), &format!("6*7 {index:02}")))
+        .map(|index| {
+            command(
+                &format!("command-{index:02}"),
+                &format!("reverse 42 {index:02}"),
+            )
+        })
         .collect();
     let launcher =
         Launcher::with_packages(Runtime::start(), commands, data.path().join("extensions"));
-    block_on(launcher.install_package(&calculator()));
+    block_on(launcher.install_package(&rust_sample()));
     let (window, cx) = open_launcher(cx, launcher);
 
-    // The answer above twenty matches: "Calculator" and "Results".
-    cx.simulate_input("6*7");
-    let expected: Vec<String> = std::iter::once("42".to_owned())
-        .chain((1..=20).map(|index| format!("6*7 {index:02}")))
+    // The answer above twenty matches: "Rust sample" and "Results".
+    cx.simulate_input("reverse 42");
+    let expected: Vec<String> = std::iter::once("24".to_owned())
+        .chain((1..=20).map(|index| format!("reverse 42 {index:02}")))
         .collect();
     until(&window, cx, |view| row_titles(view) == expected);
     let view = settle(&window, cx);
     assert_eq!(view.selected, Some(0));
-    assert!(in_view(cx, "section-Calculator"));
+    assert!(in_view(cx, "section-Rust sample"));
     assert!(in_view(cx, "section-Results"));
 
     // The first row of the next section: the first match.
     cx.simulate_keystrokes("ctrl-down");
-    assert_eq!(selected_title(&settle(&window, cx)), "6*7 01");
+    assert_eq!(selected_title(&settle(&window, cx)), "reverse 42 01");
 
     // Ten rows down, the "Results" label is out of view; the jump back
     // lands on the section's first row with its label scrolled into view.
@@ -667,26 +672,26 @@ fn ctrl_arrows_cross_root_searches_sections_scrolling_the_label_into_view(cx: &m
     assert!(!in_view(cx, "section-Results"), "the label is out of view");
     cx.simulate_keystrokes("ctrl-up");
     let view = settle(&window, cx);
-    assert_eq!(selected_title(&view), "6*7 01");
+    assert_eq!(selected_title(&view), "reverse 42 01");
     assert!(
         in_view(cx, "section-Results"),
         "the label scrolled into view"
     );
 
-    // From the section's first row, up: the "Calculator" answer, and
+    // From the section's first row, up: the "Rust sample" answer, and
     // nothing above it to reach.
     cx.simulate_keystrokes("ctrl-up");
-    assert_eq!(selected_title(&settle(&window, cx)), "42");
+    assert_eq!(selected_title(&settle(&window, cx)), "24");
     cx.simulate_keystrokes("ctrl-up");
-    assert_eq!(selected_title(&settle(&window, cx)), "42");
+    assert_eq!(selected_title(&settle(&window, cx)), "24");
 
     // No next section past the last: the last row, and it stays there.
     cx.simulate_keystrokes("ctrl-down");
-    assert_eq!(selected_title(&settle(&window, cx)), "6*7 01");
+    assert_eq!(selected_title(&settle(&window, cx)), "reverse 42 01");
     cx.simulate_keystrokes("ctrl-down");
-    assert_eq!(selected_title(&settle(&window, cx)), "6*7 20");
+    assert_eq!(selected_title(&settle(&window, cx)), "reverse 42 20");
     cx.simulate_keystrokes("ctrl-down");
-    assert_eq!(selected_title(&settle(&window, cx)), "6*7 20");
+    assert_eq!(selected_title(&settle(&window, cx)), "reverse 42 20");
 }
 
 /// In the vertical pinned layout the pinned rows count as the first

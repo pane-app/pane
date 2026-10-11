@@ -3,6 +3,9 @@
 //! folder Pane has not installed is shown for installation with the build
 //! handed over, and developed once the author installs it; declining the
 //! preview refuses the build; an installed folder is developed at once.
+//! One extension of a collection, named by its id (ADR 0044), is developed
+//! alone, with its own identity and preview, while the collection's other
+//! extensions are untouched.
 //! Pane's messages and what the package prints come back as log events; a
 //! build that failed elsewhere keeps the working code and is shown as Pane's
 //! own are; a later build is reloaded; closing the connection stops the
@@ -38,6 +41,18 @@ const MANIFEST: &str = r#"{
   "apiVersion": "0.1",
   "commands": [{ "id": "open", "title": "Open Dev", "component": "command.wasm" }]
 }"#;
+
+/// The manifest of a package titled `title`, with one command.
+fn manifest(title: &str) -> String {
+    format!(
+        r#"{{
+  "manifestVersion": 1,
+  "title": "{title}",
+  "apiVersion": "0.1",
+  "commands": [{{ "id": "open", "title": "Open {title}", "component": "command.wasm" }}]
+}}"#
+    )
+}
 
 /// What the window does with an install preview it is asked to show.
 #[derive(Clone, Copy)]
@@ -104,6 +119,47 @@ impl Pane {
     fn develop(&self, staging: &Path) -> Request {
         Request::Develop {
             folder: self.folder.clone(),
+            extension: None,
+            staging: staging.to_path_buf(),
+            command: "cargo build".into(),
+        }
+    }
+
+    /// A collection of two extensions at `tools`, each a package of its
+    /// own: `clock`, whose builds are staged elsewhere, and `timers`,
+    /// which stays as it is installed.
+    fn collection(&self) -> PathBuf {
+        let root = self.dir.path().join("tools");
+        for (id, title) in [("clock", "Clock"), ("timers", "Timers")] {
+            let folder = root.join("extensions").join(id);
+            fs::create_dir_all(&folder).unwrap();
+            fs::write(folder.join("pane.json"), manifest(title)).unwrap();
+        }
+        fs::write(
+            root.join("pane-collection.json"),
+            r#"{ "extensions": [ { "id": "clock", "path": "extensions/clock" },
+                                 { "id": "timers", "path": "extensions/timers" } ] }"#,
+        )
+        .unwrap();
+        root
+    }
+
+    /// A build of the extension titled `title` from the guest `source`,
+    /// staged in its own folder.
+    fn staged_extension(&self, name: &str, title: &str, source: &str) -> PathBuf {
+        let staging = self.dir.path().join("staging").join(name);
+        fs::create_dir_all(&staging).unwrap();
+        fs::write(staging.join("pane.json"), manifest(title)).unwrap();
+        fs::copy(guest(source), staging.join("command.wasm")).unwrap();
+        staging
+    }
+
+    /// A `develop` request for the extension `id` of the collection at
+    /// `root`, handing over the build staged in `staging`.
+    fn develop_extension(&self, root: &Path, id: &str, staging: &Path) -> Request {
+        Request::Develop {
+            folder: root.to_path_buf(),
+            extension: Some(id.into()),
             staging: staging.to_path_buf(),
             command: "cargo build".into(),
         }
@@ -121,12 +177,13 @@ impl Pane {
         }
     }
 
-    /// From root search, opens "Dev" and runs its item titled `item`.
-    fn run(&self, item: &str) -> Status {
+    /// From root search, opens the command titled `command` and runs its
+    /// item titled `item`.
+    fn run(&self, command: &str, item: &str) -> Status {
         for _ in 0..3 {
             self.launcher.back();
         }
-        select_title(&self.launcher, "Open Dev");
+        select_title(&self.launcher, command);
         block_on(self.launcher.activate_selected());
         select_title(&self.launcher, item);
         block_on(self.launcher.activate_selected());
@@ -146,8 +203,15 @@ impl Pane {
 /// for, and answers it.
 fn window(launcher: Launcher, mut previews: Previews, answer: Answer) {
     std::thread::spawn(move || {
-        while let Some(folder) = block_on(previews.next()) {
-            block_on(launcher.preview_package(&folder));
+        while let Some(asked) = block_on(previews.next()) {
+            match &asked {
+                local_channel::ToPreview::Folder(folder) => {
+                    block_on(launcher.preview_package(folder))
+                }
+                local_channel::ToPreview::Collection(folder, id) => {
+                    block_on(launcher.preview_collection(folder, id))
+                }
+            }
             match answer {
                 Answer::Install => {
                     select_title(&launcher, "Install");
@@ -236,7 +300,7 @@ fn a_folder_not_installed_is_previewed_then_developed_until_the_connection_close
 
     // What the package prints comes as log events.
     assert_eq!(
-        pane.run("Write to the log"),
+        pane.run("Open Dev", "Write to the log"),
         Status::Result("Wrote to the log".into())
     );
     client.wait_for_log("stdout: an info line");
@@ -256,7 +320,7 @@ fn a_folder_not_installed_is_previewed_then_developed_until_the_connection_close
     assert_eq!(development.command, "cargo build");
     assert_eq!(development.failure.unwrap().summary, "error: expected `;`");
     assert_eq!(
-        pane.run("Write to the log"),
+        pane.run("Open Dev", "Write to the log"),
         Status::Result("Wrote to the log".into())
     );
 
@@ -338,9 +402,200 @@ fn a_request_pane_does_not_answer_is_refused_saying_why() {
     // A development of a folder that is not there.
     let missing = Request::Develop {
         folder: pane.dir.path().join("missing"),
+        extension: None,
         staging: pane.staged("first", "sample_settings"),
         command: "cargo build".into(),
     };
     assert!(client.sender.send(&missing));
     assert!(matches!(client.answer(), Event::Refused { .. }));
+}
+
+#[test]
+fn one_extension_of_a_collection_is_previewed_developed_and_reloaded_alone() {
+    let pane = Pane::new(Answer::Install);
+    let tools = pane.collection();
+    let clock = PackageIdentity::local_extension(&tools, "clock").unwrap();
+    let timers = PackageIdentity::local_extension(&tools, "timers").unwrap();
+    // The collection's other extension is installed, as its own package:
+    // developing `clock` never touches it.
+    let timers_folder = tools.join("extensions/timers");
+    fs::copy(guest("sample_rust"), timers_folder.join("command.wasm")).unwrap();
+    block_on(pane.launcher.preview_collection(&tools, "timers"));
+    select_title(&pane.launcher, "Install");
+    block_on(pane.launcher.activate_selected());
+    assert_eq!(
+        pane.launcher.view().status,
+        Status::Result("Installed Timers".into())
+    );
+    let mut client = pane.connect();
+
+    // Clock is not installed: its first build is shown in its own install
+    // preview, naming the id, with this build, and developed once the
+    // author installs it.
+    let first = pane.staged_extension("clock-first", "Clock", "sample_settings");
+    assert!(
+        client
+            .sender
+            .send(&pane.develop_extension(&tools, "clock", &first))
+    );
+    assert_eq!(
+        client.answer(),
+        Event::Previewing {
+            title: "Clock".into()
+        }
+    );
+    let Event::Developing {
+        title,
+        replaced,
+        installed,
+    } = client.answer()
+    else {
+        panic!("not developed; the log: {:#?}", client.log);
+    };
+    assert_eq!(title, "Clock");
+    assert!(replaced);
+    assert!(installed.unwrap().join("pane.json").is_file());
+    // The development is Clock's alone, with its own identity; Timers is
+    // not developed, and still answers its own command.
+    assert!(pane.launcher.development(&clock).is_some());
+    assert!(pane.launcher.development(&timers).is_none());
+    assert_eq!(
+        pane.run("Open Timers", "Say hello"),
+        Status::Result("Hello from the Rust guest".into())
+    );
+    // The preview put the build in the extension's folder, as development
+    // does — never in the collection's root or the other extension's.
+    assert!(tools.join("extensions/clock/command.wasm").is_file());
+    assert_eq!(
+        fs::read(timers_folder.join("command.wasm")).unwrap(),
+        fs::read(guest("sample_rust")).unwrap()
+    );
+    // The extension log the terminal follows is Clock's.
+    client.wait_for_log("pane: Developing Clock with pane-ext");
+    assert_eq!(
+        pane.run("Open Clock", "Write to the log"),
+        Status::Result("Wrote to the log".into())
+    );
+    client.wait_for_log("stdout: an info line");
+
+    // A later build is reloaded, and the other extension is untouched.
+    let second = pane.staged_extension("clock-second", "Clock", "sample_settings");
+    assert!(
+        client
+            .sender
+            .send(&pane.develop_extension(&tools, "clock", &second))
+    );
+    let Event::Developing { replaced, .. } = client.answer() else {
+        panic!("not reloaded; the log: {:#?}", client.log);
+    };
+    assert!(replaced);
+    client.wait_for_log("pane: Reloaded Clock");
+    assert!(pane.launcher.development(&timers).is_none());
+    assert_eq!(
+        pane.run("Open Timers", "Say hello"),
+        Status::Result("Hello from the Rust guest".into())
+    );
+
+    // Closing the connection stops Clock's development; both extensions
+    // stay installed.
+    drop(client);
+    pane.wait_until("the development to stop", |launcher| {
+        launcher.development(&clock).is_none()
+    });
+    let installed: Vec<PackageIdentity> = pane
+        .launcher
+        .packages()
+        .iter()
+        .map(|package| package.identity.clone())
+        .collect();
+    assert!(installed.contains(&clock), "{installed:?}");
+    assert!(installed.contains(&timers), "{installed:?}");
+
+    // A second run, with the extension now installed, is developed at
+    // once, with no preview: the build is reloaded.
+    let mut client = pane.connect();
+    let third = pane.staged_extension("clock-third", "Clock", "sample_settings");
+    assert!(
+        client
+            .sender
+            .send(&pane.develop_extension(&tools, "clock", &third))
+    );
+    let Event::Developing { replaced, .. } = client.answer() else {
+        panic!("not developed; the log: {:#?}", client.log);
+    };
+    assert!(replaced);
+    client.wait_for_log("pane: Reloaded Clock");
+    assert!(pane.launcher.development(&timers).is_none());
+}
+
+#[test]
+fn a_collection_without_an_id_is_explained_and_an_unknown_one_is_refused() {
+    let pane = Pane::new(Answer::Leave);
+    let tools = pane.collection();
+    let mut client = pane.connect();
+    let root = PackageIdentity::local(&tools)
+        .unwrap()
+        .local_folder()
+        .unwrap()
+        .to_path_buf();
+
+    // A collection named without an id is explained: name one of its
+    // extensions, after `#`.
+    let no_id = Request::Develop {
+        folder: tools.clone(),
+        extension: None,
+        staging: pane.staged("first", "sample_settings"),
+        command: "cargo build".into(),
+    };
+    assert!(client.sender.send(&no_id));
+    let Event::Refused { message } = client.answer() else {
+        panic!("not refused; the log: {:#?}", client.log);
+    };
+    assert!(
+        message.contains(&format!(
+            "The folder {} is a collection, not one extension: its root holds \
+             pane-collection.json, which lists the extensions it offers by id; name the one to \
+             develop after `#`",
+            root.display()
+        )),
+        "{message}"
+    );
+    assert!(pane.launcher.packages().is_empty());
+
+    // An id the collection does not list is refused as an install of one
+    // is.
+    let missing = pane.staged("second", "sample_settings");
+    assert!(
+        client
+            .sender
+            .send(&pane.develop_extension(&tools, "nobody", &missing))
+    );
+    let Event::Refused { message } = client.answer() else {
+        panic!("not refused; the log: {:#?}", client.log);
+    };
+    assert!(
+        message.contains(&format!(
+            "The collection at {} lists no extension `nobody` in its \
+             pane-collection.json",
+            root.display()
+        )),
+        "{message}"
+    );
+    // A `#<id>` on the suite's one-extension folder names no extension of
+    // a collection, as an install naming one is told.
+    let plain = Request::Develop {
+        folder: pane.folder.clone(),
+        extension: Some("clock".into()),
+        staging: pane.staged("third", "sample_settings"),
+        command: "cargo build".into(),
+    };
+    assert!(client.sender.send(&plain));
+    let Event::Refused { message } = client.answer() else {
+        panic!("not refused; the log: {:#?}", client.log);
+    };
+    assert!(
+        message.contains("is not a collection: its root holds pane.json, one extension"),
+        "{message}"
+    );
+    assert!(pane.launcher.packages().is_empty());
 }

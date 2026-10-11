@@ -45,6 +45,7 @@ mod application_update;
 mod argument_fields;
 mod argument_form;
 pub(crate) mod capability_choices;
+mod choice;
 mod choices;
 mod clipboard_settings;
 pub mod clipboard_view;
@@ -134,6 +135,7 @@ pub use application_update::ApplicationUpdate;
 use application_update::{Application, Updates};
 pub use argument_fields::ArgumentFields;
 pub use capability_choices::{Capability, CapabilityProvider};
+pub use choice::{ChoiceExtension, ChoiceOutcome, ChoiceView};
 use choices::Record;
 pub use crash_notice::{LogNotice, UNEXPECTED_QUIT};
 pub use create::FolderAsk;
@@ -252,6 +254,13 @@ pub enum Screen {
     /// A package folder's identity and compatibility, before installing it,
     /// as lines of information under the title.
     Package { details: Vec<String> },
+    /// The extensions a collection offers, to tick some or all of them
+    /// and install each on its own (#308, ADR 0044): one row per
+    /// extension, the Install row after them, the lines under the title
+    /// saying where the collection came from — or, while the run of the
+    /// ticked extensions installs one, that extension's preview of what
+    /// it uses.
+    Choice(ChoiceView),
     /// A form opened from an item of the command's list view. It has no
     /// rows.
     Form(FormView),
@@ -637,6 +646,7 @@ impl LauncherView {
             | Screen::BuildDetails { details, .. }
             | Screen::RuntimeDetails { details }
             | Screen::Hotkey { details, .. } => details,
+            Screen::Choice(choice) => &choice.details,
             _ => &[],
         }
     }
@@ -907,6 +917,11 @@ struct State {
     actions_return: Option<actions::Return>,
     /// The custom view on screen, if one is open.
     custom_view: Option<OpenCustomView>,
+    /// The choice of a collection's extensions in progress (#308), while
+    /// the choice screen — or the preview of one of its extensions,
+    /// opened from it — is on show. Holds the revision fetched for a
+    /// collection from Git, so it stays while the choice lists it.
+    choice: Option<choice::Choice>,
     /// The open command's items' icons, tooltips and accessories, by item
     /// id (see `looks`).
     looks: looks::Looks,
@@ -1498,6 +1513,14 @@ enum Entry {
     /// replace its installed copy, as the preview's plan assumed things to
     /// be.
     Install(install::Request, Mode, dependencies::Assumptions),
+    /// The ordinary preview of one extension of the open choice, opened
+    /// from the choice (#308): the extension's own preview screen, whose
+    /// Back returns to the choice. The entry's id is the extension's id
+    /// in the collection's index.
+    PreviewChoice(String),
+    /// Install every ticked extension of the open choice, one after
+    /// another, each as its own package (#308).
+    InstallChoice,
     /// Pane's "Manage Extensions" command (root): the launcher window
     /// opens Settings at the extensions instead (see
     /// [`Launcher::selected_settings_target`]); activated here, it enters
@@ -1644,6 +1667,11 @@ enum Pending {
     Uninstall(uninstall::Uninstall),
     DeleteRetained(RetainedData),
     Install(install::Begun),
+    /// The preview of one extension of the open choice, opened from it
+    /// (#308).
+    PreviewChoice(install::Request),
+    /// The run of the open choice's ticked extensions (#308).
+    ChoiceRun(choice::Begun),
     Acquire(String),
     InstallUpdate,
     CheckUpdate,
@@ -1855,6 +1883,7 @@ impl Launcher {
             form: None,
             actions_return: None,
             custom_view: None,
+            choice: None,
             looks: looks::Looks::default(),
             icon_loads,
             application_icons,
@@ -3438,13 +3467,23 @@ impl Launcher {
             Screen::Command | Screen::CommandSearch { .. } | Screen::Extensions { .. } => {
                 self.show_root(&mut state, None)
             }
+            // The choice of a collection's extensions (#308): leaving it
+            // leaves for root search, as a package preview's Back does,
+            // and the choice — with the revision it holds — goes with it.
+            Screen::Choice { .. } => self.show_root(&mut state, None),
             // Leaving an install preview drops what Create Extension or
             // Import Extension asked Pane to do once the package was
             // installed (see `create`): not installing it is the author's
-            // answer.
+            // answer. A package preview that is one extension of the
+            // collection the choice lists (#308), opened from the choice,
+            // returns to the choice instead.
             Screen::Package { .. } => {
-                state.develop_after = None;
-                self.show_root(&mut state, None);
+                if state.choice.is_some() {
+                    self.choice_view(&mut state);
+                } else {
+                    state.develop_after = None;
+                    self.show_root(&mut state, None);
+                }
             }
             Screen::Root { query } => {
                 if !query.is_empty() {
@@ -3599,6 +3638,8 @@ impl Launcher {
                     launcher.finish_delete_retained(epoch, retained).await
                 }
                 Pending::Install(install) => launcher.finish_install(epoch, install).await,
+                Pending::PreviewChoice(request) => launcher.preview_after(epoch, request).await,
+                Pending::ChoiceRun(begun) => launcher.run_choice(epoch, begun).await,
                 Pending::Acquire(id) => launcher.retry_acquiring(&id).await,
                 Pending::InstallUpdate => launcher.install_application_update().await,
                 Pending::CheckUpdate => launcher.check_application_update_again().await,
@@ -3809,6 +3850,8 @@ impl Launcher {
             Entry::Install(request, mode, assumptions) => self
                 .begin_install(state, request, mode, assumptions)
                 .map_or(Pending::Nothing, Pending::Install),
+            Entry::PreviewChoice(id) => self.preview_choice(state, &id),
+            Entry::InstallChoice => self.begin_choice_run(state),
             Entry::Acquire(id) => {
                 state.view.status = Status::Running {
                     since: Instant::now(),
@@ -4264,6 +4307,9 @@ impl Launcher {
     /// the installed packages' commands, then the install row. Selects the
     /// command with component `select` if given, else the first row.
     fn show_root(&self, state: &mut State, select: Option<PathBuf>) {
+        // The choice of a collection's extensions goes with the screen it
+        // was shown on (#308), and the revision it holds with it.
+        state.choice = None;
         state.list_entered = false;
         self.note_setup_needed(state);
         state.root = self.root_results(state);
@@ -4410,6 +4456,10 @@ impl Launcher {
             | Screen::CustomView(_)
             | Screen::Confirm { .. }
             | Screen::Hotkey { .. } => {}
+            // The choice's rows are the collection's, not the installed
+            // packages'; the run of its ticked extensions redraws it
+            // itself as each lands (#308).
+            Screen::Choice { .. } => {}
             // The error overlay covers the screen it stands over: what it
             // was about does not change underneath it. A new development
             // event of the package ends it (see `show_development`).

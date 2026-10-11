@@ -340,7 +340,7 @@ fn is_release_tag(tag: &str) -> bool {
 pub(crate) struct Fetched {
     /// The revision's files, in Pane's downloads folder, removed once the
     /// package read from it is dropped.
-    pub download: Download,
+    pub download: std::sync::Arc<Download>,
     pub origin: DefaultOrigin,
 }
 
@@ -460,7 +460,14 @@ fn acquire(pin: &DefaultExtension, downloads: &Path) -> Result<Fetched, Failure>
             failed(why)
         }
     })?;
-    let crate::git::Fetched { download, origin } = fetched;
+    let crate::git::Fetched {
+        download,
+        origin,
+        // A default extension's repository is one extension, not a
+        // collection (ADR 0045): where its server filters, the probe
+        // found no collection's index and the whole revision was fetched.
+        partial: _,
+    } = fetched;
     let revision = GitRevision {
         // The pin names the tag whose commit was fetched; the commit that
         // was fetched is exactly the pinned one (a commit id pins the
