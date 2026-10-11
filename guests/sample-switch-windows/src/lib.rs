@@ -33,11 +33,6 @@ const SWITCH: &str = "switch-windows";
 struct SwitchWindowsSample;
 pane_extension::export!(SwitchWindowsSample);
 
-/// The error's message, as the answer the launcher shows.
-fn explain(error: windows::WindowsError) -> String {
-    error.message().to_string()
-}
-
 /// One listed window as an item: its title, its application's name (as
 /// the keywords the List's host filtering matches besides the title) and
 /// icon, with "on another desktop" said of one that is. Activating it

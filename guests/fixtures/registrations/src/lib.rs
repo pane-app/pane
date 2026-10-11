@@ -28,7 +28,7 @@ use core::cell::RefCell;
 use pane_extension::alloc::{format, string::String, string::ToString};
 use pane_extension::feedback::{Toast, show_toast};
 use pane_extension::registrations::{self, Change, Events, Item};
-use pane_extension::{Command, List, NoCustomView, content, publish, settings};
+use pane_extension::{Command, List, content, publish, settings};
 
 /// The command's id in the pane.json the test writes.
 const COMMAND: &str = "fixture";
@@ -232,7 +232,7 @@ impl publish::Guest for Fixture {
 }
 
 impl Command for Fixture {
-    type CustomView = NoCustomView;
+    type DesignedView = pane_extension::view::NoDesignedView;
 
     async fn render() -> Result<List, String> {
         // An item whose action is `act` with its id.
