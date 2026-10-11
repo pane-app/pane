@@ -261,6 +261,10 @@ fn guests() -> Result<(), String> {
                 .map_err(|error| format!("copy {} failed: {error}", built.display()))?;
         }
     }
+    // The designed fixture's hand-written manifests name it by its package
+    // ("designed"), not its crate.
+    std::fs::copy(out.join("designed_fixture.wasm"), out.join("designed.wasm"))
+        .map_err(|error| error.to_string())?;
     for name in PREBUILT {
         let prebuilt = root.join(format!("guests/prebuilt/{name}.wasm"));
         std::fs::copy(&prebuilt, out.join(format!("{name}.wasm")))
