@@ -39,6 +39,9 @@
 //!   extension API says the version the `pane:extension` WIT package
 //!   declares, #317), the WIT guard (`wit_guard`: a breaking change to
 //!   `wit/` fails unless the extension API version moved, #319, ADR
+//!   0046), the release notes' breaking-changes record (`release_notes`:
+//!   the extension API version `wit/` declares must have its section in
+//!   docs/breaking-changes.md once a previous world exists, #321, ADR
 //!   0046), the prebuilt JS/TS samples, the SDKs' packages (`sdks`) and
 //!   clippy: the half of `ci` that runs no tests and builds no guest but
 //!   the Rust SDK. The prebuilt-samples check needs no toolchain at all
@@ -84,6 +87,7 @@ mod api_versions;
 mod cli_packages;
 mod js_guests;
 mod package;
+mod release_notes;
 mod wit_guard;
 mod zip;
 
@@ -661,12 +665,12 @@ fn schema(write: bool) -> Result<(), String> {
 const SCHEMA: &str = "guests/js/schema/pane.schema.json";
 
 /// The lints half of `ci`: the formatting checks, the one extension API
-/// number, the WIT's breaking-change guard, the prebuilt-samples check,
-/// the SDKs' packages and clippy — everything that runs no tests and
-/// builds no guest but the Rust SDK, which `sdks` builds from its
-/// package. `ci-branch.yml` runs this as a job beside `ci-tests`, so
-/// the lints and the tests of a push finish in the time of the slower
-/// one.
+/// number, the WIT's breaking-change guard, the release notes' record,
+/// the prebuilt-samples check, the SDKs' packages and clippy — everything
+/// that runs no tests and builds no guest but the Rust SDK, which `sdks`
+/// builds from its package. `ci-branch.yml` runs this as a job beside
+/// `ci-tests`, so the lints and the tests of a push finish in the time of
+/// the slower one.
 fn ci_lints() -> Result<(), String> {
     // Formatting first: it is free, so a formatting error is seen at once
     // instead of after the guests and the checks have been built.
@@ -716,6 +720,10 @@ fn ci_lints() -> Result<(), String> {
     // guard fails a breaking change under a version that has already
     // shipped (#319, ADR 0046).
     wit_guard::check()?;
+    // A version that moved must announce its breaking changes: the
+    // guard's sibling, failing a version whose section the release
+    // notes' record does not hold (#321, ADR 0046).
+    release_notes::check()?;
     // The prebuilt JS/TS samples must match their sources and pins.
     js_guests::check()?;
     sdks()?;

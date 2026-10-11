@@ -428,7 +428,8 @@ fn wit_agreement(
 
 /// The version a WIT file's `package pane:extension@X.Y.Z;` line
 /// declares, or None when it declares none: the one number's source.
-fn wit_package_version(text: &str) -> Option<(u64, u64, u64)> {
+/// `release_notes` reads the current version with it, too.
+pub(crate) fn wit_package_version(text: &str) -> Option<(u64, u64, u64)> {
     for line in text.lines() {
         // A package declaration is one line, its version ending at the
         // semicolon.
