@@ -46,6 +46,16 @@ fn open(cx: &mut TestAppContext) -> (Entity<LauncherWindow>, &mut VisualTestCont
     cx.executor().allow_parking();
     cx.update(pane::bind_keys);
     let (window, cx) = cx.add_window_view(|window, cx| LauncherWindow::new(launcher, window, cx));
+    // The canvas command, not the counter the fixture's first command is:
+    // root search finds it by its title.
+    cx.simulate_input("canvas fixture");
+    let view = settle(&window, cx);
+    assert_eq!(
+        view.rows.first().map(|row| row.title.as_str()),
+        Some("Designed canvas fixture"),
+        "{:?}",
+        view.rows
+    );
     cx.simulate_keystrokes("enter");
     let view = settle(&window, cx);
     assert!(

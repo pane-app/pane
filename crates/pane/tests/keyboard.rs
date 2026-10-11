@@ -35,7 +35,7 @@ mod samples;
 #[path = "../../pane-core/tests/support/service.rs"]
 mod service;
 
-use settle::settle;
+use settle::{settle, settle_shown};
 
 #[path = "support/a11y.rs"]
 mod a11y;
@@ -1036,8 +1036,10 @@ fn a_form_still_submits_with_the_rebound_key_and_the_footer_button(cx: &mut Test
     // The rebound key submits the form, as Enter did.
     cx.simulate_input("Ada");
     cx.simulate_keystrokes("ctrl-j");
+    // The form's answer is a toast in the footer, not the status line
+    // (#141).
     assert_eq!(
-        settle(&window, cx).status,
+        settle_shown(&window, cx),
         Status::Result("Hello, Ada, from the Rust guest".into())
     );
 

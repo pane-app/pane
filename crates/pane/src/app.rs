@@ -1043,6 +1043,13 @@ impl LauncherWindow {
             // `return_to_root` does: it lands at once.
             self.motion.land_at_once();
             self.sync_screen(window, cx);
+            // The root search a pop starts from is the state a summon
+            // starts from: its search is the focus, as the kept-view
+            // branch below focuses a view's own. The sync above leaves
+            // the focus on the window itself (the designed state the
+            // popped view held is dropped for the root screen), and the
+            // field was already shown, so nothing else brings it back.
+            self.query.focus(window, cx);
         } else if self.launcher.screen().search_field().is_some() {
             self.query.focus(window, cx);
         }

@@ -337,6 +337,14 @@ impl LauncherWindow {
         // keys of two trees of one view decide which state is kept.
         let shown = match self.launcher.screen() {
             pane_core::Screen::DesignedView(view) => Some((view.id, view.render, view.tree)),
+            // A form Pane itself asks (#241) is a designed tree too: its
+            // fields' controls are kept for it, keyed by its own number
+            // (a form's id, so one form replacing another builds afresh
+            // and a form's own re-render reconciles), and the same draw
+            // covers both.
+            pane_core::Screen::PaneForm(form) => {
+                Some((pane_core::ViewId::of_number(form.id), form.id, form.tree))
+            }
             _ => None,
         };
         let open = shown
@@ -493,7 +501,11 @@ impl LauncherWindow {
         form: pane_core::PaneForm,
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
-        self.render_designed_tree(&form.tree, 0, cx)
+        // The form's own number is its render, as its keyed state is
+        // keyed by it: the tree the form re-renders (a field's error set)
+        // is the one its fields' values were collected from.
+        let render = form.id;
+        self.render_designed_tree(&form.tree, render, cx)
     }
 
     /// One designed tree, drawn with the keyed state the window keeps for

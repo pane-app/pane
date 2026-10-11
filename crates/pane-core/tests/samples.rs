@@ -141,6 +141,47 @@ impl Sample {
         launcher.view().status
     }
 
+    /// The open form view's field keyed `key`: its placeholder, error and
+    /// title, as the tree's props name them (#241: a field's title is over
+    /// its control, its error under it, its placeholder inside it — none
+    /// a text node).
+    fn field(
+        &self,
+        launcher: &Launcher,
+        key: &str,
+    ) -> (Option<String>, Option<String>, Option<String>) {
+        let view = launcher.view();
+        let Screen::DesignedView(shown) = &view.screen else {
+            panic!("no form view: {:?}", view.screen)
+        };
+        fn at(
+            node: &pane_core::Node,
+            key: &str,
+            into: &mut Option<(Option<String>, Option<String>, Option<String>)>,
+        ) {
+            let field = match &node.kind {
+                pane_core::NodeKind::TextInput(input) => Some((
+                    input.placeholder.clone(),
+                    input.field.error.clone(),
+                    input.field.title.clone(),
+                )),
+                _ => None,
+            };
+            if node.key.as_deref() == Some(key) {
+                if let Some(field) = field {
+                    *into = Some(field);
+                }
+                return;
+            }
+            for child in &node.children {
+                at(child, key, into);
+            }
+        }
+        let mut found = None;
+        at(&shown.tree.root, key, &mut found);
+        found.unwrap_or_else(|| panic!("no field {key} in the form"))
+    }
+
     /// The texts the open form view's tree holds.
     fn form_texts(&self, launcher: &Launcher) -> Vec<String> {
         match &launcher.view().screen {
@@ -370,11 +411,11 @@ fn opening_the_form_shows_its_fields(sample: &Sample) {
             "toggle",
         ]
     );
-    // The name's placeholder and the dropdown's sections, drawn as the
-    // tree says them.
-    let texts = sample.form_texts(&launcher);
-    assert!(texts.contains(&"Ada Lovelace".to_owned()), "{texts:?}");
-    assert!(texts.contains(&"Name".to_owned()), "{texts:?}");
+    // The name's placeholder and title are its field's props, drawn
+    // around its control (#241), not texts the tree holds.
+    let (placeholder, _, title) = sample.field(&launcher, "name");
+    assert_eq!(placeholder.as_deref(), Some("Ada Lovelace"));
+    assert_eq!(title.as_deref(), Some("Name"));
     let _ = view;
 }
 
@@ -403,8 +444,8 @@ fn an_invalid_field_is_marked_and_the_form_stays_open(sample: &Sample) {
     sample.submit(&launcher, "   ", "welcome");
 
     // The field's error, drawn under it (#241); the form view stays open.
-    let texts = sample.form_texts(&launcher);
-    assert!(texts.contains(&"Enter a name".to_owned()), "{texts:?}");
+    let (_, error, _) = sample.field(&launcher, "name");
+    assert_eq!(error.as_deref(), Some("Enter a name"));
     assert!(
         matches!(launcher.view().screen, Screen::DesignedView(_)),
         "{:?}",
@@ -427,11 +468,8 @@ fn a_too_long_name_is_rejected_by_the_guest(sample: &Sample) {
 
     sample.submit(&launcher, &"x".repeat(41), "hello");
 
-    let texts = sample.form_texts(&launcher);
-    assert!(
-        texts.contains(&"Use at most 40 characters".to_owned()),
-        "{texts:?}"
-    );
+    let (_, error, _) = sample.field(&launcher, "name");
+    assert_eq!(error.as_deref(), Some("Use at most 40 characters"));
 }
 
 /// Each sample declares one action for Windows only and one for macOS and
@@ -760,8 +798,19 @@ fn each_opened_color_view_starts_afresh(sample: &Sample) {
         "Purple, #8E24AA"
     );
 
+    // The root view's own back leaves the command, as leaving its list
+    // does: root search afresh, its first row selected. The color command
+    // is chosen again, as it was the first time.
     launcher.back();
     assert!(matches!(launcher.view().screen, Screen::Root { .. }));
+    block_on(launcher.set_query("color picker"));
+    let index = launcher
+        .view()
+        .rows
+        .iter()
+        .position(|row| row.id.ends_with("#color"))
+        .expect("the color command is listed");
+    launcher.select(index);
     block_on(launcher.activate_selected());
 
     assert_eq!(color(&launcher), "Blue, #1E88E5");

@@ -2693,7 +2693,11 @@ fn field_props(wire: &WireNode) -> Result<FieldProps, ReadError> {
     Ok(FieldProps {
         title: string(wire, "title")?,
         info: string(wire, "info")?,
-        error: string(wire, "error")?,
+        // An empty error is none: the SDKs write a field's `error` with
+        // the empty string while it is clean (its view's error closure
+        // answers "" for every field), and nothing draws an empty
+        // refusal under a field.
+        error: string(wire, "error")?.filter(|error| !error.is_empty()),
         remember: boolean(wire, "remember")?.unwrap_or(false),
     })
 }

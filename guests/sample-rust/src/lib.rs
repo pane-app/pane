@@ -138,21 +138,22 @@ impl Greeting {
             .navigation_title("Greet someone")
             .submit_title("Greet")
             .on_submit(submit);
+        // The answer draws over the form as its first child, the form
+        // staying the tree's root: the window keeps a field's state by
+        // the path of its key, and wrapping the form in a column would
+        // move every field's path — losing the text, the caret and the
+        // focus the user left in them (#238's rule).
+        if !answered.is_empty() {
+            view = view.child(
+                pane_extension::view::text(answered.as_str())
+                    .style(pane_extension::view::TextStyle::Title)
+                    .into_node(),
+            );
+        }
         for field in fields() {
             view = view.child(field);
         }
-        if answered.is_empty() {
-            view.into_answer()
-        } else {
-            pane_extension::view::column()
-                .gap(pane_extension::view::Space::M)
-                .child(
-                    pane_extension::view::text(answered.as_str())
-                        .style(pane_extension::view::TextStyle::Title),
-                )
-                .child(view)
-                .into_answer()
-        }
+        view.into_answer()
     }
 }
 

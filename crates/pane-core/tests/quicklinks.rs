@@ -252,20 +252,17 @@ fn submit(launcher: &Launcher, values: &[(&str, &str)]) -> (Status, Vec<String>)
     let submitting = launcher.submit_designed_form(None, values);
     block_on(submitting);
     launches_done(launcher);
-    let errors = fields_of(&form_tree(launcher))
-        .into_iter()
-        .filter(|(_, _, error, _)| !error.is_empty())
-        .map(|(key, _, error, _)| format!("{key}: {error}"))
-        .collect();
+    // A refused submission keeps the form; a successful one closes it,
+    // back at root search, where there are no fields to read.
+    let errors = match &launcher.view().screen {
+        Screen::DesignedView(shown) => fields_of(&shown.tree)
+            .into_iter()
+            .filter(|(_, _, error, _)| !error.is_empty())
+            .map(|(key, _, error, _)| format!("{key}: {error}"))
+            .collect(),
+        _ => Vec::new(),
+    };
     (shown(launcher), errors)
-}
-
-/// The open form view's tree.
-fn form_tree(launcher: &Launcher) -> pane_core::DesignedTree {
-    match &launcher.view().screen {
-        Screen::DesignedView(shown) => shown.tree.clone(),
-        other => panic!("no form view: {other:?}"),
-    }
 }
 
 /// Opens Create Quicklink from root search.

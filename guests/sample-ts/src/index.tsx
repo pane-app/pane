@@ -349,8 +349,13 @@ function GreetingForm(): Element {
     const { name, greeting } = submitted.data;
     setAnswer(`${GREETINGS[greeting]}, ${name}, from the TypeScript guest`);
   };
+  // The answer draws over the form as its first child, the form staying
+  // the tree's root: the window keeps a field's state by the path of its
+  // key, and wrapping the form in a column would move every field's path
+  // — losing the text, the caret and the focus the user left in them.
   const form = (
     <Form key="form" navigationTitle="Greet someone" submitTitle="Greet" onSubmit={submit}>
+      {answer !== "" && <Text style="title">{answer}</Text>}
       <Form.TextField
         key="name"
         id="name"
@@ -391,13 +396,5 @@ function GreetingForm(): Element {
       <Form.Toggle key="quiet" id="quiet" label="Quiet mode" />
     </Form>
   );
-  if (answer === "") {
-    return form;
-  }
-  return (
-    <Column gap="m">
-      <Text style="title">{answer}</Text>
-      {form}
-    </Column>
-  );
+  return form;
 }

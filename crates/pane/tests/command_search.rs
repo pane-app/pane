@@ -149,6 +149,10 @@ fn backspace_in_the_empty_search_field_pops_the_view(cx: &mut TestAppContext) {
         launcher
     });
     settle(&window, cx);
+    // The preview's Enter installs it, as the first test does, before
+    // its service is set.
+    cx.simulate_keystrokes("enter");
+    settle(&window, cx);
     use_service(&window, cx, &service.url());
     cx.simulate_input("package search");
     settle(&window, cx);

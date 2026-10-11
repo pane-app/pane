@@ -67,11 +67,12 @@ fn an_alias_and_a_fallback_set_in_the_window_send_the_typed_text_to_the_command(
     assert!(matches!(view.screen, Screen::PaneForm(_)));
     cx.simulate_input("ec");
     cx.simulate_keystrokes("enter");
-    let view = settle(&window, cx);
+    // The outcome is a toast in the footer, not the status line (#141).
     assert_eq!(
-        view.status,
+        settle_shown(&window, cx),
         Status::Result("Typing “ec” now finds Echo".into())
     );
+    let view = settle(&window, cx);
     let selected = view.selected.map(|index| view.rows[index].title.as_str());
     assert_eq!(selected, Some("Alias for Echo"));
 

@@ -461,13 +461,15 @@ fn tab_and_shift_tab_visit_each_control_once_in_order(cx: &mut TestAppContext) {
         "Greet",
         "Pane menu",
     ];
+    // Each press visits the next stop once: as many presses as stops,
+    // the first from the name the form opened focused.
     let mut forward = Vec::new();
-    for _ in 0..stops.len() + 1 {
+    for _ in 0..stops.len() {
         cx.simulate_keystrokes("tab");
         forward.push(focused_label(cx));
     }
     let mut backward = Vec::new();
-    for _ in 0..stops.len() + 1 {
+    for _ in 0..stops.len() {
         cx.simulate_keystrokes("shift-tab");
         backward.push(focused_label(cx));
     }
@@ -1200,7 +1202,10 @@ fn keys_change_the_color_the_view_shows(cx: &mut TestAppContext, sample: &Sample
     // The view has keyboard focus, and assistive technology reads its value.
     assert_eq!(focused_label(cx).as_deref(), Some("Color"));
     assert_eq!(color_node(cx)["value"], "Blue, #1E88E5");
-    // The drawing itself adds no nodes: the view is one control.
+    // The drawing itself adds no nodes of its own: the view is one
+    // control. The tree's column (the navigation title's holder) and the
+    // window's own scroll container for the tree are the two containers
+    // around it.
     let roles: Vec<String> = accessible_nodes(cx)
         .iter()
         .map(|node| node["role"].as_str().unwrap_or_default().to_owned())
@@ -1211,9 +1216,18 @@ fn keys_change_the_color_the_view_shows(cx: &mut TestAppContext, sample: &Sample
         "{roles:?}"
     );
     assert_eq!(
-        roles.len(),
-        5,
-        "the view, the menu button, the status line, the announcer and the window: {roles:?}"
+        roles,
+        [
+            "ColorWell".to_owned(),
+            "Group".to_owned(),
+            "Button".to_owned(),
+            "GenericContainer".to_owned(),
+            "Status".to_owned(),
+            "Label".to_owned(),
+            "Window".to_owned(),
+        ],
+        "the view, the tree's column, the menu button, the window's scroll \
+         container, the status line, the announcer and the window"
     );
     assert!(
         cx.debug_bounds("designed-canvas-grid").is_some(),

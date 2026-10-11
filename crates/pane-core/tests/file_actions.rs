@@ -68,8 +68,8 @@ fn built(path: &str) -> PathBuf {
 }
 
 /// The Files package's files, as the artifact source serves them.
-fn package_files() -> Vec<(String, Vec<u8>)> {
-    let folder = guests().join("packages/files");
+fn package_files(package: &str) -> Vec<(String, Vec<u8>)> {
+    let folder = guests().join("packages").join(package);
     assert!(
         folder.is_dir(),
         "{} is missing; run `cargo xtask guests`",
@@ -268,7 +268,7 @@ impl Pane {
         // one command whose search field Pane itself fills (#177), which
         // an install into the data folder's local identity is not.
         let artifacts = Artifacts::start();
-        let files = package_files();
+        let files = package_files(fixture.package);
         let manifest: Value = serde_json::from_slice(
             &files
                 .iter()

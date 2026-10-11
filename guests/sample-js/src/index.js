@@ -358,7 +358,13 @@ function GreetingForm() {
     navigationTitle: "Greet someone",
     submitTitle: "Greet",
     onSubmit: submit,
+    // The answer draws over the form as its first child, the form staying
+    // the tree's root: the window keeps a field's state by the path of
+    // its key, and wrapping the form in a column would move every
+    // field's path — losing the text, the caret and the focus the user
+    // left in them.
     children: [
+      ...(answer === "" ? [] : [jsxs(Text, { style: "title", children: [answer] })]),
       jsxs(Form.TextField, {
         id: "name",
         key: "name",
@@ -399,11 +405,5 @@ function GreetingForm() {
       jsxs(Form.Toggle, { id: "quiet", key: "quiet", label: "Quiet mode" }),
     ],
   });
-  if (answer === "") {
-    return form;
-  }
-  return jsxs(Column, {
-    gap: "m",
-    children: [jsxs(Text, { style: "title", children: [answer] }), form],
-  });
+  return form;
 }
