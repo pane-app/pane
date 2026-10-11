@@ -184,10 +184,10 @@ fn field_errors(view: &LauncherView) -> Vec<(String, String)> {
     };
     let mut errors = Vec::new();
     fn at(node: &pane_core::Node, into: &mut Vec<(String, String)>) {
-        if let (Some(key), pane_core::NodeKind::TextInput(input)) = (&node.key, &node.kind) {
-            if let Some(error) = &input.field.error {
-                into.push((key.clone(), error.clone()));
-            }
+        if let (Some(key), pane_core::NodeKind::TextInput(input)) = (&node.key, &node.kind)
+            && let Some(error) = &input.field.error
+        {
+            into.push((key.clone(), error.clone()));
         }
         for child in &node.children {
             at(child, into);

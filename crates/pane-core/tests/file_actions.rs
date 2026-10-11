@@ -55,18 +55,6 @@ fn guests() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/guests")
 }
 
-fn built(path: &str) -> PathBuf {
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../target/guests")
-        .join(path);
-    assert!(
-        path.exists(),
-        "{} is missing; run `cargo xtask guests`",
-        path.display()
-    );
-    path
-}
-
 /// The Files package's files, as the artifact source serves them.
 fn package_files(package: &str) -> Vec<(String, Vec<u8>)> {
     let folder = guests().join("packages").join(package);

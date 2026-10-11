@@ -1010,7 +1010,8 @@ fn the_retention_can_be_changed_and_applies_to_kept_items(fixture: &'static Fixt
     // card in Settings now that the typed form is gone (#241): the same
     // value, the same effect.
     let identity = pane.identity_of(&launcher);
-    block_on(launcher.set_preference(&identity, "keepHistoryFor", Some("3600")));
+    block_on(launcher.set_preference(&identity, "keepHistoryFor", Some("3600")))
+        .expect("the retention is saved");
     assert_eq!(pane.listed(&launcher), ["new"]);
     assert_eq!(
         pane.history_of_the_package(&launcher)["retentionSeconds"],
