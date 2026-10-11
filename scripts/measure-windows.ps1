@@ -90,8 +90,11 @@ if (-not (Test-Path -LiteralPath "target/guests/packages/sample-rust/pane.json")
     Write-Warning "SKIPPED the hidden phase (#189): the guests are not built (cargo xtask guests); nothing was measured"
     $skipped = @("hidden-idle")
 }
-# Pane's default extensions (#60), the set the workload waits for.
-$defaults = @("calculator", "applications", "quicklinks", "files", "clipboard-history")
+# Pane's default extensions, the set the workload waits for: on Windows
+# all eight -- the five of #60 plus Run, System Commands and Switch
+# Windows (ADR 0040), pinned "platform": "windows" so only a Windows
+# first setup acquires them (the pins file's platform gate).
+$defaults = @("calculator", "applications", "quicklinks", "files", "clipboard-history", "run", "system-commands", "switch-windows")
 $utf8 = New-Object System.Text.UTF8Encoding $false   # proc_tree.py reads JSON without a BOM
 
 # The scratch profile: a new folder of the temporary folder, never one that

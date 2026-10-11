@@ -15,8 +15,13 @@
 //! The pins are committed to the build as a JSON array
 //! ([`pane::default_extensions`] reads it): each entry names the default
 //! extension's id, its title, its repository, its release tag and that
-//! tag's commit. Tests and development builds can replace the pins with
-//! a file of their own naming the same (`PANE_DEFAULTS`, whose
+//! tag's commit, and, optionally, the only system the default is set up
+//! on (`platform`, as `pane.json` names one: absent, every system — a
+//! Windows-only default's pin names `windows`, and the gate
+//! [`DefaultExtension::runs_here`] drops it on every other system
+//! before any repository is fetched). Tests and development builds can
+//! replace the pins with a file of their own naming the same
+//! (`PANE_DEFAULTS`, whose
 //! repositories must be reachable as a Git address is: HTTPS, or a
 //! loopback address in these builds alone), so the tests and smokes can
 //! serve the repositories on this computer and no check ever reaches a
@@ -49,6 +54,7 @@ use serde::Deserialize;
 use crate::downloads::Download;
 use crate::git::{GitRef, GitRevision};
 use crate::http::{Answer, GetError, Origin};
+use crate::platform::Platform;
 
 /// Where Pane's own application updates are published: the index a Pane
 /// installed from its package reads at start for a newer version of
@@ -179,6 +185,12 @@ pub struct DefaultExtension {
     /// The full commit id of that tag, as this Pane release was tested
     /// with.
     pub commit: String,
+    /// The only system this pin's default is set up on (`windows`), as
+    /// the pins file names it; absent, every system. The field lives in
+    /// the pins file because that file is read before any repository is
+    /// fetched, so a default of another system is never fetched — the
+    /// launcher's platform gate, [`DefaultExtension::runs_here`].
+    pub platform: Option<Platform>,
 }
 
 impl DefaultExtension {
@@ -191,13 +203,25 @@ impl DefaultExtension {
         spec.reference = Some(self.commit.clone());
         Ok(spec)
     }
+
+    /// Whether this pin's platform is the system this runs on: a pin
+    /// that names none is set up on every system, and one that names
+    /// another system is never listed, never fetched. A pin that names a
+    /// platform and a system [`Platform::current`] does not know counts
+    /// as another system's.
+    pub fn runs_here(&self) -> bool {
+        self.platform
+            .is_none_or(|platform| Platform::current() == Some(platform))
+    }
 }
 
 /// The pins this build sets its default extensions up from, as the pins
 /// file holds them: a JSON array of `{ "id", "title", "repository",
-/// "tag", "commit" }`. Each id appears once, each repository is a Git
-/// address Pane fetches, each tag is a `v…` release tag and each commit
-/// a full id; the text is at most [`MAX_PINS`] long. An empty array names
+/// "tag", "commit", "platform" }` — the `platform` optional, naming the
+/// only system the default is set up on (absent, every system). Each id
+/// appears once, each repository is a Git address Pane fetches, each tag
+/// is a `v…` release tag, each commit a full id and each platform one
+/// Pane names; the text is at most [`MAX_PINS`] long. An empty array names
 /// no default extension — a pins file a development build takes as its
 /// own when it sets up none (the smokes' phases that install samples by
 /// hand, where first setup must add nothing).
@@ -245,12 +269,22 @@ pub fn parse_pins(text: &str) -> Result<Vec<DefaultExtension>, String> {
                     named("commit")
                 ));
             }
+            let platform = match pin.platform.as_deref() {
+                None => None,
+                Some(id) => Some(Platform::from_id(id).ok_or_else(|| {
+                    format!(
+                        "{} is `{id}`, not `windows`, `macos` or `linux`",
+                        named("platform")
+                    )
+                })?),
+            };
             Ok(DefaultExtension {
                 id,
                 title,
                 repository,
                 tag,
                 commit,
+                platform,
             })
         })
         .collect::<Result<Vec<_>, String>>()
@@ -536,6 +570,7 @@ struct PinJson {
     repository: Option<String>,
     tag: Option<String>,
     commit: Option<String>,
+    platform: Option<String>,
 }
 
 /// The index format this Pane reads.
@@ -586,19 +621,44 @@ mod tests {
                 { "id": "calculator", "title": "Calculator",
                   "repository": "https://github.com/pane-app/calculator",
                   "tag": "v0.5.0",
-                  "commit": "0123456789012345678901234567890123456789" }
+                  "commit": "0123456789012345678901234567890123456789" },
+                { "id": "run", "title": "Run",
+                  "repository": "https://github.com/pane-app/run",
+                  "tag": "v0.2.0",
+                  "commit": "0123456789012345678901234567890123456789",
+                  "platform": "windows" }
             ]"#,
         )
         .unwrap();
         assert_eq!(
             pins,
-            vec![DefaultExtension {
-                id: "calculator".into(),
-                title: "Calculator".into(),
-                repository: "https://github.com/pane-app/calculator".into(),
-                tag: "v0.5.0".into(),
-                commit: "0123456789012345678901234567890123456789".into(),
-            }]
+            vec![
+                DefaultExtension {
+                    id: "calculator".into(),
+                    title: "Calculator".into(),
+                    repository: "https://github.com/pane-app/calculator".into(),
+                    tag: "v0.5.0".into(),
+                    commit: "0123456789012345678901234567890123456789".into(),
+                    platform: None,
+                },
+                DefaultExtension {
+                    id: "run".into(),
+                    title: "Run".into(),
+                    repository: "https://github.com/pane-app/run".into(),
+                    tag: "v0.2.0".into(),
+                    commit: "0123456789012345678901234567890123456789".into(),
+                    platform: Some(Platform::Windows),
+                }
+            ]
+        );
+        // The platform gate: a pin that names none is set up on every
+        // system, and one that names a platform on that system alone —
+        // and on a system `Platform::current` does not know, not even
+        // there.
+        assert!(pins[0].runs_here());
+        assert_eq!(
+            pins[1].runs_here(),
+            Platform::current() == Some(Platform::Windows)
         );
         // The fetch names the repository at the pinned commit: a commit id
         // pins the bytes, so the tag is recorded, never asked for.
@@ -617,8 +677,9 @@ mod tests {
     fn a_pins_file_that_cannot_be_used_is_explained() {
         // Not a list, an empty list, a pin missing a field, an id that is
         // no extension id, a repository that is no Git address, a tag that
-        // is no release tag, a commit that is no full id, and the same id
-        // twice: each explained, naming the pin.
+        // is no release tag, a commit that is no full id, a platform that
+        // names no system, and the same id twice: each explained, naming
+        // the pin.
         for (text, expected) in [
             (
                 "{ \"formatVersion\": 1 }",
@@ -651,6 +712,13 @@ mod tests {
                   \"https://github.com/pane-app/calculator\", \"tag\": \"v0.5.0\", \
                   \"commit\": \"01234567890123456\" }]",
                 "pin 1: its commit is `01234567890123456`, not a full commit id",
+            ),
+            (
+                "[{ \"id\": \"run\", \"title\": \"Run\", \"repository\": \
+                  \"https://github.com/pane-app/run\", \"tag\": \"v0.2.0\", \
+                  \"commit\": \"0123456789012345678901234567890123456789\", \
+                  \"platform\": \"haiku\" }]",
+                "pin 1: its platform is `haiku`, not `windows`, `macos` or `linux`",
             ),
             (
                 r#"[

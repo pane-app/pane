@@ -656,7 +656,7 @@ pub mod system_commands {
 /// }
 /// ```
 ///
-/// The Switch Windows default extension (guests/switch-windows) is the
+/// The Switch Windows default extension (pane-app/switch-windows) is the
 /// one that lists them (ADR 0040); the windows samples are a Rust, a
 /// JavaScript and a TypeScript command answering the same.
 pub mod windows {

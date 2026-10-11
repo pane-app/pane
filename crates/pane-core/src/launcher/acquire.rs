@@ -28,7 +28,10 @@ use crate::defaults::DefaultExtension;
 use crate::packages::{PackageIdentity, SourcePackage};
 
 /// The default extensions this launcher acquires at first setup, with the
-/// pins this Pane release names them by.
+/// pins this Pane release names them by — only the pins whose platform
+/// this system is, the gate of the pins file applied where the pins are
+/// taken into the launcher, so a default of another system is neither
+/// listed nor fetched (a pin that names no platform is every system's).
 #[derive(Clone)]
 pub(in crate::launcher) struct Defaults {
     extensions: Arc<[DefaultExtension]>,
@@ -37,7 +40,15 @@ pub(in crate::launcher) struct Defaults {
 impl Defaults {
     pub(in crate::launcher) fn new(extensions: Vec<DefaultExtension>) -> Defaults {
         Defaults {
-            extensions: extensions.into(),
+            // The platform gate of the pins file, applied where the pins
+            // are taken — before any repository is fetched — so a
+            // Windows-only default is never fetched, never listed as a
+            // failed acquisition and never offered as a retry row on
+            // another system.
+            extensions: extensions
+                .into_iter()
+                .filter(|extension| extension.runs_here())
+                .collect(),
         }
     }
 }
@@ -140,7 +151,9 @@ impl Launcher {
     /// managed copies, as [`Launcher::acquire_defaults`] does. Without
     /// this, no default extension is acquired; the pins the application
     /// build gives are its own choice (the committed ones, or the ones
-    /// `PANE_DEFAULTS` names in a development build).
+    /// `PANE_DEFAULTS` names in a development build). A pin whose
+    /// platform this system is not is dropped here, before any repository
+    /// is fetched — the pins file's platform gate.
     pub fn with_defaults(self, extensions: Vec<DefaultExtension>) -> Self {
         let defaults = Defaults::new(extensions);
         Launcher {

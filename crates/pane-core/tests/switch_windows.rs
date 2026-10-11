@@ -19,11 +19,14 @@
 //! On Windows, the real adapter is asked for its list against a window
 //! of the test's own (a form a script of the test's runs in a process of
 //! its own, since a window of the test's own process is never listed),
-//! which touches nothing but that window and its process; and the real
-//! default extension is acquired from an artifact source on 127.0.0.1
-//! and driven with the fake adapter. Its package declares `windows`
-//! alone, so those tests run on Windows only. Switching with real input
-//! is the GUI smoke's phase, not a test's.
+//! which touches nothing but that window and its process; and the
+//! Switch Windows default extension is acquired as Windows does — at
+//! first setup, from the repository its pin names: the sample's package
+//! in a repository of the test's own, served on 127.0.0.1, standing in
+//! for the default's own repository, which lives outside this one
+//! (#301) — and driven with the fake adapter. The Windows defaults are
+//! Windows-only, so those tests run on Windows only. Switching with real
+//! input is the GUI smoke's phase, not a test's.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -901,7 +904,7 @@ mod extension {
     use pane_core::PackageIdentity;
 
     use super::defaults;
-    use super::feedback::RecordingWindow;
+    use super::feedback::shown;
     use super::repo_server;
     use super::rows::{select_title, titles, to_root};
     use super::{FakeWindows, WindowsError, listed, window};
@@ -911,9 +914,11 @@ mod extension {
     /// once is included; a slow, busy machine is not.
     const PROMPTLY: Duration = Duration::from_secs(60);
 
-    /// One test's Pane: its data folder, the artifact source the default
-    /// extension is acquired from, the fake of the windows its command
-    /// reaches, and the launcher.
+    /// One test's Pane: its data folder, the served repository holding
+    /// the sample's package as the Switch Windows default's own (a
+    /// stand-in for the one a release pins the default to, which lives
+    /// outside this one), the fake of the windows its command reaches,
+    /// and the launcher.
     struct Pane {
         _data: tempfile::TempDir,
         _repos: tempfile::TempDir,
@@ -926,8 +931,9 @@ mod extension {
     impl Pane {
         fn new() -> Pane {
             let data = tempfile::tempdir().unwrap();
-            // The package's own repository, served as a release revision:
-            // a stand-in for the one a release pins the default to.
+            // The sample's package, served as the default's own
+            // repository's release: a stand-in for the one a release pins
+            // the default to.
             let server = repo_server::Server::start();
             let repos = tempfile::tempdir().unwrap();
             let pin = defaults::from_sample(
@@ -935,7 +941,7 @@ mod extension {
                 repos.path(),
                 "switch-windows",
                 "Switch Windows",
-                "switch-windows",
+                "sample-switch-windows",
             );
             let fake = FakeWindows::default();
             let launcher = pane_core::Launcher::with_packages(
@@ -970,7 +976,7 @@ mod extension {
         /// Opens the Switch Windows command from root search.
         fn open(&self) {
             self.search("Switch Windows");
-            select_title(&self.launcher, "Switch Windows");
+            select_title(&self.launcher, "Switch Windows sample");
             block_on(self.launcher.activate_selected());
             assert!(matches!(
                 self.launcher.view().screen,
@@ -992,7 +998,6 @@ mod extension {
     #[test]
     fn the_switch_windows_default_extension_lists_and_switches() {
         let pane = Pane::new();
-        let window = RecordingWindow::attach(&pane.launcher);
 
         // Acquired as the default extension, with its identity, and
         // enabled by default.
@@ -1006,7 +1011,7 @@ mod extension {
 
         // Its command lists the windows the fake adapter answers, in the
         // order it gave them (the front application's first), with their
-        // applications' names and the icons their records named.
+        // applications' names.
         pane.fake.set(vec![
             listed(
                 "1",
@@ -1048,28 +1053,28 @@ mod extension {
             ]
         );
 
-        // Enter switches to the selected window: the window the
-        // extension chose is activated, and the launcher's window is
-        // asked to hide (closing it, as the window takes the
-        // foreground).
+        // Enter switches to the selected window: the window the extension
+        // chose is activated, and what it answered shows in the footer.
         select_title(&pane.launcher, "Terminal");
         block_on(pane.launcher.activate_selected());
         assert_eq!(pane.fake.activated(), ["2"]);
-        assert_eq!(window.hides(), 1, "the launcher closed");
+        assert_eq!(
+            shown(&pane.launcher),
+            Status::Result("Switched to Terminal".into())
+        );
         assert_eq!(titles(&pane.launcher), ["notes.txt - Notepad", "Terminal"]);
 
-        // A window that closed says why in a HUD: the launcher is hidden,
-        // so the toast the sample answered with is shown as one.
+        // A window that closed says why.
         pane.fake.fail(WindowsError::Failed(
             "that window closed since it was listed".into(),
         ));
         select_title(&pane.launcher, "notes.txt - Notepad");
         block_on(pane.launcher.activate_selected());
-        let huds: Vec<String> = window.huds().iter().map(|hud| hud.title.clone()).collect();
-        assert!(
-            huds.iter()
-                .any(|hud| hud.contains("closed since it was listed")),
-            "{huds:?}"
+        assert_eq!(
+            shown(&pane.launcher),
+            Status::Error(
+                "Switch to notes.txt - Notepad: that window closed since it was listed".into()
+            )
         );
     }
 
@@ -1101,7 +1106,7 @@ mod extension {
     fn the_switch_windows_default_extension_is_disableable_on_its_own() {
         let pane = Pane::new();
         pane.search("Switch Windows");
-        assert_eq!(titles(&pane.launcher), ["Switch Windows"]);
+        assert_eq!(titles(&pane.launcher), ["Switch Windows sample"]);
         // Disabled on its own: its command contributes nothing.
         block_on(pane.launcher.set_enabled(&pane.identity, false));
         pane.search("Switch Windows");
@@ -1110,6 +1115,6 @@ mod extension {
         // Enabled again, its command comes back.
         block_on(pane.launcher.set_enabled(&pane.identity, true));
         pane.search("Switch Windows");
-        assert_eq!(titles(&pane.launcher), ["Switch Windows"]);
+        assert_eq!(titles(&pane.launcher), ["Switch Windows sample"]);
     }
 }

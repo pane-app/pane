@@ -292,7 +292,7 @@ jobs:
       # guests and binary, its record checked against the proposed targets
       # (scripts/resource-targets.json; every ceiling is pending a number,
       # so the check passes until one is confirmed and then breached). Its
-      # hidden phases (#189) clone the five default extensions'
+      # hidden phases (#189) clone the default extensions'
       # repositories at the commits this release pins and serve them on
       # 127.0.0.1 (no
       # application update source, so no update of Pane's own is offered),
