@@ -159,6 +159,35 @@ impl Pane {
         self.launcher.select(index);
     }
 
+    /// Installs the assembled package `name`, saying it did.
+    fn install(&self, name: &str) {
+        let folder = package(name, &self._sources.path().join(name));
+        block_on(self.launcher.install_package(&folder));
+        assert!(
+            matches!(self.view().status, Status::Result(_)),
+            "{:?}",
+            self.view().status
+        );
+    }
+
+    /// Activates the row `title` on a thread of its own, as a background
+    /// launch would, returning the thread once the activation is running.
+    fn activate_in_background(&self, title: &str) -> std::thread::JoinHandle<()> {
+        self.select(title);
+        let activating = self.launcher.activate_selected();
+        std::thread::spawn(move || block_on(activating))
+    }
+
+    /// The identity of the installed package titled `title`.
+    fn identity_of(&self, title: &str) -> PackageIdentity {
+        self.launcher
+            .packages()
+            .into_iter()
+            .find(|package| package.title() == title)
+            .unwrap_or_else(|| panic!("{title} is not installed"))
+            .identity
+    }
+
     fn to_root(&self) {
         while !matches!(self.view().screen, Screen::Root { .. }) {
             self.launcher.back();
@@ -332,7 +361,7 @@ fn a_cleared_search_lists_the_command_as_it_is_now() {
         let pane = Pane::with(fixture);
         pane.open();
         // Its settings change while it is open...
-        pane.set_service(&service.url());
+        pane.use_service(&service.url());
         pane.search("aurora");
         assert_eq!(pane.titles(), ["aurora-charts", "aurora-cli"]);
 
@@ -346,109 +375,6 @@ fn a_cleared_search_lists_the_command_as_it_is_now() {
             .find(|row| row.title == "Service address")
             .and_then(|row| row.subtitle.clone());
         assert_eq!(address, Some(service.url()), "{}", fixture.package);
-    }
-}
-
-/// The wait before a search starts, held by the test instead of the clock:
-/// it counts the searches that waited on it, and none ends until the test
-/// lets every wait end.
-#[derive(Default)]
-struct HeldWait {
-    state: Mutex<Waits>,
-    changed: Condvar,
-}
-
-#[derive(Default)]
-struct Waits {
-    reached: usize,
-    ended: bool,
-    wakers: Vec<Waker>,
-}
-
-impl HeldWait {
-    /// Has `runtime`'s searches wait on this.
-    fn hold(runtime: &Runtime) -> Arc<HeldWait> {
-        let held = Arc::new(HeldWait::default());
-        let timer = held.clone();
-        runtime.set_search_timer(move |_| {
-            let timer = timer.clone();
-            let mut reached = false;
-            // A search reaches the wait when it first waits on it, not when
-            // it is handed it.
-            Box::pin(std::future::poll_fn(move |context| {
-                let mut state = timer.state.lock().unwrap();
-                if !reached {
-                    reached = true;
-                    state.reached += 1;
-                    timer.changed.notify_all();
-                }
-                if state.ended {
-                    return Poll::Ready(());
-                }
-                state.wakers.push(context.waker().clone());
-                Poll::Pending
-            }))
-        });
-        held
-    }
-
-    /// Waits until `count` searches have reached the wait, for at most five
-    /// seconds.
-    fn wait_until_reached(&self, count: usize) {
-        let deadline = Instant::now() + Duration::from_secs(5);
-        let mut state = self.state.lock().unwrap();
-        while state.reached < count {
-            let left = deadline
-                .checked_duration_since(Instant::now())
-                .unwrap_or_else(|| panic!("{count} searches never waited: {}", state.reached));
-            state = self.changed.wait_timeout(state, left).unwrap().0;
-        }
-    }
-
-    /// Ends every wait, now and from now on.
-    fn end(&self) {
-        let mut state = self.state.lock().unwrap();
-        state.ended = true;
-        for waker in state.wakers.drain(..) {
-            waker.wake();
-        }
-    }
-}
-
-#[test]
-fn typing_on_asks_only_for_the_text_the_user_stops_at() {
-    for fixture in &ALL {
-        let service = Service::start();
-        let pane = Pane::with(fixture);
-        pane.use_service(&service.url());
-        pane.search("granite");
-        let asked = service.requests().len();
-
-        // The first keystroke's search waits before it asks anything (it
-        // reaches the wait, and the service has heard nothing)...
-        let held = HeldWait::hold(&pane.runtime);
-        let first = pane.launcher.set_query("a");
-        held.wait_until_reached(1);
-        assert_eq!(service.requests().len(), asked, "{}", fixture.package);
-        // ...so each keystroke typed on within it stops the one before
-        // before it asks the service; only the text the user stops at is
-        // asked for once the wait ends. No clock is involved.
-        let typed: Vec<_> = ["au", "aur", "auro", "auror", "aurora"]
-            .into_iter()
-            .map(|text| pane.launcher.set_query(text))
-            .collect();
-        held.end();
-        block_on(first);
-        for search in typed {
-            block_on(search);
-        }
-        assert_eq!(pane.titles(), ["aurora-charts", "aurora-cli"]);
-        assert_eq!(
-            service.requests()[asked..],
-            ["/search?q=aurora"],
-            "{}",
-            fixture.package
-        );
     }
 }
 

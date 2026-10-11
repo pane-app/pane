@@ -109,6 +109,20 @@ pub fn assembled_package(sample: &str, folder: &Path) -> PathBuf {
     folder.to_path_buf()
 }
 
+/// Copies `from` to `to`, folders and all.
+fn copy_folder(from: &Path, to: &Path) {
+    fs::create_dir_all(to).unwrap();
+    for entry in fs::read_dir(from).unwrap() {
+        let entry = entry.unwrap();
+        let path = entry.path();
+        if path.is_dir() {
+            copy_folder(&path, &to.join(entry.file_name()));
+        } else {
+            fs::copy(&path, to.join(entry.file_name())).unwrap();
+        }
+    }
+}
+
 /// A package folder at `folder` with the Rust sample's two commands: the
 /// list one `package` declares, and its color picker as a designed
 /// command the list's "Choose a color" item launches — the canvas flow

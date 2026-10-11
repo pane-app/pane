@@ -25,11 +25,8 @@ use pane::LauncherWindow;
 use pane_core::changes;
 use pane_core::develop::Toolchains;
 use pane_core::file_index::{IndexerConfig, WalkOptions};
-use pane_core::{DefaultExtension, Launcher, LauncherView, LinkOpener, Runtime, Screen, Status};
+use pane_core::{Launcher, LauncherView, LinkOpener, Runtime, Screen, Status};
 use tempfile::TempDir;
-
-#[path = "../../pane-core/tests/support/artifacts.rs"]
-mod artifacts;
 
 #[path = "support/settle.rs"]
 mod settle;
@@ -37,7 +34,6 @@ mod settle;
 #[path = "../../pane-core/tests/support/system.rs"]
 mod recording;
 
-use artifacts::Artifacts;
 use recording::{Done, RecordingSystem};
 use settle::{published, settle};
 
@@ -71,7 +67,6 @@ fn same_file(reported: &Path, made: &Path) -> bool {
 /// What Pane keeps for one test, and the fakes it acts through.
 struct World {
     _data: TempDir,
-    _artifacts: Artifacts,
     _temp: TempDir,
     /// The folder standing for the home folder, which the file index
     /// covers, named plainly inside `_temp` (whose own name starts with a
@@ -124,13 +119,6 @@ impl World {
             ..IndexerConfig::native(&data.path().join("cache"), folder.clone(), Vec::new())
         };
         let launcher = Launcher::with_packages(Ok(runtime), vec![], data.path().join("extensions"))
-            .with_defaults(
-                ArtifactSource::local(artifacts.url()).unwrap(),
-                vec![DefaultExtension {
-                    id: "files".into(),
-                    title: "Files".into(),
-                }],
-            )
             .with_link_opener(Arc::new(opener.clone()))
             .with_system(system.clone())
             .with_file_index(index)
@@ -150,7 +138,6 @@ impl World {
         launcher.show_root_search();
         let world = World {
             _data: data,
-            _artifacts: artifacts,
             _temp: temp,
             folder,
             opener,

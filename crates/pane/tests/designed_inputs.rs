@@ -281,7 +281,7 @@ fn the_caret_and_selection_survive_re_renders(cx: &mut TestAppContext) {
     let toggle = bounds(cx, "designed-toggle");
     cx.simulate_click(toggle.center(), gpui::Modifiers::none());
     until(&window, cx, |view| {
-        view.status != pane_core::Status::Running
+        !matches!(view.status, pane_core::Status::Running { .. })
     });
     assert_eq!(
         marked_caret(&window, cx, "name"),
@@ -300,7 +300,7 @@ fn the_caret_and_selection_survive_re_renders(cx: &mut TestAppContext) {
     let toggle = bounds(cx, "designed-toggle");
     cx.simulate_click(toggle.center(), gpui::Modifiers::none());
     until(&window, cx, |view| {
-        view.status != pane_core::Status::Running
+        !matches!(view.status, pane_core::Status::Running { .. })
     });
     assert_eq!(
         marked_caret(&window, cx, "name"),
@@ -409,7 +409,7 @@ fn the_scroll_position_survives_re_renders_and_reorders(cx: &mut TestAppContext)
     let reorder = bounds(cx, "designed-button-Reorder");
     cx.simulate_click(reorder.center(), gpui::Modifiers::none());
     until(&window, cx, |view| {
-        view.status != pane_core::Status::Running
+        !matches!(view.status, pane_core::Status::Running { .. })
     });
     let after = scrolled(&window, cx);
     assert_eq!(after, at, "the scroll position survived the re-render");
@@ -444,7 +444,7 @@ fn the_focus_survives_re_renders_and_reorders(cx: &mut TestAppContext) {
     );
     cx.simulate_keystrokes("enter");
     until(&window, cx, |view| {
-        view.status != pane_core::Status::Running
+        !matches!(view.status, pane_core::Status::Running { .. })
     });
     assert_eq!(
         focused_label(cx).as_deref(),
@@ -517,7 +517,7 @@ fn tab_order_follows_the_tree_across_reorders(cx: &mut TestAppContext) {
     let reorder = bounds(cx, "designed-button-Reorder");
     cx.simulate_click(reorder.center(), gpui::Modifiers::none());
     until(&window, cx, |view| {
-        view.status != pane_core::Status::Running
+        !matches!(view.status, pane_core::Status::Running { .. })
     });
     focus_field(&window, cx, "name");
     cx.simulate_keystrokes("tab");

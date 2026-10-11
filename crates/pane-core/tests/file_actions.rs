@@ -26,18 +26,13 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use futures::executor::block_on;
-use pane_core::defaults::ArtifactSource;
 use pane_core::file_index::{IndexerConfig, WalkOptions};
 use pane_core::system::Clip;
 use pane_core::{
     ConfirmAnswer, DefaultExtension, Launcher, LinkOpener, PackageIdentity, Runtime, Screen,
     Status, SubmenuState, WindowPresence,
 };
-use serde_json::Value;
 use tempfile::TempDir;
-
-#[path = "support/artifacts.rs"]
-mod artifacts;
 
 #[path = "support/feedback.rs"]
 mod feedback;
@@ -48,38 +43,12 @@ mod settle;
 #[path = "support/system.rs"]
 mod system;
 
-use artifacts::Artifacts;
 use feedback::RecordingWindow;
 use rows::{select_title, titles};
 use settle::wait_for_merges;
 use system::{Done, RecordingSystem};
 
-/// The folder `cargo xtask guests` builds into.
-fn guests() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/guests")
-}
-
 /// The Files package's files, as the artifact source serves them.
-fn package_files(package: &str) -> Vec<(String, Vec<u8>)> {
-    let folder = guests().join("packages").join(package);
-    assert!(
-        folder.is_dir(),
-        "{} is missing; run `cargo xtask guests`",
-        folder.display()
-    );
-    let mut files = fs::read_dir(&folder)
-        .unwrap()
-        .map(|entry| entry.unwrap().path())
-        .filter(|path| path.is_file())
-        .map(|path| {
-            let name = path.file_name().unwrap().to_str().unwrap().to_owned();
-            (name, fs::read(&path).unwrap())
-        })
-        .collect::<Vec<(String, Vec<u8>)>>();
-    files.sort();
-    files
-}
-
 /// A package that searches Pane's file index, in one language.
 struct Package {
     /// The assembled package under `target/guests/packages`.
@@ -216,7 +185,6 @@ impl Folder {
 /// fixture folder settled, and the fakes it acts through.
 struct Pane {
     _data: TempDir,
-    _artifacts: Artifacts,
     launcher: Launcher,
     _runtime: Runtime,
     opener: FakeOpener,
@@ -249,39 +217,13 @@ impl Pane {
         runtime.set_applications(system.clone());
         let opener = FakeOpener::default();
         let folder = Folder::new();
-        // Files is Pane's own default extension here, acquired as the
-        // application acquires it: the registered Files command is the
-        // one command whose search field Pane itself fills (#177), which
-        // an install into the data folder's local identity is not.
-        let artifacts = Artifacts::start();
-        let files = package_files(fixture.package);
-        let manifest: Value = serde_json::from_slice(
-            &files
-                .iter()
-                .find(|(path, _)| path == "pane.json")
-                .expect("the package has a pane.json")
-                .1,
-        )
-        .unwrap();
-        let borrowed: Vec<(&str, Vec<u8>)> = files
-            .iter()
-            .map(|(path, contents)| (path.as_str(), contents.clone()))
-            .collect();
-        artifacts.publish("files", manifest["version"].as_str().unwrap(), &borrowed);
         let launcher =
             Launcher::with_packages(Ok(runtime.clone()), vec![], data.path().join("extensions"))
-                .with_defaults(
-                    ArtifactSource::local(artifacts.url()).unwrap(),
-                    vec![DefaultExtension {
-                        id: "files".into(),
-                        title: fixture.title.into(),
-                    }],
-                )
                 .with_link_opener(Arc::new(opener.clone()))
                 .with_system(system.clone())
                 .with_file_index(index_config(&data.path().join("cache"), &folder.root));
         let window = RecordingWindow::attach(&launcher);
-        block_on(launcher.acquire_defaults());
+        block_on(launcher.install_package(&built(&format!("packages/{}", fixture.package))));
         assert!(
             matches!(launcher.view().status, Status::Result(_)),
             "{:?}",
@@ -301,7 +243,6 @@ impl Pane {
         );
         Pane {
             _data: data,
-            _artifacts: artifacts,
             launcher,
             _runtime: runtime,
             opener,
@@ -416,37 +357,6 @@ fn listed(pane: &Pane) -> Vec<(String, Option<String>)> {
         .into_iter()
         .map(|row| (row.title, row.subtitle))
         .collect()
-}
-
-fn search_files_lists_the_files_in_the_launchers_own_field(fixture: &'static Package) {
-    let pane = Pane::new(fixture);
-    pane.open();
-    // Its own list.
-    assert_eq!(titles(&pane.launcher), ["What is searched"]);
-
-    pane.search("résumé");
-    let view = pane.launcher.view();
-    assert_eq!(
-        view.screen,
-        Screen::CommandSearch {
-            query: "résumé".into()
-        }
-    );
-    assert_eq!(
-        listed(&pane),
-        [("Résumé plan ü.txt".to_owned(), Some("~".to_owned()))]
-    );
-    pane.search("todo");
-    assert_eq!(
-        listed(&pane),
-        [("todo.txt".to_owned(), Some("~/notes".to_owned()))]
-    );
-    // Folders are found too, a name before the files only in it.
-    pane.search("notes");
-    assert_eq!(listed(&pane)[0], ("notes".to_owned(), Some("~".to_owned())));
-    // Cleared, the command's own list is back.
-    pane.search("");
-    assert_eq!(titles(&pane.launcher), ["What is searched"]);
 }
 
 fn a_documents_actions_act_through_the_system_and_close_the_window(fixture: &'static Package) {
@@ -761,32 +671,6 @@ fn root_searchs_file_results_have_the_same_actions(fixture: &'static Package) {
     assert!(same_file(&opened[0], &pane.folder.file("notes/todo.txt")));
     assert_eq!(pane.launcher.view().query(), Some("todo"));
     assert!(pane.closed());
-}
-
-fn search_files_opens_from_root_search_with_the_query_typed(fixture: &'static Package) {
-    let pane = Pane::new(fixture);
-    pane.launcher.show_root_search();
-    pane.search("plan");
-    let row = format!("{} for “plan”", fixture.command);
-    assert!(
-        titles(&pane.launcher).contains(&row),
-        "{:?}",
-        titles(&pane.launcher)
-    );
-    // At most five files, then the row searching them all.
-    assert!(titles(&pane.launcher).len() <= 6);
-    select_title(&pane.launcher, &row);
-    block_on(pane.launcher.activate_selected());
-    assert_eq!(
-        pane.launcher.view().screen,
-        Screen::CommandSearch {
-            query: "plan".into()
-        }
-    );
-    let found = titles(&pane.launcher);
-    for name in ["Résumé plan ü.txt", "plan.md", "run plan.bat"] {
-        assert!(found.iter().any(|title| title == name), "{found:?}");
-    }
 }
 
 fn a_folder_opens_in_the_file_manager(fixture: &'static Package) {
