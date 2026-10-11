@@ -24,7 +24,6 @@ use std::time::Instant;
 
 use super::pausing::{self, Pauses};
 use super::{
-use super::{
     Entry, Launcher, LauncherView, Row, Screen, State, first_index, install, network, off_thread,
     programs, retained, updates,
 };
