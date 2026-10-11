@@ -1849,6 +1849,7 @@ fn capability_select(
                 subtitle: None,
                 keywords: vec![provider.title.clone().into()],
                 unavailable_reason: None,
+                section: None,
             })
             .collect(),
         committed: Some(capability.selected.clone().into()),

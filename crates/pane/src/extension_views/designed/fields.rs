@@ -631,7 +631,7 @@ fn option_row(
         .text_size(theme.typography.settings_text_size)
         .text_color(theme.text_title)
         .when(highlighted, |row| {
-            row.bg(theme.row_selected).text_color(theme.text_title)
+            row.bg(theme.selection_wash).text_color(theme.text_title)
         })
         .child(label.to_owned())
 }

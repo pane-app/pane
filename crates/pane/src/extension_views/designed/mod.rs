@@ -251,7 +251,7 @@ impl LauncherWindow {
                     .placeholder(placeholder.clone())
                     .placeholder_color(theme.text_placeholder)
                     .caret_color(theme.accent_text)
-                    .selection_color(theme.row_selected)
+                    .selection_color(theme.selection_wash)
                     .marked_color(theme.accent_text)
                     .text_size(theme.typography.search_size)
                     .text_color(theme.text_query)

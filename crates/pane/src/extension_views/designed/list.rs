@@ -195,7 +195,7 @@ impl LauncherWindow {
             drawn.push(tree::draw_node(child, &mut path, draw, cx));
             path.truncate(start);
         }
-        let wash = visuals.theme.row_selected;
+        let wash = visuals.theme.selection_wash;
         Some(
             div()
                 .id(format!("designed-row-{key}"))
@@ -445,7 +445,7 @@ impl LauncherWindow {
                 )
             });
         let pressable = !row.actions.is_empty();
-        let selected_wash = theme.row_selected;
+        let selected_wash = theme.selection_wash;
         let cell = cell
             .map(|cell| {
                 cell.when(pressable, |cell| {

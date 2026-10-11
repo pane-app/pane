@@ -258,7 +258,7 @@ fn tone(
 fn hover_fill(tone: Option<pane_core::ButtonTone>, theme: &Theme) -> gpui::Hsla {
     match tone {
         Some(pane_core::ButtonTone::Secondary) | Some(pane_core::ButtonTone::Ghost) => {
-            theme.control_hover
+            theme.hover_wash
         }
         Some(pane_core::ButtonTone::Accent) => gpui::Hsla::opacity(&theme.accent, 0.9),
         Some(pane_core::ButtonTone::Destructive) => gpui::Hsla::opacity(&theme.danger, 0.24),
@@ -807,7 +807,7 @@ pub(super) fn rich_row(
         .enumerate()
         .map(|(index, accessory)| accessory_run(accessory, index, path, draw))
         .collect();
-    let hover = theme.row_hover;
+    let hover = theme.hover_wash;
     let row_element = div()
         .id(path.to_owned())
         .debug_selector(move || debug)
@@ -1965,7 +1965,7 @@ fn field_input(
         .placeholder(placeholder)
         .placeholder_color(theme.text_placeholder)
         .caret_color(theme.accent_text)
-        .selection_color(theme.row_selected)
+        .selection_color(theme.selection_wash)
         .marked_color(theme.accent_text)
         .text_size(typography.settings_text_size)
         .text_color(theme.text_title)

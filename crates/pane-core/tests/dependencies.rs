@@ -18,7 +18,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use futures::executor::block_on;
-use pane_core::{Launcher, PackageIdentity, Runtime, SavedData, Screen, Status, Unavailable};
+use pane_core::{
+    FormValue, Launcher, PackageIdentity, Runtime, SavedData, Screen, Status, Unavailable,
+};
 use tempfile::TempDir;
 
 #[path = "support/platforms.rs"]

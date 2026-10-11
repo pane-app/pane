@@ -603,7 +603,12 @@ impl LauncherWindow {
         self.window_requested(WindowRequest::Hud(hud), window, cx);
     }
 
-    pub(crate) fn select_next(&mut self, _: &SelectNext, _: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn select_next(
+        &mut self,
+        _: &SelectNext,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         // Down ends the walk through the recent queries (#206): any
         // other key than the walking Up does. A Grid's Up and Down move
         // by a whole row of cells (#240); a list's by one row.

@@ -21,11 +21,18 @@ mod unreachable;
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Condvar, Mutex};
+use std::task::{Poll, Waker};
 use std::time::{Duration, Instant};
 
 use feedback::shown;
 use futures::executor::block_on;
-use pane_core::{HttpLimits, Launcher, PackageIdentity, Runtime, Screen, Status};
+
+use pane_core::hotkeys::{HotkeyError, Hotkeys, Shortcut};
+use pane_core::{
+    Fault, HttpLimits, Launcher, PackageIdentity, Runtime, RuntimeStatus, SavedData, Screen, Status,
+};
+use serde_json::{Value, json};
 use service::Service;
 use tempfile::TempDir;
 
@@ -34,20 +41,26 @@ struct Fixture {
     package: &'static str,
     /// Its title.
     title: &'static str,
+    /// An assembled package in the same language that makes no web
+    /// requests.
+    offline: &'static str,
 }
 
 const RUST: Fixture = Fixture {
     package: "sample-search",
     title: "Search sample",
+    offline: "sample-query",
 };
 
 const JAVASCRIPT: Fixture = Fixture {
     package: "sample-search-js",
     title: "JavaScript search sample",
+    offline: "sample-query-js",
 };
 const TYPESCRIPT: Fixture = Fixture {
     package: "sample-search-ts",
     title: "TypeScript search sample",
+    offline: "sample-query-ts",
 };
 
 const ALL: [Fixture; 3] = [RUST, JAVASCRIPT, TYPESCRIPT];
@@ -186,6 +199,20 @@ impl Pane {
             Status::Error(message) => message,
             other => panic!("expected an error, found {other:?}"),
         }
+    }
+}
+
+/// Waits until the service has received `path`, asserting it did within
+/// five seconds.
+fn wait_for_request(service: &Service, path: &str) {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !service.requests().iter().any(|seen| seen == path) {
+        assert!(
+            Instant::now() < deadline,
+            "the service never received {path}: {:?}",
+            service.requests()
+        );
+        std::thread::sleep(Duration::from_millis(10));
     }
 }
 
