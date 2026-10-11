@@ -4,7 +4,9 @@ Added for [#48](https://github.com/pane-app/pane/issues/48) (US14, US45,
 US57, US79; T02, T09, T17; contributions to G3, not a claim that it
 passes). A command can declare, in its package's manifest, that it runs a
 continuing service: Pane runs the service's cycles while the package's
-code may run — it is enabled and not [paused](pausing.md) — without the
+code may run — it is enabled, not [paused](pausing.md) and not
+[waiting](dependencies.md#waiting-for-a-required-dependency) for a required
+dependency — without the
 user asking and at no interval the manifest declares, since each cycle
 answers the status to show and how long to wait before the next. A user
 starts a service by installing or enabling its package, sees its status
@@ -89,14 +91,25 @@ recorded in [ADR 0025](adr/0025-a-continuing-service-cycles-at-its-own-cadence.m
   generation ends the instance goes with it (see
   [generations](generations.md) for what stopping costs), so the task
   Pane stops on disable is exactly the guest's in-memory state; enabling
-  the package again starts a fresh one. Data the service saves in its
-  settings or content is kept, as for any package.
+  the package again starts a fresh one. A reload or an update that
+  replaces the code hands the task over instead when the component opts
+  in to the [state handoff](generations.md#the-state-handoff) (ADR 0041,
+  #159): the old instance is asked for a snapshot while it is idle, and
+  the new instance's first cycle finds the restored state — the service
+  sample's "this run" count carries on where it left off. Data the
+  service saves in its settings or content is kept, as for any package.
 - **The generation owns the cycle.** Each cycle belongs to the package's
   generation current when the runner asked for it: a disable, reload,
   update, uninstall or pause that happens while it runs stops it (the
   runtime stops the call, and its instance and task go), and its late
   answer is discarded, never shown and never paced from. The sample's
   "Wait on the next cycle" never saves "finished" when it is stopped.
+  Waiting is not one of these: a package that
+  [waits](dependencies.md#waiting-for-a-required-dependency) for a required
+  dependency runs no cycles meanwhile, a cycle already going finishes
+  (waiting ends no [generation](generations.md) and stops no instance), and
+  the first cycle after what it waited for returns runs at once, in the
+  instance the service still has.
 - **At most one cycle at a time.** No second cycle of a service is asked
   for before the current one answers; cadences that pass meanwhile are
   served by the next cycle, at the cadence its answer gives from when it
@@ -166,7 +179,10 @@ recorded in [ADR 0025](adr/0025-a-continuing-service-cycles-at-its-own-cadence.m
   cycle answers `Watching: <events> events (cycle <total>, <this run>
   this run)` and asks for the next cycle in a second; "this run" is the
   task's state, kept in the instance and so beginning again whenever the
-  code starts afresh. "Add an event" is what the service watches; "Wait
+  code starts afresh — except across a reload or an update, which the
+  sample opts in to handing over (its component exports the lifecycle
+  interface, with the JavaScript and TypeScript service samples). "Add an
+  event" is what the service watches; "Wait
   on the next cycle" notes "started" in its settings, waits ten seconds,
   then notes "finished"; "Fail the next cycle" answers an error; "Crash
   the next cycle" counts, then traps; "Stop responding on the next cycle"

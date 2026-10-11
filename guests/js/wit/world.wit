@@ -26,7 +26,10 @@
 // the interfaces they name: `rootResults` (wit/root-results.wit),
 // `indexedResults` (wit/applications.wit), `operations`
 // (wit/operations.wit), `search`
-// (wit/search.wit) and `service` (wit/service.wit); `files` makes it import the granted folder's listing
+// (wit/search.wit), `service` (wit/service.wit), `events`
+// (wit/registrations.wit) and `activate` or `snapshot` (the lifecycle
+// interface of wit/registrations.wit: the activation entry point, and the
+// state handoff of ADR 0041); `files` makes it import the granted folder's listing
 // (wit/files.wit), `fileIndex` the file index Pane keeps (wit/file-index.wit),
 // `typedFolder` the entries of a folder the user typed (wit/typed-folder.wit)
 // and `clipboardHistory` the clipboard history Pane keeps

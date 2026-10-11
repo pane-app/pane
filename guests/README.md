@@ -2242,6 +2242,268 @@ which is how a package names the extensions it is written for. Pane starts the t
 keeps each package's settings apart, and refuses a call back into a package
 already waiting in the same chain instead of deadlocking.
 
+### Capabilities
+
+A capability is a second way to address the same calls: a named, versioned
+set of operations, such as `acme:translate@1`, that any installed package
+may provide and yours calls by that name, without naming the package that
+serves it (ADR 0041). The full contract, routing and errors are in
+[docs/operations.md](../docs/operations.md#capabilities). A provider of
+`pane-samples:greet@1` and a consumer of it, in
+[Rust](sample-greet/src/lib.rs), [JavaScript](sample-greet-js/src/index.js)
+and [TypeScript](sample-greet-ts/src/index.ts) beside their consumers
+([sample-capabilities](sample-capabilities/src/lib.rs)), are the samples.
+
+Provide a capability in `pane.json`; the component named there serves its
+operations through the same export that serves published operations, and
+Pane passes each operation qualified by its capability
+(`pane-samples:greet@1/greet`), so one component can tell the two apart:
+
+```json
+"provides": [
+  { "capability": "pane-samples:greet@1", "component": "sample_greet.wasm",
+    "operations": ["greet"] }
+]
+```
+
+Call a capability by its name, with the operations your `pane.json` declares
+under `uses`. A use may be `optional` (it is called only when some package
+provides the capability), narrowed with `commands` to the commands that
+need it, and may say `"use": "all"` to call every provider at once:
+
+```rust
+use pane_extension::capabilities::{available, call};
+
+let answer = call("pane-samples:greet@1", "greet", input) // routed by Pane
+    .await
+    .map_err(|error| error.explain())?; // "not-found: …", "failed: …"
+if available("pane-samples:farewell@1").is_none() {
+    // No provider can serve it now; an optional use degrades gracefully.
+}
+```
+
+```ts
+import { available, call } from "@pane-app/extension/capabilities";
+
+const answer = await call("pane-samples:greet@1", "greet", input);
+if (available("pane-samples:farewell@1") === undefined) {
+  // No provider can serve it now.
+}
+```
+
+A use declared `"use": "all"` can also call every provider at once, each
+answer labelled with its provider's title:
+
+```rust
+use pane_extension::capabilities::call_every;
+
+let answers = call_every("pane-samples:greet@1", "greet", input)
+    .await
+    .map_err(|error| error.explain())?; // one entry per provider that served
+for answer in answers {
+    // answer.provider, answer.title, answer.answer: Result<String, CallError>
+}
+```
+
+Pane routes each call to the provider that can serve it — the first one
+installed — never your own package, and refuses a call to a capability or
+operation your `pane.json` does not declare, so its view of what you need
+stays complete. A required use of one provider makes your commands wait
+while no provider can serve it
+([dependencies](../docs/dependencies.md#waiting-for-a-required-dependency));
+optional uses and uses of every provider never do.
+
+#### Providing a capability at run time
+
+Mark a `provides` entry `"atRunTime": true` and your package provides the
+capability only while its code holds a run-time provision for it — an
+[owned registration](#owned-registrations) the component makes, typically
+once the user has signed in. The manifest still names the capability, so
+install plans and Settings work from it alone; a provision the manifest
+does not declare and mark is refused. Dropping it, its instance going or
+the package's code being replaced withdraws the provider at once, and the
+capability's consumers fall back to another provider or wait for one. The
+registrations sample provides `pane-samples:greet@1` this way after its
+"Sign in" action.
+
+```rust
+use pane_extension::registrations;
+
+let provision = registrations::provide("acme:translate@1")?; // held until dropped
+```
+
+```ts
+import { provide } from "@pane-app/extension/registrations";
+
+const provision = provide("acme:translate@1"); // `dispose()` withdraws it
+```
+
+### Owned registrations
+
+Anything a command registers at run time, it owns: a **dynamic root
+item** (a row of root search under one of the package's commands), a
+**timer**, a **folder watcher**, or a **run-time provision** of a
+capability marked `atRunTime` above. Each is a handle the guest holds
+(`pane_extension::registrations` in Rust, `@pane-app/extension/
+registrations` in JavaScript and TypeScript); dropping it undoes the
+registration, and so does the instance that made it going away or the
+package's code being replaced — a disable, a reload, an update, an
+uninstall or a pause. Nothing an extension registers outlives its code:
+an author never writes cleanup code, and using a handle of ended code is
+refused. The full contract is in
+[docs/generations.md](../docs/generations.md#owned-registrations). The
+registrations sample, in [Rust](sample-registrations/src/lib.rs),
+[JavaScript](sample-registrations-js/src/index.js) and
+[TypeScript](sample-registrations-ts/src/index.ts), registers one of
+each.
+
+```rust
+use pane_extension::registrations::{self, Item};
+
+let item = registrations::root_item("focus", Item::new("focus", "Focus: counting")
+    .subtitle("registered at run time")
+    .action(registrations::Action::new("Add one", || async {
+        // repeatable: as often as the user chooses the row
+        Ok(())
+    })))?;
+// A timer updates it; a `watcher` does the same for a folder's changes.
+registrations::every(1, || async { item.update(...).ok(); Ok(()) })?;
+```
+
+```ts
+import * as registrations from "@pane-app/extension/registrations";
+
+const item = registrations.rootItem("focus", {
+  id: "focus",
+  title: "Focus: counting",
+  actions: [{ title: "Add one", onAction: async () => {} }], // repeatable
+});
+registrations.every(1, async () => item.update({ ... }));
+```
+
+A dynamic item is in the [item shape](list-tree.md) a list's items are
+(id, title, subtitle, icon, accessories, actions), matched and ranked
+like an indexed result. One that declares a `mode` (`"view"` or
+`"no-view"`) is a **dynamic command**: invoking it launches its command
+with a launch record naming the item's id, so one component can offer a
+row per workspace, or whatever it registered; without a mode, invoking
+the row runs its first action. A quick slot, an alias or a global hotkey
+holds a dynamic command by its command and item id, and while it is not
+registered says so.
+
+Timers are `after` (one firing) or `every` (one every interval), from 1
+second to 30 days, each firing a call into the component's `events`
+export with the timer's tag — a guest call like any other, stopped with
+the generation and its traps counted towards pausing. Firings that fall
+due while one is pending, or while the package
+[waits](../docs/dependencies.md#waiting-for-a-required-dependency) for
+what it needs, are coalesced into one. A component that registers timers
+or watchers exports the events entry point (`pane_extension::
+registrations::export_events!(Events)` in Rust (importing
+`pane_extension::registrations::Events` beside it), `"pane": { "events": true }` and
+`export const events = { handleEvent: registrations.handleEvent }` in
+JavaScript and TypeScript) — the SDK keeps the callback table, as for
+actions.
+
+A watcher reports a folder's changes, coalesced for half a second, as the
+paths that changed relative to the watched folder; an overflow is one
+"rescan" event. For each package Pane allows 1000 dynamic root items, 64
+timers, 16 watchers and 16 provisions; one beyond is refused with the
+limit named.
+
+### The activation entry point
+
+A package whose `pane.json` declares `"activate"` has that component's
+`activate` export called when its code may run and it is not waiting —
+at install, enable, start, reload, update, Retry and on coming back from
+waiting — and again when the instance that ran it is dropped while the
+generation continues, so its registrations exist without waiting for the
+user. A trap in it is a crash, counted towards pausing. Without it, a
+package's code first runs when the user asks for one of its commands.
+
+```json
+"activate": "sample_registrations.wasm"
+```
+
+```rust
+pane_extension::export!(Registrations);
+pane_extension::lifecycle::export!(Registrations);
+
+impl pane_extension::lifecycle::Guest for Registrations {
+    async fn activate() {
+        // register what the package registers
+    }
+}
+```
+
+```ts
+// package.json: "pane": { "activate": true }
+export const lifecycle = {
+  async activate() {
+    // register what the package registers
+  },
+};
+```
+
+### The state handoff
+
+A component whose code is replaced — by Reload, by an update or by a
+development-mode reload — can hand what it kept in memory to its new
+code: it opts in by exporting `snapshot` and `restore` in the lifecycle
+interface above (`pane_extension::lifecycle` in Rust,
+`"pane": { "snapshot": true }` and `export const lifecycle = { … }` in
+JavaScript and TypeScript), whatever its `pane.json` says. Pane asks each
+idle instance for a snapshot before the old generation ends — within one
+second and one megabyte, kept in memory only — and the new code's first
+instance restores it before anything else is asked of it, so a user's
+counter, draft or running task carries on where it was. It never happens
+after a crash, a pause, a failure to start, Retry, a disable followed by
+an enable, or a restart of Pane. The screen that was open opens again for
+every package, opted in or not, with its original launch record (only the
+command's root view).
+
+The bytes are opaque and yours to version; the SDK's helpers serialise a
+value (`pane_extension::state` in Rust, `@pane-app/extension/state` in
+JavaScript and TypeScript — serde and JSON). A `restore` that cannot read
+what an older release wrote should answer an error: the state is
+discarded and the extension starts fresh, which is not a failure. In
+development mode, a snapshot that was dropped, late, oversized or rejected
+is reported in the package's log. The full contract is in
+[docs/generations.md](../docs/generations.md#the-state-handoff). The
+handoff sample, in [Rust](sample-handoff/src/lib.rs), [JavaScript](sample-handoff-js/src/index.js)
+and [TypeScript](sample-handoff-ts/src/index.ts), keeps a counter and a
+draft:
+
+```rust
+impl pane_extension::lifecycle::Guest for Handoff {
+    async fn activate() {} // this package declares no activation entry point
+
+    async fn snapshot() -> Option<Vec<u8>> {
+        pane_extension::state::save(&KEPT)
+    }
+
+    async fn restore(bytes: Vec<u8>) -> Result<(), String> {
+        KEPT = pane_extension::state::load(&bytes)?;
+        Ok(())
+    }
+}
+```
+
+```ts
+// package.json: "pane": { "snapshot": true }
+import { load, save } from "@pane-app/extension/state";
+
+export const lifecycle = {
+  async activate() {},
+  async snapshot() {
+    return save(kept);
+  },
+  async restore(bytes) {
+    kept = load(bytes);
+  },
+};
+```
+
 ### Dependencies on other extensions
 
 A package that calls other packages' operations declares them, so that
@@ -2625,7 +2887,8 @@ and TypeScript: Pane sees only components.
   available on Linux: this package supports only Windows") instead of
   installing it. See
   [platform availability](../docs/platform-availability.md).
-- `commands` (required, at least one): `id` unique in the package (without
+- `commands` (required, at least one, unless the package publishes
+  `operations` or provides `provides`): `id` unique in the package (without
   `#`, which Pane's records use to join it to the package identity), `title`,
   optional `subtitle`, optional `platforms` (the same list, for this command
   alone: elsewhere its root row is listed with the reason and does not
@@ -2646,6 +2909,13 @@ and TypeScript: Pane sees only components.
   enabled.
 - `operations` (optional): the [operations](#operations) the package
   publishes; `commands` may then be empty.
+- `provides` (optional): the [capabilities](#capabilities) the package
+  provides, each a `capability` name, the `component` serving it and its
+  `operations`, with an optional `platforms`; `commands` may then be empty
+  too.
+- `uses` (optional): the [capabilities](#capabilities) the package calls,
+  each a `capability` name and the `operations` it calls, with an optional
+  `optional`, `use`, `default` and `commands`.
 - `dependencies` (optional): the other packages whose operations it calls,
   required or optional ([dependencies](#dependencies-on-other-extensions)).
 - `helpers` (optional): the [native helpers](#native-helpers) the package
@@ -2712,6 +2982,14 @@ What installing does:
 - **Required dependencies.** Installing or updating also installs the
   missing [required dependencies](#dependencies-on-other-extensions) the
   manifest declares, first, or explains why it cannot and installs nothing.
+- **Capability providers.** The [capabilities](#capabilities) the package
+  uses are listed in the preview, each with who provides it, and the
+  `default` provider a use names is installed with the package when no
+  installed package provides the capability — planned, installed and
+  rolled back as a required dependency is, and stopped with the reason when
+  it cannot be installed or does not provide the capability. A capability
+  nobody provides stops nothing: the package waits for a provider
+  ([details](../docs/dependencies.md#installing)).
 - **Listing.** Installed commands are listed from the manifests alone; no
   guest runs until you open a command or another extension calls one of the
   package's [operations](#operations). A damaged installed copy stays listed

@@ -110,6 +110,8 @@ impl Launcher {
     pub(super) fn recover_state(&self, state: &mut State) {
         state.changing.clear();
         self.reconcile_pauses(state);
+        // The pauses may have changed, and with them who waits.
+        state.recheck_waiting();
         self.show_root(state, None);
         state.view.status = Status::Error(
             "Pane recovered from an internal error; what was in progress may not have finished. \

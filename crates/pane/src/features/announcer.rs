@@ -576,6 +576,7 @@ impl LauncherWindow {
             | Screen::NetworkDetails { .. }
             | Screen::ProgramDetails { .. }
             | Screen::PauseDetails { .. }
+            | Screen::WaitingDetails { .. }
             | Screen::BuildDetails { .. }
             | Screen::Crash { .. }
             | Screen::Confirm { .. }

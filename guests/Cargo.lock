@@ -15,6 +15,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3ded4057c258ba199e2d26386d3af3780957ecaee6c4ef4041c6b4b8b97c0b06"
 
 [[package]]
+name = "capabilities-fixture"
+version = "0.1.0"
+dependencies = [
+ "pane-extension",
+ "serde_json",
+]
+
+[[package]]
 name = "cfg-if"
 version = "1.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -143,6 +151,15 @@ version = "0.1.0"
 dependencies = [
  "pane-extension",
  "serde_json",
+]
+
+[[package]]
+name = "handoff-fixture"
+version = "0.1.0"
+dependencies = [
+ "pane-extension",
+ "serde",
+ "wasip3",
 ]
 
 [[package]]
@@ -279,6 +296,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "registrations-fixture"
+version = "0.1.0"
+dependencies = [
+ "pane-extension",
+]
+
+[[package]]
 name = "refusing-view"
 version = "0.1.0"
 dependencies = [
@@ -308,6 +332,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "sample-capabilities"
+version = "0.1.0"
+dependencies = [
+ "pane-extension",
+ "serde_json",
+]
+
+[[package]]
 name = "sample-dependencies"
 version = "0.1.0"
 dependencies = [
@@ -320,6 +352,22 @@ name = "sample-files"
 version = "0.1.0"
 dependencies = [
  "pane-extension",
+]
+
+[[package]]
+name = "sample-greet"
+version = "0.1.0"
+dependencies = [
+ "pane-extension",
+ "serde_json",
+]
+
+[[package]]
+name = "sample-handoff"
+version = "0.1.0"
+dependencies = [
+ "pane-extension",
+ "serde",
 ]
 
 [[package]]
@@ -389,6 +437,15 @@ name = "sample-query"
 version = "0.1.0"
 dependencies = [
  "pane-extension",
+]
+
+[[package]]
+name = "sample-registrations"
+version = "0.1.0"
+dependencies = [
+ "pane-extension",
+ "serde_json",
+ "wasip3",
 ]
 
 [[package]]

@@ -225,6 +225,10 @@ fn guests() -> Result<(), String> {
                 "switch_windows",
                 "sample_operations",
                 "sample_dependencies",
+                "sample_greet",
+                "sample_capabilities",
+                "sample_registrations",
+                "sample_handoff",
                 "sample_query",
                 "sample_keywords",
                 "sample_matches",
@@ -245,6 +249,9 @@ fn guests() -> Result<(), String> {
                 "faulty",
                 "folder_files",
                 "operations_fixture",
+                "capabilities_fixture",
+                "registrations_fixture",
+                "handoff_fixture",
                 "old_api",
                 "mismatched_api",
                 "failing_start",
@@ -506,7 +513,7 @@ fn git_sample(root: &Path, out: &Path) -> Result<(), String> {
 /// the commits its pins name (`crates/pane/defaults.json`) — except the
 /// Windows power features' three (#125), which this repository still
 /// builds until their own repositories release.
-const SAMPLE_PACKAGES: [(&str, &str); 72] = [
+const SAMPLE_PACKAGES: [(&str, &str); 84] = [
     ("sample-rust", "sample_rust"),
     ("sample-settings", "sample_settings"),
     ("sample-js", "sample_js"),
@@ -519,6 +526,18 @@ const SAMPLE_PACKAGES: [(&str, &str); 72] = [
     ("sample-operations", "sample_operations"),
     ("sample-operations-js", "sample_operations_js"),
     ("sample-operations-ts", "sample_operations_ts"),
+    ("sample-greet", "sample_greet"),
+    ("sample-greet-js", "sample_greet_js"),
+    ("sample-greet-ts", "sample_greet_ts"),
+    ("sample-capabilities", "sample_capabilities"),
+    ("sample-registrations", "sample_registrations"),
+    ("sample-registrations-js", "sample_registrations_js"),
+    ("sample-registrations-ts", "sample_registrations_ts"),
+    ("sample-handoff", "sample_handoff"),
+    ("sample-handoff-js", "sample_handoff_js"),
+    ("sample-handoff-ts", "sample_handoff_ts"),
+    ("sample-capabilities-js", "sample_capabilities_js"),
+    ("sample-capabilities-ts", "sample_capabilities_ts"),
     ("sample-dependencies", "sample_dependencies"),
     ("sample-dependencies-npm", "sample_dependencies"),
     ("sample-applications-js", "sample_applications_js"),

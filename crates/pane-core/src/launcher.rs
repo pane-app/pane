@@ -44,6 +44,7 @@ mod application_icons;
 mod application_update;
 mod argument_fields;
 mod argument_form;
+pub(crate) mod capability_choices;
 mod choices;
 mod clipboard_settings;
 pub mod clipboard_view;
@@ -94,9 +95,11 @@ use crate::runtime::{
     Runtime, ScreenForm, View, ViewEvent, ViewId, WallTime, WeakRuntime,
 };
 use crate::search::{self, Candidate, Keys, Query};
+use crate::waiting::{Fix, Waiting};
 
 mod dependents;
 mod developing;
+mod dynamic;
 mod error_overlay;
 mod extensions;
 mod file_search;
@@ -115,9 +118,11 @@ mod setup;
 mod shortcuts;
 mod subtitles;
 mod system;
+mod timers;
 mod uninstall;
 mod update_results;
 mod updates;
+mod watchers;
 
 use acquire::{Acquisitions, Defaults};
 use actions::selected_action;
@@ -128,6 +133,7 @@ pub use aliases::AliasOutcome;
 pub use application_update::ApplicationUpdate;
 use application_update::{Application, Updates};
 pub use argument_fields::ArgumentFields;
+pub use capability_choices::{Capability, CapabilityProvider};
 use choices::Record;
 pub use crash_notice::{LogNotice, UNEXPECTED_QUIT};
 pub use create::FolderAsk;
@@ -136,7 +142,10 @@ use developing::Developing;
 pub use developing::{BuildFailure, Development};
 pub(crate) use developing::{BuildNow, Remote};
 use error_overlay::Shown;
-pub use extensions::{ExtensionMark, ExtensionOperation, OperationKind};
+pub use extensions::{
+    ExtensionDetails, ExtensionMark, ExtensionOperation, ExtensionWait, FixAction, OperationKind,
+    ProvidedCapability, RequirementCycle, RequirementFix, UnmetRequirement,
+};
 pub use hotkeys::HotkeyOutcome;
 use hotkeys::{Bindings, Game, OpenPane};
 pub(crate) use install::InstallPreview;
@@ -271,6 +280,16 @@ pub enum Screen {
         identity: PackageIdentity,
         details: Vec<String>,
     },
+    /// Why a command of the installed package with `identity` waits for
+    /// what its package requires, as lines of information under the title,
+    /// with a row that fixes what is missing (see `waiting`). The command
+    /// is named by its manifest id: the package may run while only it
+    /// waits, when a use is narrowed to it.
+    WaitingDetails {
+        identity: PackageIdentity,
+        command: String,
+        details: Vec<String>,
+    },
     /// The error overlay of a developed package's command that crashed,
     /// trapped, threw or failed to start (see `error_overlay`): the message
     /// and the stack trace as lines of information under the title, with
@@ -384,6 +403,10 @@ pub enum Unavailable {
     OnThisSystem(String),
     /// Its package is paused after an error until the user retries it.
     Paused(String),
+    /// Its package waits for a required dependency that cannot serve it
+    /// (see `waiting`): the command comes back by itself once what it
+    /// needs returns, and nothing of it runs meanwhile.
+    Waiting(String),
 }
 
 impl Row {
@@ -449,7 +472,9 @@ impl Unavailable {
     /// The reason, as shown to the user.
     pub fn reason(&self) -> &str {
         match self {
-            Unavailable::OnThisSystem(reason) | Unavailable::Paused(reason) => reason,
+            Unavailable::OnThisSystem(reason)
+            | Unavailable::Paused(reason)
+            | Unavailable::Waiting(reason) => reason,
         }
     }
 }
@@ -605,6 +630,7 @@ impl LauncherView {
             | Screen::Extensions { details }
             | Screen::Confirm { details, .. }
             | Screen::PauseDetails { details, .. }
+            | Screen::WaitingDetails { details, .. }
             | Screen::Crash { details, .. }
             | Screen::NetworkDetails { details, .. }
             | Screen::ProgramDetails { details, .. }
@@ -683,6 +709,17 @@ pub struct Launcher {
     /// ([`Launcher::with_clock`]). Only a launcher that installs packages
     /// runs any.
     services: Option<Arc<Services>>,
+    /// Fires the timers the packages' code registered at run time (#158),
+    /// by the launcher's clock ([`Launcher::with_clock`]).
+    timers: Option<Arc<timers::Timers>>,
+    /// Watches the folders the packages' code registered at run time
+    /// (#158), through the native watcher development mode uses.
+    watchers: Option<Arc<watchers::Watchers>>,
+    /// Holds the registrations registry's hook alive: the registry keeps
+    /// only a weak handle on it (its holder must outlive it), and the hook
+    /// is what refreshes root search and wakes the worker threads when a
+    /// package registers something (#158).
+    registrations_hook: Option<Arc<dyn Fn() + Send + Sync>>,
     /// Checks for newer versions of the installed npm packages and
     /// updates the eligible ones at a safe boundary (see `updates`).
     /// Only a launcher that installs packages checks anything.
@@ -720,9 +757,18 @@ struct WeakLauncher {
     /// Held weakly, so that Pane stops running continuing services as soon
     /// as the launcher is dropped.
     services: Option<std::sync::Weak<Services>>,
+    /// Held weakly, so that Pane stops firing registered timers as soon as
+    /// the launcher is dropped.
+    timers: Option<std::sync::Weak<timers::Timers>>,
+    /// Held weakly, so that Pane stops watching registered folders as soon
+    /// as the launcher is dropped.
+    watchers: Option<std::sync::Weak<watchers::Watchers>>,
     /// Held weakly, so that Pane stops checking for updates as soon as the
     /// launcher is dropped.
     updates: Option<std::sync::Weak<updates::Updates>>,
+    /// Strong, as the launcher's own handle is: the hook holds only weak
+    /// handles of what it wakes.
+    registrations_hook: Option<Arc<dyn Fn() + Send + Sync>>,
     sources: install::Sources,
     developing: std::sync::Weak<Developing>,
     state: std::sync::Weak<Mutex<State>>,
@@ -751,6 +797,9 @@ impl WeakLauncher {
             clipboard,
             schedules: self.schedules.as_ref().and_then(std::sync::Weak::upgrade),
             services: self.services.as_ref().and_then(std::sync::Weak::upgrade),
+            registrations_hook: self.registrations_hook.clone(),
+            timers: self.timers.as_ref().and_then(std::sync::Weak::upgrade),
+            watchers: self.watchers.as_ref().and_then(std::sync::Weak::upgrade),
             updates: self.updates.as_ref().and_then(std::sync::Weak::upgrade),
             sources: self.sources.clone(),
             developing: self.developing.upgrade()?,
@@ -1020,6 +1069,27 @@ struct State {
     /// What this start forgot because its command is a root provider (see
     /// `providers`), for the toast naming it.
     provider_forgotten: providers::Forgotten,
+    /// Which packages wait for a required dependency or capability that
+    /// cannot serve them, each with why, and which commands of running
+    /// packages wait for a use narrowed to them (see `waiting`):
+    /// recomputed whenever the packages or their pauses change, under this
+    /// lock.
+    waiting: Waiting,
+    /// The providers the user chose for capabilities (see
+    /// `capability_choices`), Pane's own record, which every capability
+    /// call's routing reads.
+    capability_choices: capability_choices::Kept,
+    /// What the packages' guests registered at run time (see
+    /// `registrations`): the dynamic root items root search lists, the
+    /// timers and watchers the worker threads run, and the run-time
+    /// provisions the operation routing and the waiting model see. `None`
+    /// without a runtime. Its own hooks tell this launcher of changes.
+    registrations: Option<Arc<crate::registrations::Registrations>>,
+    /// The dynamic root items' looks, by their rows' ids (see `dynamic`).
+    dynamic: dynamic::Looks,
+    /// The packages whose activation entry point a thread is calling now,
+    /// by identity key, so it is not begun twice (see `registered`).
+    activating: HashSet<String>,
     /// The package whose install preview is shown for Create Extension or
     /// Import Extension (see `create`), which Pane develops once it is
     /// installed: the author confirming the preview. Leaving the preview
@@ -1074,9 +1144,39 @@ impl State {
             .find(|package| package.identity == *identity)
     }
 
-    /// Whether `package`'s code may run: it is enabled and not paused.
+    /// Whether `package`'s code may run: it is enabled, not paused, and not
+    /// waiting for a required dependency or capability that cannot serve
+    /// it (see `waiting`). Waiting gates what Pane starts for a package —
+    /// its commands' views and runs, scheduled work, services and results —
+    /// but ends no generation: what already runs keeps running, and an open
+    /// screen stays. A command a use is narrowed into waiting does not run
+    /// its own work either, while the package's other commands do.
     fn runs(&self, package: &InstalledPackage) -> bool {
-        package.enabled && !self.paused.is_paused(&package.identity)
+        package.enabled
+            && !self.paused.is_paused(&package.identity)
+            && self.waiting.reason(&package.identity).is_none()
+    }
+
+    /// Computes which packages wait again, after the installed packages or
+    /// their pauses changed (installed, uninstalled, enabled, disabled,
+    /// paused, retried, reloaded or updated): what every path that changes
+    /// them calls under this lock, so `runs`, the rows and the operation
+    /// calls a guest makes all see the same answer. The change hooks of the
+    /// extension data wake the scheduler and the services thread, which
+    /// look again through `runs`.
+    fn recheck_waiting(&mut self) {
+        let provisions = self
+            .registrations
+            .as_ref()
+            .map(|registrations| registrations.provisions())
+            .unwrap_or_default();
+        let waiting = Waiting::of(
+            &self.packages,
+            &provisions,
+            &|identity| self.paused.is_paused(identity),
+            &|identity| self.title_of(identity),
+        );
+        self.waiting = waiting;
     }
 
     /// The title of the installed package with `identity`, the title its
@@ -1336,6 +1436,16 @@ enum Entry {
     /// Explain why this command (root) or this item's action (command view)
     /// is unavailable on this system, or paused; the extension is not called.
     Unavailable(String),
+    /// Show why this command of the installed package with `identity` waits
+    /// for what its package requires, with the row that fixes it (root;
+    /// see `waiting`). The command's title names the screen, and its
+    /// manifest id finds the reason: the package may run while only this
+    /// command waits, when a use is narrowed to it.
+    Waiting {
+        identity: PackageIdentity,
+        command: String,
+        manifest: String,
+    },
     /// Nothing in the launcher: the window asks for a folder (root).
     InstallFromFolder,
     /// Ask which npm package to install (root).
@@ -1376,6 +1486,10 @@ enum Entry {
     /// Say that this item has no actions, so it cannot be activated
     /// (command view).
     NoActions,
+    /// Run the first action of this dynamic root item, an owned
+    /// registration (#158): its callback goes to the command's `handle-
+    /// event`, in the component whose instance registered it (root).
+    DynamicAction(dynamic::DynamicAction),
     /// Open this form of the open command's item with this id.
     Form(String, Form),
     /// Open the custom view of the open command's item with this id.
@@ -1403,6 +1517,9 @@ enum Entry {
     /// Disable this installed package and the packages that require it,
     /// which the confirmation showed (confirmation).
     DisableAll(PackageIdentity, Vec<PackageIdentity>),
+    /// Disable this installed package alone, leaving the packages that
+    /// require it waiting for it (confirmation).
+    DisableOnly(PackageIdentity),
     /// Reload this installed package from its source folder.
     Reload(PackageIdentity),
     /// Start again this package, which Pane paused after it failed.
@@ -1512,6 +1629,7 @@ enum Pending {
         name: String,
     },
     Run(String),
+    DynamicAction(dynamic::DynamicAction),
     CustomView(String, CustomViewInfo),
     OpenUrl(String),
     /// One of Pane's own actions on a row (see `own_actions`).
@@ -1664,6 +1782,11 @@ impl Launcher {
             .map_or_else(Record::default, |installation| {
                 Record::open(&installation.dir)
             });
+        let provider_choices = installation
+            .as_ref()
+            .map_or_else(capability_choices::Kept::default, |installation| {
+                capability_choices::Kept::open(&installation.dir)
+            });
         let update_controls = installation
             .as_ref()
             .and_then(|installation| updates::UpdateControls::open(&installation.dir))
@@ -1783,6 +1906,11 @@ impl Launcher {
             setup_needed: HashSet::new(),
             error_overlay: None,
             provider_forgotten: providers::Forgotten::default(),
+            waiting: Waiting::default(),
+            capability_choices: provider_choices,
+            registrations: runtime.as_ref().ok().map(Runtime::registrations),
+            dynamic: dynamic::Looks::default(),
+            activating: HashSet::new(),
             develop_after: None,
         };
         if let (Some(installation), Some(files)) = (&installation, &state.files) {
@@ -1806,6 +1934,8 @@ impl Launcher {
                 }
             }
         }
+        // Who waits, from the packages and the pauses restored above.
+        state.recheck_waiting();
         let sources = install::Sources {
             registry: crate::npm::Registry::npmjs(),
             downloads: installation.as_ref().map(|i| i.dir.join(DOWNLOADS_DIR)),
@@ -1822,21 +1952,31 @@ impl Launcher {
             clipboard: None,
             schedules: None,
             services: None,
+            timers: None,
+            watchers: None,
+            registrations_hook: None,
             updates: None,
             sources,
             developing,
             state: Arc::new(Mutex::new(state)),
         };
         if let (Ok(runtime), Some(installation)) = (&launcher.runtime, &launcher.installation) {
-            // Operation calls see the packages as the launcher has them.
+            // Operation calls see the packages as the launcher has them,
+            // who waits among them, who is paused and which provider the
+            // user chose for each capability.
             let state = Arc::downgrade(&launcher.state);
             let data = installation.data.clone();
-            runtime.set_directory(Arc::new(move || Installed {
-                packages: state.upgrade().map_or_else(Vec::new, |state| {
-                    let state = state.lock().unwrap_or_else(|p| p.into_inner());
-                    state.packages.clone()
-                }),
-                data: Some(data.clone()),
+            runtime.set_directory(Arc::new(move || {
+                state.upgrade().map_or_else(
+                    || Installed {
+                        data: Some(data.clone()),
+                        ..Installed::default()
+                    },
+                    |state| {
+                        let state = state.lock().unwrap_or_else(|p| p.into_inner());
+                        installed_of(&state, Some(data.clone()))
+                    },
+                )
             }));
         }
         // Scheduled work and continuing services follow the system's clock
@@ -1851,6 +1991,38 @@ impl Launcher {
                 Services::start(Arc::new(crate::clipboard::SystemClock), &installation.data);
             services.run(launcher.downgrade());
             launcher.services = Some(services);
+            // The timers and watchers the packages' code registers at run
+            // time (#158) run only with a runtime to deliver their events.
+            if let Some(registrations) = launcher.runtime.as_ref().ok().map(Runtime::registrations)
+            {
+                let timers = timers::Timers::start(Arc::new(crate::clipboard::SystemClock));
+                let watchers = watchers::Watchers::start();
+                // The registry's hooks: the launcher refreshes root search,
+                // recomputes who waits (a run-time provision makes the
+                // package a provider) and sees to the activation entry
+                // point; the worker threads take their new work.
+                let weak = launcher.downgrade();
+                let wake_timers = timers.clone();
+                let wake_watchers = watchers.clone();
+                let hook: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
+                    if let Some(launcher) = weak.upgrade() {
+                        launcher.registered();
+                    }
+                    wake_timers.poke();
+                    wake_watchers.poke();
+                });
+                registrations.set_changed(hook.clone());
+                launcher.registrations_hook = Some(hook);
+                timers.run(launcher.downgrade());
+                watchers.run(launcher.downgrade());
+                launcher.timers = Some(timers.clone());
+                launcher.watchers = Some(watchers);
+                // The extension data's hooks end generations: the registry
+                // is undone with them, so the threads look again.
+                installation
+                    .data
+                    .set_changed(Arc::new(move || timers.poke()));
+            }
             // Pane checks for newer versions of the installed npm packages
             // in the background (see `updates`), starting shortly after
             // this, once a development build's registry is in place.
@@ -1860,6 +2032,9 @@ impl Launcher {
         }
         launcher.report_failures();
         launcher.show_root(&mut launcher.lock(), None);
+        // Pane starting is one of the moments the activation entry point
+        // runs at (ADR 0041); see `ensure_activated`.
+        launcher.ensure_activated(&mut launcher.lock());
         // Aliases, fallbacks and hotkeys recorded for a command that has
         // become a root provider are forgotten, with a toast saying so
         // (#164); `with_quick_slots` does the same for its pins.
@@ -1928,6 +2103,12 @@ impl Launcher {
         if let Some(services) = &self.services {
             services.follow(clock.clone());
         }
+        if let Some(timers) = &self.timers {
+            timers.follow(clock.clone());
+        }
+        if let Some(watchers) = &self.watchers {
+            watchers.poke();
+        }
         if let Some(updates) = &self.updates {
             updates.follow(clock.clone());
         }
@@ -1942,6 +2123,32 @@ impl Launcher {
         }));
         self
     }
+    /// Waits until the timers the packages' code registered at run time
+    /// looked at every change of the clock, the registry and the packages
+    /// so far, and every firing they started has reported; `false` if they
+    /// did not within `limit`. For tests and development builds, which so
+    /// wait for timers without timing them.
+    #[cfg(any(test, debug_assertions))]
+    #[doc(hidden)]
+    pub fn wait_for_timers(&self, limit: std::time::Duration) -> bool {
+        self.timers
+            .as_ref()
+            .is_some_and(|timers| timers.settled(limit))
+    }
+
+    /// Waits until the folder watchers the packages' code registered at
+    /// run time looked at every change of the registry so far, and every
+    /// change they started to deliver has reported; `false` if they did
+    /// not within `limit`. For tests and development builds, which so wait
+    /// for watchers without timing them.
+    #[cfg(any(test, debug_assertions))]
+    #[doc(hidden)]
+    pub fn wait_for_watchers(&self, limit: std::time::Duration) -> bool {
+        self.watchers
+            .as_ref()
+            .is_some_and(|watchers| watchers.settled(limit))
+    }
+
     /// Waits until Pane's clipboard history expiry thread swept after every
     /// change of the history and of the clock so far; `false` if it did not
     /// within `limit`. For tests and development builds, which so wait for
@@ -2154,6 +2361,9 @@ impl Launcher {
             clipboard: self.clipboard.as_ref().map(Arc::downgrade),
             schedules: self.schedules.as_ref().map(Arc::downgrade),
             services: self.services.as_ref().map(Arc::downgrade),
+            registrations_hook: self.registrations_hook.clone(),
+            timers: self.timers.as_ref().map(Arc::downgrade),
+            watchers: self.watchers.as_ref().map(Arc::downgrade),
             updates: self.updates.as_ref().map(Arc::downgrade),
             sources: self.sources.clone(),
             developing: Arc::downgrade(&self.developing),
@@ -2515,6 +2725,7 @@ impl Launcher {
         if query.trim().is_empty() {
             return Vec::new();
         }
+        let waiting = &state.waiting;
         let commands = state
             .packages
             .iter()
@@ -2528,8 +2739,15 @@ impl Launcher {
                     .indexed_result_commands()
                     .into_iter()
                     // One whose required preferences are unset is not
-                    // asked: it says "Needs setup" instead (see `setup`).
-                    .filter(move |command| !self.needs_setup(package, command.manifest_id()))
+                    // asked: it says "Needs setup" instead (see `setup`);
+                    // nor is one a use is narrowed into waiting (see
+                    // `waiting`).
+                    .filter(move |command| {
+                        !self.needs_setup(package, command.manifest_id())
+                            && waiting
+                                .reason_for(&package.identity, command.manifest_id())
+                                .is_none()
+                    })
                     .map(move |command| (command, data.clone()))
             })
             .collect();
@@ -2825,8 +3043,16 @@ impl Launcher {
                     .root_result_commands()
                     .into_iter()
                     // One whose required preferences are unset is not
-                    // asked: it says "Needs setup" instead (see `setup`).
-                    .filter(move |command| !self.needs_setup(package, command.manifest_id()))
+                    // asked: it says "Needs setup" instead (see `setup`);
+                    // nor is one a use is narrowed into waiting (see
+                    // `waiting`).
+                    .filter(move |command| {
+                        !self.needs_setup(package, command.manifest_id())
+                            && state
+                                .waiting
+                                .reason_for(&package.identity, command.manifest_id())
+                                .is_none()
+                    })
                     .map(move |command| (command, data.clone()))
             })
             .collect()
@@ -3160,6 +3386,10 @@ impl Launcher {
                     |entry| matches!(entry, Entry::PauseDetails(shown) if *shown == identity),
                 );
             }
+            // Entered from root search: Escape returns to it.
+            Screen::WaitingDetails { .. } => {
+                self.show_root(&mut state, None);
+            }
             // The error overlay leaves for what it covered; the command it
             // was about stays open underneath, as it was.
             Screen::Crash { .. } => self.leave_error_overlay(&mut state),
@@ -3315,6 +3545,9 @@ impl Launcher {
                 opening: Opening { component, .. },
                 ..
             }) => Some(component),
+            // A dynamic root item's action is a call into the package's
+            // component (#158), with its generation as of now.
+            Pending::DynamicAction(action) => Some(&action.component),
             Pending::Run(_) | Pending::CustomView(..) => open.as_ref(),
             _ => None,
         };
@@ -3339,6 +3572,9 @@ impl Launcher {
                     if let Some(component) = open {
                         launcher.run_action(epoch, component, callback, data).await
                     }
+                }
+                Pending::DynamicAction(action) => {
+                    launcher.run_dynamic_action(epoch, action, data).await
                 }
                 Pending::OpenUrl(url) => launcher.open_url(epoch, url).await,
                 Pending::Own(work) => launcher.do_own(epoch, work).await,
@@ -3394,6 +3630,14 @@ impl Launcher {
             },
             Entry::Broken(problem) | Entry::Unavailable(problem) => {
                 state.view.status = Status::Error(problem);
+                Pending::Nothing
+            }
+            Entry::Waiting {
+                identity,
+                command,
+                manifest,
+            } => {
+                self.show_waiting_details(state, &identity, &command, &manifest);
                 Pending::Nothing
             }
             Entry::Copy(text) => {
@@ -3553,6 +3797,9 @@ impl Launcher {
             Entry::DisableAll(identity, shown) => self
                 .begin_disable_all(state, identity, &shown)
                 .map_or(Pending::Nothing, Pending::Change),
+            Entry::DisableOnly(identity) => self
+                .begin_disable_only(state, identity)
+                .map_or(Pending::Nothing, Pending::Change),
             Entry::Reload(identity) => self
                 .begin_reload(state, identity, reload::Attempt::Reload)
                 .map_or(Pending::Nothing, Pending::Reload),
@@ -3637,6 +3884,12 @@ impl Launcher {
             Entry::NoActions => {
                 state.view.status = Status::Error(item_actions::NO_ACTIONS.into());
                 Pending::Nothing
+            }
+            Entry::DynamicAction(action) => {
+                state.view.status = Status::Running {
+                    since: Instant::now(),
+                };
+                Pending::DynamicAction(action)
             }
             Entry::CustomView(item_id, info) => {
                 state.view.status = Status::Running {
@@ -3889,6 +4142,12 @@ impl Launcher {
             // A package that uses the file index starts it (#175), whether
             // or not root search is refreshed after.
             self.sync_file_index(state);
+            // What it requires may have changed who waits (see `waiting`).
+            state.recheck_waiting();
+            // Installing is one of the moments the activation entry point
+            // runs at (ADR 0041): the screen is not refreshed yet, so it
+            // is seen to here.
+            self.ensure_activated(state);
             return false;
         };
         // The replaced copy's code no longer runs: its generation ended
@@ -3913,6 +4172,12 @@ impl Launcher {
         self.sync_hotkeys(state);
         // The new copy may use the file index, or no longer use it.
         self.sync_file_index(state);
+        // The new copy's requirements may change who waits (see `waiting`).
+        state.recheck_waiting();
+        // An update is one of the moments the activation entry point runs
+        // at (ADR 0041); the code that starts a reload or an update calls
+        // it as its own start, and this covers the rest.
+        self.ensure_activated(state);
         // The replaced copy's results are asked for afresh.
         state
             .indexes
@@ -4002,6 +4267,7 @@ impl Launcher {
         state.list_entered = false;
         self.note_setup_needed(state);
         state.root = self.root_results(state);
+        state.dynamic.keep(dynamic::rows(state).1);
         // What the static rows are ranked from changed with the root
         // results of this visit (#202): they are ranked again below.
         state.statics += 1;
@@ -4131,6 +4397,7 @@ impl Launcher {
     /// Updates root search or the extension list on screen after a package
     /// changed; other screens show no package state.
     fn refresh(&self, state: &mut State) {
+        self.ensure_activated(state);
         // The file index runs while a package that uses it may run.
         self.sync_file_index(state);
         match &state.view.screen {
@@ -4175,6 +4442,17 @@ impl Launcher {
                 state.screen_epoch = epoch;
             }
             Screen::PauseDetails { .. } => {}
+            // Once the command no longer waits (what it needed came back, or
+            // it is gone or disabled), root search lists its commands as
+            // they are now, keeping the screen epoch as refreshing does.
+            Screen::WaitingDetails {
+                identity, command, ..
+            } if state.waiting.reason_for(identity, command).is_none() => {
+                let epoch = state.screen_epoch;
+                self.show_root(state, None);
+                state.screen_epoch = epoch;
+            }
+            Screen::WaitingDetails { .. } => {}
             // What it reached since, or the extension list once it is gone,
             // keeping the screen epoch.
             Screen::NetworkDetails { identity, .. } => {
@@ -4194,6 +4472,106 @@ impl Launcher {
         }
     }
 
+    /// What the registry of owned registrations told this launcher (#158):
+    /// a registration was made or undone (the guest dropped its handle,
+    /// its instance went, its generation ended) or an activation entry
+    /// point began. As a package's own change does, root search and the
+    /// extension list are refreshed and who waits recomputed — a run-time
+    /// provision makes the package a provider — and the activation entry
+    /// points are seen to. The hooks run on the runtime thread, with the
+    /// registry unlocked, so the state may be locked here.
+    fn registered(&self) {
+        {
+            let mut state = self.lock();
+            state.recheck_waiting();
+            self.refresh(&mut state);
+        }
+        self.changed();
+    }
+
+    /// Sees to the activation entry points (ADR 0041): every package
+    /// whose code may run and is not waiting, whose `pane.json` declares
+    /// `activate`, has it called in its current generation — at install,
+    /// enable, start, reload, update, Retry and on coming back from
+    /// waiting — and again when the instance that ran it is dropped while
+    /// the generation continues unpaused. One that has run in this
+    /// generation, in an instance that still lives, or whose call a thread
+    /// is making now, is not begun again; one whose package is being
+    /// reloaded or updated is left to the reload's own start, which treats
+    /// a trap in it as a startup failure.
+    fn ensure_activated(&self, state: &mut State) {
+        let Some(installation) = &self.installation else {
+            return;
+        };
+        let Some(registrations) = state.registrations.clone() else {
+            return;
+        };
+        let mut begun: Vec<(PackageIdentity, PathBuf, PackageData)> = Vec::new();
+        for package in state.packages.iter() {
+            // Only code that may run is activated: not a disabled or
+            // paused package, and not one waiting as a whole.
+            if !state.runs(package) || state.waiting.reason(&package.identity).is_some() {
+                continue;
+            }
+            // Its replacement runs its own activation as it starts.
+            if matches!(
+                state.changing.get(&package.identity),
+                Some(Changing::Reloading | Changing::Updating | Changing::BackgroundUpdating)
+            ) {
+                continue;
+            }
+            let Ok(manifest) = &package.manifest else {
+                continue;
+            };
+            let Some(activate) = &manifest.activate else {
+                continue;
+            };
+            let data = installation.data.owned_by(&package.identity);
+            if registrations.is_activated(&package.identity.key(), data.generation())
+                || state.activating.contains(&package.identity.key())
+            {
+                continue;
+            }
+            state.activating.insert(package.identity.key());
+            begun.push((
+                package.identity.clone(),
+                package.location.join(activate),
+                data,
+            ));
+        }
+        for (identity, component, data) in begun {
+            let launcher = self.clone();
+            let key = identity.key();
+            let in_flight = key.clone();
+            let started = std::thread::Builder::new()
+                .name("pane-activate".into())
+                .spawn(move || {
+                    if let Ok(runtime) = launcher.runtime() {
+                        let runtime = runtime.clone();
+                        // The runtime records the activation as the call
+                        // begins, in the instance it runs in; a trap in it
+                        // is a crash of the package like any call's,
+                        // counted towards pausing it.
+                        let _ = futures::executor::block_on(
+                            runtime.activate_with(&component, Some(data)),
+                        );
+                    }
+                    launcher.lock().activating.remove(&in_flight);
+                    // A trap dropped the instance the activation ran in,
+                    // which cleared its record while this thread still held
+                    // the in-flight mark: seeing to the activations again
+                    // runs it afresh, so a trapping one counts towards
+                    // pausing as any call's crash does. A successful
+                    // activation keeps its record, so this runs nothing.
+                    launcher.registered();
+                });
+            if let Err(error) = started {
+                eprintln!("Pane could not activate an extension: {error}");
+                state.activating.remove(&key);
+            }
+        }
+    }
+
     /// Updates the rows of the root search on screen after the installed
     /// packages changed in the background. Unlike navigating, it keeps the
     /// screen epoch, so an action the user started from root still
@@ -4206,19 +4584,32 @@ impl Launcher {
             .map(|row| row.id.clone());
         self.note_setup_needed(state);
         state.root = self.root_results(state);
+        state.dynamic.keep(dynamic::rows(state).1);
         // What the static rows are ranked from changed with the root
         // results (#202): they are ranked again, held list or not — a
         // held query's publication ranks them for it.
         state.statics += 1;
-        // A command that was disabled, paused or replaced contributes
-        // nothing more; one enabled again answers from the next change of the
-        // query.
+        // A command that was disabled, paused, replaced or narrowed into
+        // waiting contributes nothing more; one enabled again answers from
+        // the next change of the query.
         let computing: Vec<PathBuf> = state
             .packages
             .iter()
             .filter(|package| state.runs(package))
-            .flat_map(|package| package.root_result_commands())
-            .map(|command| command.component)
+            .flat_map(|package| {
+                package
+                    .root_result_commands()
+                    .into_iter()
+                    // A use narrowed to a command keeps it waiting: what it
+                    // computed before is listed no longer (see `waiting`).
+                    .filter(|command| {
+                        state
+                            .waiting
+                            .reason_for(&package.identity, command.manifest_id())
+                            .is_none()
+                    })
+                    .map(|command| command.component)
+            })
             .collect();
         state
             .computed
@@ -4260,8 +4651,11 @@ impl Launcher {
                 .with_alias(alias);
             // A command's row, available or not, is a registered command a
             // quick slot can hold by its id; Pane's own rows are not.
-            let pin = matches!(entry, Entry::Open(_) | Entry::Unavailable(_))
-                .then(|| PinTarget::Command(row.id.clone()));
+            let pin = matches!(
+                entry,
+                Entry::Open(_) | Entry::Unavailable(_) | Entry::Waiting { .. }
+            )
+            .then(|| PinTarget::Command(row.id.clone()));
             results.push(RootResult {
                 row,
                 entry,
@@ -4273,8 +4667,17 @@ impl Launcher {
             });
         };
         let command = |(command, unavailable): (CommandRegistration, Option<Unavailable>),
-                       no_view: bool| {
+                       no_view: bool,
+                       waiting: Option<&PackageIdentity>,
+                       manifest: &str| {
             let entry = match &unavailable {
+                // A waiting command's reason comes with the row that fixes
+                // what it waits for (see `waiting`).
+                Some(Unavailable::Waiting(_)) => Entry::Waiting {
+                    identity: waiting.cloned().expect("the package that waits"),
+                    command: command.title.clone(),
+                    manifest: manifest.to_owned(),
+                },
                 Some(reason) => Entry::Unavailable(reason.reason().to_owned()),
                 None => Entry::Open(Opening::of(&command, no_view, LaunchSource::RootSearch)),
             };
@@ -4296,7 +4699,7 @@ impl Launcher {
         // A disabled package contributes nothing to root search.
         let enabled = || state.packages.iter().filter(|package| package.enabled);
         for built in self.commands.iter() {
-            let (row, entry) = command((built.clone(), None), false);
+            let (row, entry) = command((built.clone(), None), false, None, "");
             add(
                 row,
                 entry,
@@ -4317,10 +4720,19 @@ impl Launcher {
                 .paused
                 .is_paused(&package.identity)
                 .then(|| Unavailable::Paused(paused_reason(&title)));
+            // A package that waits for a required dependency or capability
+            // (see `waiting`) keeps its commands listed, saying what they
+            // need: they come back by themselves once what it needs
+            // returns. A use narrowed to one command waits there alone.
             // A root provider has no row: its results answer instead.
             for (registration, unavailable) in package.launchable_commands() {
+                let waiting = state
+                    .waiting
+                    .reason_for(&package.identity, registration.manifest_id())
+                    .map(|reason| Unavailable::Waiting(reason.row.clone()));
                 let unavailable = paused
                     .clone()
+                    .or(waiting)
                     .or(unavailable.map(Unavailable::OnThisSystem));
                 let no_view = package.mode_of(registration.manifest_id())
                     == crate::packages::CommandMode::NoView;
@@ -4331,8 +4743,14 @@ impl Launcher {
                     unavailable: unavailable.clone(),
                     no_view,
                 };
+                let manifest = registration.manifest_id().to_owned();
                 let keywords = registration.keywords.clone();
-                let (row, entry) = command((registration, unavailable), no_view);
+                let (row, entry) = command(
+                    (registration, unavailable),
+                    no_view,
+                    Some(&package.identity),
+                    &manifest,
+                );
                 add(
                     row,
                     entry,
@@ -4559,6 +4977,15 @@ impl Launcher {
                 CommandWhen::Always,
                 CommandMatches::Title,
             );
+        }
+        // What the packages registered at run time: their items' rows,
+        // ranked with everything else root search lists, matched by their
+        // titles and subtitles as an indexed result is, and by their
+        // aliases as any row is (see `dynamic`).
+        for result in dynamic::rows(state).0 {
+            let alias = state.aliases.chosen.active_alias(&result.row.id);
+            let keys = result.keys.with_alias(alias);
+            results.push(RootResult { keys, ..result });
         }
         results
     }
@@ -4821,6 +5248,120 @@ impl Launcher {
         };
         state.view =
             LauncherView::new(screen, pausing::details_title(&title)).with_rows(vec![retry]);
+    }
+
+    /// Shows why the command titled `command` of the package with
+    /// `identity` waits for what its package requires, with the row that
+    /// fixes what it waits for (see `waiting`). Once the command no longer
+    /// waits — what it needed came back — root search lists it again, so
+    /// the screen is left for it.
+    fn show_waiting_details(
+        &self,
+        state: &mut State,
+        identity: &PackageIdentity,
+        command: &str,
+        manifest: &str,
+    ) {
+        let Some(reason) = state.waiting.reason_for(identity, manifest).cloned() else {
+            self.show_root(state, None);
+            return;
+        };
+        let details = vec![
+            format!("{}.", reason.row),
+            "Pane runs none of its code until what it needs returns. It comes back by itself; \
+             waiting stops nothing of it that runs, keeps its settings and saved data, and an \
+             open screen of it stays."
+                .into(),
+        ];
+        // What fixes what it waits for: the root cause the chain names.
+        let (row, entry) = match reason.fix {
+            Fix::Enable(target) => {
+                let title = state.title_of(&target);
+                (
+                    Row {
+                        id: format!("enable:{}", target.key()),
+                        title: format!("Enable {title}"),
+                        subtitle: Some("The extension it needs is disabled".into()),
+                        unavailable: None,
+                    },
+                    Entry::Toggle(target),
+                )
+            }
+            Fix::Retry(target) => {
+                let title = state.title_of(&target);
+                (
+                    Row {
+                        id: format!("retry:{}", target.key()),
+                        title: format!("Retry {title}"),
+                        subtitle: Some("The extension it needs is paused after an error".into()),
+                        unavailable: None,
+                    },
+                    Entry::Retry(target),
+                )
+            }
+            // A capability with no provider that can serve it: the default
+            // its use names, or any extension that provides it. Either way
+            // the row opens one of Settings' install forms, where a
+            // provider is chosen and installed.
+            Fix::InstallProvider {
+                capability,
+                default,
+            } => {
+                let named_by = state.title_of(identity);
+                // Which install form the row opens: the one for the default's
+                // source, or npm's, where a published provider is named.
+                let entry = match default
+                    .as_deref()
+                    .and_then(|source| crate::packages::SourceSpec::parse(source).ok())
+                {
+                    Some(crate::packages::SourceSpec::Local(_)) => Entry::InstallFromFolder,
+                    Some(crate::packages::SourceSpec::Git(_)) => Entry::AskGit,
+                    _ => Entry::AskNpm,
+                };
+                let (title, subtitle) = match default {
+                    Some(default) => (
+                        format!("Install {default} (named by {named_by})"),
+                        format!("A provider of {capability}, which it names as its default"),
+                    ),
+                    None => (
+                        format!("Install an extension that provides {capability}"),
+                        "A provider of the capability, named in the install form".into(),
+                    ),
+                };
+                (
+                    Row {
+                        id: format!("install-provider:{capability}"),
+                        title,
+                        subtitle: Some(subtitle),
+                        unavailable: None,
+                    },
+                    entry,
+                )
+            }
+            // What it waits for is not installed, or the choice among
+            // providers is the user's: from root search, the way to it is
+            // Manage extensions, whose pages offer the install (the fix
+            // row on the waiting package's page installs it directly) and
+            // the Capabilities section to choose in.
+            Fix::Choose | Fix::Install(_) | Fix::Manage => (
+                Row {
+                    id: MANAGE_EXTENSIONS.into(),
+                    title: "Open Manage extensions".into(),
+                    subtitle: Some("See what is installed and what it needs".into()),
+                    unavailable: None,
+                },
+                Entry::Manage,
+            ),
+        };
+        state.next_screen();
+        state.entries = vec![entry];
+        let screen = Screen::WaitingDetails {
+            identity: identity.clone(),
+            command: manifest.to_owned(),
+            details,
+        };
+        state.view =
+            LauncherView::new(screen, format!("Why {command} cannot run")).with_rows(vec![row]);
     }
 
     /// Asks whether to clear the cache of the installed package with
@@ -5264,6 +5805,69 @@ impl Launcher {
             }
         }
         self.list_again(epoch, component, data).await;
+    }
+
+    /// Runs the first action of the dynamic root item `action` belongs
+    /// to (#158): its callback goes to the command's
+    /// `handle-event`, in the component whose instance registered it.
+    /// The answer shows nothing (the command says what it has to through
+    /// a toast or a HUD); an error it answers with is a failure toast,
+    /// and anything else is shown as the status line's error. Root search
+    /// stays; the registry's hooks relist it if the action changes the
+    /// item.
+    async fn run_dynamic_action(
+        &self,
+        epoch: u64,
+        action: dynamic::DynamicAction,
+        data: Option<PackageData>,
+    ) {
+        let dynamic::DynamicAction {
+            component,
+            command,
+            callback,
+        } = action;
+        if let Some(problem) = self.updating(&component) {
+            let mut state = self.lock();
+            if state.screen_epoch == epoch {
+                state.view.status = Status::Error(problem);
+            }
+            return;
+        }
+        let result = match self.runtime() {
+            Ok(runtime) => {
+                runtime
+                    .handle_event_with(
+                        &component,
+                        Some(command.as_str()),
+                        &callback,
+                        "{}",
+                        data.clone(),
+                    )
+                    .await
+            }
+            Err(error) => Err(error),
+        };
+        {
+            let Some(mut state) = self.lock_if_current(epoch) else {
+                return;
+            };
+            let state = &mut *state;
+            let ended = stopped(state, &component, &data);
+            state.view.status = match (ended, result) {
+                // Stopped while it was running: its answer is not shown.
+                (Some(problem), _) => Status::Error(problem),
+                // The answer shows nothing: the command said what it had
+                // to through a toast or a HUD (#141).
+                (None, Ok(_)) => Status::Idle,
+                // An error it answered with is a failure toast.
+                (None, Err(CallError::Guest(message))) => {
+                    self.show_failure(state, &component, Some(command.as_str()), message);
+                    Status::Idle
+                }
+                (None, Err(error)) => Status::Error(error.to_string()),
+            };
+        }
+        self.changed();
     }
 
     /// Asks the open command in `component` for its tree again, after it
@@ -6226,6 +6830,24 @@ async fn off_thread<T: Send + 'static>(work: impl FnOnce() -> T + Send + 'static
         let _ = reply.send(work());
     });
     response.await.expect("package file work panicked")
+}
+
+/// The installed packages as the operation router resolves calls against
+/// them now, from the launcher's state: the snapshot every capability
+/// call's routing and the Settings Capabilities section read.
+fn installed_of(state: &State, data: Option<ExtensionData>) -> Installed {
+    Installed {
+        packages: state.packages.clone(),
+        waiting: state.waiting.clone(),
+        paused: state.paused.identities(),
+        chosen: state.capability_choices.chosen.clone(),
+        provisions: state
+            .registrations
+            .as_ref()
+            .map(|registrations| registrations.provisions())
+            .unwrap_or_default(),
+        data,
+    }
 }
 
 fn first_index(rows: &[Row]) -> Option<usize> {

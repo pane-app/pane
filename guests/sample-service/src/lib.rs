@@ -7,10 +7,11 @@
 //! and counts its cycles, in its content for all time and in its instance
 //! for this run: the second count is the state of the task the service
 //! manages, which lives as long as the code's generation and is dropped
-//! with it, so a disable, a reload or a pause ends it and enabling or
-//! retrying starts a fresh one. Disabling the package stops the service;
-//! enabling it starts it again; a restart starts it again where the
-//! package is enabled.
+//! with it — except that the state handoff (ADR 0041) carries it to the
+//! new code on a reload or an update, so the new instance's first cycle
+//! finds it; a disable, a pause, a retry or a restart starts a fresh
+//! task. Disabling the package stops the service; enabling it starts it
+//! again; a restart starts it again where the package is enabled.
 //!
 //! Its items stand for the ways a cycle can end, for Pane's checks and for
 //! trying them by hand: "Wait on the next cycle" makes the next cycle
@@ -30,7 +31,8 @@ use core::sync::atomic::{AtomicU64, Ordering};
 use pane_extension::alloc::{format, string::String, vec::Vec};
 use pane_extension::feedback::{Toast, show_toast};
 use pane_extension::{
-    Command, CustomView, FieldValue, FormError, Item, List, NoCustomView, content, settings,
+    Command, CustomView, FieldValue, FormError, Item, List, NoCustomView, content, lifecycle,
+    settings, state,
 };
 
 /// The content key holding how many cycles the service has run, ever.
@@ -70,6 +72,27 @@ static THIS_RUN: AtomicU64 = AtomicU64::new(0);
 struct Watching;
 pane_extension::export!(Watching);
 pane_extension::service::export!(Watching);
+pane_extension::lifecycle::export!(Watching);
+
+impl pane_extension::lifecycle::Guest for Watching {
+    /// No activation entry point: the interface is exported for the state
+    /// handoff (ADR 0041), so the task's own state survives a replacement
+    /// of the code.
+    async fn activate() {}
+
+    /// The task's count of cycles this run, handed to the new code.
+    async fn snapshot() -> Option<Vec<u8>> {
+        state::save(&THIS_RUN.load(Ordering::Relaxed))
+    }
+
+    /// Restores the count, so the new instance's first cycle carries the
+    /// task on: a reload or an update hands the task over, and a disable,
+    /// a pause, a retry or a restart does not.
+    async fn restore(bytes: Vec<u8>) -> Result<(), String> {
+        THIS_RUN.store(state::load(&bytes)?, Ordering::Relaxed);
+        Ok(())
+    }
+}
 
 /// The count kept in the command's content.
 fn counted(key: &str) -> Result<u64, String> {

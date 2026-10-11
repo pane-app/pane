@@ -1,0 +1,25 @@
+{
+  "manifestVersion": 1,
+  "title": "TypeScript registrations sample",
+  "version": "0.1.0",
+  "apiVersion": "0.1",
+  "commands": [
+    {
+      "id": "registrations",
+      "title": "Registrations (TypeScript)",
+      "subtitle": "Registers a root search row, a timer, a folder watcher and a capability provision at run time",
+      "component": "sample_registrations_ts.wasm"
+    }
+  ],
+  "provides": [
+    {
+      "capability": "pane-samples:greet@1",
+      "component": "sample_registrations_ts.wasm",
+      "operations": [
+        "greet"
+      ],
+      "atRunTime": true
+    }
+  ],
+  "activate": "sample_registrations_ts.wasm"
+}

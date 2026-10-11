@@ -240,7 +240,49 @@ pub(super) fn row_presentation(state: &State, index: usize) -> RowPresentation {
     let Some(entry) = state.entries.get(index) else {
         return RowPresentation::default();
     };
-    let command = matches!(entry, Entry::Open(_) | Entry::Unavailable(_));
+    let command = matches!(
+        entry,
+        Entry::Open(_) | Entry::Unavailable(_) | Entry::Waiting { .. } | Entry::DynamicAction(_)
+    );
+    // A dynamic root item draws what its item says: its own icon and
+    // accessories, resolved in its package's managed copy (#158).
+    if let Some(look) = state.dynamic.of(&row.id) {
+        let presented = RowPresentation {
+            kind: kind(entry),
+            alias: state
+                .aliases
+                .chosen
+                .active_alias(&row.id)
+                .map(str::to_owned),
+            hotkey: state.bindings.registered_of(&row.id),
+            // The query whose list the rows shown are (#201): the field's own
+            // query runs ahead while the list is held, and the previous list
+            // keeps its matches.
+            matched: title_matches(
+                &row.title,
+                row.subtitle.as_deref(),
+                state.published.as_str(),
+                state.sensitivity,
+            ),
+            answer: answer(state, row, entry),
+            icon: look
+                .icon
+                .as_ref()
+                .map(|icon| looks::shown_icon(state, icon)),
+            accessories: looks::shown_accessories(look, state.clock.now())
+                .into_iter()
+                .map(|accessory| ShownAccessory {
+                    icon: accessory
+                        .icon
+                        .as_ref()
+                        .map(|icon| looks::shown_icon(state, icon)),
+                    ..accessory
+                })
+                .collect(),
+            ..RowPresentation::default()
+        };
+        return presented;
+    }
     RowPresentation {
         kind: kind(entry),
         alias: command
@@ -280,6 +322,18 @@ pub(super) fn want_row_icons(state: &State, index: usize) {
         return;
     }
     if !matches!(state.view.screen, Screen::Root { .. }) {
+        return;
+    }
+    // A dynamic root item's row loads what its item's look needs (#158);
+    // its packaged images are already resolved to the package's copy.
+    if let Some(look) = state.dynamic.of(&row.id) {
+        for icon in look.icon.iter().chain(
+            look.accessories
+                .iter()
+                .filter_map(|accessory| accessory.icon.as_ref()),
+        ) {
+            looks::want_icon(state, None, icon);
+        }
         return;
     }
     // A file row loads its system icon, not the stand-in it shows until
@@ -423,7 +477,7 @@ fn icon(state: &State, row: &Row, entry: &Entry) -> Option<Icon> {
         return Some(looks::shown_icon(state, &icon));
     }
     let id = match entry {
-        Entry::Open(_) | Entry::Unavailable(_) => row.id.as_str(),
+        Entry::Open(_) | Entry::Unavailable(_) | Entry::Waiting { .. } => row.id.as_str(),
         // A typed query's row is the command's own row, sent what was
         // typed (#195).
         Entry::Send(Sending {
@@ -453,7 +507,10 @@ fn file_icon(entry: &Entry) -> Option<Icon> {
 /// What kind of thing activating `entry` from root search reaches.
 pub(super) fn kind(entry: &Entry) -> Option<RowKind> {
     match entry {
-        Entry::Open(_) | Entry::Unavailable(_) => Some(RowKind::Command),
+        Entry::Open(_)
+        | Entry::Unavailable(_)
+        | Entry::Waiting { .. }
+        | Entry::DynamicAction(_) => Some(RowKind::Command),
         Entry::Send(Sending {
             via: Via::Fallback, ..
         }) => Some(RowKind::Fallback),

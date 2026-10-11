@@ -8,8 +8,10 @@
 // — its "Add an event" item adds one — and counts its cycles, in its
 // content for all time and in this module for this run: the second count
 // is the state of the task the service manages, which lives as long as
-// the code's generation and is dropped with it, so a disable, a reload or
-// a pause ends it and enabling or retrying starts a fresh one. Items,
+// the code's generation and is dropped with it — except that the state
+// handoff (ADR 0041) carries it to the new code on a reload or an update,
+// so the new instance's first cycle finds it; a disable, a pause, a retry
+// or a restart starts a fresh one. Items,
 // titles, results and errors match the Rust service sample
 // (guests/sample-service) and the TypeScript one. "Wait on the next
 // cycle" makes the next cycle note in its settings that it started, wait
@@ -25,6 +27,7 @@
 // bounds, which it clamps to its 1-second minimum and 30-day maximum.
 // @ts-check
 import { showToast } from "@pane-app/extension/feedback";
+import { load, save } from "@pane-app/extension/state";
 import { get, set } from "pane:extension/settings@0.1.0";
 import * as content from "pane:extension/content@0.1.0";
 import { waitFor } from "wasi:clocks/monotonic-clock@0.3.0";
@@ -149,6 +152,28 @@ export const command = {
 
   async openView(itemId) {
     throw new Error(`The service sample has no custom views: ${itemId}`);
+  },
+};
+
+/** The state handoff's entry points, beside the command's own export: the
+ * task's count of cycles this run is handed to the code that replaces
+ * it, so its first cycle finds it.
+ * @type {import("@pane-app/extension/state").Lifecycle}
+ */
+export const lifecycle = {
+  // No activation entry point: the interface is exported for the state
+  // handoff, so the task's own state survives a replacement of the code.
+  async activate() {},
+
+  async snapshot() {
+    return save({ thisRun });
+  },
+
+  /**
+   * @param {Uint8Array} bytes
+   */
+  async restore(bytes) {
+    thisRun = /** @type {{ thisRun: number }} */ (load(bytes)).thisRun;
   },
 };
 

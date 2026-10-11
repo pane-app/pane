@@ -187,7 +187,8 @@ impl AliasChoices {
 pub(super) struct Target {
     pub(super) registration: CommandRegistration,
     pub(super) identity: PackageIdentity,
-    /// Why it cannot run now: paused, or unavailable on this system.
+    /// Why it cannot run now: paused, waiting for a required dependency
+    /// (see `waiting`), or unavailable on this system.
     pub(super) unavailable: Option<Unavailable>,
     /// Whether it is a no-view command, which runs with the text sent
     /// rather than opening a screen.
@@ -564,6 +565,49 @@ impl Launcher {
             };
             let (key, command) = split(id);
             let owner = state.packages.iter().find(|p| p.identity.key() == key);
+            // A dynamic root item's alias is held by its row id, `<command
+            // id>:<item id>` (#158), and is active while the item is
+            // registered: while it is, the choice is not one of a missing
+            // command; while it is not, it says so, as a gone command's
+            // does.
+            // A dynamic root item's alias is held by its row id, `<command
+            // id>#<manifest id>:<item id>` (#158): the manifest part of a
+            // plain command's id never contains a `:`.
+            if split(id).1.contains(':') {
+                let owner = state.packages.iter().find(|p| p.identity.key() == key);
+                // The row the alias names, as the registry holds it now.
+                if super::dynamic::pinned_by_id(state, id).is_some() {
+                    continue;
+                }
+                // The command's title names what no longer lists it,
+                // as a missing indexed result's does.
+                let title = owner
+                    .map(|owner| {
+                        let manifest = split(command).1;
+                        let manifest = manifest.split(':').next().unwrap_or(manifest);
+                        let command = owner
+                            .commands()
+                            .into_iter()
+                            .find(|offered| offered.manifest_id() == manifest)
+                            .map(|offered| offered.title)
+                            .unwrap_or_else(|| owner.title());
+                        // A disabled or paused package does not list the
+                        // item either: the alias says the item is gone, as
+                        // the slot and the hotkey do.
+                        format!("{command} no longer lists it")
+                    })
+                    .unwrap_or_else(|| "its extension is not installed".to_owned());
+                rows.push((
+                    Row {
+                        id: format!("unlisted-setting:{id}"),
+                        title: format!("{what} of a dynamic root item"),
+                        subtitle: Some(format!("Not active: {title}; Enter forgets it · {id}")),
+                        unavailable: None,
+                    },
+                    Entry::ForgetChoices(id.clone()),
+                ));
+                continue;
+            }
             let (title, why) = match owner {
                 Some(owner) => match &owner.manifest {
                     Err(error) => (

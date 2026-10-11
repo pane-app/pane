@@ -184,6 +184,9 @@ impl Begun {
 pub(in crate::launcher) struct Outcome {
     /// The required dependencies installed with it, first installed first.
     pub(in crate::launcher) dependencies: Vec<InstalledPackage>,
+    /// The default providers of its uses installed with it, first
+    /// installed first.
+    pub(in crate::launcher) defaults: Vec<InstalledPackage>,
     pub(in crate::launcher) package: InstalledPackage,
     /// Titles of required dependencies the user disabled, which stay so.
     pub(in crate::launcher) disabled: Vec<String>,
@@ -219,8 +222,9 @@ fn failed(error: impl ToString) -> Stopped {
 }
 
 /// The message for an install or update that installed `outcome` as `mode`
-/// asked: what was installed or updated, with which required dependencies,
-/// and which of them the user left disabled or Pane left paused.
+/// asked: what was installed or updated, with which required dependencies
+/// and default providers, and which of them the user left disabled or Pane
+/// left paused.
 pub(in crate::launcher) fn outcome_message(mode: &Mode, outcome: &Outcome) -> String {
     let title = outcome.package.title();
     let mut message = match (mode, outcome.package.version()) {
@@ -228,16 +232,25 @@ pub(in crate::launcher) fn outcome_message(mode: &Mode, outcome: &Outcome) -> St
         (Mode::Update(_), Some(version)) => format!("Updated {title} to {version}"),
         (Mode::Update(_), None) => format!("Updated {title}"),
     };
+    let mut installed_with: Vec<String> = Vec::new();
     if !outcome.dependencies.is_empty() {
         let titles: Vec<String> = outcome
             .dependencies
             .iter()
             .map(InstalledPackage::title)
             .collect();
-        message.push_str(&format!(
-            " with {}, which it requires",
-            platform::join(&titles)
-        ));
+        installed_with.push(format!("{}, which it requires", platform::join(&titles)));
+    }
+    if !outcome.defaults.is_empty() {
+        let titles: Vec<String> = outcome
+            .defaults
+            .iter()
+            .map(InstalledPackage::title)
+            .collect();
+        installed_with.push(format!("{}, which it names", platform::join(&titles)));
+    }
+    if !installed_with.is_empty() {
+        message.push_str(&format!(" with {}", platform::join(&installed_with)));
     }
     if !outcome.disabled.is_empty() {
         message.push_str(&format!(
@@ -632,11 +645,13 @@ impl Launcher {
         let result = self
             .install_planned(request.clone(), &mode, shown.as_ref(), &mut claimed)
             .await;
-        // The install's own work, in a block so the state's lock is not
-        // held across the development that may follow: what it answers is
-        // the package Create Extension or Import Extension previewed, to
-        // develop once it is installed (see `create`).
-        let developed = {
+        // What the outcome asks once the state is let go: the command
+        // screen to reopen on the new code and where its outcome belongs
+        // (ADR 0041), and the package Create Extension or Import Extension
+        // previewed, to develop once it is installed (see `create`). The
+        // state must be out of scope before either's calls: a future that
+        // holds the launcher's lock is not Send, and this future is.
+        let (reopen, developed) = {
             let mut state = self.lock();
             for identity in &claimed {
                 state.release(identity);
@@ -645,8 +660,8 @@ impl Launcher {
             match result {
                 Ok(outcome) => {
                     let message = outcome_message(&mode, &outcome);
-                    for dependency in outcome.dependencies {
-                        self.put_installed(&mut state, dependency);
+                    for dependency in outcome.dependencies.iter().chain(&outcome.defaults) {
+                        self.put_installed(&mut state, dependency.clone());
                     }
                     let package = outcome.package;
                     // What Create Extension or Import Extension asked for:
@@ -656,14 +671,47 @@ impl Launcher {
                         .develop_after
                         .take_if(|identity| *identity == package.identity);
                     let first = package.commands().first().map(|c| c.component.clone());
-                    let replaced_is_open = self.put_installed(&mut state, package);
-                    if current || replaced_is_open {
+                    let was_open = self.put_installed(&mut state, package);
+                    // A command screen of the replaced copy that was on
+                    // display is reopened on the new code, as a reload
+                    // reopens it: an update the user chose replaces as a
+                    // reload does. One whose command the new code no longer
+                    // has goes to root search, as it did before; an update
+                    // Pane applies by itself never finds a screen on
+                    // display.
+                    let taken = if was_open {
+                        match &mode {
+                            Mode::Update(identity) => {
+                                let taken = self.take_reopen(&mut state, identity);
+                                if taken.is_none() {
+                                    self.show_root(&mut state, first);
+                                }
+                                taken
+                            }
+                            // Only an update replaces installed code, so only
+                            // one can have had a screen of it open.
+                            _ => {
+                                self.show_root(&mut state, first);
+                                None
+                            }
+                        }
+                    } else if current {
                         self.show_root(&mut state, first);
-                        state.view.status = Status::Result(message);
+                        None
                     } else {
                         self.refresh(&mut state);
-                    }
-                    develop_after
+                        None
+                    };
+                    let reopen = match taken {
+                        Some(taken) => Some((state.screen_epoch, taken, message)),
+                        None => {
+                            if current || was_open {
+                                state.view.status = Status::Result(message);
+                            }
+                            None
+                        }
+                    };
+                    (reopen, develop_after)
                 }
                 Err(Stopped::Changed(changed_plan)) => {
                     let (package, plan) = *changed_plan;
@@ -672,17 +720,24 @@ impl Launcher {
                         self.show_preview(&mut state, &request, Ok((package, plan)));
                         state.view.status = Status::Error(changed(&title));
                     }
-                    None
+                    (None, None)
                 }
                 Err(Stopped::Failed(failure)) => {
                     let message = self.install_left_behind(&mut state, &failure);
                     if current {
                         state.view.status = Status::Error(message);
                     }
-                    None
+                    (None, None)
                 }
             }
         };
+        if let Some((at, reopen, message)) = reopen {
+            let at = self.reopen(at, reopen).await;
+            let mut state = self.lock();
+            if state.screen_epoch == at {
+                state.view.status = Status::Result(message);
+            }
+        }
         // The package Create Extension or Import Extension previewed is
         // developed as its own row would develop it: its folder is watched
         // from now on, each save building and reloading it.
@@ -749,19 +804,49 @@ impl Launcher {
         }
         let disabled = plan.titles_in(RequiredState::Disabled);
         let paused = plan.titles_in(RequiredState::Paused);
+        // The default providers of uses are installed with the rest; the
+        // message says which is which.
+        let defaults: Vec<PackageIdentity> = plan
+            .defaults
+            .iter()
+            .map(|default| default.target.identity.clone())
+            .collect();
+        let install = plan.install;
         let mode = mode.clone();
+        // The state the old code hands to the new one (ADR 0041, #159),
+        // taken now that every check above passed and before the old
+        // generation ends: an update the user chose or one Pane applies by
+        // itself replaces as a reload does.
+        let handoff = self
+            .take_handoff(&package.identity, &package.manifest)
+            .await;
         let retire = self.retire(&package.identity);
-        let (dependencies, package) = off_thread(move || {
+        let (installed, package) = off_thread(move || {
             let mut store = store.lock().unwrap_or_else(|p| p.into_inner());
-            dependencies::install_all(&mut store, &plan.install, |store| match mode {
+            dependencies::install_all(&mut store, &install, |store| match mode {
                 Mode::Install => store.install(&package),
                 Mode::Update(_) => store.update(&package, retire),
             })
         })
         .await
         .map_err(Stopped::Failed)?;
+        // Staged for the new code's first start, before anything is asked
+        // of it: the old generation ended with the replacement above.
+        self.stage_handoff(&package.identity, &package, handoff);
+        // The default providers of uses are installed with the rest; the
+        // message says which is which.
+        let mut dependencies = Vec::new();
+        let mut default_providers = Vec::new();
+        for added in installed {
+            if defaults.contains(&added.identity) {
+                default_providers.push(added);
+            } else {
+                dependencies.push(added);
+            }
+        }
         Ok(Outcome {
             dependencies,
+            defaults: default_providers,
             package,
             disabled,
             paused,
@@ -814,19 +899,39 @@ impl Launcher {
                 // requests and run system programs.
                 Ok(checked) => dependency.note_imports(checked),
                 Err(error) => {
-                    let required = plan
+                    // A package to install is a required dependency, or the
+                    // default provider a use names; the problem names the
+                    // package that relies on it either way.
+                    let problem = if let Some(required) = plan
                         .required
                         .iter()
                         .find(|required| required.target.identity == dependency.identity)
-                        .expect("a package to install is a required dependency");
-                    problems.push(dependencies::Problem {
-                        dependent: required.dependent.clone(),
-                        id: required.id.clone(),
-                        kind: dependencies::ProblemKind::CannotInstall {
-                            from: dependencies::source_name(&dependency.identity),
-                            error,
-                        },
-                    });
+                    {
+                        dependencies::Problem {
+                            dependent: required.dependent.clone(),
+                            id: required.id.clone(),
+                            kind: dependencies::ProblemKind::CannotInstall {
+                                from: dependencies::source_name(&dependency.identity),
+                                error,
+                            },
+                        }
+                    } else {
+                        let default = plan
+                            .defaults
+                            .iter()
+                            .find(|default| default.target.identity == dependency.identity)
+                            .expect("a package to install is a required dependency or a default");
+                        dependencies::Problem {
+                            dependent: default.consumer.clone(),
+                            id: default.capability.clone(),
+                            kind: dependencies::ProblemKind::DefaultCannotInstall {
+                                source: default.source.clone(),
+                                from: dependencies::source_name(&dependency.identity),
+                                error,
+                            },
+                        }
+                    };
+                    problems.push(problem);
                 }
             }
         }
@@ -962,11 +1067,26 @@ fn preview_view(
         };
         return (view, Vec::new());
     }
-    let with = match plan.installed_with().as_slice() {
-        [] => String::new(),
-        [one] => format!(", and install {one}, which it requires"),
-        titles => format!(", and install the {} extensions it requires", titles.len()),
-    };
+    // What the Install row says is installed with the package: the
+    // required dependencies it is missing, and the default providers its
+    // uses name.
+    let mut with = String::new();
+    match plan.installed_with().as_slice() {
+        [] => {}
+        [one] => with.push_str(&format!(", and install {one}, which it requires")),
+        required => with.push_str(&format!(
+            ", and install the {} extensions it requires",
+            required.len()
+        )),
+    }
+    match plan.named_defaults().as_slice() {
+        [] => {}
+        [one] => with.push_str(&format!(", and install {one}, which it names")),
+        defaults => with.push_str(&format!(
+            ", and install the {} providers it names",
+            defaults.len()
+        )),
+    }
     let (row, entry) = match installed {
         Some(installed) => {
             details.push(

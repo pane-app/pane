@@ -1268,7 +1268,7 @@ fn open_installed_color_view(launcher: &Launcher) {
 }
 
 #[test]
-fn an_update_finishing_while_its_view_is_open_closes_the_view_at_once() {
+fn an_update_finishing_while_its_view_is_open_closes_the_old_view_and_reopens_the_command() {
     let dirs = Dirs::new();
     let runtime = Runtime::start().unwrap();
     let (launcher, folder) = installed_color_view(&dirs, &runtime);
@@ -1283,11 +1283,12 @@ fn an_update_finishing_while_its_view_is_open_closes_the_view_at_once() {
 
     block_on(updating);
 
+    // The old copy's view closed at once, and the new code's command
+    // opens again on it, with the update said on the status line: the
+    // pushed view itself is not reopened.
     let view = launcher.view();
-    assert_eq!(
-        (view.query(), &view.status),
-        (Some(""), &Status::Result("Updated Hello to 2.0.0".into()))
-    );
+    assert_eq!(view.screen, Screen::Command);
+    assert_eq!(view.status, Status::Result("Updated Hello to 2.0.0".into()));
     assert_eq!(block_on(runtime.view_count()), 0);
 }
 
