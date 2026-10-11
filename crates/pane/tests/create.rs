@@ -156,11 +156,11 @@ fn the_create_row_opens_the_form_and_creates_builds_and_develops(cx: &mut TestAp
     assert_eq!(
         titles(&settle(&window, cx)),
         [
-            INSTALL_ROW,
-            NPM_ROW,
-            GIT_ROW,
             CREATE_ROW,
             IMPORT_ROW,
+            INSTALL_ROW,
+            GIT_ROW,
+            NPM_ROW,
             SETTINGS_ROW
         ]
     );

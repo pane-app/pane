@@ -658,7 +658,12 @@ fn an_installed_command_is_found_by_its_title_or_its_package_title() {
     );
 
     block_on(launcher.set_query("forec"));
-    assert_eq!(titles(&launcher), ["Forecast"]);
+    // The command's title is the best match; Pane's update-check row
+    // matches the letters fuzzily below it.
+    assert_eq!(
+        titles(&launcher),
+        ["Forecast", "Check for Extension Updates"]
+    );
     // Without its own subtitle a command shows its package title, which
     // matches too.
     block_on(launcher.set_query("weather"));

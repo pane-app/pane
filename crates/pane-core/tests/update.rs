@@ -668,7 +668,7 @@ fn tools_files_as(
     api: &str,
 ) -> Vec<(String, Vec<u8>)> {
     let mut files = vec![("pane-collection.json".to_owned(), index.as_bytes().to_vec())];
-    for (id, path, title, version) in extensions {
+    for (_id, path, title, version) in extensions {
         let manifest = format!(
             r#"{{ "manifestVersion": 1, "title": "{title}", "version": "{version}",
                  "apiVersion": "{api}",

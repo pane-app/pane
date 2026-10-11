@@ -396,9 +396,14 @@ fn a_late_answer_merges_without_ranking_the_static_rows_again() {
 
     // The list is what a full re-rank of the same rows gives: a second
     // launcher, asked the same way, has the slow provider answer while
-    // its list is held, so its publication ranks everything together.
+    // its list is held, so its publication ranks everything together. The
+    // first row is selected, as the merged launcher's publication left
+    // its own: the last install had selected `drills`' row, so the first
+    // row is selected before the query, as the budget's publication
+    // would have left it.
     let other = Dirs::new();
     let (full, _clock) = slow_launcher(&other, &[sums(&other), drills(&other)]);
+    full.select(0);
     search(&full, "0 + 0");
     assert_eq!(titles(&full), ["Slow answer", "Drill 0 + 0", "Sum 0 + 0"]);
     assert_eq!(selected_title(&full).as_deref(), Some("Slow answer"));

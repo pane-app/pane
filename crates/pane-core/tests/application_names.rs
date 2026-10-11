@@ -223,8 +223,10 @@ fn a_program_s_name_finds_its_application_unless_generic_shared_or_given_argumen
         titles_for(launcher, "wt"),
         ["Create Extension…", "Launch Windows Terminal"]
     );
-    // Typing a role finds nothing by it.
-    assert!(titles_for(launcher, "launcher").is_empty());
+    // Typing a role finds nothing by it: `launcher` is a generic program
+    // name, as `setup` is, so it names no application — though its letters
+    // now run through the "Launch" of some rows' titles (#193).
+    assert!(!titles_for(launcher, "launcher").contains(&"Launch Space Game".to_owned()));
     assert!(titles_for(launcher, "setup").is_empty());
     // A name two applications share picks neither, though their titles
     // still find them.

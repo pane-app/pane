@@ -358,9 +358,10 @@ function Wait-For($file, $text, [bool]$present, $tries = 100) {
 
 # The Rust, JavaScript and TypeScript samples are no commands of Pane's
 # own (#162): installed with `pane --install` into a data folder of their
-# own, they are root's first three rows, in install order (Rust sample,
-# JavaScript sample, TypeScript sample), then Pane's install rows. The
-# first phase and the root search phase run there.
+# own. The blank query's order (#199) ranks Pane's own rows among the
+# commands by title, so the samples are not root's first rows: each is
+# opened by typing its name. The first phase and the root search phase
+# run there.
 $samplesData = Join-Path $OutDir "samples-data"
 if (Test-Path $samplesData) { Remove-Item -Recurse -Force $samplesData }
 $env:PANE_DATA_DIR = $samplesData
@@ -376,14 +377,21 @@ $process = Start-Pane "stderr.log"
 Capture "1-root.png"
 Check "1-root.png" "hint"   # the hint line: text renders
 # Open each sample command (Rust, JavaScript, TypeScript) and run an item.
-foreach ($index in 0..2) {
-    for ($i = 0; $i -lt $index; $i++) { Send "{DOWN}" }
-    Send "{ENTER}"; Start-Sleep -Seconds 3
+# Typing the command's name narrows root to it and Enter opens the best
+# match, as the root search phase below does.
+$index = 0
+foreach ($sample in "Rust sample", "JavaScript sample", "TypeScript sample") {
+    Send $sample; Start-Sleep -Seconds 1
+    # The Rust sample also answers the query itself (#285): its answer card
+    # takes the first row, so a Down lands on the command row - and clamps
+    # at the single row of the samples that answer nothing.
+    Send "{DOWN}"; Start-Sleep -Milliseconds 120; Send "{ENTER}"; Start-Sleep -Seconds 3
     Capture "$($index + 2)-command-$index.png"
     Send "{DOWN}"; Start-Sleep -Milliseconds 120; Send "{ENTER}"; Start-Sleep -Seconds 2
     Capture "$($index + 2)-result-$index.png"
     Check "$($index + 2)-result-$index.png" "success"   # the guest's answer
     Send "{ESC}"; Start-Sleep -Seconds 1
+    $index++
 }
 Capture "5-back-to-root.png"
 # Each command must have answered from its own guest, not the same view twice.
@@ -392,8 +400,10 @@ if ($LASTEXITCODE -ne 0) { throw "screenshot check failed: result screenshots ar
 
 # The Rust command's form (its fifth item): submitting it empty is rejected
 # and focus returns to the name, so typing there and choosing a greeting with
-# Tab and Down makes the guest answer.
-Send "{ENTER}"; Start-Sleep -Seconds 3
+# Tab and Down makes the guest answer. The command is opened by typing its
+# name, as the samples above are.
+Send "rust sample"; Start-Sleep -Seconds 1
+Send "{DOWN}"; Start-Sleep -Milliseconds 120; Send "{ENTER}"; Start-Sleep -Seconds 3
 Send "{DOWN}{DOWN}{DOWN}{DOWN}{ENTER}"; Start-Sleep -Seconds 1
 Capture "6-form.png"
 Send "{ENTER}"; Start-Sleep -Seconds 2
@@ -456,8 +466,10 @@ Focus-Pane $process
 
 # The Rust command's seventh item is declared for Windows only, its eighth
 # for macOS and Linux only. Here the first runs and the second is explained
-# without running.
-Send "{ENTER}"; Start-Sleep -Seconds 3
+# without running. The command is opened by typing its name, as the samples
+# above are.
+Send "rust sample"; Start-Sleep -Seconds 1
+Send "{DOWN}"; Start-Sleep -Milliseconds 120; Send "{ENTER}"; Start-Sleep -Seconds 3
 Send "{DOWN}{DOWN}{DOWN}{DOWN}{DOWN}{DOWN}{ENTER}"; Start-Sleep -Seconds 2
 Capture "13-windows-only.png"
 Check "13-windows-only.png" "success"   # Windows: the guest's answer
@@ -519,7 +531,7 @@ Press-Named "Settings sample" -Toggle   # its switch: on
 Wait-Shown "Enabled Settings sample"
 Capture "19-enabled.png"
 Close-Settings
-Send "{DOWN}"   # Greeting, after Rust sample
+Send "greeting"; Start-Sleep -Seconds 1   # Greeting, wherever the blank order places it
 Send "{ENTER}"; Start-Sleep -Seconds 3
 Send "{DOWN}{DOWN}{ENTER}"; Start-Sleep -Seconds 2   # "Greet me"
 Capture "20-greeted.png"
@@ -533,8 +545,10 @@ $process = Start-Pane "stderr-color.log"
 # package's color command: a designed view whose canvas the guest draws:
 # Right chooses purple, and a click on the dark green swatch chooses it. The
 # chosen color fills its swatch and the preview, far more pixels than any
-# other swatch covers.
-Send "{ENTER}"; Start-Sleep -Seconds 3
+# other swatch covers. The command is opened by typing its name, as the
+# samples above are.
+Send "rust sample"; Start-Sleep -Seconds 1
+Send "{DOWN}"; Start-Sleep -Milliseconds 120; Send "{ENTER}"; Start-Sleep -Seconds 3
 Send "{DOWN}{DOWN}{DOWN}{DOWN}{DOWN}{ENTER}"; Start-Sleep -Seconds 2
 Capture "21-color.png"
 Check "21-color.png" "1e88e5" 3000   # blue, chosen when the view opens
@@ -606,8 +620,8 @@ Extension-Action "Dev" "Reload"
 Wait-Shown "Reloaded Dev"
 Capture "34-reloaded.png"
 Close-Settings
-Send "{DOWN 4}"   # Dev sample
-Send "{ENTER}"; Start-Sleep -Seconds 3
+Send "dev sample"; Start-Sleep -Seconds 1   # wherever the blank order places it
+Send "{DOWN}"; Start-Sleep -Milliseconds 120; Send "{ENTER}"; Start-Sleep -Seconds 3   # below the answer card
 Send "{ENTER}"; Start-Sleep -Seconds 2   # "Say hello"
 Capture "35-dev-after.png"
 Check "35-dev-after.png" "success"   # "Hello from the JavaScript guest"
@@ -623,8 +637,8 @@ Extension-Action "Dev" "Reload"
 Wait-Shown "Dev was not reloaded" -Prefix
 Capture "36-not-reloaded.png"
 Close-Settings
-Send "{DOWN 4}"
-Send "{ENTER}"; Start-Sleep -Seconds 3
+Send "dev sample"; Start-Sleep -Seconds 1
+Send "{DOWN}"; Start-Sleep -Milliseconds 120; Send "{ENTER}"; Start-Sleep -Seconds 3   # below the answer card
 Send "{ENTER}"; Start-Sleep -Seconds 2
 Capture "37-still-running.png"
 python "$PSScriptRoot/check_screenshot.py" --same (Join-Path $OutDir "35-dev-after.png") (Join-Path $OutDir "37-still-running.png")
@@ -650,7 +664,7 @@ if (-not (Select-String -Quiet -SimpleMatch '"start-attempted": "yes"' (Join-Pat
 # fifth items save a note (content) and sign in (a local credential), and its
 # sixth shows all four.
 $process = Start-Pane "stderr-kept.log"
-Send "{DOWN}"   # Greeting
+Send "greeting"; Start-Sleep -Seconds 1   # Greeting, wherever the blank order places it
 Send "{ENTER}"; Start-Sleep -Seconds 3
 Send "{DOWN 3}"
 Send "{ENTER}"; Start-Sleep -Seconds 2   # "Save a note"
@@ -687,7 +701,7 @@ Press-Named "Clear cache"
 Wait-Shown "Cleared the cache of Settings sample"
 Capture "42-cache-cleared.png"
 Close-Settings
-Send "{DOWN}"   # Greeting
+Send "greeting"; Start-Sleep -Seconds 1   # Greeting, wherever the blank order places it
 Send "{ENTER}"; Start-Sleep -Seconds 3
 Send "{DOWN 5}"
 Send "{ENTER}"; Start-Sleep -Seconds 2   # "Show what Pane keeps"

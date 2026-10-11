@@ -305,6 +305,22 @@ impl Launcher {
         self
     }
 
+    /// Tells the window through `changes` what the launcher changed in
+    /// the background, without local development: a publication root
+    /// search's budget or a late answer's merge made (#201), a dynamic
+    /// row's registration, a folder watcher's change. What
+    /// [`with_development`](Self::with_development) wires is what the
+    /// binary uses; a window without any sender learns only what the
+    /// calls it awaits made.
+    pub fn with_changes(self, changes: ChangeSender) -> Self {
+        // See `with_development` for why the sender is written into the
+        // shared configuration rather than a field. The builder stays as
+        // it is: this adds the sender alone.
+        self.developing.config().changes = Some(changes);
+        self.report_failures();
+        self
+    }
+
     /// Develops the installed package with `identity`: from now on, each
     /// save in its source folder builds it and, if the build succeeds,
     /// reloads it (see the module documentation). Await the returned future

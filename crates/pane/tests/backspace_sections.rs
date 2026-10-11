@@ -186,7 +186,16 @@ fn open_launcher(
 ) -> (Entity<LauncherWindow>, &mut VisualTestContext) {
     cx.executor().allow_parking();
     cx.update(pane::bind_keys);
-    cx.add_window_view(|window, cx| LauncherWindow::new(launcher, window, cx))
+    // The window learns what the launcher changed in the background — a
+    // late answer's merge (#201) — as the binary's window does; without it
+    // the last frame stays what the awaited calls left.
+    let (sender, changes) = pane_core::changes::channel();
+    let launcher = launcher.with_changes(sender);
+    cx.add_window_view(|window, cx| {
+        let mut launcher_window = LauncherWindow::new(launcher, window, cx);
+        launcher_window.follow_changes(changes, window, cx);
+        launcher_window
+    })
 }
 
 /// The window over `commands` root commands, on root search.
@@ -483,18 +492,27 @@ fn backspace_does_nothing_in_root_search_and_never_from_a_form(cx: &mut TestAppC
     cx.simulate_keystrokes("backspace");
     assert_eq!(settle(&window, cx).query(), Some("command 0"));
 
-    // A form's fields — an argument's among them — keep the key.
+    // A command's fields — an argument's among them — keep the key.
     let data = tempfile::tempdir().unwrap();
     let (window, cx) = open_installed(cx, vec![], data.path(), "sample-arguments");
     cx.simulate_input("greet");
     settle(&window, cx);
     cx.simulate_keystrokes("enter");
     let view = settle(&window, cx);
-    assert!(view.form().is_some(), "{:?}", view.screen);
+    // The no-view command's argument fields show after the query (#205),
+    // Enter taking the focus to the first blank one.
+    assert!(
+        matches!(view.screen, Screen::Root { .. }),
+        "{:?}",
+        view.screen
+    );
     assert_eq!(focused_label(cx).as_deref(), Some("Name"));
     cx.simulate_keystrokes("backspace");
     let view = settle(&window, cx);
-    assert!(view.form().is_some(), "the form stays open");
+    assert!(
+        matches!(view.screen, Screen::Root { .. }),
+        "the fields stay"
+    );
     assert_eq!(focused_label(cx).as_deref(), Some("Name"));
 }
 
@@ -767,7 +785,9 @@ fn the_actions_panel_jumps_entries_and_groups(cx: &mut TestAppContext) {
     // "Share" and "Danger" sections.
     let runs = panel_runs;
 
-    // Five entries at a time, clamped at the last.
+    // Five entries at a time, clamped at the last. Up lands on the
+    // page's first entry, as the downs within the same panel left it:
+    // each `runs` call opens the panel afresh.
     assert_eq!(
         runs("alt-down", &window, cx),
         Status::Result("Copy Link: Alpha note".into())
@@ -777,7 +797,7 @@ fn the_actions_panel_jumps_entries_and_groups(cx: &mut TestAppContext) {
         Status::Result("Delete: Alpha note".into())
     );
     assert_eq!(
-        runs("alt-up", &window, cx),
+        runs("alt-down alt-down alt-up", &window, cx),
         Status::Result("Duplicate: Alpha note".into())
     );
 
@@ -836,10 +856,13 @@ fn the_emacs_pair_moves_the_selection_and_the_argument_fields(cx: &mut TestAppCo
     );
     let (window, cx) = open_installed(cx, vec![], data.path(), "sample-arguments");
 
+    // The install left the command's row selected, wherever the blank
+    // query's collated order places it (#199); the pair moves by one.
+    let before = settle(&window, cx).selected;
     cx.simulate_keystrokes(EMACS_NEXT);
-    assert_eq!(settle(&window, cx).selected, Some(1));
+    assert_eq!(settle(&window, cx).selected, before.map(|at| at + 1));
     cx.simulate_keystrokes(EMACS_PREVIOUS);
-    assert_eq!(settle(&window, cx).selected, Some(0));
+    assert_eq!(settle(&window, cx).selected, before);
 
     // The argument form: Left and Right between its fields.
     cx.simulate_input("greet");

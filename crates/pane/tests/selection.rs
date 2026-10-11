@@ -107,7 +107,16 @@ fn open_launcher(
 ) -> (Entity<LauncherWindow>, &'_ mut VisualTestContext) {
     cx.executor().allow_parking();
     cx.update(pane::bind_keys);
-    cx.add_window_view(|window, cx| LauncherWindow::new(launcher, window, cx))
+    // The window learns what the launcher changed in the background — a
+    // late answer's merge (#201) — as the binary's window does; without it
+    // the last frame stays what the awaited calls left.
+    let (sender, changes) = pane_core::changes::channel();
+    let launcher = launcher.with_changes(sender);
+    cx.add_window_view(|window, cx| {
+        let mut launcher_window = LauncherWindow::new(launcher, window, cx);
+        launcher_window.follow_changes(changes, window, cx);
+        launcher_window
+    })
 }
 
 /// The launcher window over `commands` registered, settled on its first

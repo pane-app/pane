@@ -93,7 +93,12 @@ fn a_package_named_in_the_npm_form_is_previewed_installed_and_run(cx: &mut TestA
         view.status,
         Status::Result("Installed Greeter from npm".into())
     );
-    assert_eq!(titles(&view)[0], "Greeter from npm");
+    // The installed command is the selected row, wherever the blank
+    // query's order places it: Enter runs it.
+    assert_eq!(
+        view.selected.map(|index| view.rows[index].title.as_str()),
+        Some("Greeter from npm")
+    );
 
     // Named again, it is offered as an Update, whose row stays in view below
     // the npm package's longer details.

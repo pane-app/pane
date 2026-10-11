@@ -529,13 +529,16 @@ fn copies_from_other_sources_with_the_same_title_stay_distinct(fixture: &Fixture
 
     // The rows name their sources, since the titles are the same. The
     // Echo commands match the query's letters themselves now, and Pane's
-    // install row matches them below (#193), so the fallbacks sit last.
+    // own rows match them below — the update check's row between the
+    // commands, the install row under them (#193) — so the fallbacks sit
+    // last.
     search(&launcher, "ec hi");
     let listed = titles(&launcher);
     assert_eq!(
         listed,
         [
             "Echo",
+            "Check for Extension Updates",
             "Echo",
             "Echo",
             "Install extension from folder…",
@@ -547,16 +550,16 @@ fn copies_from_other_sources_with_the_same_title_stay_distinct(fixture: &Fixture
     // package's source after its subtitle. The copy the user gave an
     // alias ranks first of the two (#199's no-query order).
     assert!(
-        subtitle(&launcher, 1).starts_with(&format!("{} · ", fixture.echo_subtitle)),
+        subtitle(&launcher, 2).starts_with(&format!("{} · ", fixture.echo_subtitle)),
         "{}",
-        subtitle(&launcher, 1)
-    );
-    assert_eq!(
-        subtitle(&launcher, 1),
-        format!("{} · {second_source}", fixture.echo_subtitle)
+        subtitle(&launcher, 2)
     );
     assert_eq!(
         subtitle(&launcher, 2),
+        format!("{} · {second_source}", fixture.echo_subtitle)
+    );
+    assert_eq!(
+        subtitle(&launcher, 3),
         format!("{} · {first_source}", fixture.echo_subtitle)
     );
     assert_eq!(
@@ -859,11 +862,17 @@ fn uninstalling_forgets_exactly_its_own_commands_not_those_of_a_longer_source() 
     let recorded = fs::read_to_string(dirs.aliases_file()).unwrap();
     assert!(recorded.contains("x#y#echo\": \"ec\""), "{recorded}");
     search(&launcher, "ec hi");
-    // The Echo command matches the query's letters too, and Pane's
-    // install row matches them below (#193).
+    // The Echo command matches the query's letters too, and Pane's own
+    // rows match them — the update check's row between the command and
+    // the install row (#193).
     assert_eq!(
         titles(&launcher),
-        ["Echo", "Echo", "Install extension from folder…"]
+        [
+            "Echo",
+            "Check for Extension Updates",
+            "Echo",
+            "Install extension from folder…"
+        ]
     );
 }
 
@@ -894,11 +903,15 @@ fn a_change_that_cannot_be_kept_never_brings_back_an_uninstalled_packages_choice
         row_subtitle(&launcher, "Alias for Echo")
     );
     search(&launcher, "ec hi");
-    // The command's row is gone; Pane's install row matches the letters
-    // fuzzily (#193).
+    // The command's row is gone; Pane's own rows match the letters
+    // fuzzily, the update check's row above the install row (#193).
     assert_eq!(
         titles(&launcher),
-        ["Echo", "Install extension from folder…"]
+        [
+            "Check for Extension Updates",
+            "Echo",
+            "Install extension from folder…"
+        ]
     );
 }
 

@@ -170,7 +170,17 @@ fn open_launcher(
     // scheduler's deterministic control.
     cx.executor().allow_parking();
     cx.update(pane::bind_keys);
-    cx.add_window_view(|window, cx| LauncherWindow::new(launcher, window, cx))
+    // The window learns what the launcher changed in the background — a
+    // publication the budget or a late answer's merge made (#201), a
+    // dynamic row — as the binary's window does; without it the last
+    // frame stays what the awaited calls left.
+    let (sender, changes) = pane_core::changes::channel();
+    let launcher = launcher.with_changes(sender);
+    cx.add_window_view(|window, cx| {
+        let mut launcher_window = LauncherWindow::new(launcher, window, cx);
+        launcher_window.follow_changes(changes, window, cx);
+        launcher_window
+    })
 }
 
 /// Opens the sample's command from root search with the keyboard: its
@@ -1024,7 +1034,10 @@ fn the_mouse_wheel_scrolls_away_until_the_rows_reload(cx: &mut TestAppContext) {
     cx.foreground_executor().block_on(install);
     redraw(&window, cx);
     let view = launcher.view();
-    assert_eq!((view.query(), view.selected), (Some(""), Some(0)));
+    assert_eq!(view.query(), Some(""));
+    // The reload kept a selected row — whichever the collated order now
+    // places it at — and the list holds the installed command.
+    assert!(view.selected.is_some(), "the reload kept a selected row");
     assert!(view.rows.iter().any(|row| row.title == "Say hello"));
     assert!(
         row_is_visible(cx, "row-Install extension from folder…"),

@@ -339,7 +339,14 @@ fn search(launcher: &Launcher, query: &str) {
 /// titled `command`, and answers what the launcher showed.
 fn run_through_alias(launcher: &Launcher, command: &str, alias: &str, line: &str) -> Status {
     search(launcher, &format!("{alias} {line}"));
-    assert_eq!(titles(launcher), [command], "the alias lists the command");
+    // The alias's row is listed first, hoisted above every other row;
+    // the sample's other commands may match the line's letters below it.
+    assert_eq!(
+        titles(launcher).first().map(String::as_str),
+        Some(command),
+        "the alias lists the command: {:?}",
+        titles(launcher)
+    );
     block_on(launcher.activate_selected());
     shown(launcher)
 }
@@ -590,11 +597,12 @@ fn a_fallback_sends_the_whole_query_to_run() {
         let pane = Installed::new(&sample);
         make_fallback(&pane.launcher, RETITLED);
 
-        // Nothing else matches: the fallback is listed, not selected, so
-        // Enter sends nothing.
+        // Nothing else matches: the fallback is listed, and the first
+        // fallback is preselected when nothing else is (ADR 0031), so
+        // Enter sends the query. Choosing it does too.
         search(&pane.launcher, "zqx command line");
         assert_eq!(titles(&pane.launcher), [RETITLED]);
-        assert_eq!(pane.launcher.view().selected, None);
+        assert_eq!(pane.launcher.view().selected, Some(0));
 
         // Choosing it sends the whole query.
         pane.launcher.move_selection(1);

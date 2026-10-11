@@ -217,8 +217,12 @@ fn a_slow_root_search_shows_the_late_loading_bar_and_fades_it_away(cx: &mut Test
     );
 
     // The fixture's answer arrives: the work is over, the line fades away
-    // from where it was, and the window is idle again.
-    let view = until(&window, cx, |view| !view.rows.is_empty());
+    // from where it was, and the window is idle again. The query's list
+    // is held while the provider answers (#201), so the wait is for the
+    // answer's row, not for the rows to stop being the blank query's.
+    let view = until(&window, cx, |view| {
+        view.rows.iter().any(|row| row.title == "Slow answer")
+    });
     assert_eq!(titles(&view), ["Slow answer"]);
     frame(cx, SOME);
     let (strength, _) = bar(&window, cx).expect("the line still shows");

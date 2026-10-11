@@ -107,7 +107,9 @@ impl Watchers {
             .name("pane-watchers".into())
             .spawn(move || until_stopped(launcher, watchers));
         if let Err(error) = started {
-            eprintln!("Pane cannot run extension folder watchers in the background: {error}");
+            crate::diagnostic!(
+                "Pane cannot run extension folder watchers in the background: {error}"
+            );
         }
     }
 
@@ -427,7 +429,7 @@ fn start_delivery(watchers: &Watchers, launcher: &WeakLauncher, delivery: Delive
             wake.finished();
         });
     if let Err(error) = started {
-        eprintln!("Pane could not deliver a folder watcher's changes: {error}");
+        crate::diagnostic!("Pane could not deliver a folder watcher's changes: {error}");
         watchers.wake.finished();
     }
 }
