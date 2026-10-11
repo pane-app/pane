@@ -48,7 +48,18 @@ use rows::{select_title, titles};
 use settle::wait_for_merges;
 use system::{Done, RecordingSystem};
 
-/// The Files package's files, as the artifact source serves them.
+fn built(path: &str) -> PathBuf {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../target/guests")
+        .join(path);
+    assert!(
+        path.exists(),
+        "{} is missing; run `cargo xtask guests`",
+        path.display()
+    );
+    path
+}
+
 /// A package that searches Pane's file index, in one language.
 struct Package {
     /// The assembled package under `target/guests/packages`.
