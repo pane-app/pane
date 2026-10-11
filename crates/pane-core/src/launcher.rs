@@ -6379,6 +6379,7 @@ fn asked_at(state: &State) -> WallTime {
 /// (#197): an installed command names its package's source after its
 /// subtitle, as the send rows already do; an indexed result's own
 /// subtitle is what its provider gave to tell it apart.
+#[derive(Clone)]
 enum Told {
     /// The package the command was installed from.
     Source(PackageIdentity),

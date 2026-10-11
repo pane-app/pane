@@ -38,6 +38,7 @@ use std::pin::Pin;
 
 use super::presentation::Section;
 use super::{Entry, Launcher, Pending, Row, Screen, State, first_index};
+use crate::host_settings::SearchSensitivity;
 use crate::runtime::{
     Accessory, DesignedHandler, DesignedTree, ItemLook, ListNode, Node, NodeKind,
 };
@@ -270,7 +271,7 @@ fn matches(
         query,
         std::iter::once(search::Candidate {
             keys: &keys,
-            kind: search::Kind::Item,
+            kind: search::Kind::Command,
             provider: 0,
             learned: None,
         }),
