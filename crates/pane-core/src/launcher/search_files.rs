@@ -531,7 +531,7 @@ impl Launcher {
     /// Pane's registered Files command, whose package runs and uses the
     /// file index, and this launcher keeps one: the one command that opens
     /// on its own search field, which Pane fills browsing the index.
-    pub(super) fn registered(state: &State, component: &Path, command: &str) -> bool {
+    pub(super) fn registered_files(state: &State, component: &Path, command: &str) -> bool {
         let Some(package) = owner(&state.packages, component) else {
             return false;
         };
@@ -551,7 +551,7 @@ impl Launcher {
         component: &Path,
         command: &str,
     ) -> bool {
-        if !Self::registered(state, component, command) {
+        if !Self::registered_files(state, component, command) {
             return false;
         }
         let owner = owner(&state.packages, component)

@@ -36,7 +36,7 @@ use super::{
     Entry, Launcher, LauncherView, Opening, Pending, Row, Screen, State, Status, owner, reload,
 };
 use crate::extension_log::{ExtensionLogs, LogLevel, LogSource, LogStream};
-use crate::packages::{CommandMode, PackageIdentity};
+use crate::packages::PackageIdentity;
 use crate::runtime::CallError;
 
 /// What the overlay's Retry row does.

@@ -5252,61 +5252,6 @@ impl Host {
         outcome.map(|_: ()| ())
     }
 
-    async fn indexed_results(
-        &self,
-        path: &Path,
-        data: Option<PackageData>,
-    ) -> Result<Vec<IndexedResult>, CallError> {
-        let chain = self.chain();
-        let _turn = self.turn_for(path, &chain).await?;
-        self.instance(path, data).await?;
-        let exported = self
-            .instances
-            .borrow()
-            .get(path)
-            .is_some_and(|instance| instance.indexed_results.is_some());
-        if !exported {
-            return Err(CallError::Interface(format!(
-                "it does not export {INDEXED_RESULTS_INTERFACE}"
-            )));
-        }
-        let result = self
-            .run_guest(path, &chain, async |instance| {
-                let provider = instance
-                    .indexed_results
-                    .as_ref()
-                    .expect("checked above")
-                    .pane_extension_indexed_results();
-                instance
-                    .store
-                    .run_concurrent(async |store| provider.call_results(store).await)
-                    .await
-            })
-            .await?;
-        let results = self.settle(path, result, CallError::Guest)?;
-        Ok(results
-            .into_iter()
-            .map(|result| IndexedResult {
-                listing: ResultListing {
-                    id: result.id,
-                    title: result.title,
-                    subtitle: result.subtitle,
-                },
-                alternate_titles: result.alternate_titles,
-                keywords: result.keywords,
-                action: match result.action {
-                    indexed_results::IndexedAction::OpenApplication(id) => {
-                        IndexedAction::OpenApplication(id)
-                    }
-                    indexed_results::IndexedAction::Open(open) => IndexedAction::Open {
-                        target: open.target,
-                        application: open.application,
-                    },
-                },
-            })
-            .collect())
-    }
-
     /// Runs `call` on the live instance of `path`, in `chain`, serving the
     /// operation calls its guest makes while it runs. Without a live
     /// instance (a view's instance has stopped) it is
@@ -5640,7 +5585,8 @@ impl Host {
         // A call the guest sent but did not wait for has no frame to serve
         // it.
         while let Ok(stranded) = calls.try_recv() {
-            let _ = stranded.reply.send(Err(operations::outside_a_call()));
+            let answer = stranded.unanswered(operations::outside_a_call());
+            let _ = stranded.reply.send(answer);
         }
         instance.calls = Some(calls);
         match result {

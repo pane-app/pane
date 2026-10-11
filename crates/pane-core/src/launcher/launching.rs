@@ -208,7 +208,6 @@ impl Launcher {
         let Opening {
             component,
             command,
-            search,
             launch,
             ..
         } = opening;
@@ -254,8 +253,8 @@ impl Launcher {
                 super::Opening {
                     component: component.clone(),
                     command: command.clone(),
-                    search,
                     no_view: true,
+                    designed: false,
                     launch: launch.clone(),
                     initial_search: None,
                 },

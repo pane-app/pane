@@ -253,14 +253,30 @@ fn item_of(item: &Node, at: usize) -> (String, String, Option<String>, Vec<Strin
     }
 }
 
-/// Whether the item (`title`, `subtitle`, `keywords`) matches `query`:
-/// the root-search matcher's sensitivity, every word found somewhere.
-fn matches(query: &Query, title: &str, subtitle: Option<&str>, keywords: &[String]) -> bool {
+/// Whether the item (`title`, `subtitle`, `keywords`) matches `query` at
+/// `sensitivity`: the root-search matcher's, every word found somewhere.
+fn matches(
+    query: &Query,
+    sensitivity: SearchSensitivity,
+    title: &str,
+    subtitle: Option<&str>,
+    keywords: &[String],
+) -> bool {
     if query.text.trim().is_empty() {
         return true;
     }
     let keys = Keys::new(title, subtitle, None).with_alternates(&[], keywords);
-    !search::ranked_matches(query, std::iter::once(&keys)).is_empty()
+    !search::ranked_matches(
+        query,
+        std::iter::once(search::Candidate {
+            keys: &keys,
+            kind: search::Kind::Item,
+            provider: 0,
+            learned: None,
+        }),
+        sensitivity,
+    )
+    .is_empty()
 }
 
 impl Launcher {
@@ -358,6 +374,7 @@ impl Launcher {
             }
             let searching = list.on_search_text.is_some();
             let query = Query::new(&held.search);
+            let sensitivity = state.sensitivity;
             let selected_key = held.selected.clone();
             // The items of each group, filtered by the held search (a
             // self-searching list is never filtered: its view answers the
@@ -373,7 +390,9 @@ impl Launcher {
                 for item in group.items {
                     let at = rows.len();
                     let (key, title, subtitle, keywords) = item_of(item, at);
-                    if !searching && !matches(&query, &title, subtitle.as_deref(), &keywords) {
+                    if !searching
+                        && !matches(&query, sensitivity, &title, subtitle.as_deref(), &keywords)
+                    {
                         continue;
                     }
                     let mut designed = designed_row(item, group.shape);

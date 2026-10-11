@@ -3944,12 +3944,6 @@ impl Launcher {
                 }
                 Pending::Open(opening)
             }
-            Entry::Run(callback) => {
-                state.view.status = Status::Running {
-                    since: Instant::now(),
-                };
-                Pending::Run(callback)
-            }
             Entry::Actions(listed) => match listed.actions[0].callback() {
                 Some(callback) => {
                     state.view.status = Status::Running {
@@ -5688,7 +5682,7 @@ impl Launcher {
             // search field (#177): a command's own search is the designed
             // List's search-text event now (#240), and no command of a
             // package opens one.
-            let search = Self::registered(state, &component, command.as_str());
+            let search = Self::registered_files(state, &component, command.as_str());
             match result {
                 Ok(view) => {
                     // A command the query's alias named and a space opened
@@ -6355,6 +6349,73 @@ async fn off_thread<T: Send + 'static>(work: impl FnOnce() -> T + Send + 'static
         let _ = reply.send(work());
     });
     response.await.expect("package file work panicked")
+}
+
+/// The user's home folder, which `~` in a typed path resolves to
+/// (#195), as the environment names it: `USERPROFILE` on Windows, `HOME`
+/// elsewhere. The file index's configuration replaces it with the home it
+/// is built over (see [`Launcher::with_file_index`]), which is the same
+/// folder on a real Pane; the typed folder the user names is resolved with
+/// the same home ([`crate::typed_folder`]).
+pub(crate) fn home_folder() -> Option<PathBuf> {
+    let var = if cfg!(windows) { "USERPROFILE" } else { "HOME" };
+    std::env::var_os(var).map(PathBuf::from)
+}
+
+/// When a query is asked about, by the clock root search's own dates are
+/// shown by (a test's, in a test): the moment the user stopped at the
+/// query, and how far the local time there is from UTC, so a command can
+/// answer about the local date or time (#196). The whole search shares
+/// one moment, whatever a slow command delays.
+fn asked_at(state: &State) -> WallTime {
+    let milliseconds = state.clock.now();
+    WallTime {
+        milliseconds,
+        offset: state.clock.local_offset(milliseconds),
+    }
+}
+
+/// How a row tells itself apart from another with the same folded title
+/// (#197): an installed command names its package's source after its
+/// subtitle, as the send rows already do; an indexed result's own
+/// subtitle is what its provider gave to tell it apart.
+enum Told {
+    /// The package the command was installed from.
+    Source(PackageIdentity),
+    /// Nothing: the row already tells itself apart.
+    Apart,
+}
+
+/// One root result as the search module ranks it (see `Candidate`): the
+/// result's keys, what kind of thing it is, the position of the provider
+/// that supplied it among the others, and what root search learned about
+/// it (#199), looked up by its row id.
+fn candidate<'a>(
+    result: &'a RootResult,
+    kind: search::Kind,
+    provider: usize,
+    learned: &'a HashMap<String, search::Learned>,
+) -> Candidate<'a> {
+    Candidate {
+        keys: &result.keys,
+        kind,
+        provider,
+        learned: learned.get(&result.row.id),
+    }
+}
+
+/// What kind of thing a root result is, as the comparator ranks kinds:
+/// commands above links, above applications, above files. Folders,
+/// fallbacks and the like are never ranked by the comparator — they keep
+/// their places below the results — so they take the lowest kind, which
+/// the order names for files.
+fn kind(entry: &Entry) -> search::Kind {
+    match presentation::kind(entry) {
+        Some(presentation::RowKind::Command) => search::Kind::Command,
+        Some(presentation::RowKind::Link) => search::Kind::Link,
+        Some(presentation::RowKind::Application) => search::Kind::Application,
+        _ => search::Kind::File,
+    }
 }
 
 /// The installed packages as the operation router resolves calls against
