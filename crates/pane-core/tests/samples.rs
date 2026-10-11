@@ -2,9 +2,9 @@
 //! in Rust, JavaScript or TypeScript: the same items, answers and errors
 //! through the launcher's public interface, a native WASI 0.3 async wait,
 //! fresh state per instance, a form the guest validates, a color picker the
-//! guest draws and changes on keys and pointer input, a root result
-//! computed from the query, WASI 0.3-only imports, and memory within the
-//! cap Pane puts on each guest.
+//! guest draws as the canvas of its designed view and changes on keys and
+//! pointer input, a root result computed from the query, WASI 0.3-only
+//! imports, and memory within the cap Pane puts on each guest.
 //!
 //! Components come from `cargo xtask guests`; the JavaScript and TypeScript
 //! ones are the prebuilt components in `guests/prebuilt/`.
@@ -13,9 +13,8 @@ use std::path::PathBuf;
 
 use futures::executor::block_on;
 use pane_core::{
-    CallError, Choice, CommandRegistration, CustomViewRole, FieldKind, FieldValue, FormError,
-    FormField, GUEST_MEMORY, Key, Launcher, Point, Rgb, Runtime, Screen, Shape, Status,
-    Unavailable, ViewEvent,
+    CallError, Canvas, CanvasOp, CanvasRole, CommandRegistration, DesignedEvent, DesignedHandler,
+    FormValue, GUEST_MEMORY, Launcher, Node, NodeKind, Paint, Runtime, Screen, Status, Unavailable,
 };
 use wasmtime::component::Component;
 use wasmtime::{Config, Engine};
@@ -79,7 +78,6 @@ impl Sample {
                 subtitle: None,
                 component: self.path(),
                 takes_query: false,
-                search: false,
                 keywords: Vec::new(),
                 when: pane_core::CommandWhen::Always,
                 matches: pane_core::CommandMatches::Title,
@@ -115,32 +113,132 @@ impl Sample {
         shown(launcher)
     }
 
-    /// A launcher with this sample's form opened.
+    /// A launcher with this sample's form command opened (#241: the
+    /// "Greet someone" command of the same package, a designed view, like
+    /// the color command's — only an installed command can be launched).
     fn open_form(&self) -> Launcher {
-        let launcher = self.open();
-        assert_eq!(self.run(&launcher, "form"), Status::Idle);
+        let data = tempfile::tempdir().unwrap();
+        let launcher =
+            Launcher::with_packages(Runtime::start(), vec![], data.path().join("extensions"));
+        let folder = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../target/guests/packages")
+            .join(self.component.replace('_', "-"));
+        block_on(launcher.install_package(&folder));
+        while !matches!(launcher.view().screen, Screen::Root { .. }) {
+            launcher.back();
+        }
+        block_on(launcher.set_query("greet someone"));
+        let index = launcher
+            .view()
+            .rows
+            .iter()
+            .position(|row| row.id.ends_with("#form"))
+            .expect("the form command is listed");
+        launcher.select(index);
+        block_on(launcher.activate_selected());
         assert!(
-            matches!(launcher.view().screen, Screen::Form(_)),
+            matches!(launcher.view().screen, Screen::DesignedView(_)),
             "{:?}",
             launcher.view().screen
         );
         launcher
     }
 
-    /// Fills in the form's name and greeting, submits it and returns the status.
+    /// Fills in the form's name and greeting, submits it and returns what
+    /// the view draws: its answer text, or the field's error.
     fn submit(&self, launcher: &Launcher, name: &str, greeting: &str) -> Status {
-        launcher.set_field_value("name", name);
-        launcher.set_field_value("greeting", greeting);
-        block_on(launcher.submit_form());
+        let submitting = launcher.submit_designed_form(
+            None,
+            vec![
+                ("name".to_owned(), FormValue::Text(name.to_owned())),
+                ("greeting".to_owned(), FormValue::Text(greeting.to_owned())),
+            ],
+        );
+        block_on(submitting);
         launcher.view().status
     }
 
-    /// A launcher with this sample's color picker opened.
+    /// The open form view's field keyed `key`: its placeholder, error and
+    /// title, as the tree's props name them (#241: a field's title is over
+    /// its control, its error under it, its placeholder inside it — none
+    /// a text node).
+    fn field(
+        &self,
+        launcher: &Launcher,
+        key: &str,
+    ) -> (Option<String>, Option<String>, Option<String>) {
+        let view = launcher.view();
+        let Screen::DesignedView(shown) = &view.screen else {
+            panic!("no form view: {:?}", view.screen)
+        };
+        fn at(
+            node: &pane_core::Node,
+            key: &str,
+            into: &mut Option<(Option<String>, Option<String>, Option<String>)>,
+        ) {
+            let field = match &node.kind {
+                pane_core::NodeKind::TextInput(input) => Some((
+                    input.placeholder.clone(),
+                    input.field.error.clone(),
+                    input.field.title.clone(),
+                )),
+                _ => None,
+            };
+            if node.key.as_deref() == Some(key) {
+                if let Some(field) = field {
+                    *into = Some(field);
+                }
+                return;
+            }
+            for child in &node.children {
+                at(child, key, into);
+            }
+        }
+        let mut found = None;
+        at(&shown.tree.root, key, &mut found);
+        found.unwrap_or_else(|| panic!("no field {key} in the form"))
+    }
+
+    /// The texts the open form view's tree holds.
+    fn form_texts(&self, launcher: &Launcher) -> Vec<String> {
+        match &launcher.view().screen {
+            Screen::DesignedView(view) => {
+                let mut texts = Vec::new();
+                collect_texts(&view.tree.root, &mut texts);
+                texts
+            }
+            other => panic!("no form view: {other:?}"),
+        }
+    }
+
+    /// A launcher with this sample's package installed (the color
+    /// command's view is a designed one, and only an installed command can
+    /// be launched by an item of the package's list), its color command
+    /// opened. Text is measured by a stub, so the tree's measured text is
+    /// the same in every language and every run.
     fn open_color(&self) -> Launcher {
-        let launcher = self.open();
-        assert_eq!(self.run(&launcher, "color"), Status::Idle);
+        let data = tempfile::tempdir().unwrap();
+        let launcher =
+            Launcher::with_packages(Runtime::start(), vec![], data.path().join("extensions"));
+        launcher.set_text_measures(std::sync::Arc::new(|_, _| (42., 17.)));
+        let folder = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../target/guests/packages")
+            .join(self.component.replace('_', "-"));
+        block_on(launcher.install_package(&folder));
+        while !matches!(launcher.view().screen, Screen::Root { .. }) {
+            launcher.back();
+        }
+        block_on(launcher.set_query("color picker"));
+        let index = launcher
+            .view()
+            .rows
+            .iter()
+            .position(|row| row.id.ends_with("#color"))
+            .expect("the color command is listed");
+        launcher.select(index);
+        block_on(launcher.activate_selected());
         assert!(
-            matches!(launcher.view().screen, Screen::CustomView(_)),
+            matches!(launcher.view().screen, Screen::DesignedView(_)),
             "{:?}",
             launcher.view().screen
         );
@@ -157,6 +255,34 @@ impl Sample {
         assert!((0.0..1.0).contains(&value), "{value} is not in [0, 1)");
         value
     }
+}
+
+/// Every text a tree holds, plain and in spans.
+fn collect_texts(node: &pane_core::Node, into: &mut Vec<String>) {
+    if let pane_core::NodeKind::Text(text) = &node.kind {
+        match &text.content {
+            pane_core::TextContent::Plain(text) => into.push(text.clone()),
+            pane_core::TextContent::Spans(spans) => {
+                into.extend(spans.iter().map(|span| span.text.clone()));
+            }
+        }
+    }
+    for child in &node.children {
+        collect_texts(child, into);
+    }
+}
+
+/// The nodes a tree holds, breadth-first.
+fn nodes_of(tree: &pane_core::DesignedTree) -> Vec<&pane_core::Node> {
+    fn at<'a>(node: &'a pane_core::Node, into: &mut Vec<&'a pane_core::Node>) {
+        into.push(node);
+        for child in &node.children {
+            at(child, into);
+        }
+    }
+    let mut nodes = Vec::new();
+    at(&tree.root, &mut nodes);
+    nodes
 }
 
 fn opening_shows_the_samples_items(sample: &Sample) {
@@ -257,58 +383,73 @@ fn the_component_imports_only_wasi_0_3(sample: &Sample) {
 }
 
 fn opening_the_form_shows_its_fields(sample: &Sample) {
-    let view = sample.open_form().view();
+    let launcher = sample.open_form();
+    let view = launcher.view();
 
+    // The form view's title and its form node: every field kind the
+    // designed tree offers (#241).
     assert_eq!(view.title, "Greet someone");
-    let form = view.form().expect("a form");
-    assert_eq!(form.submit_label, "Greet");
-    let choice = |id: &str, label: &str| Choice {
-        id: id.into(),
-        label: label.into(),
+    let Screen::DesignedView(shown) = &view.screen else {
+        panic!("{:?}", view.screen);
     };
+    let fields: Vec<&str> = nodes_of(&shown.tree)
+        .into_iter()
+        .filter(|node| matches!(&node.kind, pane_core::NodeKind::Form(_)))
+        .flat_map(|form| form.children.iter())
+        .filter(|node| node.key.is_some())
+        .map(|node| match &node.kind {
+            pane_core::NodeKind::TextInput(_) => "text-input",
+            pane_core::NodeKind::PasswordInput(_) => "password-input",
+            pane_core::NodeKind::TextArea(_) => "text-area",
+            pane_core::NodeKind::DatePicker(_) => "date-picker",
+            pane_core::NodeKind::DateTimePicker(_) => "date-time-picker",
+            pane_core::NodeKind::Select(_) => "select",
+            pane_core::NodeKind::TagPicker(_) => "tag-picker",
+            pane_core::NodeKind::FilePicker(_) => "file-picker",
+            pane_core::NodeKind::FolderPicker(_) => "folder-picker",
+            pane_core::NodeKind::Checkbox(_) => "checkbox",
+            pane_core::NodeKind::Toggle(_) => "toggle",
+            _ => "other",
+        })
+        .collect();
     assert_eq!(
-        form.fields,
+        fields,
         [
-            FormField {
-                id: "name".into(),
-                label: "Name".into(),
-                kind: FieldKind::Text {
-                    placeholder: Some("Ada Lovelace".into())
-                },
-                value: String::new(),
-                error: None,
-                description: None,
-                required: false,
-            },
-            FormField {
-                id: "greeting".into(),
-                label: "Greeting".into(),
-                kind: FieldKind::Choice(vec![
-                    choice("hello", "Hello"),
-                    choice("morning", "Good morning"),
-                    choice("welcome", "Welcome"),
-                ]),
-                value: "hello".into(),
-                error: None,
-                description: None,
-                required: false,
-            },
+            "text-input",
+            "password-input",
+            "text-area",
+            "date-picker",
+            "date-time-picker",
+            "select",
+            "tag-picker",
+            "file-picker",
+            "folder-picker",
+            "checkbox",
+            "toggle",
         ]
     );
+    // The name's placeholder and title are its field's props, drawn
+    // around its control (#241), not texts the tree holds.
+    let (placeholder, _, title) = sample.field(&launcher, "name");
+    assert_eq!(placeholder.as_deref(), Some("Ada Lovelace"));
+    assert_eq!(title.as_deref(), Some("Name"));
+    let _ = view;
 }
 
 fn a_valid_form_shows_the_guests_answer(sample: &Sample) {
     let launcher = sample.open_form();
 
-    assert_eq!(
-        sample.submit(&launcher, "Ada", "morning"),
-        Status::Result(format!(
+    sample.submit(&launcher, "Ada", "morning");
+    assert!(
+        sample.form_texts(&launcher).contains(&format!(
             "Good morning, Ada, from the {} guest",
             sample.language
-        ))
+        )),
+        "{:?}",
+        sample.form_texts(&launcher)
     );
     assert!(
-        matches!(launcher.view().screen, Screen::Form(_)),
+        matches!(launcher.view().screen, Screen::DesignedView(_)),
         "{:?}",
         launcher.view().screen
     );
@@ -317,58 +458,35 @@ fn a_valid_form_shows_the_guests_answer(sample: &Sample) {
 fn an_invalid_field_is_marked_and_the_form_stays_open(sample: &Sample) {
     let launcher = sample.open_form();
 
-    let status = sample.submit(&launcher, "   ", "welcome");
+    sample.submit(&launcher, "   ", "welcome");
 
-    assert_eq!(status, Status::Error("Name: Enter a name".into()));
-    let view = launcher.view();
-    assert!(matches!(view.screen, Screen::Form(_)), "{:?}", view.screen);
-    let fields = &view.form().unwrap().fields;
-    assert_eq!(fields[0].error.as_deref(), Some("Enter a name"));
-    assert_eq!(fields[1].error, None);
-    // The values survive the rejection, and a corrected form is accepted.
-    assert_eq!(
-        (fields[0].value.as_str(), fields[1].value.as_str()),
-        ("   ", "welcome")
+    // The field's error, drawn under it (#241); the form view stays open.
+    let (_, error, _) = sample.field(&launcher, "name");
+    assert_eq!(error.as_deref(), Some("Enter a name"));
+    assert!(
+        matches!(launcher.view().screen, Screen::DesignedView(_)),
+        "{:?}",
+        launcher.view().screen
     );
-    assert_eq!(
-        sample.submit(&launcher, "Grace", "welcome"),
-        Status::Result(format!(
+    // A corrected form is accepted.
+    sample.submit(&launcher, "Grace", "welcome");
+    assert!(
+        sample.form_texts(&launcher).contains(&format!(
             "Welcome, Grace, from the {} guest",
             sample.language
-        ))
+        )),
+        "{:?}",
+        sample.form_texts(&launcher)
     );
 }
 
 fn a_too_long_name_is_rejected_by_the_guest(sample: &Sample) {
     let launcher = sample.open_form();
 
-    let status = sample.submit(&launcher, &"x".repeat(41), "hello");
+    sample.submit(&launcher, &"x".repeat(41), "hello");
 
-    assert_eq!(
-        status,
-        Status::Error("Name: Use at most 40 characters".into())
-    );
-}
-
-fn an_unknown_choice_is_a_field_error_from_the_guest(sample: &Sample) {
-    // The launcher only submits offered choices, so call the guest directly.
-    let runtime = Runtime::start().unwrap();
-    let values = [("name", "Ada"), ("greeting", "howdy")]
-        .map(|(id, value)| FieldValue {
-            id: id.into(),
-            value: value.into(),
-        })
-        .to_vec();
-
-    let answer = block_on(runtime.submit_form(&sample.path(), "form", values));
-
-    assert_eq!(
-        answer,
-        Err(CallError::Form(FormError {
-            field: Some("greeting".into()),
-            message: "Choose a greeting".into(),
-        }))
-    );
+    let (_, error, _) = sample.field(&launcher, "name");
+    assert_eq!(error.as_deref(), Some("Use at most 40 characters"));
 }
 
 /// Each sample declares one action for Windows only and one for macOS and
@@ -403,130 +521,313 @@ fn a_platform_limited_action_runs_only_on_its_declared_systems(sample: &Sample) 
     );
 }
 
-/// The open color picker's value: the chosen color's name and hex code.
-fn color(launcher: &Launcher) -> String {
-    let view = launcher.view();
-    view.custom_view()
-        .expect("a view is open")
-        .frame
-        .value
-        .clone()
+/// The open color view's canvas: what its node says (its key and its key
+/// handler) and what it holds, with the render it was drawn from.
+struct DrawnCanvas {
+    node_key: String,
+    on_key: Option<u32>,
+    canvas: Canvas,
 }
 
-/// Sends `event` to the open view and returns the color it then shows.
-fn send(launcher: &Launcher, event: ViewEvent) -> String {
-    block_on(launcher.send_view_event(event));
+/// The canvas `tree` draws, when it draws one.
+fn canvas_of_tree(tree: &pane_core::DesignedTree) -> DrawnCanvas {
+    fn of(node: &Node) -> Option<DrawnCanvas> {
+        match &node.kind {
+            NodeKind::Canvas(canvas) => Some(DrawnCanvas {
+                node_key: node.key.clone().unwrap_or_default(),
+                on_key: node.on_key,
+                canvas: canvas.clone(),
+            }),
+            _ => node.children.iter().find_map(of),
+        }
+    }
+    of(&tree.root).expect("the view draws a canvas")
+}
+
+/// The open color view's canvas.
+fn canvas(launcher: &Launcher) -> Canvas {
+    let view = launcher.view();
+    let Screen::DesignedView(view) = &view.screen else {
+        panic!("a designed view is open, not {:?}", view.screen)
+    };
+    canvas_of_tree(&view.tree).canvas
+}
+
+/// The open color view's value: the chosen color's name and hex code, what
+/// its canvas says for assistive technology.
+fn color(launcher: &Launcher) -> String {
+    canvas(launcher)
+        .a11y
+        .value
+        .clone()
+        .expect("the canvas names its value")
+}
+
+/// Sends one event to the open color view's canvas — the handler of
+/// `kind`, by the callback id its tree named — and returns the color it
+/// then shows.
+fn send(
+    launcher: &Launcher,
+    kind: DesignedHandler,
+    read: impl FnOnce(&DrawnCanvas) -> Option<u32>,
+    payload: &str,
+) -> String {
+    let view = launcher.view();
+    let Screen::DesignedView(view) = &view.screen else {
+        panic!("a designed view is open, not {:?}", view.screen)
+    };
+    let drawn = canvas_of_tree(&view.tree);
+    let callback = read(&drawn).expect("the canvas names the handler");
+    block_on(launcher.send_designed_seen(
+        kind,
+        callback,
+        (!drawn.node_key.is_empty()).then_some(drawn.node_key.as_str()),
+        Some(view.render),
+        payload.to_owned(),
+    ));
     assert_eq!(launcher.view().status, Status::Idle);
     color(launcher)
 }
 
-fn press(launcher: &Launcher, key: Key) -> String {
-    send(launcher, ViewEvent::Key(key))
+/// A key event for the open color view's canvas, pressed as `key` spells
+/// it.
+fn key(key: &str) -> String {
+    format!("{{\"key\":\"{key}\"}}")
 }
 
-fn at(x: i32, y: i32) -> Point {
-    Point { x, y }
-}
-
-fn opening_the_color_view_draws_the_picker(sample: &Sample) {
-    let view = sample.open_color().view();
-
-    assert_eq!(view.title, "Choose a color");
-    let custom = view.custom_view().expect("a view is open");
-    assert_eq!(
-        (custom.label.as_str(), custom.role),
-        ("Color", CustomViewRole::ColorWell)
-    );
-    let frame = &custom.frame;
-    assert_eq!(
-        (frame.width, frame.height, frame.value.as_str()),
-        (376, 108, "Blue, #1E88E5")
-    );
-    let rect = |x, y, size, fill| Shape::Rect {
+/// The operation a swatch is: a square filled with `fill`.
+fn square(x: f32, y: f32, size: f32, fill: Option<Paint>) -> CanvasOp {
+    CanvasOp::Rect {
         x,
         y,
         width: size,
         height: size,
-        fill: Rgb(fill),
-    };
-    // The frame around the chosen swatch, 8 x 3 swatches, the preview and
-    // its hex code.
-    assert_eq!(frame.shapes.len(), 1 + 24 + 2);
-    assert_eq!(frame.shapes[0], rect(180, 36, 36, 0xf1f3f5));
-    assert_eq!(frame.shapes[1], rect(2, 2, 32, 0xef9a9a));
-    assert_eq!(frame.shapes[24], rect(254, 74, 32, 0x880e4f));
-    assert_eq!(frame.shapes[25], rect(300, 2, 64, 0x1e88e5));
+        radius: None,
+        fill,
+        stroke: None,
+    }
+}
+
+/// A pointer event for the open color view's canvas, at `x`, `y`.
+fn pointer(event: &str, x: i32, y: i32) -> String {
+    format!("{{\"event\":\"{event}\",\"x\":{x},\"y\":{y}}}")
+}
+
+/// The canvas's key handler, which rides its node.
+fn on_key(drawn: &DrawnCanvas) -> Option<u32> {
+    drawn.on_key
+}
+
+fn opening_the_color_view_draws_the_picker(sample: &Sample) {
+    let launcher = sample.open_color();
+
+    assert_eq!(launcher.view().title, "Choose a color");
+    let canvas = canvas(&launcher);
     assert_eq!(
-        frame.shapes[26],
-        Shape::Text {
-            x: 300,
-            y: 74,
+        (canvas.a11y.role, canvas.a11y.label.as_deref()),
+        (Some(CanvasRole::ColorWell), Some("Color"))
+    );
+    // The frame around the chosen swatch, 8 x 3 swatches, the preview and
+    // its hex code: 27 drawing operations, the hex one measured.
+    assert_eq!(canvas.ops.len(), 1 + 24 + 2);
+    assert_eq!(
+        canvas.ops[0],
+        square(
+            180.,
+            36.,
+            36.,
+            Some(Paint {
+                tint: pane_core::Tint::Same(pane_core::Color::Rgba(0xf1f3f5ff)),
+                exact: false,
+            })
+        )
+    );
+    assert_eq!(
+        canvas.ops[1],
+        square(
+            2.,
+            2.,
+            32.,
+            Some(Paint {
+                tint: pane_core::Tint::Same(pane_core::Color::Rgba(0xef9a9aff)),
+                exact: true,
+            })
+        )
+    );
+    assert_eq!(
+        canvas.ops[25],
+        square(
+            300.,
+            2.,
+            64.,
+            Some(Paint {
+                tint: pane_core::Tint::Same(pane_core::Color::Rgba(0x1e88e5ff)),
+                exact: true,
+            })
+        )
+    );
+    // The hex code, measured: its text sits under the preview, as far
+    // down as the stub measures it.
+    assert_eq!(
+        canvas.ops[26],
+        CanvasOp::Text(pane_core::CanvasText {
+            x: 300.,
+            y: 85.,
             content: "#1E88E5".into(),
-            color: Rgb(0xf1f3f5),
-        }
+            style: Some(pane_core::TextStyle::Caption),
+            level: None,
+            color: Some(Paint {
+                tint: pane_core::Tint::Same(pane_core::Color::Rgba(0xf1f3f5ff)),
+                exact: false,
+            }),
+            size: None,
+            weight: None,
+        })
     );
 }
 
 fn keys_move_the_chosen_color(sample: &Sample) {
     let launcher = sample.open_color();
+    let pressed = key;
 
-    assert_eq!(press(&launcher, Key::Right), "Purple, #8E24AA");
-    assert_eq!(press(&launcher, Key::Down), "Dark purple, #4A148C");
-    assert_eq!(press(&launcher, Key::Home), "Dark red, #B71C1C");
-    assert_eq!(press(&launcher, Key::Left), "Dark red, #B71C1C");
-    assert_eq!(press(&launcher, Key::End), "Dark pink, #880E4F");
-    assert_eq!(press(&launcher, Key::Up), "Pink, #D81B60");
-    assert_eq!(press(&launcher, Key::Up), "Light pink, #F48FB1");
-    assert_eq!(press(&launcher, Key::Up), "Light pink, #F48FB1");
+    assert_eq!(
+        send(&launcher, DesignedHandler::Key, on_key, &pressed("right")),
+        "Purple, #8E24AA"
+    );
+    assert_eq!(
+        send(&launcher, DesignedHandler::Key, on_key, &pressed("down")),
+        "Dark purple, #4A148C"
+    );
+    assert_eq!(
+        send(&launcher, DesignedHandler::Key, on_key, &pressed("home")),
+        "Dark red, #B71C1C"
+    );
+    assert_eq!(
+        send(&launcher, DesignedHandler::Key, on_key, &pressed("left")),
+        "Dark red, #B71C1C"
+    );
+    assert_eq!(
+        send(&launcher, DesignedHandler::Key, on_key, &pressed("end")),
+        "Dark pink, #880E4F"
+    );
+    assert_eq!(
+        send(&launcher, DesignedHandler::Key, on_key, &pressed("up")),
+        "Pink, #D81B60"
+    );
+    assert_eq!(
+        send(&launcher, DesignedHandler::Key, on_key, &pressed("up")),
+        "Light pink, #F48FB1"
+    );
+    assert_eq!(
+        send(&launcher, DesignedHandler::Key, on_key, &pressed("up")),
+        "Light pink, #F48FB1"
+    );
     // The preview shows the chosen color too.
-    let frame = launcher.view().custom_view().unwrap().frame.clone();
-    assert!(matches!(
-        frame.shapes[25],
-        Shape::Rect {
-            fill: Rgb(0xf48fb1),
-            ..
-        }
-    ));
+    assert_eq!(
+        canvas(&launcher).ops[25],
+        square(
+            300.,
+            2.,
+            64.,
+            Some(Paint {
+                tint: pane_core::Tint::Same(pane_core::Color::Rgba(0xf48fb1ff)),
+                exact: true,
+            })
+        )
+    );
 }
 
 fn pressing_and_dragging_the_pointer_chooses_swatches(sample: &Sample) {
     let launcher = sample.open_color();
+    let down = |drawn: &DrawnCanvas| drawn.canvas.handlers.on_pointer_down;
+    let movement = |drawn: &DrawnCanvas| drawn.canvas.handlers.on_pointer_move;
+    let up = |drawn: &DrawnCanvas| drawn.canvas.handlers.on_pointer_up;
 
     assert_eq!(
-        send(&launcher, ViewEvent::PointerDown(at(10, 10))),
+        send(
+            &launcher,
+            DesignedHandler::Pointer,
+            down,
+            &pointer("pointer-down", 10, 10)
+        ),
         "Light red, #EF9A9A"
     );
     assert_eq!(
-        send(&launcher, ViewEvent::PointerMove(at(80, 80))),
+        send(
+            &launcher,
+            DesignedHandler::Pointer,
+            movement,
+            &pointer("pointer-move", 80, 80)
+        ),
         "Dark yellow, #F57F17"
     );
     // A drag past the grid chooses the nearest swatch.
     assert_eq!(
-        send(&launcher, ViewEvent::PointerMove(at(-50, 500))),
+        send(
+            &launcher,
+            DesignedHandler::Pointer,
+            movement,
+            &pointer("pointer-move", -50, 500)
+        ),
         "Dark red, #B71C1C"
     );
-    send(&launcher, ViewEvent::PointerUp(at(-50, 500)));
+    send(
+        &launcher,
+        DesignedHandler::Pointer,
+        up,
+        &pointer("pointer-up", -50, 500),
+    );
+    // A move without the drag chooses nothing.
     assert_eq!(
-        send(&launcher, ViewEvent::PointerMove(at(200, 40))),
+        send(
+            &launcher,
+            DesignedHandler::Pointer,
+            movement,
+            &pointer("pointer-move", 200, 40)
+        ),
         "Dark red, #B71C1C"
     );
     // A press on the preview, outside the grid, chooses nothing.
     assert_eq!(
-        send(&launcher, ViewEvent::PointerDown(at(330, 10))),
+        send(
+            &launcher,
+            DesignedHandler::Pointer,
+            down,
+            &pointer("pointer-down", 330, 10)
+        ),
         "Dark red, #B71C1C"
     );
     assert_eq!(
-        send(&launcher, ViewEvent::PointerMove(at(10, 10))),
+        send(
+            &launcher,
+            DesignedHandler::Pointer,
+            movement,
+            &pointer("pointer-move", 10, 10)
+        ),
         "Dark red, #B71C1C"
     );
 }
 
 fn each_opened_color_view_starts_afresh(sample: &Sample) {
     let launcher = sample.open_color();
-    assert_eq!(press(&launcher, Key::Right), "Purple, #8E24AA");
+    assert_eq!(
+        send(&launcher, DesignedHandler::Key, on_key, &key("right")),
+        "Purple, #8E24AA"
+    );
 
+    // The root view's own back leaves the command, as leaving its list
+    // does: root search afresh, its first row selected. The color command
+    // is chosen again, as it was the first time.
     launcher.back();
-    assert_eq!(launcher.view().screen, Screen::Command);
+    assert!(matches!(launcher.view().screen, Screen::Root { .. }));
+    block_on(launcher.set_query("color picker"));
+    let index = launcher
+        .view()
+        .rows
+        .iter()
+        .position(|row| row.id.ends_with("#color"))
+        .expect("the color command is listed");
+    launcher.select(index);
     block_on(launcher.activate_selected());
 
     assert_eq!(color(&launcher), "Blue, #1E88E5");
@@ -534,34 +835,67 @@ fn each_opened_color_view_starts_afresh(sample: &Sample) {
 
 fn views_open_at_once_keep_their_own_state(sample: &Sample) {
     let runtime = Runtime::start().unwrap();
-    let open = || block_on(runtime.open_view(&sample.path(), "color")).unwrap();
-    let ((first, _), (second, _)) = (open(), open());
+    let open = || {
+        block_on(runtime.open_designed_view(&sample.path(), "color", &default_launch())).unwrap()
+    };
+    let ((first, rendered), (second, _)) = (open(), open());
 
-    let event = ViewEvent::Key(Key::Right);
-    let first_frame = block_on(runtime.view_event(first, event)).unwrap();
-    let second_frame = block_on(runtime.view_event(second, ViewEvent::Key(Key::Left))).unwrap();
+    // The event each view is sent: a key pressed on its canvas, by the
+    // callback id its own tree named.
+    let pressed = |rendered: &pane_core::DesignedRendered, name: &str| {
+        let drawn = canvas_of_tree(&rendered.tree);
+        DesignedEvent {
+            render: rendered.render,
+            key: drawn.node_key,
+            callback: drawn.on_key.expect("the canvas takes keys"),
+            payload: key(name),
+        }
+    };
+    // One moves right, the other left: each view's own state.
+    let first_next = block_on(runtime.designed_view_event(first, pressed(&rendered, "right")));
+    let second_next = block_on(runtime.designed_view_event(second, pressed(&rendered, "left")));
 
-    assert_eq!(first_frame.value, "Purple, #8E24AA");
-    assert_eq!(second_frame.value, "Teal, #00897B");
-    assert_eq!(block_on(runtime.view_count()), 2);
-    runtime.close_view(first);
-    assert_eq!(block_on(runtime.view_count()), 1);
+    assert_eq!(value_of(&first_next), "Purple, #8E24AA");
+    assert_eq!(value_of(&second_next), "Teal, #00897B");
+    assert_eq!(block_on(runtime.designed_view_count()), 2);
+    runtime.close_designed_view(first);
+    assert_eq!(block_on(runtime.designed_view_count()), 1);
     assert_eq!(
-        block_on(runtime.view_event(first, event)),
+        block_on(runtime.designed_view_event(first, pressed(&rendered, "right"))),
         Err(CallError::ViewClosed)
     );
+}
+
+/// The launch record every view of these tests opens with: none of them
+/// reads it.
+fn default_launch() -> pane_core::LaunchRecord {
+    pane_core::LaunchRecord::default()
+}
+
+/// The value of the canvas the answer `next` drew.
+fn value_of(next: &Result<pane_core::DesignedNext, CallError>) -> String {
+    let pane_core::DesignedNext::Tree(rendered) = next.as_ref().unwrap() else {
+        panic!("the view re-rendered: {next:?}")
+    };
+    fn of(node: &Node) -> Option<String> {
+        match &node.kind {
+            NodeKind::Canvas(canvas) => canvas.a11y.value.clone(),
+            _ => node.children.iter().find_map(of),
+        }
+    }
+    of(&rendered.tree.root).expect("the view draws a canvas")
 }
 
 fn an_unknown_view_is_a_guest_error(sample: &Sample) {
     let runtime = Runtime::start().unwrap();
 
-    let opened = block_on(runtime.open_view(&sample.path(), "missing"));
+    let opened = block_on(runtime.open_designed_view(&sample.path(), "missing", &default_launch()));
 
     assert_eq!(
-        opened.map(|(_, frame)| frame),
-        Err(CallError::Guest("unknown view: missing".into()))
+        opened.map(|(_, rendered)| rendered),
+        Err(CallError::Guest("unknown designed view: missing".into()))
     );
-    assert_eq!(block_on(runtime.view_count()), 0);
+    assert_eq!(block_on(runtime.designed_view_count()), 0);
 }
 
 fn reverse_typed_into_root_search_lists_the_reversed_text_to_copy(sample: &Sample) {
@@ -652,7 +986,6 @@ fn the_guest_stays_under_the_memory_cap(sample: &Sample) {
     an_async_wasi_wait_shows_running_until_it_answers(sample);
     one_instance_rolls_a_new_number_each_time(sample);
     a_valid_form_shows_the_guests_answer(sample);
-    an_unknown_choice_is_a_field_error_from_the_guest(sample);
     keys_move_the_chosen_color(sample);
     pressing_and_dragging_the_pointer_chooses_swatches(sample);
     views_open_at_once_keep_their_own_state(sample);
@@ -698,7 +1031,6 @@ contract!(
     a_valid_form_shows_the_guests_answer,
     an_invalid_field_is_marked_and_the_form_stays_open,
     a_too_long_name_is_rejected_by_the_guest,
-    an_unknown_choice_is_a_field_error_from_the_guest,
     a_platform_limited_action_runs_only_on_its_declared_systems,
     opening_the_color_view_draws_the_picker,
     keys_move_the_chosen_color,

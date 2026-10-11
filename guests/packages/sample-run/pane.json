@@ -46,7 +46,7 @@
       "title": "Run with Completions",
       "subtitle": "Type a command line; what you ran and installed completes it as you type",
       "component": "sample_run.wasm",
-      "search": true
+      "mode": "designed"
     },
     {
       "id": "history",

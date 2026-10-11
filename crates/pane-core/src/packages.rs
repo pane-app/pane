@@ -701,6 +701,13 @@ pub enum CommandMode {
     /// answer while its package is enabled, and its extension's Settings
     /// card lists it, so the user can still turn it off.
     Provider,
+    /// `"designed"`: launching it opens a designed view (`open-view`, ADR
+    /// 0036) — a screen the extension describes as a tree of layout nodes
+    /// and UI components that Pane renders (`docs/designed-tree.md`) — and
+    /// never calls its `render`. Transitional: the List and the Form move
+    /// onto the tree (#240, #241), after which the `view` mode retires into
+    /// this one and the mode says only that a screen opens.
+    Designed,
 }
 
 /// When root search lists a command (`"when"` in its `pane.json` entry,
@@ -810,11 +817,6 @@ pub struct ManifestCommand {
     /// into root search that Pane sends it when the user invokes it through
     /// its alias or as a fallback, as its launch record's fallback text.
     pub takes_query: bool,
-    /// Whether the command searches as the user types into its own search
-    /// field once it is open (`"search": true`), such as a command searching
-    /// an online service; root search never asks it. Its component then
-    /// also exports `pane:extension/command-search`.
-    pub search: bool,
     /// The scheduled work the command declares (`"schedule"`), if any:
     /// every `schedule.every_seconds` seconds while the package's code may
     /// run, Pane runs the action of `schedule.item` (a view command) or the
@@ -1135,12 +1137,6 @@ pub(crate) struct CommandJson {
     /// fallback, as its launch record's fallback text.
     #[serde(default)]
     takes_query: bool,
-    /// The command searches as the user types into its own search field
-    /// once it is open, such as a command searching an online service; root
-    /// search never asks it. Its component then also exports
-    /// `pane:extension/command-search`.
-    #[serde(default)]
-    search: bool,
     /// The scheduled work the command declares, if any: every
     /// `everySeconds` seconds while the package's code may run, Pane runs
     /// the action of `item` (a view command) or the command itself in the
@@ -1333,7 +1329,6 @@ impl Manifest {
         Exports {
             root_results: commands().any(|command| command.root_results),
             indexed_results: commands().any(|command| command.indexed_results),
-            search: commands().any(|command| command.search),
             service: commands().any(|command| command.service),
             operations: self
                 .operations
@@ -1412,19 +1407,18 @@ impl Manifest {
                 .map(|icon| icons::parse_manifest_icon(icon, &format!("command `{}`", command.id)))
                 .transpose()
                 .map_err(invalid)?;
-            // A command may both search inside itself and answer root
-            // search (Search Files, #150): root search still never asks one
-            // that searches unless its manifest says `rootResults` too, so
-            // what is typed there reaches only a command that asks for it.
             let mode = match command.mode.as_deref() {
                 None | Some("view") => CommandMode::View,
                 Some("no-view") => CommandMode::NoView,
                 Some("provider") => CommandMode::Provider,
+                Some("designed") => CommandMode::Designed,
                 Some(other) => {
                     return Err(invalid(format!(
                         "command `{}` has the mode \"{}\"; a command's `mode` is \"view\" (it \
-                         opens a screen, the default), \"no-view\" (it runs without one) or \
-                         \"provider\" (it only answers root search)",
+                         opens a screen of items, the default), \"no-view\" (it runs without one), \
+                         \"provider\" (it only answers root search) or \"designed\" (it opens a \
+                         screen the extension designs as a tree Pane renders; the `view` mode \
+                         retires into it once the List and the Form move onto the tree)",
                         command.id,
                         other.escape_debug()
                     )));
@@ -1497,7 +1491,6 @@ impl Manifest {
                 root_results: command.root_results,
                 indexed_results: command.indexed_results,
                 takes_query: command.takes_query,
-                search: command.search,
                 schedule,
                 service,
                 preferences: own,
@@ -1654,9 +1647,6 @@ fn check_provider(command: &CommandJson) -> Result<(), PackageError> {
              needs one of them, or another mode (\"view\" or \"no-view\")"
         )));
     }
-    if command.search {
-        return refused("search as the user types into its own field (`search`)");
-    }
     if command.takes_query {
         return refused("take a query (`takesQuery`)");
     }
@@ -1705,7 +1695,7 @@ fn parse_schedule(
                  has no list, and Pane runs the command itself on its schedule; remove `item`"
             )));
         }
-        (CommandMode::View, item) => {
+        (CommandMode::View | CommandMode::Designed, item) => {
             let item = item.unwrap_or_default();
             if item.trim().is_empty() {
                 return Err(invalid(format!(
@@ -3224,7 +3214,6 @@ impl InstalledPackage {
                         .or_else(|| Some(manifest.title.clone())),
                     component: self.location.join(&command.component),
                     takes_query: command.accepts_fallback_text(),
-                    search: command.search,
                     keywords: command.keywords.clone(),
                     when: command.when,
                     matches: command.matches,

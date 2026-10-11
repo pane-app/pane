@@ -46,7 +46,6 @@ fn command_titled(id: &str, title: &str, subtitle: Option<&str>) -> CommandRegis
         subtitle: subtitle.map(Into::into),
         component: guest("sample_rust"),
         takes_query: false,
-        search: false,
         keywords: Vec::new(),
         when: pane_core::CommandWhen::Always,
         matches: pane_core::CommandMatches::Title,

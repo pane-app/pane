@@ -62,13 +62,6 @@ function host(call) {
  * @param {() => T} call
  * @returns {T}
  */
-function forForm(call) {
-  try {
-    return call();
-  } catch (error) {
-    throw { message: String(/** @type {any} */ (error).payload) };
-  }
-}
 
 /**
  * @param {string} id
@@ -109,23 +102,6 @@ function span(seconds) {
           ? [seconds / 60, "minute", "minutes"]
           : [seconds, "second", "seconds"];
   return plural(count, one, many);
-}
-
-/**
- * A form with one choice field.
- * @param {string} title
- * @param {string} id
- * @param {string} label
- * @param {[string, string][]} choices
- * @param {string} submitLabel
- * @returns {import("@pane-app/extension").Form}
- */
-function choiceForm(title, id, label, choices, submitLabel) {
-  return {
-    title,
-    fields: [{ id, label, kind: { tag: "choice", val: choices.map(([id, label]) => ({ id, label })) } }],
-    submitLabel,
-  };
 }
 
 /** @param {history.HistoryStatus} status */
@@ -284,38 +260,16 @@ export const command = {
         ),
       );
     }
-    items.push({
-      ...item(
+    items.push(
+      item(
         "retention",
         `Keep items for ${span(status.retentionSeconds)}`,
         "Older items are deleted, also while Pane is stopped or the extension is disabled · Enter changes it",
       ),
-      form: choiceForm(
-        "Keep clipboard history items for",
-        "retention",
-        "Keep each item for",
-        // A form starts on its first choice, so the retention now comes first:
-        // submitting the form unchanged changes nothing.
-        [status.retentionSeconds, ...RETENTIONS.filter((seconds) => seconds !== status.retentionSeconds)].map(
-          (seconds) => [String(seconds), span(seconds)],
-        ),
-        "Keep",
-      ),
-    });
+    );
     const excluded = status.excluded.length === 0 ? "None excluded" : `${status.excluded.length} excluded`;
     items.push({
       ...item("exclude", "Exclude a program", `Text copied from it is never kept · ${excluded}`),
-      form: {
-        title: "Exclude a program",
-        fields: [
-          {
-            id: "program",
-            label: "Program file name",
-            kind: { tag: "text", val: { placeholder: "KeePass.exe" } },
-          },
-        ],
-        submitLabel: "Exclude",
-      },
     });
     for (const program of status.excluded) {
       items.push(
@@ -340,16 +294,9 @@ export const command = {
           ),
         );
       }
-      items.push({
-        ...item("delete-recent", "Delete recent items", "Deletes what you copied in the last 15 minutes, hour or day"),
-        form: choiceForm(
-          "Delete recent clipboard history items",
-          "since",
-          "Copied in the last",
-          RECENT.map(([seconds, label]) => [String(seconds), label]),
-          "Delete",
-        ),
-      });
+      items.push(
+        item("delete-recent", "Delete recent items", "Deletes what you copied in the last 15 minutes, hour or day"),
+      );
     }
     items.push(...entries.map(entryItem));
     if (entries.length === 0 && status.capture === "on") {
@@ -364,36 +311,7 @@ export const command = {
     await act(id);
   },
 
-  async submitForm(itemId, values) {
-    /** @param {string} id */
-    const value = (id) => (values.find((value) => value.id === id)?.value ?? "").trim();
-    if (itemId === "retention") {
-      const seconds = Number(value("retention"));
-      const before = forForm(history.status).items;
-      forForm(() => history.setRetention(seconds));
-      const deleted = before - forForm(history.status).items;
-      const kept = `Items are kept for ${span(seconds)}`;
-      return deleted > 0 ? `${kept}; deleted ${plural(deleted, "older item", "older items")}` : kept;
-    }
-    if (itemId === "delete-recent") {
-      const seconds = Number(value("since"));
-      const ids = forForm(history.entries)
-        .filter((entry) => entry.ageSeconds < seconds)
-        .map((entry) => entry.id);
-      return `Deleted ${plural(forForm(() => history.deleteItems(ids)), "kept item", "kept items")}`;
-    }
-    if (itemId !== "exclude") throw { message: `unknown form: ${itemId}` };
-    const program = value("program");
-    const excluded = host(history.status).excluded;
-    try {
-      history.setExcluded([...excluded, program]);
-    } catch (error) {
-      throw { field: "program", message: String(/** @type {any} */ (error).payload) };
-    }
-    return `Text copied from ${program} is not kept`;
-  },
-
-  async openView(itemId) {
-    throw new Error(`unknown view: ${itemId}`);
+  async openView(/** @type {string} */ commandId) {
+    throw new Error(`unknown designed view: ${commandId}`);
   },
 };

@@ -1,11 +1,26 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 //
 // Pane's sample command in JavaScript: a list with one action per item, a
-// form, a color picker the command draws itself and a root result computed
-// from the query ("reverse <text>"). Items, titles, results and errors match the Rust sample
-// (guests/sample-rust) and the TypeScript sample. The JSDoc types let
-// TypeScript check this file against Pane's contract; they are optional.
+// a form the "Greet someone" command of the same package answers on the
+// designed tree, a color picker the command draws itself and a root result
+// computed from the query ("reverse <text>"). Items, titles, results and
+// errors match the Rust sample (guests/sample-rust) and the TypeScript
+// sample. The JSDoc types let TypeScript check this file against Pane's
+// contract; they are optional.
 // @ts-check
+/** @typedef {import("@pane-app/extension/view").CanvasEvent} CanvasEvent */
+import { launch } from "pane:extension/commands@0.1.0";
+import { jsxs } from "@pane-app/extension/jsx-runtime";
+import {
+  Canvas,
+  Column,
+  Form,
+  Text,
+  createView,
+  measureText,
+  useRef,
+  useState,
+} from "@pane-app/extension/view";
 import { showToast } from "@pane-app/extension/feedback";
 import { waitFor } from "wasi:clocks/monotonic-clock@0.3.0";
 import * as z from "zod/mini";
@@ -21,26 +36,6 @@ const Settings = z.object({
 
 /** The greeting form's options, by id. */
 const GREETINGS = { hello: "Hello", morning: "Good morning", welcome: "Welcome" };
-
-/**
- * The "form" item's form: a name to greet and a greeting to choose.
- * @type {import("@pane-app/extension").Form}
- */
-const GREETING_FORM = {
-  title: "Greet someone",
-  fields: [
-    { id: "name", label: "Name", kind: { tag: "text", val: { placeholder: "Ada Lovelace" } } },
-    {
-      id: "greeting",
-      label: "Greeting",
-      kind: {
-        tag: "choice",
-        val: Object.entries(GREETINGS).map(([id, label]) => ({ id, label })),
-      },
-    },
-  ],
-  submitLabel: "Greet",
-};
 
 // Checks the submitted values in field order; the first problem is reported.
 // Lengths count characters (code points), like the Rust sample.
@@ -77,91 +72,130 @@ const STEP = 36;
 const COLUMNS = COLORS.length;
 const ROWS = SHADES.length;
 
+/** The frame colour the chosen swatch and the hex code are drawn in. */
+const FRAME = "#f1f3f5";
+
 /** "#RRGGBB" for 0xRRGGBB. */
 const hex = (/** @type {number} */ rgb) => `#${rgb.toString(16).padStart(6, "0").toUpperCase()}`;
-const clamp = (/** @type {number} */ n, /** @type {number} */ max) => Math.min(Math.max(n, 0), max);
+
+/** A swatch's own colour, drawn exactly as the sample authored it. */
+const swatch = (/** @type {number} */ fill) => ({ raw: hex(fill) });
 
 /** How each arrow key moves the choice, as (columns, rows). */
 const MOVES = { left: [-1, 0], right: [1, 0], up: [0, -1], down: [0, 1] };
 
+/** Moves the choice by `columns` and `rows`, clamped at the edges. */
+const moved = (/** @type {number} */ column, /** @type {number} */ row,
+               /** @type {number} */ columns, /** @type {number} */ rows) => ({
+  column: clamp(column + columns, COLUMNS - 1),
+  row: clamp(row + rows, ROWS - 1),
+});
+
+const clamp = (/** @type {number} */ n, /** @type {number} */ max) => Math.min(Math.max(n, 0), max);
+
+/** Chooses the swatch nearest to `x`, `y`. */
+const at = (/** @type {number} */ x, /** @type {number} */ y) => ({
+  column: clamp(Math.floor(x / STEP), COLUMNS - 1),
+  row: clamp(Math.floor(y / STEP), ROWS - 1),
+});
+
 /**
  * An open color picker: a grid of swatches and a preview of the chosen
- * color. Arrow keys, Home and End move the choice; pressing or dragging the
- * pointer over the grid chooses the swatch under it. Pane creates one per
- * opened view (`openView`) and drops it when the view closes.
+ * color, drawn as the canvas of its designed view. Arrow keys, Home and
+ * End move the choice; pressing or dragging the pointer over the grid
+ * chooses the swatch under it. Pane opens one per opened view (the
+ * "color" command's `openView`) and drops it when the view closes.
  */
-class ColorPicker {
-  constructor() {
-    // Blue.
-    this.column = 5;
-    this.row = 1;
-    this.dragging = false;
-  }
-
-  async render() {
-    const [hue, ...shades] = COLORS[this.column];
-    const chosen = shades[this.row];
-    const shade = SHADES[this.row];
-    /** @type {import("@pane-app/extension").Shape[]} */
-    const shapes = [
-      // A light frame around the chosen swatch.
-      { tag: "rect", val: { x: this.column * STEP, y: this.row * STEP, width: STEP, height: STEP, fill: 0xf1f3f5 } },
-    ];
-    COLORS.forEach(([, ...column], x) =>
-      column.forEach((fill, y) =>
-        shapes.push({
-          tag: "rect",
-          val: { x: x * STEP + 2, y: y * STEP + 2, width: SWATCH, height: SWATCH, fill },
-        }),
-      ),
-    );
-    shapes.push(
-      { tag: "rect", val: { x: COLUMNS * STEP + 12, y: 2, width: 64, height: 64, fill: chosen } },
-      { tag: "text", val: { x: COLUMNS * STEP + 12, y: 74, content: hex(chosen), color: 0xf1f3f5 } },
-    );
-    return {
-      width: COLUMNS * STEP + 88,
-      height: ROWS * STEP,
-      shapes,
-      value: `${shade ? `${shade} ${hue.toLowerCase()}` : hue}, ${hex(chosen)}`,
-    };
-  }
-
-  /** @param {import("@pane-app/extension").ViewEvent} event */
-  async handleEvent(event) {
-    switch (event.tag) {
-      case "key":
-        if (event.val === "home") this.column = 0;
-        else if (event.val === "end") this.column = COLUMNS - 1;
-        else {
-          const [dx, dy] = MOVES[event.val];
-          this.column = clamp(this.column + dx, COLUMNS - 1);
-          this.row = clamp(this.row + dy, ROWS - 1);
-        }
-        break;
-      case "pointer-down": {
-        const { x, y } = event.val;
-        // Only a press on the grid chooses a swatch and starts a drag.
-        if (x >= 0 && x < COLUMNS * STEP && y >= 0 && y < ROWS * STEP) {
-          this.dragging = true;
-          this.choose(x, y);
-        }
-        break;
-      }
-      case "pointer-move":
-        if (this.dragging) this.choose(event.val.x, event.val.y);
-        break;
-      case "pointer-up":
-        this.dragging = false;
-        break;
+function ColorPicker() {
+  // Blue.
+  const [choice, setChoice] = useState({ column: 5, row: 1 });
+  const dragging = useRef(false);
+  const { column, row } = choice;
+  const [hue, ...shades] = COLORS[column];
+  const chosen = shades[row];
+  const shade = SHADES[row];
+  const code = hex(chosen);
+  // A light frame around the chosen swatch, then the swatches, the
+  // preview and its hex code. The hex code is measured
+  // (`pane:extension/view.measure-text`), so the text drawn under the
+  // preview fits what it says.
+  const measured = measureText(code, { style: "caption" });
+  /** @type {import("@pane-app/extension/view").Draw[]} */
+  const ops = [
+    { op: "rect", x: column * STEP, y: row * STEP, width: STEP, height: STEP, fill: FRAME },
+  ];
+  for (let x = 0; x < COLUMNS; x += 1) {
+    const [, ...shades] = COLORS[x];
+    for (let y = 0; y < ROWS; y += 1) {
+      ops.push({
+        op: "rect",
+        x: x * STEP + 2,
+        y: y * STEP + 2,
+        width: SWATCH,
+        height: SWATCH,
+        fill: swatch(shades[y]),
+      });
     }
   }
-
-  /** Chooses the swatch nearest to `x`, `y`. */
-  choose(/** @type {number} */ x, /** @type {number} */ y) {
-    this.column = clamp(Math.floor(x / STEP), COLUMNS - 1);
-    this.row = clamp(Math.floor(y / STEP), ROWS - 1);
-  }
+  ops.push(
+    { op: "rect", x: COLUMNS * STEP + 12, y: 2, width: 64, height: 64, fill: swatch(chosen) },
+    {
+      op: "text",
+      x: COLUMNS * STEP + 12,
+      y: 68 + measured.height,
+      text: code,
+      style: "caption",
+      color: FRAME,
+    },
+  );
+  const key = (/** @type {string} */ name) => {
+    if (name === "home") setChoice({ column: 0, row });
+    else if (name === "end") setChoice({ column: COLUMNS - 1, row });
+    else if (Object.hasOwn(MOVES, name)) {
+      const [columns, rows] =
+        /** @type {[number, number]} */ (MOVES[/** @type {"left" | "right" | "up" | "down"} */ (name)]);
+      setChoice(moved(column, row, columns, rows));
+    }
+  };
+  // Only a press on the grid chooses a swatch and starts a drag; a move
+  // during one chooses under the pointer.
+  const pointed = (
+    /** @type {import("@pane-app/extension/view").CanvasEvent} */ event,
+    /** @type {boolean} */ press,
+  ) => {
+    if (event.event !== "pointer-down" && event.event !== "pointer-move") return;
+    const { x, y } = event;
+    const onGrid = x >= 0 && x < COLUMNS * STEP && y >= 0 && y < ROWS * STEP;
+    if (press) {
+      if (onGrid) {
+        dragging.current = true;
+        setChoice(at(x, y));
+      }
+    } else if (dragging.current) {
+      setChoice(at(x, y));
+    }
+  };
+  return jsxs(Column, {
+    key: "picker",
+    navigationTitle: "Choose a color",
+    children: [
+      jsxs(Canvas, {
+        key: "grid",
+        width: COLUMNS * STEP + 88,
+        height: ROWS * STEP,
+        role: "color-well",
+        label: "Color",
+        value: `${shade ? `${shade} ${hue.toLowerCase()}` : hue}, ${code}`,
+        onKey: key,
+        onPointerDown: (/** @type {CanvasEvent} */ event) => pointed(event, true),
+        onPointerMove: (/** @type {CanvasEvent} */ event) => pointed(event, false),
+        onPointerUp: () => {
+          dragging.current = false;
+        },
+        ops,
+      }),
+    ],
+  });
 }
 
 /**
@@ -217,12 +251,19 @@ export const command = {
         { id: "wait", title: "Wait briefly", subtitle: "Await a WASI 0.3 clock, then answer", onAction: () => act("wait") },
         { id: "validate", title: "Validate settings", subtitle: "Reject settings with an out-of-range port", onAction: () => act("validate") },
         { id: "random", title: "Roll a number", subtitle: "A random number from this instance", onAction: () => act("random") },
-        { id: "form", title: "Greet someone", subtitle: "Fill in a form the guest checks", form: GREETING_FORM },
+        {
+          id: "form",
+          title: "Greet someone",
+          subtitle: "A form the guest checks, on the designed tree",
+          onAction: async () =>
+            launch({ command: "form" }, "user-initiated", [], null),
+        },
         {
           id: "color",
           title: "Choose a color",
           subtitle: "Pick a color in a view the guest draws",
-          customView: { title: "Choose a color", label: "Color", role: "color-well" },
+          onAction: async () =>
+            launch({ command: "color" }, "user-initiated", [], null),
         },
         // Elsewhere Pane lists these as unavailable, says why, and never runs
         // their actions.
@@ -244,26 +285,14 @@ export const command = {
     };
   },
 
-  async submitForm(itemId, values) {
-    if (itemId !== "form") {
-      throw { message: `unknown form: ${itemId}` };
+  async openView(/** @type {string} */ commandId) {
+    if (commandId === "form") {
+      return createView(GreetingForm);
     }
-    const submitted = Object.fromEntries(values.map(({ id, value }) => [id, value]));
-    const parsed = z.safeParse(Greeting, submitted);
-    if (!parsed.success) {
-      // A thrown FormError ({ field, message }) is shown next to its field.
-      const issue = parsed.error.issues[0];
-      throw { field: String(issue.path[0]), message: issue.message };
+    if (commandId !== "color") {
+      throw new Error(`unknown designed view: ${commandId}`);
     }
-    const { name, greeting } = parsed.data;
-    return `${GREETINGS[greeting]}, ${name}, from the JavaScript guest`;
-  },
-
-  async openView(itemId) {
-    if (itemId !== "color") {
-      throw new Error(`unknown view: ${itemId}`);
-    }
-    return new ColorPicker();
+    return createView(ColorPicker);
   },
 };
 
@@ -298,3 +327,83 @@ export const rootResults = {
     ];
   },
 };
+
+/**
+ * The "Greet someone" command's view (#241): the greeting form — every
+ * field the designed tree's forms offer, so the sample shows each kind.
+ * A submission validates the name and answers with the greeting; the
+ * fields' values arrive with the submission, keyed by their `id`s, and
+ * the name's is remembered: Pane keeps it as the package's settings and
+ * prefills it the next time the form opens.
+ * @returns {import("@pane-app/extension/view").Element}
+ */
+function GreetingForm() {
+  const [answer, setAnswer] = useState("");
+  const [error, setError] = useState(/** @type {string | null} */ (null));
+  const submit = (/** @type {import("@pane-app/extension/view").FormSubmittedValues} */ values) => {
+    const submitted = z.safeParse(Greeting, values);
+    if (!submitted.success) {
+      // The first problem marks its field in the tree the view answers
+      // with, as its validation error.
+      const issue = submitted.error.issues[0];
+      setError(String(issue.message));
+      return;
+    }
+    setError(null);
+    const { name, greeting } = submitted.data;
+    setAnswer(`${GREETINGS[greeting]}, ${name}, from the JavaScript guest`);
+  };
+  const form = jsxs(Form, {
+    key: "form",
+    navigationTitle: "Greet someone",
+    submitTitle: "Greet",
+    onSubmit: submit,
+    // The answer draws over the form as its first child, the form staying
+    // the tree's root: the window keeps a field's state by the path of
+    // its key, and wrapping the form in a column would move every
+    // field's path — losing the text, the caret and the focus the user
+    // left in them.
+    children: [
+      ...(answer === "" ? [] : [jsxs(Text, { style: "title", children: [answer] })]),
+      jsxs(Form.TextField, {
+        id: "name",
+        key: "name",
+        title: "Name",
+        placeholder: "Ada Lovelace",
+        remember: true,
+        autoFocus: true,
+        error: error ?? undefined,
+      }),
+      jsxs(Form.PasswordField, { id: "secret", key: "secret", title: "Secret" }),
+      jsxs(Form.TextArea, { id: "notes", key: "notes", title: "Notes" }),
+      jsxs(Form.DatePicker, { id: "day", key: "day", title: "Day" }),
+      jsxs(Form.DateTimePicker, { id: "at", key: "at", title: "At" }),
+      jsxs(Form.Dropdown, {
+        id: "greeting",
+        key: "greeting",
+        title: "Greeting",
+        options: [
+          { value: "hello", label: "Hello", section: "Plain" },
+          { value: "morning", label: "Good morning", section: "Warm" },
+          { value: "welcome", label: "Welcome", section: "Warm" },
+        ],
+        defaultValue: "hello",
+      }),
+      jsxs(Form.TagPicker, {
+        id: "tags",
+        key: "tags",
+        title: "Tags",
+        options: [
+          { value: "friend", label: "Friend" },
+          { value: "colleague", label: "Colleague" },
+          { value: "family", label: "Family" },
+        ],
+      }),
+      jsxs(Form.FilePicker, { id: "file", key: "file", title: "File" }),
+      jsxs(Form.FolderPicker, { id: "folder", key: "folder", title: "Folder", allowMultiple: true }),
+      jsxs(Form.Checkbox, { id: "updates", key: "updates", label: "Send updates" }),
+      jsxs(Form.Toggle, { id: "quiet", key: "quiet", label: "Quiet mode" }),
+    ],
+  });
+  return form;
+}

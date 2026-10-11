@@ -336,7 +336,11 @@ fn a_slow_command_search_shows_the_line_under_its_own_rule(cx: &mut TestAppConte
     // Its form points it at this test's service.
     cx.simulate_keystrokes("down enter");
     let view = settle(&window, cx);
-    assert!(matches!(view.screen, Screen::Form(_)), "{:?}", view.screen);
+    assert!(
+        matches!(view.screen, Screen::DesignedView(_)),
+        "{:?}",
+        view.screen
+    );
     cx.simulate_input(&service.url());
     cx.simulate_keystrokes("enter");
     let view = settle(&window, cx);

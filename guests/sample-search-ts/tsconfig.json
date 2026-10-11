@@ -4,10 +4,16 @@
     "noEmit": true,
     "skipLibCheck": true,
     "target": "es2022",
-    "lib": ["es2022"],
+    "lib": [
+      "es2022"
+    ],
     "types": [],
     "module": "esnext",
-    "moduleResolution": "bundler"
+    "moduleResolution": "bundler",
+    "jsx": "react-jsx",
+    "jsxImportSource": "@pane-app/extension"
   },
-  "include": ["src"]
+  "include": [
+    "src"
+  ]
 }

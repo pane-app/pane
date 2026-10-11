@@ -63,7 +63,7 @@ impl Launcher {
     }
 
     /// Runtime thread number `thread` crashed and the runtime was
-    /// restarted or not (`status`): says so, closes the custom view on
+    /// restarted or not (`status`): says so, closes the designed view on
     /// screen if that thread held it (one a restarted thread opened since
     /// stays), updates the screens about it, and has the window redraw.
     /// Called on the crashed thread, once the helpers it ran were ended.
@@ -72,12 +72,14 @@ impl Launcher {
         state.runtime_slow = None;
         let toast = Status::Error(toast(status));
         let held = state
-            .custom_view
+            .designed_view
             .as_ref()
-            .is_some_and(|open| open.id.thread() == thread);
+            .is_some_and(|stack| stack.top_id_thread() == thread);
         if held {
-            // Its guest instance, and the view with it, is gone.
-            self.return_from_custom_view(&mut state, toast.clone());
+            // Its guest instance, and the view with it, is gone: the
+            // command's screen went with it, back to root search.
+            self.close_designed_view(&mut state);
+            self.show_root(&mut state, None);
         }
         match &state.view.screen {
             Screen::Extensions { .. } => self.refresh_extensions(&mut state),
@@ -285,38 +287,55 @@ mod tests {
     use futures::executor::block_on;
 
     use super::*;
-    use crate::launcher::{Changing, CommandRegistration};
-    use crate::packages::{CommandMatches, CommandWhen, PackageIdentity, Store};
+    use crate::launcher::Changing;
+    use crate::packages::{PackageIdentity, Store};
     use crate::runtime::{Runtime, RuntimeFailure};
 
-    /// A launcher whose one command is the Rust sample, which draws a
-    /// custom view, with it open on its color view.
+    /// A launcher with the Rust sample's package installed, its color
+    /// command (a designed view) open.
     fn with_view_open() -> (Runtime, Launcher) {
-        let component =
-            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/guests/sample_rust.wasm");
-        assert!(component.exists(), "run `cargo xtask guests`");
         let runtime = Runtime::start().unwrap();
-        let command = CommandRegistration {
-            id: "rust".into(),
-            title: "Rust sample".into(),
-            subtitle: None,
-            component,
-            takes_query: false,
-            search: false,
-            keywords: Vec::new(),
-            when: CommandWhen::default(),
-            matches: CommandMatches::default(),
-        };
-        let launcher = Launcher::new(Ok(runtime.clone()), vec![command]);
-        block_on(launcher.activate_selected());
-        let items = launcher.view().rows;
-        let color = items
+        let data = tempfile::tempdir().unwrap();
+        let source = data.path().join("sample");
+        std::fs::create_dir_all(&source).unwrap();
+        for name in ["pane.json", "sample_rust.wasm"] {
+            let from = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("../../target/guests")
+                .join(name);
+            let from = if name == "pane.json" {
+                PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                    .join("../../target/guests/packages/sample-rust/pane.json")
+            } else {
+                from
+            };
+            assert!(
+                from.exists(),
+                "run `cargo xtask guests`: {}",
+                from.display()
+            );
+            std::fs::copy(from, source.join(name)).unwrap();
+        }
+        let launcher = Launcher::with_packages(
+            Ok(runtime.clone()),
+            Vec::new(),
+            data.path().join("extensions"),
+        );
+        block_on(launcher.install_package(&source));
+        while !matches!(launcher.view().screen, Screen::Root { .. }) {
+            launcher.back();
+        }
+        block_on(launcher.set_query("choose a color"));
+        // The color command, found by its id: its row is titled as its
+        // manifest titles it, not as the query that finds it.
+        let color = launcher
+            .view()
+            .rows
             .iter()
-            .position(|row| row.title == "Choose a color")
+            .position(|row| row.id.ends_with("#color"))
             .unwrap();
         launcher.select(color);
         block_on(launcher.activate_selected());
-        assert!(matches!(launcher.view().screen, Screen::CustomView(_)));
+        assert!(matches!(launcher.view().screen, Screen::DesignedView(_)));
         (runtime, launcher)
     }
 
@@ -328,24 +347,34 @@ mod tests {
     }
 
     #[test]
-    fn a_crash_closes_the_custom_view_of_the_thread_that_crashed() {
+    fn a_crash_closes_the_designed_view_of_the_thread_that_crashed() {
         let (_runtime, launcher) = with_view_open();
-        let thread = launcher.lock().custom_view.as_ref().unwrap().id.thread();
+        let thread = launcher
+            .lock()
+            .designed_view
+            .as_ref()
+            .unwrap()
+            .top_id_thread();
 
         launcher.note_runtime_crash(thread, &crashed());
 
-        assert_eq!(launcher.view().screen, Screen::Command);
+        assert!(matches!(launcher.view().screen, Screen::Root { .. }));
     }
 
     #[test]
-    fn a_crash_leaves_a_custom_view_another_thread_opened() {
+    fn a_crash_leaves_a_designed_view_another_thread_opened() {
         let (_runtime, launcher) = with_view_open();
-        let thread = launcher.lock().custom_view.as_ref().unwrap().id.thread();
+        let thread = launcher
+            .lock()
+            .designed_view
+            .as_ref()
+            .unwrap()
+            .top_id_thread();
 
         // Reported late, after a restarted thread opened this view.
         launcher.note_runtime_crash(thread - 1, &crashed());
 
-        assert!(matches!(launcher.view().screen, Screen::CustomView(_)));
+        assert!(matches!(launcher.view().screen, Screen::DesignedView(_)));
         assert!(matches!(launcher.view().status, Status::Error(_)));
     }
 

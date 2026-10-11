@@ -67,7 +67,7 @@ use crate::generation::EndMark;
 use crate::hotkeys::{FreshOpenPane, HookHealth, Route, Shortcut};
 use crate::launch::LaunchSource;
 use crate::launcher::CommandRegistration;
-use crate::packages::{CommandId, CommandMode, InstalledPackage, PackageIdentity};
+use crate::packages::{CommandId, InstalledPackage, PackageIdentity};
 use crate::platform::Platform;
 
 /// Each command's hotkey by command id, recorded in `hotkeys.json` as
@@ -566,8 +566,8 @@ impl Launcher {
                     let (offered, _) = package.launchable_commands().into_iter().find(
                         |(offered, unavailable)| offered.id == command && unavailable.is_none(),
                     )?;
-                    let no_view = package.mode_of(offered.manifest_id()) == CommandMode::NoView;
-                    Some(Opening::of(&offered, no_view, LaunchSource::Hotkey))
+                    let mode = package.mode_of(offered.manifest_id());
+                    Some(Opening::of(&offered, mode, LaunchSource::Hotkey))
                 })
         {
             return Some(opening);

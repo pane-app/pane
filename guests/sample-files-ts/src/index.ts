@@ -22,12 +22,10 @@ import { type FileEntry, search, status } from "pane:extension/file-index@0.1.0"
 import { type FolderEntry, listEntries } from "pane:extension/typed-folder@0.1.0";
 import type {
   Command,
-  CommandSearch,
-  CustomView,
+  DesignedView,
   List,
   RootResult,
   RootResults,
-  SearchResult,
 } from "@pane-app/extension";
 
 /** The most entries one query lists. */
@@ -78,25 +76,16 @@ async function render(): Promise<List> {
   };
 }
 
-async function submitForm(itemId: string): Promise<string> {
-  throw { message: `unknown form: ${itemId}` };
+async function openView(itemId: string): Promise<DesignedView> {
+  throw new Error(`unknown designed view: ${itemId}`);
 }
 
-async function openView(itemId: string): Promise<CustomView> {
-  throw new Error(`unknown view: ${itemId}`);
-}
+export const command: Command = { render, openView };
 
-export const command: Command = { render, submitForm, openView };
-
-export const commandSearch: CommandSearch = {
-  async search(_command: string, query: string): Promise<SearchResult[]> {
-    return found(query).map((entry) => ({
-      id: entry.path,
-      title: entry.name,
-      file: entry.id,
-    }));
-  },
-};
+// A command's own search is the designed List's search-text event now
+// (#240, `command-search` retired): root search still asks this sample for
+// its results (`rootResults`), which keep Pane's own file actions. See the
+// search sample (sample-search) for the designed List that searches itself.
 
 export const rootResults: RootResults = {
   async resultsFor(query: string): Promise<RootResult[]> {

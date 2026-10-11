@@ -105,10 +105,52 @@ fn launcher(data: &TempDir, builder: Arc<TemplateBuilder>) -> Launcher {
 /// the `language`, submitted, and the view once it settles.
 fn created(launcher: &Launcher, parent: &Path, name: &str, language: &str) -> Status {
     launcher.show_create_form(parent);
-    launcher.set_field_value("name", name);
-    launcher.set_field_value("language", language);
-    block_on(launcher.submit_form());
+    block_on(launcher.submit_pane_form(vec![
+        ("name".to_owned(), name.to_owned()),
+        ("language".to_owned(), language.to_owned()),
+    ]));
     launcher.view().status
+}
+
+/// One field of the form's tree, by its key: the tree node.
+fn field_node<'a>(form: &'a pane_core::PaneForm, key: &str) -> &'a pane_core::Node {
+    fn at<'a>(node: &'a pane_core::Node, key: &str) -> Option<&'a pane_core::Node> {
+        if node.key.as_deref() == Some(key) {
+            return Some(node);
+        }
+        node.children.iter().find_map(|child| at(child, key))
+    }
+    at(&form.tree.root, key).unwrap_or_else(|| panic!("the form has no {key} field"))
+}
+
+/// The values the form's fields start from, by their keys.
+fn field_values(form: &pane_core::PaneForm) -> Vec<(String, String)> {
+    [
+        ("name", "name"),
+        ("language", "language"),
+        ("template", "template"),
+    ]
+    .into_iter()
+    .map(|(key, _)| {
+        let value = match &field_node(form, key).kind {
+            pane_core::NodeKind::TextInput(input) => input.value.clone(),
+            pane_core::NodeKind::Select(select) => select.value.clone().unwrap_or_default(),
+            _ => String::new(),
+        };
+        (key.to_owned(), value)
+    })
+    .collect()
+}
+
+/// The error a field of the form's tree carries, if one was set.
+fn error_of(form: &pane_core::PaneForm, key: &str) -> Option<String> {
+    match &field_node(form, key).kind {
+        pane_core::NodeKind::TextInput(input) | pane_core::NodeKind::PasswordInput(input) => {
+            input.field.error.clone()
+        }
+        pane_core::NodeKind::Select(select) => select.field.error.clone(),
+        _ => None,
+    }
 }
 
 #[test]
@@ -155,40 +197,36 @@ fn the_form_creates_builds_previews_and_develops_the_package() {
     launcher.show_create_form(sources.path());
 
     let view = launcher.view();
-    let Screen::Form(form) = &view.screen else {
+    let Screen::PaneForm(form) = &view.screen else {
         panic!("no form: {:?}", view.screen);
     };
     assert_eq!(view.title, "Create Extension");
-    assert_eq!(form.submit_label, "Create extension");
-    let fields: Vec<(&str, &str)> = form
-        .fields
-        .iter()
-        .map(|field| (field.id.as_str(), field.value.as_str()))
-        .collect();
+    assert_eq!(form.submit, "Create extension");
     assert_eq!(
-        fields,
-        [
-            ("name", ""),
-            ("language", "typescript"),
-            ("template", "list")
+        field_values(form),
+        vec![
+            ("name".to_owned(), String::new()),
+            ("language".to_owned(), "typescript".to_owned()),
+            ("template".to_owned(), "list".to_owned())
         ]
     );
 
     // A name that names no package is refused on its field, as an
     // extension's rejection is, and the form stays.
-    block_on(launcher.submit_form());
+    block_on(launcher.submit_pane_form(Vec::new()));
     let view = launcher.view();
-    let Screen::Form(form) = &view.screen else {
+    let Screen::PaneForm(form) = &view.screen else {
         panic!("no form: {:?}", view.screen);
     };
     assert!(matches!(view.status, Status::Error(_)));
-    assert!(form.fields[0].error.is_some());
+    assert!(error_of(form, "name").is_some());
 
     // Filled and submitted: the folder is written, built once with the
     // builder development mode uses, and the install preview offers it.
-    launcher.set_field_value("name", "Word Count");
-    launcher.set_field_value("language", "rust");
-    block_on(launcher.submit_form());
+    block_on(launcher.submit_pane_form(vec![
+        ("name".to_owned(), "Word Count".to_owned()),
+        ("language".to_owned(), "rust".to_owned()),
+    ]));
     let folder = sources.path().join("word-count");
     assert!(
         folder.join("Cargo.toml").is_file(),
@@ -256,7 +294,7 @@ fn a_folder_that_is_not_empty_is_refused_and_the_form_stays() {
     assert!(why.contains("is not empty"), "{why}");
     // The form stays, and the author's file is kept.
     assert!(
-        matches!(launcher.view().screen, Screen::Form(_)),
+        matches!(launcher.view().screen, Screen::PaneForm(_)),
         "the form stays"
     );
     assert_eq!(
@@ -286,7 +324,7 @@ fn a_build_failure_is_shown_and_the_folder_is_kept_for_importing() {
     let folder = sources.path().join("word-count");
     assert!(folder.join("Cargo.toml").is_file());
     // The form stays, ready to submit again.
-    assert!(matches!(launcher.view().screen, Screen::Form(_)));
+    assert!(matches!(launcher.view().screen, Screen::PaneForm(_)));
 }
 
 #[test]

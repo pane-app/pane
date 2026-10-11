@@ -43,20 +43,21 @@ use serde_json::{Map, Value};
 
 use super::argument_fields;
 use super::choices::{Choices, Record, provider_title, split};
+use super::pane_form::{self, PaneFieldKind, PaneForm, PaneFormField};
 use super::{
-    CommandRegistration, Entry, FormField, FormPurpose, FormView, Launcher, LauncherView, OpenForm,
-    Opening, Row, Screen, State, Status, Unavailable, off_thread,
+    CommandRegistration, Entry, FormPurpose, Launcher, Opening, Row, Screen, State, Status,
+    Unavailable, next_form_id, off_thread,
 };
 use crate::launch::{LaunchRecord, LaunchSource};
-use crate::packages::{PackageIdentity, paused_reason};
-use crate::runtime::FieldKind;
+use crate::packages::{CommandMode, PackageIdentity, paused_reason};
 use crate::search::same_text;
 
 /// The longest alias, in characters.
 const MAX_ALIAS_CHARS: usize = 32;
 
-/// The alias form's only field.
-const ALIAS_FIELD: &str = "alias";
+/// The key of the alias form's only field: where its value is in the
+/// form's submission.
+pub(super) const ALIAS_FIELD: &str = "alias";
 
 /// The user's aliases and fallbacks, recorded in `aliases.json` as
 /// `{ "version": 1, "aliases": { "<command id>": "ec" }, "fallbacks":
@@ -190,9 +191,9 @@ pub(super) struct Target {
     /// Why it cannot run now: paused, waiting for a required dependency
     /// (see `waiting`), or unavailable on this system.
     pub(super) unavailable: Option<Unavailable>,
-    /// Whether it is a no-view command, which runs with the text sent
-    /// rather than opening a screen.
-    pub(super) no_view: bool,
+    /// Its mode, as its manifest declares it (a no-view command runs with
+    /// the text sent; a designed one opens its own screen).
+    pub(super) mode: CommandMode,
 }
 
 /// How a row sends the query to its command.
@@ -258,7 +259,7 @@ fn send_row(state: &State, target: &Target, text: &str, via: Via, how: &str) -> 
         // A typed query's rows are built in `typed_query`, never here.
         Via::Fallback | Via::Typed => LaunchSource::Fallback,
     };
-    let mut opening = Opening::of(registration, target.no_view, from);
+    let mut opening = Opening::of(registration, target.mode, from);
     opening.launch = LaunchRecord::sending(from, text);
     let entry = Entry::Send(Sending {
         opening,
@@ -647,8 +648,8 @@ impl Launcher {
     }
 
     /// Shows the form that sets the alias of the command `command`, with
-    /// its current alias filled in (Pane's own form; an extension's form
-    /// starts empty).
+    /// its current alias filled in: a designed tree now (#241), its field
+    /// a text field, as every form Pane itself asks is.
     pub(super) fn show_alias_form(&self, state: &mut State, command: &str) {
         state.actions_return = None;
         let title = self.command_title(state, command);
@@ -659,51 +660,53 @@ impl Launcher {
             .get(command)
             .cloned()
             .unwrap_or_default();
-        let form = FormView {
-            fields: vec![FormField {
-                id: ALIAS_FIELD.into(),
-                label: format!("Alias: one word that finds {title} in root search; empty for none"),
-                kind: FieldKind::Text {
-                    placeholder: Some("such as ec".into()),
-                },
+        let form = PaneForm::of(
+            next_form_id(),
+            &format!("Alias for {title}"),
+            "Save alias",
+            vec![PaneFormField {
+                key: ALIAS_FIELD.into(),
+                kind: PaneFieldKind::Text,
+                title: format!("Alias: one word that finds {title} in root search; empty for none"),
+                placeholder: Some("such as ec".into()),
+                info: None,
                 value: current,
-                error: None,
-                description: None,
                 required: false,
             }],
-            submit_label: "Save alias".into(),
-            setup: None,
-        };
-        let view = LauncherView::new(Screen::Form(form), format!("Alias for {title}"));
-        let return_to = std::mem::replace(&mut state.view, view);
-        state.form = Some(OpenForm {
-            purpose: FormPurpose::Alias(command.to_owned()),
-            return_to,
-            submitting: false,
-        });
-        state.next_screen();
+            None,
+        );
+        pane_form::open_pane_form(
+            state,
+            FormPurpose::Alias(command.to_owned()),
+            form,
+            format!("Alias for {title}"),
+        );
     }
 
-    /// Applies the alias submitted for `command` in its form: refused, with
-    /// the reason next to the field, if it is not one word, is too long or
-    /// is another command's; else it takes effect at once and the extension
-    /// list is shown, and the returned change records it.
-    pub(super) fn submit_alias(&self, state: &mut State, command: &str) -> Option<ChoiceChange> {
-        let Screen::Form(form) = &state.view.screen else {
+    /// Applies the alias `alias` submitted for `command` in its form:
+    /// refused, with the reason next to the field, if it is not one word,
+    /// is too long or is another command's; else it takes effect at once
+    /// and the extension list is shown, and the returned change records
+    /// it.
+    pub(super) fn submit_alias(
+        &self,
+        state: &mut State,
+        command: &str,
+        alias: &str,
+    ) -> Option<ChoiceChange> {
+        if !matches!(state.view.screen, Screen::PaneForm(_)) {
             return None;
-        };
-        let alias = form.fields.first()?.value.trim().to_owned();
+        }
         if let Some(refusal) =
-            alias_refusal(self, state, command, &alias).filter(|_| !alias.is_empty())
+            alias_refusal(self, state, command, alias).filter(|_| !alias.is_empty())
         {
-            let Screen::Form(form) = &mut state.view.screen else {
-                unreachable!("the alias form is open");
-            };
-            form.fields[0].error = Some(refusal.clone());
+            if let Screen::PaneForm(form) = &mut state.view.screen {
+                pane_form::mark_error(&mut form.tree, ALIAS_FIELD, &refusal);
+            }
             state.view.status = Status::Error(format!("Alias: {refusal}"));
             return None;
         }
-        let done = apply_alias(self, state, command, &alias);
+        let done = apply_alias(self, state, command, alias);
         state.form = None;
         let at = |entry: &Entry| matches!(entry, Entry::AskAlias(id) if id == command);
         Some(self.choices_changed(state, at, command, done))

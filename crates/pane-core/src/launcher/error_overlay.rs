@@ -36,7 +36,7 @@ use super::{
     Entry, Launcher, LauncherView, Opening, Pending, Row, Screen, State, Status, owner, reload,
 };
 use crate::extension_log::{ExtensionLogs, LogLevel, LogSource, LogStream};
-use crate::packages::{CommandMode, PackageIdentity};
+use crate::packages::PackageIdentity;
 use crate::runtime::CallError;
 
 /// What the overlay's Retry row does.
@@ -274,10 +274,10 @@ impl Launcher {
             .commands()
             .into_iter()
             .find(|found| found.manifest_id() == command)?;
-        let no_view = package.mode_of(&command) == CommandMode::NoView;
+        let mode = package.mode_of(&command);
         Some(Opening {
             launch: state.launch.clone(),
-            ..Opening::of(&registration, no_view, state.launch.source)
+            ..Opening::of(&registration, mode, state.launch.source)
         })
     }
 }

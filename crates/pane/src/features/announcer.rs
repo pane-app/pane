@@ -565,9 +565,11 @@ impl LauncherWindow {
     ) -> Option<Listing> {
         let root = matches!(view.screen, Screen::Root { .. });
         let opening = match &view.screen {
-            // Forms, custom views and a package's Logs screen (#213) keep
-            // their own accessibility.
-            Screen::Form(_) | Screen::CustomView(_) | Screen::ExtensionLog { .. } => return None,
+            // Forms, designed views and a package's Logs screen (#213)
+            // keep their own accessibility.
+            Screen::PaneForm(_) | Screen::DesignedView(_) | Screen::ExtensionLog { .. } => {
+                return None;
+            }
             Screen::Root { .. } => Opening::Silent,
             Screen::Command
             | Screen::CommandSearch { .. }

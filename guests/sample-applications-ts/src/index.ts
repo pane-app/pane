@@ -9,9 +9,7 @@
 // sample (guests/sample-applications-js).
 import type {
   Command,
-  CustomView,
-  FieldValue,
-  FormError,
+  DesignedView,
   IndexedResult,
   IndexedResults,
   List,
@@ -61,15 +59,11 @@ async function render(): Promise<List> {
   };
 }
 
-async function submitForm(_itemId: string, _values: FieldValue[]): Promise<string> {
-  throw { message: "this sample has no forms" } satisfies FormError;
+async function openView(_itemId: string): Promise<DesignedView> {
+  throw new Error("this sample opens no designed view");
 }
 
-async function openView(_itemId: string): Promise<CustomView> {
-  throw new Error("this sample has no custom views");
-}
-
-export const command: Command = { render, submitForm, openView };
+export const command: Command = { render, openView };
 
 export const indexedResults: IndexedResults = {
   async results(): Promise<IndexedResult[]> {

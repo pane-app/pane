@@ -102,12 +102,19 @@ pub enum IconSource {
 
 /// A theme tone an icon, an accessory or a tag can be coloured with: the
 /// theme's text levels and accent, or a named colour each theme draws in
-/// its own shade.
+/// its own shade. The UI component set's tone token (#237) is the same
+/// set: `neutral` is the primary ink, `secondary` the muted one, and the
+/// semantic `success`, `warning` and `danger` are the theme's own colours
+/// for them.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Tone {
     Primary,
     Secondary,
+    Neutral,
     Accent,
+    Success,
+    Warning,
+    Danger,
     Red,
     Orange,
     Yellow,
@@ -119,10 +126,14 @@ pub enum Tone {
 
 impl Tone {
     /// Every tone with its name in the tree, for reading and writing them.
-    pub const ALL: [(&'static str, Tone); 10] = [
+    pub const ALL: [(&'static str, Tone); 14] = [
         ("primary", Tone::Primary),
         ("secondary", Tone::Secondary),
+        ("neutral", Tone::Neutral),
         ("accent", Tone::Accent),
+        ("success", Tone::Success),
+        ("warning", Tone::Warning),
+        ("danger", Tone::Danger),
         ("red", Tone::Red),
         ("orange", Tone::Orange),
         ("yellow", Tone::Yellow),
@@ -675,8 +686,10 @@ pub(crate) fn read_tint(value: &Value) -> Result<Tint, String> {
     parse_tint(value)
 }
 
-/// Reads one colour: a tone's name (`red`, `secondary`), or `#rgb`,
-/// `#rgba`, `#rrggbb` or `#rrggbbaa`.
+/// Reads one colour: a tone's name (`red`, `secondary`), `#rgb`,
+/// `#rgba`, `#rrggbb`, `#rrggbbaa`, `rgb()`, `rgba()`, `hsl()` or
+/// `hsla()`. The designed tree accepts the same raw forms its colour
+/// properties do (#237).
 fn parse_color(text: &str) -> Result<Color, String> {
     let text = text.trim();
     if let Some(hex) = text.strip_prefix('#') {
@@ -695,6 +708,9 @@ fn parse_color(text: &str) -> Result<Color, String> {
         }
         return Ok(Color::Rgba(rgba));
     }
+    if let Some(rgba) = function_color(text) {
+        return Ok(Color::Rgba(rgba));
+    }
     Tone::named(text).map(Color::Tone).ok_or_else(|| {
         let names: Vec<&str> = Tone::ALL.iter().map(|(name, _)| *name).collect();
         format!(
@@ -702,6 +718,102 @@ fn parse_color(text: &str) -> Result<Color, String> {
             names.join(", ")
         )
     })
+}
+
+/// The colour `text` names — a tone, or a raw colour in any of its forms —
+/// or `None` when it names neither, as a token a later version may add.
+/// The designed tree's colour properties read through this, so an unknown
+/// name degrades as an unknown token does.
+pub fn color_of(text: &str) -> Option<Color> {
+    parse_color(text).ok()
+}
+
+/// The colour a `rgb()`, `rgba()`, `hsl()` or `hsla()` function names, as
+/// `0xRRGGBBAA`. Numbers may be comma- or space-separated, the channels
+/// may be percentages, and the alpha may come after a `/`.
+fn function_color(text: &str) -> Option<u32> {
+    let lower = text.trim().to_ascii_lowercase();
+    let (name, rest) = lower.split_once('(')?;
+    let rest = rest.strip_suffix(')')?;
+    let parts: Vec<(f32, bool)> = rest
+        .split([',', ' ', '/'])
+        .filter(|part| !part.trim().is_empty())
+        .map(|part| {
+            let part = part.trim();
+            match part.strip_suffix('%') {
+                Some(number) => number.parse::<f32>().ok().map(|value| (value, true)),
+                None => part.parse::<f32>().ok().map(|value| (value, false)),
+            }
+        })
+        .collect::<Option<Vec<(f32, bool)>>>()?;
+    let channels = parts.len() == 3 || parts.len() == 4;
+    let alpha = parts
+        .get(3)
+        .map(|(alpha, _)| (alpha.clamp(0., 1.) * 255.).round() as u32)
+        .unwrap_or(255);
+    let byte = |unit: f32| (unit.clamp(0., 1.) * 255.).round() as u32;
+    match (name, parts.as_slice()) {
+        // rgb() and rgba(): each channel a percentage or a number on
+        // 0..255, the alpha a fraction.
+        (
+            "rgb" | "rgba",
+            [
+                (red, red_percent),
+                (green, green_percent),
+                (blue, blue_percent),
+                ..,
+            ],
+        ) if channels => {
+            let scale = |value: f32, percent: bool| {
+                if percent { value / 100. } else { value / 255. }
+            };
+            Some(
+                byte(scale(*red, *red_percent)) << 24
+                    | byte(scale(*green, *green_percent)) << 16
+                    | byte(scale(*blue, *blue_percent)) << 8
+                    | alpha,
+            )
+        }
+        // hsl() and hsla(): the hue in degrees, the saturation and the
+        // lightness percentages of 100 or fractions of 1.
+        (
+            "hsl" | "hsla",
+            [
+                (hue, _),
+                (saturation, s_percent),
+                (lightness, l_percent),
+                ..,
+            ],
+        ) if channels => {
+            let fraction = |value: f32, percent: bool| if percent { value / 100. } else { value };
+            let (red, green, blue) = hsl(
+                *hue,
+                fraction(*saturation, *s_percent).clamp(0., 1.),
+                fraction(*lightness, *l_percent).clamp(0., 1.),
+            );
+            Some(byte(red) << 24 | byte(green) << 16 | byte(blue) << 8 | alpha)
+        }
+        _ => None,
+    }
+}
+
+/// A colour of hue `hue` degrees (wrapping), `saturation` and `lightness`
+/// in 0..1, as RGB in 0..1.
+fn hsl(hue: f32, saturation: f32, lightness: f32) -> (f32, f32, f32) {
+    let hue = (hue.rem_euclid(360.) / 60.) % 6.;
+    let sector = hue.floor() as u32;
+    let at = hue - hue.floor();
+    let chroma = (1. - (2. * lightness - 1.).abs()) * saturation;
+    let minimum = lightness - chroma / 2.;
+    let add = |rgb: (f32, f32, f32)| (rgb.0 + minimum, rgb.1 + minimum, rgb.2 + minimum);
+    match sector {
+        0 => add((chroma, chroma * at, 0.)),
+        1 => add((chroma * (1. - at), chroma, 0.)),
+        2 => add((0., chroma, chroma * at)),
+        3 => add((0., chroma * (1. - at), chroma)),
+        4 => add((chroma * at, 0., chroma)),
+        _ => add((chroma, 0., chroma * (1. - at))),
+    }
 }
 
 /// Whether `url` is a `data:` URL, which Pane draws without downloading.
@@ -1471,5 +1583,40 @@ mod tests {
         assert_eq!(caution(folder.path(), Some(&icon("big.png"))), None);
         assert_eq!(caution(folder.path(), Some(&icon("star"))), None);
         assert!(caution(folder.path(), None).unwrap().contains("no icon"));
+    }
+
+    #[test]
+    fn a_colour_reads_in_every_raw_form_and_the_semantic_tones_name_their_own() {
+        let raw = |text: &str| color_of(text);
+        assert_eq!(raw("#f63"), Some(Color::Rgba(0xFF6633FF)));
+        assert_eq!(raw("#FF6633"), Some(Color::Rgba(0xFF6633FF)));
+        assert_eq!(raw("#FF663380"), Some(Color::Rgba(0xFF663380)));
+        assert_eq!(raw("rgb(255, 102, 51)"), Some(Color::Rgba(0xFF6633FF)));
+        assert_eq!(raw("rgb(100% 40% 20%)"), Some(Color::Rgba(0xFF6633FF)));
+        assert_eq!(
+            raw("rgba(255, 102, 51, 0.5)"),
+            Some(Color::Rgba(0xFF663380))
+        );
+        assert_eq!(raw("hsl(18, 100%, 60%)"), Some(Color::Rgba(0xFF7033FF)));
+        assert_eq!(
+            raw("hsl(18, 100%, 60% / 0.5)"),
+            Some(Color::Rgba(0xFF703380))
+        );
+        assert_eq!(raw("hsla(0, 100%, 50%)"), Some(Color::Rgba(0xFF0000FF)));
+        // The semantic tones the UI component set names (#237), beside the
+        // text levels and the palette.
+        for (name, tone) in [
+            ("neutral", Tone::Neutral),
+            ("success", Tone::Success),
+            ("warning", Tone::Warning),
+            ("danger", Tone::Danger),
+        ] {
+            assert_eq!(raw(name), Some(Color::Tone(tone)), "{name}");
+            assert_eq!(Tone::named(name), Some(tone));
+        }
+        assert_eq!(raw("plaid"), None);
+        // What a colour cannot be is said, as a manifest's icon checks it.
+        assert!(parse_color("rgb(1, 2)").is_err());
+        assert!(parse_color("hsl(1, 2, 3, 4, 5)").is_err());
     }
 }

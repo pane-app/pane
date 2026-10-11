@@ -10,18 +10,18 @@
 //! answers right behind its answer.
 #![no_std]
 
+use pane_extension::Command;
 use pane_extension::alloc::{string::String, vec, vec::Vec};
 use pane_extension::root::{RootAction, RootResult, WallTime};
-use pane_extension::{Command, NoCustomView};
 
 struct Quick;
 pane_extension::export!(Quick);
 pane_extension::root::export!(Quick);
 
-/// A provider command never opens or runs, so its `Command` keeps the
-/// defaults: `type CustomView = NoCustomView` and nothing else.
+/// A provider command never opens or runs, so its `Command` names the
+/// view type of none and nothing else.
 impl Command for Quick {
-    type CustomView = NoCustomView;
+    type DesignedView = pane_extension::view::NoDesignedView;
 }
 
 impl pane_extension::root::Guest for Quick {

@@ -18,7 +18,7 @@ use serde_json::json;
 
 /// (component file in `guests/prebuilt/` and `target/guests/`, source
 /// package) of each prebuilt JS/TS sample.
-pub(crate) const SAMPLES: [(&str, &str); 53] = [
+pub(crate) const SAMPLES: [(&str, &str); 59] = [
     ("sample_js", "guests/sample-js"),
     ("sample_ts", "guests/sample-ts"),
     ("sample_settings_js", "guests/sample-settings-js"),
@@ -84,6 +84,12 @@ pub(crate) const SAMPLES: [(&str, &str); 53] = [
         "sample_system_commands_ts",
         "guests/sample-system-commands-ts",
     ),
+    ("sample_view_js", "guests/sample-view-js"),
+    ("sample_view_ts", "guests/sample-view-ts"),
+    ("sample_nav_js", "guests/sample-nav-js"),
+    ("sample_nav_ts", "guests/sample-nav-ts"),
+    ("sample_timer_js", "guests/sample-timer-js"),
+    ("sample_timer_ts", "guests/sample-timer-ts"),
 ];
 
 /// Pane's WIT, copied beside the world in `guests/js/wit`.
@@ -97,13 +103,13 @@ const PANE_WIT: [&str; 16] = [
     "root-results.wit",
     "operations.wit",
     "applications.wit",
-    "search.wit",
     "helpers.wit",
     "files.wit",
     "clipboard.wit",
     "service.wit",
     "programs.wit",
     "file-index.wit",
+    "view.wit",
 ];
 
 /// Toolchain inputs that decide what a component contains: the wasm parts

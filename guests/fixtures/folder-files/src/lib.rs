@@ -16,7 +16,9 @@
 //! checks each file again before acting on it; the extension only matches
 //! the listing Pane gives it and names files by the ids Pane gave them,
 //! never by a path. Disabling the package removes its results and stops
-//! any listing.
+//! any listing. (The command-search export this fixture once carried is
+//! retired with `search: true` itself, #240: a package's command opens a
+//! list, never a search field of its own.)
 #![no_std]
 
 mod matching;
@@ -25,13 +27,11 @@ use pane_extension::alloc::{format, string::String, vec::Vec};
 use pane_extension::feedback::{Toast, show_toast};
 use pane_extension::files::{self, FolderState};
 use pane_extension::root::{RootAction, RootResult, WallTime};
-use pane_extension::search::SearchResult;
-use pane_extension::{Command, CustomView, FieldValue, FormError, Item, List, NoCustomView};
+use pane_extension::{Command, Item, List};
 
 struct Files;
 pane_extension::export!(Files);
 pane_extension::root::export!(Files);
-pane_extension::search::export!(Files);
 
 /// What Pane lists, in its own limits.
 fn policy() -> String {
@@ -71,7 +71,7 @@ fn found(query: &str) -> Result<Vec<(String, String)>, String> {
 }
 
 impl Command for Files {
-    type CustomView = NoCustomView;
+    type DesignedView = pane_extension::view::NoDesignedView;
 
     async fn render() -> Result<List, String> {
         Ok(List::new("Search Files").item(
@@ -79,34 +79,6 @@ impl Command for Files {
                 .subtitle(policy())
                 .on_action(|| act("policy")),
         ))
-    }
-
-    async fn submit_form(item_id: String, _values: Vec<FieldValue>) -> Result<String, FormError> {
-        Err(FormError {
-            field: None,
-            message: format!("unknown form: {item_id}"),
-        })
-    }
-
-    async fn open_view(item_id: String) -> Result<CustomView, String> {
-        Err(format!("unknown view: {item_id}"))
-    }
-}
-
-impl pane_extension::search::Guest for Files {
-    /// The files the text typed in Search Files' field finds, each named by
-    /// the id Pane gave it: Pane lists it with its own name and folder, and
-    /// gives it its file actions.
-    async fn search(_command: String, query: String) -> Result<Vec<SearchResult>, String> {
-        Ok(found(&query)?
-            .into_iter()
-            .map(|(id, relative)| SearchResult {
-                title: matching::last_name(&relative).into(),
-                id: relative,
-                subtitle: None,
-                file: Some(id),
-            })
-            .collect())
     }
 }
 

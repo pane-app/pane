@@ -255,16 +255,34 @@ fn opens(kind: Kind, launcher: &Launcher) {
                 view.rows
             );
         }
-        // The form's item opens the form, which answers what was filled
-        // in.
+        // The form command opens its form as a designed view (#241),
+        // whose submission answers what was filled in.
         Kind::Form => {
-            assert_eq!(launcher.view().screen, Screen::Command, "{kind:?}");
-            choose(launcher, "Greet someone");
-            assert!(matches!(launcher.view().screen, Screen::Form(_)));
-            launcher.set_field_value("name", "Ada");
-            launcher.set_field_value("greeting", "hello");
-            block_on(launcher.submit_form());
-            assert_eq!(launcher.view().status, Status::Result("Hello, Ada".into()));
+            assert!(
+                matches!(launcher.view().screen, Screen::DesignedView(_)),
+                "{:?}",
+                launcher.view().screen
+            );
+            block_on(launcher.submit_designed_form(
+                None,
+                vec![
+                    (
+                        "name".to_owned(),
+                        pane_core::FormValue::Text("Ada".to_owned()),
+                    ),
+                    (
+                        "greeting".to_owned(),
+                        pane_core::FormValue::Text("hello".to_owned()),
+                    ),
+                ],
+            ));
+            let view = launcher.view();
+            let title: String = view.rows.iter().map(|row| row.title.clone()).collect();
+            assert!(
+                title.contains("Hello, Ada"),
+                "{kind:?}: {title:?} ({:?})",
+                view.status
+            );
         }
         // The no-view command runs without a screen, root search staying
         // as it was, and answers in a toast.

@@ -316,9 +316,7 @@ fn set_alias(launcher: &Launcher, command: &str, alias: &str) {
     manage(launcher);
     select_title(launcher, &format!("Alias for {command}"));
     block_on(launcher.activate_selected());
-    let form = launcher.view().form().cloned().expect("the alias form");
-    launcher.set_field_value(&form.fields[0].id, alias);
-    block_on(launcher.submit_form());
+    block_on(launcher.submit_pane_form(vec![("alias".to_owned(), alias.to_owned())]));
     to_root(launcher);
 }
 

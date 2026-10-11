@@ -354,9 +354,8 @@ fn set_alias(launcher: &Launcher, title: &str, alias: &str) {
     manage(launcher);
     select_title(launcher, &format!("Alias for {title}"));
     block_on(launcher.activate_selected());
-    let form = launcher.view().form().cloned().expect("the alias form");
-    launcher.set_field_value(&form.fields[0].id, alias);
-    block_on(launcher.submit_form());
+    assert!(launcher.view().form().is_some(), "the alias form opened");
+    block_on(launcher.submit_pane_form(vec![("alias".to_owned(), alias.to_owned())]));
 }
 
 /// Makes the command titled `title` a fallback in Manage extensions.
@@ -498,10 +497,11 @@ fn a_waiting_package_answers_its_operations_unavailable_with_the_reason() {
     assert_eq!(launcher.view().screen, Screen::Command);
     select_title(&launcher, "Greet through another extension");
     block_on(launcher.activate_selected());
-    launcher.set_field_value("source", &dirs.source("caller"));
-    launcher.set_field_value("name", "Ada");
-    launcher.set_field_value("times", "once");
-    block_on(launcher.submit_form());
+    block_on(launcher.submit_pane_form(vec![
+        ("source".to_owned(), dirs.source("caller").to_owned()),
+        ("name".to_owned(), "Ada".to_owned()),
+        ("times".to_owned(), "once".to_owned()),
+    ]));
     assert_eq!(
         error(&launcher.view().status),
         "unavailable: Caller is waiting for Rust operations sample, which is disabled"
@@ -719,10 +719,11 @@ fn waiting_leaves_an_open_screen_and_its_calls_alone_and_never_pauses_it() {
     assert!(dirs.runs(&launcher, "caller"), "its instance stays");
     select_title(&launcher, "Greet through another extension");
     block_on(launcher.activate_selected());
-    launcher.set_field_value("source", "greeter");
-    launcher.set_field_value("name", "Ada");
-    launcher.set_field_value("times", "once");
-    block_on(launcher.submit_form());
+    block_on(launcher.submit_pane_form(vec![
+        ("source".to_owned(), "greeter".to_owned()),
+        ("name".to_owned(), "Ada".to_owned()),
+        ("times".to_owned(), "once".to_owned()),
+    ]));
     assert_eq!(
         error(&launcher.view().status),
         "disabled: Rust operations sample is disabled; Pane does not enable it for a call, \

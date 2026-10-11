@@ -183,11 +183,39 @@ fn manage(launcher: &Launcher) {
     assert!(matches!(launcher.view().screen, Screen::Extensions { .. }));
 }
 
+/// The value the open alias form's field starts with.
+fn form_value(launcher: &Launcher, key: &str) -> String {
+    fn at(node: &pane_core::Node, key: &str) -> Option<String> {
+        if node.key.as_deref() == Some(key)
+            && let pane_core::NodeKind::TextInput(input) = &node.kind
+        {
+            return Some(input.value.clone());
+        }
+        node.children.iter().find_map(|child| at(child, key))
+    }
+    let view = launcher.view();
+    let form = view.form().expect("a form is open");
+    at(&form.tree.root, key).expect("the field")
+}
+
+/// The error the open alias form's field carries, if one was set.
+fn form_error(launcher: &Launcher, key: &str) -> Option<String> {
+    fn at(node: &pane_core::Node, key: &str) -> Option<String> {
+        if node.key.as_deref() == Some(key)
+            && let pane_core::NodeKind::TextInput(input) = &node.kind
+        {
+            return input.field.error.clone();
+        }
+        node.children.iter().find_map(|child| at(child, key))
+    }
+    let view = launcher.view();
+    let form = view.form().expect("a form is open");
+    at(&form.tree.root, key)
+}
+
 /// Submits `alias` in the open alias form; returns the status.
 fn submit_alias(launcher: &Launcher, alias: &str) -> Status {
-    let form = launcher.view().form().cloned().expect("the alias form");
-    launcher.set_field_value(&form.fields[0].id, alias);
-    block_on(launcher.submit_form());
+    block_on(launcher.submit_pane_form(vec![("alias".to_owned(), alias.to_owned())]));
     launcher.view().status
 }
 
@@ -314,7 +342,7 @@ fn an_alias_finds_the_command_first_and_sends_the_text_after_it_only_when_invoke
     // Removed by leaving the field empty; its form starts with it.
     manage(&launcher);
     activate(&launcher, "Alias for Echo");
-    assert_eq!(launcher.view().form().unwrap().fields[0].value, "ec");
+    assert_eq!(form_value(&launcher, "alias"), "ec");
     assert_eq!(
         submit_alias(&launcher, ""),
         Status::Result("Echo has no alias now".into())
@@ -635,8 +663,7 @@ fn an_alias_that_is_not_one_word_or_is_another_commands_is_refused() {
                 .into()
         )
     );
-    let form = launcher.view().form().cloned().expect("the form stays");
-    assert!(form.fields[0].error.is_some());
+    assert!(form_error(&launcher, "alias").is_some(), "the form stays");
 
     let status = set_alias(&launcher, "e c");
     assert_eq!(
@@ -851,9 +878,7 @@ fn a_change_that_cannot_be_kept_never_brings_back_an_uninstalled_packages_choice
     // The alias applies at once; its write is still to come.
     manage(&launcher);
     activate(&launcher, "Alias for Echo");
-    let form = launcher.view().form().cloned().unwrap();
-    launcher.set_field_value(&form.fields[0].id, "ec");
-    let write = launcher.submit_form();
+    let write = launcher.submit_pane_form(vec![("alias".to_owned(), "ec".to_owned())]);
     // Meanwhile the package is uninstalled, forgetting it.
     uninstall(&launcher, &folder, "Query sample");
     assert!(launcher.packages().is_empty());

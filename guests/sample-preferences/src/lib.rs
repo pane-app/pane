@@ -27,9 +27,7 @@
 use pane_extension::alloc::{format, string::String};
 use pane_extension::commands::source_name;
 use pane_extension::feedback::{Toast, show_toast};
-use pane_extension::{
-    Command, Item, LaunchRecord, LaunchType, List, NoCustomView, preferences, settings,
-};
+use pane_extension::{Command, Item, LaunchRecord, LaunchType, List, preferences, settings};
 use serde::Deserialize;
 
 /// The settings key holding how many times "Tick" ran.
@@ -104,7 +102,7 @@ fn last() -> Result<String, String> {
 }
 
 impl Command for Preferences {
-    type CustomView = NoCustomView;
+    type DesignedView = pane_extension::view::NoDesignedView;
 
     /// "Show preferences": every value it received, one per item.
     async fn render() -> Result<List, String> {

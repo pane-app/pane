@@ -18,7 +18,7 @@
 use pane_extension::alloc::{format, string::String, string::ToString, vec::Vec};
 use pane_extension::feedback::{Toast, show_toast};
 use pane_extension::operations::{CallErrorKind, call};
-use pane_extension::{Command, CustomView, FieldValue, FormError, Item, List, NoCustomView};
+use pane_extension::{Command, Item, List};
 use serde_json::{Value, json};
 
 struct Dependencies;
@@ -73,7 +73,7 @@ fn item(id: &'static str, title: &str, subtitle: &str) -> Item {
 }
 
 impl Command for Dependencies {
-    type CustomView = NoCustomView;
+    type DesignedView = pane_extension::view::NoDesignedView;
 
     async fn render() -> Result<List, String> {
         Ok(List::new("Greet through dependencies").items([
@@ -88,16 +88,5 @@ impl Command for Dependencies {
                 "The Rust operations sample, if you installed it",
             ),
         ]))
-    }
-
-    async fn submit_form(item_id: String, _values: Vec<FieldValue>) -> Result<String, FormError> {
-        Err(FormError {
-            field: None,
-            message: format!("unknown form: {item_id}"),
-        })
-    }
-
-    async fn open_view(item_id: String) -> Result<CustomView, String> {
-        Err(format!("unknown view: {item_id}"))
     }
 }

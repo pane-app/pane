@@ -418,11 +418,6 @@
           "type": "boolean",
           "default": false
         },
-        "search": {
-          "description": "The command searches as the user types into its own search field\nonce it is open, such as a command searching an online service; root\nsearch never asks it. Its component then also exports\n`pane:extension/command-search`.",
-          "type": "boolean",
-          "default": false
-        },
         "schedule": {
           "description": "The scheduled work the command declares, if any: every\n`everySeconds` seconds while the package's code may run, Pane runs\nthe action of `item` (a view command) or the command itself in the\nbackground (a no-view command, which names no item).",
           "anyOf": [
@@ -487,6 +482,11 @@
           "description": "`\"provider\"`: a root provider (#164), a command whose only job is\nto answer root search through its `rootResults` or\n`indexedResults`, such as the calculator. It is never launched: it\nhas no row in root search, cannot be pinned, has no alias, fallback\nor hotkey, is offered by neither the Actions panel nor the Shortcuts\npage, and nothing opens or runs it (its component needs no `render`\nor `run` of its own; a reload's start check may still ask it, and\ntakes its refusal as a start, as it does a no-view command's). Its\nresults\nanswer while its package is enabled, and its extension's Settings\ncard lists it, so the user can still turn it off.",
           "type": "string",
           "const": "provider"
+        },
+        {
+          "description": "`\"designed\"`: launching it opens a designed view (`open-view`, ADR\n0036) — a screen the extension describes as a tree of layout nodes\nand UI components that Pane renders (`docs/designed-tree.md`) — and\nnever calls its `render`. Transitional: the List and the Form move\nonto the tree (#240, #241), after which the `view` mode retires into\nthis one and the mode says only that a screen opens.",
+          "type": "string",
+          "const": "designed"
         }
       ]
     },

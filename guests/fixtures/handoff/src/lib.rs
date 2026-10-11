@@ -16,9 +16,7 @@ use core::cell::RefCell;
 
 use pane_extension::alloc::{format, string::String, vec, vec::Vec};
 use pane_extension::feedback::{Toast, show_toast};
-use pane_extension::{
-    Command, CustomView, Item, List, NoCustomView, content, lifecycle, settings, state,
-};
+use pane_extension::{Command, Item, List, content, lifecycle, settings, state};
 
 /// The settings key saying what the old code's `snapshot` answers.
 const SNAPSHOT: &str = "snapshot";
@@ -86,7 +84,7 @@ impl lifecycle::Guest for Fixture {
 }
 
 impl Command for Fixture {
-    type CustomView = NoCustomView;
+    type DesignedView = pane_extension::view::NoDesignedView;
 
     /// The counter as it stands, with the items that count and hold.
     async fn render() -> Result<List, String> {

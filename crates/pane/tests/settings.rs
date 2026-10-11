@@ -2882,7 +2882,7 @@ fn manage_extensions_and_the_install_rows_open_settings(cx: &mut TestAppContext)
     );
     let view = cx.read_entity(&launcher, |window, _| window.launcher().view());
     assert!(
-        !matches!(view.screen, Screen::Form(_)),
+        !matches!(view.screen, Screen::PaneForm(_)),
         "the launcher shows no form of its own"
     );
 }

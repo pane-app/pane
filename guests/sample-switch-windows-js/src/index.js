@@ -7,10 +7,14 @@
 // one item for each, which switches to it and says what it answered in
 // a toast: "Switched to notes.txt - Notepad", or why it could not.
 // Typing in the command's search field filters the windows by their
-// titles and their applications' names. Answers and errors match the
-// Rust sample (guests/sample-switch-windows) and the TypeScript one.
+// titles and their applications' names, as the designed List's host
+// filtering does (#240, each item's keywords naming its application).
+// Answers and errors match the Rust sample
+// (guests/sample-switch-windows) and the TypeScript one.
 // @ts-check
 import { showToast } from "@pane-app/extension/feedback";
+import { EmptyState, List, createView } from "@pane-app/extension/view";
+import { jsxs } from "@pane-app/extension/jsx-runtime";
 import { activate, listWindows } from "pane:extension/windows@0.1.0";
 
 /**
@@ -53,86 +57,62 @@ const subtitle = (window) =>
     : window.applicationName;
 
 /**
- * One listed window as an item: its title, its application's name and
- * icon. Running it switches to the window and says what that answered.
+ * One listed window as an item: its title, its application's name (as
+ * the keywords the List's host filtering matches besides the title) and
+ * icon. Choosing it switches to the window and says what that answered.
  * @param {import("pane:extension/windows@0.1.0").Window} window
  */
-const item = (window) => ({
-  id: window.id,
-  title: window.title,
-  subtitle: subtitle(window),
-  icon: window.icon === null ? null : { file: window.icon },
-  onAction: async () => {
-    try {
-      activate(window.id);
-      showToast({ title: `Switched to ${window.title}` });
-    } catch (error) {
-      showToast({
-        style: "failure",
-        title: `Switch to ${window.title}: ${message(error)}`,
-      });
-    }
-  },
-});
+const item = (window) =>
+  jsxs(List.Item, {
+    key: window.id,
+    title: window.title,
+    subtitle: subtitle(window),
+    icon: window.icon === null ? null : { file: window.icon },
+    keywords: [window.applicationName],
+    onClick: async () => {
+      try {
+        activate(window.id);
+        showToast({ title: `Switched to ${window.title}` });
+      } catch (error) {
+        showToast({
+          style: "failure",
+          title: `Switch to ${window.title}: ${message(error)}`,
+        });
+      }
+    },
+    children: [window.title],
+  });
+
+/**
+ * The view the command opens (#240): a List of the open windows, which
+ * Pane filters by the text typed in its search field with the
+ * root-search matcher, each item's keywords naming its application, so
+ * typing finds a window by its title or its application's name.
+ */
+function SwitchWindows() {
+  const listed = host(() => listWindows());
+  return jsxs(List, {
+    navigationTitle: "Switch Windows",
+    searchPlaceholder: "Filter the windows…",
+    children:
+      listed.length === 0
+        ? [
+            jsxs(EmptyState, {
+              title: "No windows are open",
+              description: "Nothing Alt+Tab would show is listed",
+              children: [],
+            }),
+          ]
+        : listed.map(item),
+  });
+}
 
 /** @type {import("@pane-app/extension").Command} */
 export const command = {
-  async render() {
-    const listed = host(() => listWindows());
-    return {
-      title: "Switch Windows",
-      items:
-        listed.length === 0
-          ? [
-              {
-                id: "none",
-                title: "No windows are open",
-                subtitle: "Nothing Alt+Tab would show is listed",
-              },
-            ]
-          : listed.map(item),
-    };
-  },
-
-  /** Runs the search result the user chose: the window its id names,
-   * switched to. */
-  async runSearchResult(id) {
-    // The list is asked for again, to say which window was switched to;
-    // one that is gone says so.
-    const title = host(() => listWindows()).find(
-      (window) => window.id === id,
-    )?.title;
-    try {
-      activate(id);
-      showToast({ title: `Switched to ${title ?? "a window that is gone"}` });
-    } catch (error) {
-      showToast({
-        style: "failure",
-        title: `Switch to ${title ?? "a window that is gone"}: ${message(error)}`,
-      });
-    }
-  },
-};
-
-/** @type {import("@pane-app/extension").CommandSearch} */
-export const commandSearch = {
-  /** The windows whose title or application's name matches what is
-   * typed, in the order they were listed. */
-  async search(command, query) {
+  async openView(command) {
     if (command !== "switch-windows") {
       throw new Error(`unknown command: ${command}`);
     }
-    const typed = query.trim().toLowerCase();
-    return host(() => listWindows())
-      .filter(
-        (window) =>
-          window.title.toLowerCase().includes(typed) ||
-          window.applicationName.toLowerCase().includes(typed),
-      )
-      .map((window) => ({
-        id: window.id,
-        title: window.title,
-        subtitle: subtitle(window),
-      }));
+    return createView(SwitchWindows);
   },
 };

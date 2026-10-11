@@ -133,7 +133,7 @@ impl FileType {
 }
 
 /// What Search Files keeps while Pane's Files command is open on its own
-/// search (in `command_search::Searching`).
+/// search (the launcher's `State.browsing`).
 #[derive(Clone, Debug)]
 pub(super) struct Browsing {
     /// The package's identity key: the index is asked as it.
@@ -155,17 +155,25 @@ pub(super) struct Browsing {
 /// listed.
 type Asked = Pin<Box<dyn Future<Output = ()> + Send>>;
 
+/// Whether the command whose full id is `id`, with manifest id `manifest`,
+/// is Pane's registered Files command: the one command whose own search
+/// field Pane fills, browsing the index (root search's "Search Files for
+/// …" row opens it with the text typed).
+pub(super) fn registered_command(id: &str, manifest: &str) -> bool {
+    manifest == FILES && id == PackageIdentity::default_extension(FILES).command_id(FILES)
+}
+
 /// Whether `state`'s open command is Search Files browsed by Pane.
 pub(super) fn browsing(state: &State) -> bool {
     browsing_of(state).is_some()
 }
 
 fn browsing_of(state: &State) -> Option<&Browsing> {
-    state.searching.as_ref()?.files.as_ref()
+    state.browsing.as_ref()
 }
 
 fn browsing_mut(state: &mut State) -> Option<&mut Browsing> {
-    state.searching.as_mut()?.files.as_mut()
+    state.browsing.as_mut()
 }
 
 /// The row and entry listing `found`, found by the command in `component`
@@ -519,32 +527,37 @@ impl Launcher {
         }
     }
 
+    /// Whether the command in `component` with manifest id `command` is
+    /// Pane's registered Files command, whose package runs and uses the
+    /// file index, and this launcher keeps one: the one command that opens
+    /// on its own search field, which Pane fills browsing the index.
+    pub(super) fn registered_files(state: &State, component: &Path, command: &str) -> bool {
+        let Some(package) = owner(&state.packages, component) else {
+            return false;
+        };
+        package.identity == PackageIdentity::default_extension(FILES)
+            && command == FILES
+            && state.runs(package)
+            && super::file_search::uses_file_index(package)
+            && state.files.is_some()
+    }
+
     /// Starts browsing Search Files as the command in `component`, whose
     /// manifest id is `command`, opens on its own search: when it is Pane's
-    /// registered Files command, whose package runs and uses the file
-    /// index, and this launcher keeps one. Whether it is.
+    /// registered Files command. Whether it is.
     pub(super) fn begin_search_files(
         &self,
         state: &mut State,
         component: &Path,
         command: &str,
     ) -> bool {
-        let Some(package) = owner(&state.packages, component) else {
-            return false;
-        };
-        let registered = package.identity == PackageIdentity::default_extension(FILES)
-            && command == FILES
-            && state.runs(package)
-            && super::file_search::uses_file_index(package)
-            && state.files.is_some();
-        if !registered {
+        if !Self::registered_files(state, component, command) {
             return false;
         }
-        let owner = package.identity.key();
-        let Some(searching) = state.searching.as_mut() else {
-            return false;
-        };
-        searching.files = Some(Browsing {
+        let owner = owner(&state.packages, component)
+            .map(|package| package.identity.key())
+            .unwrap_or_default();
+        state.browsing = Some(Browsing {
             owner,
             component: component.to_path_buf(),
             filter: FileType::All,

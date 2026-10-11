@@ -42,7 +42,7 @@ mod samples;
 #[path = "../../pane-core/tests/support/service.rs"]
 mod service;
 
-use settle::settle;
+use settle::{settle, settle_shown};
 
 #[path = "support/a11y.rs"]
 mod a11y;
@@ -135,6 +135,38 @@ impl Hotkeys for FakeSystem {
     fn hook_health(&self) -> Option<HookHealth> {
         self.health.lock().unwrap().clone()
     }
+}
+
+#[path = "support/packages.rs"]
+mod packages;
+
+/// The launcher window with the package in `folder` installed (its color
+/// item launches the package's color command, which only an installed
+/// command can be).
+fn open_package<'a>(
+    cx: &'a mut TestAppContext,
+    data: &std::path::Path,
+    folder: &std::path::Path,
+) -> (gpui::Entity<LauncherWindow>, &'a mut VisualTestContext) {
+    let launcher = Launcher::with_packages(Runtime::start(), vec![], data.join("extensions"));
+    futures::executor::block_on(launcher.install_package(folder));
+    open_launcher(cx, launcher, Some(data))
+}
+
+/// The value of the open designed view's canvas: what it says for
+/// assistive technology.
+fn canvas_value(window: &LauncherWindow) -> Option<String> {
+    let view = window.launcher().view();
+    let Screen::DesignedView(view) = &view.screen else {
+        return None;
+    };
+    fn value(node: &pane_core::Node) -> Option<String> {
+        match &node.kind {
+            pane_core::NodeKind::Canvas(canvas) => canvas.a11y.value.clone(),
+            _ => node.children.iter().find_map(value),
+        }
+    }
+    value(&view.tree.root)
 }
 
 /// The launcher window over `launcher`, with the record of `data` in
@@ -374,13 +406,7 @@ fn until_color(window: &gpui::Entity<LauncherWindow>, cx: &mut VisualTestContext
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
         cx.run_until_parked();
-        let shown = cx.read_entity(window, |window, _| {
-            window
-                .launcher()
-                .view()
-                .custom_view()
-                .map(|view| view.frame.value.as_str().to_owned())
-        });
+        let shown = cx.read_entity(window, |window, _| canvas_value(window));
         if shown.as_deref() == Some(expected) {
             return;
         }
@@ -1048,7 +1074,11 @@ fn return_to_root_leaves_whatever_screen_is_open(cx: &mut TestAppContext) {
     settle(&window, cx);
     cx.simulate_keystrokes("down down down down enter");
     let view = settle(&window, cx);
-    assert!(matches!(view.screen, Screen::Form(_)), "{:?}", view.screen);
+    assert!(
+        matches!(view.screen, Screen::PaneForm(_)),
+        "{:?}",
+        view.screen
+    );
 
     // The root binding returns to root search from wherever it is, with
     // the search ready to type.
@@ -1140,8 +1170,10 @@ fn a_form_still_submits_with_the_rebound_key_and_the_footer_button(cx: &mut Test
     // The rebound key submits the form, as Enter did.
     cx.simulate_input("Ada");
     cx.simulate_keystrokes("ctrl-j");
+    // The form's answer is a toast in the footer, not the status line
+    // (#141).
     assert_eq!(
-        settle(&window, cx).status,
+        settle_shown(&window, cx),
         Status::Result("Hello, Ada, from the Rust guest".into())
     );
 
@@ -1163,9 +1195,10 @@ fn a_form_still_submits_with_the_rebound_key_and_the_footer_button(cx: &mut Test
 }
 
 #[gpui::test]
-fn a_custom_view_keeps_its_own_keys_under_a_rebound_binding(cx: &mut TestAppContext) {
-    let data = tempfile::tempdir().unwrap();
-    let (window, cx) = open_sample(cx, Some(data.path()));
+fn a_canvas_keeps_its_own_keys_under_a_rebound_binding(cx: &mut TestAppContext) {
+    let (sources, data) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let folder = packages::color_package(&sources.path().join("hello"));
+    let (window, cx) = open_package(cx, data.path(), &folder);
 
     // The next result's binding is rebound to Ctrl+N.
     let (_settings, mut settings_cx) = keyboard_page(cx);
@@ -1175,13 +1208,14 @@ fn a_custom_view_keeps_its_own_keys_under_a_rebound_binding(cx: &mut TestAppCont
     // The color view: its own keys still reach it — Down changes the
     // color, as the view's own binding — while the launcher's navigation
     // under the rebind needs the new keys, and the back key closes the
-    // view as ever.
+    // view as ever. The list's color item launches the package's color
+    // command, whose designed view draws the canvas.
     cx.simulate_keystrokes("enter");
     settle(&window, cx);
     cx.simulate_keystrokes("ctrl-n ctrl-n ctrl-n ctrl-n ctrl-n enter");
     let view = settle(&window, cx);
     assert!(
-        matches!(view.screen, Screen::CustomView(_)),
+        matches!(view.screen, Screen::DesignedView(_)),
         "{:?}",
         view.screen
     );
@@ -1190,7 +1224,11 @@ fn a_custom_view_keeps_its_own_keys_under_a_rebound_binding(cx: &mut TestAppCont
     until_color(&window, cx, "Dark blue, #0D47A1");
     cx.simulate_keystrokes("escape");
     let view = settle(&window, cx);
-    assert_eq!(view.screen, Screen::Command, "the back key closed the view");
+    assert!(
+        matches!(view.screen, Screen::Root { .. }),
+        "the back key closed the view: {:?}",
+        view.screen
+    );
 }
 
 #[gpui::test]
@@ -1241,7 +1279,11 @@ fn the_rebound_back_key_clears_a_command_search_before_leaving_it(cx: &mut TestA
     settle(&window, cx);
     cx.simulate_keystrokes("down enter");
     let view = settle(&window, cx);
-    assert!(matches!(view.screen, Screen::Form(_)), "{:?}", view.screen);
+    assert!(
+        matches!(view.screen, Screen::PaneForm(_)),
+        "{:?}",
+        view.screen
+    );
     cx.simulate_input(&service.url());
     cx.simulate_keystrokes("enter");
     settle(&window, cx);

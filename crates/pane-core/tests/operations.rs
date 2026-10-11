@@ -12,7 +12,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use futures::executor::block_on;
-use pane_core::{Launcher, PackageIdentity, Runtime, SavedData, Screen, Status};
+use pane_core::{FormValue, Launcher, PackageIdentity, Runtime, SavedData, Screen, Status};
 use tempfile::TempDir;
 
 #[path = "support/platforms.rs"]
@@ -120,6 +120,12 @@ fn open_item(launcher: &Launcher, command: &str, item: &str) {
     assert_eq!(launcher.view().screen, Screen::Command, "{command} opened");
     select_title(launcher, item);
     block_on(launcher.activate_selected());
+    // The item's action launches the form's command on Pane's own launch
+    // thread: wait for it to open before reading the screen.
+    assert!(
+        launcher.wait_for_launches(std::time::Duration::from_secs(20)),
+        "{item} did not launch"
+    );
 }
 
 // The samples: each command's form calls `greet` of the package whose
@@ -141,11 +147,20 @@ fn samples(dirs: &Dirs) -> Launcher {
 /// ("once" or "twice"), returning the outcome.
 fn greet(launcher: &Launcher, command: &str, source: &str, name: &str, times: &str) -> Status {
     open_item(launcher, command, "Greet through another extension");
-    assert!(launcher.view().form().is_some(), "{command}: no form");
-    launcher.set_field_value("source", source);
-    launcher.set_field_value("name", name);
-    launcher.set_field_value("times", times);
-    block_on(launcher.submit_form());
+    // The form is a designed tree's (#241), submitted through the
+    // designed seam.
+    assert!(
+        matches!(launcher.view().screen, Screen::DesignedView(_)),
+        "{command}: no form"
+    );
+    block_on(launcher.submit_designed_form(
+        None,
+        vec![
+            ("source".to_owned(), FormValue::Text(source.to_owned())),
+            ("name".to_owned(), FormValue::Text(name.to_owned())),
+            ("times".to_owned(), FormValue::Text(times.to_owned())),
+        ],
+    ));
     launcher.view().status
 }
 
@@ -267,9 +282,16 @@ fn a_target_starts_only_when_it_is_called() {
     );
     assert_eq!(dirs.running(), ["sample_operations.wasm"]);
 
-    launcher.set_field_value("source", &dirs.source(JAVASCRIPT));
-    launcher.set_field_value("name", "Rust");
-    block_on(launcher.submit_form());
+    block_on(launcher.submit_designed_form(
+        None,
+        vec![
+            (
+                "source".to_owned(),
+                FormValue::Text(dirs.source(JAVASCRIPT).to_owned()),
+            ),
+            ("name".to_owned(), FormValue::Text("Rust".to_owned())),
+        ],
+    ));
     assert_eq!(
         dirs.running(),
         ["sample_operations.wasm", "sample_operations_js.wasm"]
@@ -1154,8 +1176,15 @@ fn start_sample_wait(dirs: &Dirs, launcher: &Launcher, caller: &str, target: &st
         sample_titles(caller).1,
         "Wait in another extension",
     );
-    launcher.set_field_value("source", &dirs.source(target));
-    let submitting = launcher.submit_form();
+    // The form is a designed tree's (#241), submitted through the
+    // designed seam.
+    let submitting = launcher.submit_designed_form(
+        None,
+        vec![(
+            "source".to_owned(),
+            FormValue::Text(dirs.source(target).to_owned()),
+        )],
+    );
     let started = Instant::now();
     let thread = thread::spawn(move || block_on(submitting));
     while dirs.waiting().as_deref() != Some("started") {

@@ -9,10 +9,32 @@
       "title": "Call from TypeScript",
       "subtitle": "A TypeScript command calling another extension's greet operation",
       "component": "sample_operations_ts.wasm"
+    },
+    {
+      "id": "greet",
+      "title": "Greet through another extension",
+      "subtitle": "Calls its greet operation through Pane",
+      "component": "sample_operations_ts.wasm",
+      "mode": "designed"
+    },
+    {
+      "id": "wait",
+      "title": "Wait in another extension",
+      "subtitle": "Calls its wait operation, which takes ten seconds",
+      "component": "sample_operations_ts.wasm",
+      "mode": "designed"
     }
   ],
   "operations": [
-    { "id": "greet", "version": 1, "component": "sample_operations_ts.wasm" },
-    { "id": "wait", "version": 1, "component": "sample_operations_ts.wasm" }
+    {
+      "id": "greet",
+      "version": 1,
+      "component": "sample_operations_ts.wasm"
+    },
+    {
+      "id": "wait",
+      "version": 1,
+      "component": "sample_operations_ts.wasm"
+    }
   ]
 }

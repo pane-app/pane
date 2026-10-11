@@ -33,14 +33,12 @@
 // It also makes whatever a handler throws an error it answers with, never a
 // crash:
 //
-// - from `submitForm`, a `FormError`-like object (`{ field?, message }`) as
-//   it is, and anything else (an `Error`, a string) as a message about the
-//   whole form;
-// - from every other handler that answers with an error (`render`, an
+// - from every handler that answers with an error (`render`, an
 //   item's `onAction`, a submenu's `onOpen`, `runSearchResult`, `run`,
-//   `openView`, a custom view's `handleEvent`, `resultsFor`, `results`,
+//   `openView`, a designed view's `handleEvent`, `resultsFor`, `results`,
 //   `runOperation`, `runCycle`), the message of an `Error` or of an object
-//   with a `message`, or the text of anything else. A submenu's `onOpen`
+//   with a
+//   `message`, or the text of anything else. A submenu's `onOpen`
 //   resolving with something other than a list is such an error too.
 //
 // What a handler throws is also logged, with its stack, to the package's
@@ -49,9 +47,8 @@
 // A crash is then only what a crash should be: an action, `run` or
 // `runSearchResult` resolving with a value (it resolves with nothing; text,
 // which Pane no longer shows, is let through), a provider resolving with a
-// value of the wrong type, or a custom view's `render` throwing (it has no
-// error to answer with). A list Pane cannot read (a title that is not text,
-// say) is the command's failure, which Pane reports, not a crash.
+// value of the wrong type. A list Pane cannot read (a title that is not
+// text, say) is the command's failure, which Pane reports, not a crash.
 
 import { logThrown } from "./console.js";
 import { look } from "./look.js";
@@ -70,19 +67,6 @@ function message(thrown) {
   return String(thrown);
 }
 
-/** The form error for what `submitForm` threw. */
-function formError(thrown) {
-  const plain =
-    thrown !== null &&
-    typeof thrown === "object" &&
-    !(thrown instanceof Error) &&
-    typeof thrown.message === "string";
-  if (plain && typeof thrown.field === "string") {
-    return { field: thrown.field, message: thrown.message };
-  }
-  return { message: message(thrown) };
-}
-
 /**
  * `target[name]`, called on `target`, throwing what `error` makes of what it
  * throws, and passing what it resolves with through `then`.
@@ -99,35 +83,6 @@ function adapted(target, name, error, then = (value) => value) {
       throw error(thrown);
     }
     return then(value);
-  };
-}
-
-/** `view`, a custom view, with `handleEvent` answering errors as text. */
-function adaptView(view) {
-  if (view !== null && typeof view === "object" && typeof view.handleEvent === "function") {
-    const handleEvent = adapted(view, "handleEvent", message);
-    try {
-      Object.defineProperty(view, "handleEvent", { value: handleEvent, configurable: true });
-    } catch {
-      // A frozen view keeps its own handler.
-    }
-  }
-  return view;
-}
-
-/** A form as the tree carries it, from the `Form` the command gives. */
-function treeForm(form) {
-  if (form === null || typeof form !== "object" || !Array.isArray(form.fields)) return form;
-  return {
-    title: form.title,
-    submitLabel: form.submitLabel,
-    fields: form.fields.map((field) => {
-      const kind = field?.kind;
-      const node = { id: field?.id, label: field?.label, kind: kind?.tag };
-      if (kind?.tag === "choice") node.choices = kind.val;
-      else if (kind?.val?.placeholder != null) node.placeholder = kind.val.placeholder;
-      return node;
-    }),
   };
 }
 
@@ -191,9 +146,7 @@ function tree(list, actions) {
             actions,
           );
         }
-        if (item?.form != null) node.form = treeForm(item.form);
         if (item?.platforms != null) node.platforms = item.platforms;
-        if (item?.customView != null) node.customView = item.customView;
         // Its icon, tooltips and accessories (#139).
         Object.assign(node, look(item));
         return node;
@@ -202,16 +155,13 @@ function tree(list, actions) {
   return JSON.stringify({ version: TREE_VERSION, view: { type: "list", title: list?.title, items } });
 }
 
-/** What a command without `render`, `submitForm` or `openView` answers. */
+/** What a command without `render` or a view answers. */
 const missing = {
   async render() {
     throw new Error("this command opens no screen");
   },
-  async submitForm() {
-    throw new Error("this command has no forms");
-  },
   async openView() {
-    throw new Error("this command has no custom views");
+    throw new Error("this command opens no designed view");
   },
 };
 
@@ -332,8 +282,7 @@ export function adaptCommand(command) {
       }
       return answer(value);
     },
-    submitForm: adapted(own, "submitForm", formError),
-    openView: adapted(own, "openView", message, adaptView),
+    openView: adapted(own, "openView", message),
   };
 }
 

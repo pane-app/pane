@@ -15,8 +15,51 @@ use alloc::vec::Vec;
 wit_bindgen::generate!({ path: "wit", world: "extension" });
 
 use exports::pane::extension::command::{
-    CustomView, FieldValue, FormError, Frame, Guest, GuestCustomView, ViewEvent,
+    FieldValue, FormError, Guest, GuestView, LaunchRecord, Outcome, Rendered, UiEvent, View,
 };
+
+struct Mismatched;
+export!(Mismatched);
+
+/// A designed view type that is never opened.
+enum NoView {}
+
+impl GuestView for NoView {
+    async fn render(&self, _context: String) -> Result<Rendered, String> {
+        match *self {}
+    }
+
+    async fn handle_event(&self, _event: UiEvent) -> Result<Outcome, String> {
+        match *self {}
+    }
+}
+
+impl Guest for Mismatched {
+    type View = NoView;
+
+    async fn render(_launch: LaunchRecord) -> Result<String, String> {
+        Ok(
+            "{\"version\":1,\"view\":{\"type\":\"list\",\"title\":\"Mismatched\",\"items\":[]}}"
+                .into(),
+        )
+    }
+
+    async fn run(command: String, _launch: LaunchRecord) -> Result<String, String> {
+        Err(command)
+    }
+
+    async fn handle_event(callback: String, _details: String) -> Result<String, String> {
+        Err(callback)
+    }
+
+    async fn submit_form(item_id: String, _values: Vec<FieldValue>) -> Result<String, FormError> {
+        Ok(item_id)
+    }
+
+    async fn open_view(_command: String, _launch: LaunchRecord) -> Result<View, String> {
+        Err("no designed view".into())
+    }
+}
 
 #[global_allocator]
 static ALLOC: dlmalloc::GlobalDlmalloc = dlmalloc::GlobalDlmalloc;
@@ -56,43 +99,4 @@ pub unsafe extern "C" fn cabi_realloc(
         core::arch::wasm32::unreachable();
     }
     result
-}
-
-struct Mismatched;
-export!(Mismatched);
-
-/// A view type that is never opened.
-enum NoView {}
-
-impl GuestCustomView for NoView {
-    async fn render(&self) -> Frame {
-        match *self {}
-    }
-
-    async fn handle_event(&self, _event: ViewEvent) -> Result<(), String> {
-        match *self {}
-    }
-}
-
-impl Guest for Mismatched {
-    type CustomView = NoView;
-
-    async fn render() -> Result<String, String> {
-        Ok(
-            "{\"version\":1,\"view\":{\"type\":\"list\",\"title\":\"Mismatched\",\"items\":[]}}"
-                .into(),
-        )
-    }
-
-    async fn handle_event(callback: String, _details: String) -> Result<String, String> {
-        Err(callback)
-    }
-
-    async fn submit_form(item_id: String, _values: Vec<FieldValue>) -> Result<String, FormError> {
-        Ok(item_id)
-    }
-
-    async fn open_view(item_id: String) -> Result<CustomView, String> {
-        Err(item_id)
-    }
 }

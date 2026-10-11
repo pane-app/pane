@@ -51,10 +51,7 @@ use core::pin::Pin;
 
 use crate::exports::pane::extension::command as wit;
 use crate::pane::extension::commands::LaunchRecord;
-use wit::{
-    CustomView, CustomViewInfo, CustomViewRole, FieldKind, FieldValue, Form, FormError,
-    GuestCustomView, Platform,
-};
+use wit::Platform;
 
 /// The version of the tree this SDK writes (`docs/list-tree.md`).
 const TREE_VERSION: u32 = 1;
@@ -327,20 +324,12 @@ impl Action {
     }
 }
 
-/// A command's screen: a list view, its title and items in order, or a
-/// form that is the whole screen ([`List::form`]).
+/// A command's screen: a list view, its title and items in order. A form
+/// is a designed view now (#241, `crate::view::form`), not a screen the
+/// list tree names.
 pub struct List {
     title: String,
     items: Vec<Item>,
-    form: Option<ScreenForm>,
-}
-
-/// A form that is a command's whole screen, with the values its fields
-/// start with.
-struct ScreenForm {
-    id: String,
-    form: Form,
-    values: Vec<(String, String)>,
 }
 
 impl List {
@@ -349,36 +338,7 @@ impl List {
         List {
             title: title.into(),
             items: Vec::new(),
-            form: None,
         }
-    }
-
-    /// A screen that is `form` rather than a list, as a command such as
-    /// "Create Quicklink" opens: the user fills it in at once, submitting
-    /// it calls [`Command::submit_form`] with `id`, and Back (Escape)
-    /// leaves the command. Its fields start empty (a choice with its first
-    /// option), or with the values [`List::value`] gives them. A list's
-    /// items given to it are ignored.
-    pub fn form(id: impl Into<String>, form: Form) -> List {
-        List {
-            title: form.title.clone(),
-            items: Vec::new(),
-            form: Some(ScreenForm {
-                id: id.into(),
-                form,
-                values: Vec::new(),
-            }),
-        }
-    }
-
-    /// For a form screen ([`List::form`]): the field `field` starts with
-    /// `value`, a text field's text or the id of the option chosen first.
-    /// A list ignores it.
-    pub fn value(mut self, field: impl Into<String>, value: impl Into<String>) -> List {
-        if let Some(screen) = &mut self.form {
-            screen.values.push((field.into(), value.into()));
-        }
-        self
     }
 
     /// This list with `item` after its items.
@@ -394,17 +354,14 @@ impl List {
     }
 }
 
-/// One entry in a command's list. Choosing it opens its form, else its
-/// custom view, else runs its primary action (its first); an item with none
-/// of them cannot be activated, and Pane says so.
+/// One entry in a command's list. Choosing it runs its primary action
+/// (its first); an item with none cannot be activated, and Pane says so.
 pub struct Item {
     id: String,
     title: String,
     subtitle: Option<String>,
     actions: Vec<Action>,
-    form: Option<Form>,
     platforms: Option<Vec<Platform>>,
-    custom_view: Option<CustomViewInfo>,
     /// Its icon, tooltips and accessories (`crate::icon`, #139).
     pub(crate) look: crate::icon::Look,
 }
@@ -412,16 +369,14 @@ pub struct Item {
 impl Item {
     /// An item titled `title`. `id` identifies it among the list's items:
     /// Pane keeps the selection on it when the list is drawn again, and
-    /// passes it to [`Command::submit_form`] and [`Command::open_view`].
+    /// passes it to [`Command::open_view`].
     pub fn new(id: impl Into<String>, title: impl Into<String>) -> Item {
         Item {
             id: id.into(),
             title: title.into(),
             subtitle: None,
             actions: Vec::new(),
-            form: None,
             platforms: None,
-            custom_view: None,
             look: crate::icon::Look::default(),
         }
     }
@@ -470,33 +425,19 @@ impl Item {
         self
     }
 
-    /// This item opening `form` when chosen, instead of running its action;
-    /// submitting it calls [`Command::submit_form`] with the item's id.
-    pub fn form(mut self, form: Form) -> Item {
-        self.form = Some(form);
-        self
-    }
-
-    /// This item's action (or form) working on `platforms` only. Elsewhere
-    /// Pane still lists the item but shows it as unavailable with the
-    /// reason, and never runs its action or opens its form.
+    /// This item's action working on `platforms` only. Elsewhere Pane
+    /// still lists the item but shows it as unavailable with the reason,
+    /// and never runs its action.
     pub fn platforms(mut self, platforms: impl IntoIterator<Item = Platform>) -> Item {
         self.platforms = Some(platforms.into_iter().collect());
-        self
-    }
-
-    /// This item opening a custom view when chosen, instead of running its
-    /// action: Pane calls [`Command::open_view`] with the item's id. Ignored
-    /// when the item has a form.
-    pub fn custom_view(mut self, info: CustomViewInfo) -> Item {
-        self.custom_view = Some(info);
         self
     }
 }
 
 /// An extension command: one whose screen is a list (a view command), one
-/// that runs without a screen (a no-view command), or a component serving
-/// several commands of either mode. Implement it and call
+/// that runs without a screen (a no-view command), one whose screen is a
+/// designed view (a `"mode": "designed"` command), or a component serving
+/// several commands of any mode. Implement it and call
 /// [`export!`](crate::export):
 ///
 /// ```ignore
@@ -504,7 +445,7 @@ impl Item {
 /// pane_extension::export!(Hello);
 ///
 /// impl pane_extension::Command for Hello {
-///     type CustomView = pane_extension::NoCustomView;
+///     type DesignedView = pane_extension::view::NoDesignedView;
 ///
 ///     async fn render() -> Result<List, String> {
 ///         Ok(List::new("Hello").item(Item::new("greet", "Say hello").on_action(|| async {
@@ -512,19 +453,18 @@ impl Item {
 ///             Ok(())
 ///         })))
 ///     }
-///     // submit_form, open_view ...
 /// }
 /// ```
 ///
 /// A root provider (`"mode": "provider"`, a command that only answers root
 /// search through [`crate::root`] or [`crate::indexed`]) implements neither:
-/// Pane never opens or runs it, so `type CustomView` is all it needs.
+/// Pane never opens or runs it, so `type DesignedView` is all it needs.
 ///
 /// A no-view command implements [`Command::run`] instead of `render`:
 ///
 /// ```ignore
 /// impl pane_extension::Command for Toggle {
-///     type CustomView = pane_extension::NoCustomView;
+///     type DesignedView = pane_extension::view::NoDesignedView;
 ///
 ///     async fn run(command: String, launch: LaunchRecord) -> Result<(), String> {
 ///         pane_extension::feedback::show_hud("Toggled", ToastStyle::Success);
@@ -532,10 +472,39 @@ impl Item {
 ///     }
 /// }
 /// ```
+///
+/// A designed command implements [`view::View`](crate::view::View) for its
+/// screen's state and opens it:
+///
+/// ```ignore
+/// impl pane_extension::view::View for Counter {
+///     fn render(&mut self, cx: &mut Cx<Self>) -> impl IntoAnswer {
+///         column()
+///             .gap(Space::M)
+///             .child(text("Count").style(TextStyle::Title))
+///             .child(button("Increment").on_click(cx.listener(|this: &mut Self| {
+///                 this.count += 1;
+///             })))
+///     }
+/// }
+///
+/// impl pane_extension::Command for Sample {
+///     type DesignedView = Counter;
+///
+///     async fn open_designed_view(
+///         command: String,
+///         launch: LaunchRecord,
+///     ) -> Result<Counter, String> {
+///         Ok(Counter { count: 0 })
+///     }
+/// }
+/// ```
 pub trait Command: 'static {
-    /// The custom view the command opens ([`NoCustomView`](crate::NoCustomView)
-    /// for none).
-    type CustomView: GuestCustomView;
+    /// The state of the designed view the command opens
+    /// ([`view::NoDesignedView`](crate::view::NoDesignedView) for none):
+    /// a [`view::View`](crate::view::View) whose `render` answers the
+    /// tree its screen draws.
+    type DesignedView: crate::view::View;
 
     /// The command's list, as it is now. Pane asks for it when the command
     /// opens and again after each action. An error is shown to the user.
@@ -566,41 +535,32 @@ pub trait Command: 'static {
         }
     }
 
-    /// Runs the search result with `id` the user chose, for a command that
-    /// searches as the user types (`pane_extension::search`): its id is the
-    /// callback Pane hands back. An error is shown as a failure toast.
-    /// Without it, choosing an id no item names is an error.
+    /// Runs the search result with `id` the user chose — an id no item of
+    /// the command's list names, as an older contract's command search
+    /// answered through `run-search` (retired, #240: a command's search is
+    /// the designed List's search-text event now). An error is shown as a
+    /// failure toast. Without it, choosing an id no item names is an error.
     fn run_search_result(id: String) -> impl Future<Output = Result<(), String>> {
         async move { Err(format!("unknown action: {id}")) }
     }
 
-    /// Handles the submitted form of the item with `item_id`. `values`
-    /// holds every field of the form, in order. The text is shown as the
-    /// result; an error is shown next to its field. Without it, a submitted
-    /// form is refused.
-    fn submit_form(
-        item_id: String,
-        values: Vec<FieldValue>,
-    ) -> impl Future<Output = Result<String, FormError>> {
-        let _ = (item_id, values);
-        async {
-            Err(FormError {
-                field: None,
-                message: "this command has no forms".into(),
-            })
-        }
-    }
-
-    /// Opens the custom view of the item with `item_id`. Each call opens a
-    /// new view with its own state. Without it, opening one is an error.
-    fn open_view(item_id: String) -> impl Future<Output = Result<CustomView, String>> {
-        let _ = item_id;
-        async { Err("this command has no custom views".into()) }
+    /// Opens the designed view of the command `command` (its id in
+    /// `pane.json`, so one component can serve several commands), launched
+    /// as `launch` says: the screen a `"mode": "designed"` command opens,
+    /// a tree of layout nodes and UI components that Pane renders
+    /// (`docs/designed-tree.md`). Each call opens a new view with its own
+    /// state. Without it, opening one is an error.
+    fn open_designed_view(
+        command: String,
+        launch: LaunchRecord,
+    ) -> impl Future<Output = Result<Self::DesignedView, String>> {
+        let _ = (command, launch);
+        async { Err("this command opens no designed view".into()) }
     }
 }
 
 impl<T: Command> wit::Guest for T {
-    type CustomView = <T as Command>::CustomView;
+    type View = crate::view::Open<<T as Command>::DesignedView>;
 
     async fn render(launch: LaunchRecord) -> Result<String, String> {
         crate::commands::set_current(launch);
@@ -651,12 +611,10 @@ impl<T: Command> wit::Guest for T {
         }
     }
 
-    async fn submit_form(item_id: String, values: Vec<FieldValue>) -> Result<String, FormError> {
-        <T as Command>::submit_form(item_id, values).await
-    }
-
-    async fn open_view(item_id: String) -> Result<CustomView, String> {
-        <T as Command>::open_view(item_id).await
+    async fn open_view(command: String, launch: LaunchRecord) -> Result<wit::View, String> {
+        crate::commands::set_current(launch.clone());
+        let state = <T as Command>::open_designed_view(command, launch).await?;
+        Ok(wit::View::new(crate::view::Open::new(state)))
     }
 }
 
@@ -702,14 +660,6 @@ fn take(callback: &str) -> Option<Callback> {
 fn remember(list: List) -> String {
     let mut actions = ACTIONS.0.borrow_mut();
     actions.clear();
-    if let Some(screen) = list.form {
-        let mut tree = format!("{{\"version\":{TREE_VERSION},\"view\":{{\"type\":\"form\",\"id\":");
-        string(&mut tree, &screen.id);
-        tree.push(',');
-        write_form_fields(&mut tree, &screen.form, &screen.values);
-        tree.push_str("}}");
-        return tree;
-    }
     let mut tree = format!("{{\"version\":{TREE_VERSION},\"view\":{{\"type\":\"list\",\"title\":");
     string(&mut tree, &list.title);
     tree.push_str(",\"items\":[");
@@ -743,10 +693,6 @@ fn remember(list: List) -> String {
                 &mut actions,
             );
         }
-        if let Some(form) = &item.form {
-            tree.push_str(",\"form\":");
-            write_form(&mut tree, form);
-        }
         if let Some(platforms) = &item.platforms {
             tree.push_str(",\"platforms\":[");
             for (index, platform) in platforms.iter().enumerate() {
@@ -763,20 +709,6 @@ fn remember(list: List) -> String {
                 );
             }
             tree.push(']');
-        }
-        if let Some(view) = &item.custom_view {
-            tree.push_str(",\"customView\":{\"title\":");
-            string(&mut tree, &view.title);
-            tree.push_str(",\"label\":");
-            string(&mut tree, &view.label);
-            tree.push_str(",\"role\":");
-            string(
-                &mut tree,
-                match view.role {
-                    CustomViewRole::ColorWell => "color-well",
-                },
-            );
-            tree.push('}');
         }
         crate::icon::write_look(&mut tree, &item.look);
         tree.push('}');
@@ -903,61 +835,6 @@ fn write_keys(tree: &mut String, keys: &Keys) {
     tree.push_str("],\"key\":");
     string(tree, &keys.key);
     tree.push('}');
-}
-
-/// Writes `form` as the tree's JSON.
-fn write_form(tree: &mut String, form: &Form) {
-    tree.push('{');
-    write_form_fields(tree, form, &[]);
-    tree.push('}');
-}
-
-/// Writes `form`'s title, submit label and fields as members of a JSON
-/// object, each field with the value `values` gives it, if any.
-fn write_form_fields(tree: &mut String, form: &Form, values: &[(String, String)]) {
-    tree.push_str("\"title\":");
-    string(tree, &form.title);
-    tree.push_str(",\"submitLabel\":");
-    string(tree, &form.submit_label);
-    tree.push_str(",\"fields\":[");
-    for (index, field) in form.fields.iter().enumerate() {
-        if index > 0 {
-            tree.push(',');
-        }
-        tree.push_str("{\"id\":");
-        string(tree, &field.id);
-        tree.push_str(",\"label\":");
-        string(tree, &field.label);
-        if let Some((_, value)) = values.iter().find(|(id, _)| *id == field.id) {
-            tree.push_str(",\"value\":");
-            string(tree, value);
-        }
-        match &field.kind {
-            FieldKind::Text(text) => {
-                tree.push_str(",\"kind\":\"text\"");
-                if let Some(placeholder) = &text.placeholder {
-                    tree.push_str(",\"placeholder\":");
-                    string(tree, placeholder);
-                }
-            }
-            FieldKind::Choice(choices) => {
-                tree.push_str(",\"kind\":\"choice\",\"choices\":[");
-                for (index, choice) in choices.iter().enumerate() {
-                    if index > 0 {
-                        tree.push(',');
-                    }
-                    tree.push_str("{\"id\":");
-                    string(tree, &choice.id);
-                    tree.push_str(",\"label\":");
-                    string(tree, &choice.label);
-                    tree.push('}');
-                }
-                tree.push(']');
-            }
-        }
-        tree.push('}');
-    }
-    tree.push(']');
 }
 
 /// Writes `text` as a JSON string.
