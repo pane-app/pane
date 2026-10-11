@@ -9,7 +9,7 @@
       "title": "Switch Windows sample",
       "subtitle": "Lists the open windows as Alt+Tab does; running one switches to it",
       "component": "sample_switch_windows.wasm",
-      "search": true
+      "mode": "designed"
     }
   ]
 }

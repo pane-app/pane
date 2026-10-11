@@ -48,8 +48,8 @@ use crate::ui::icon::{Glyph, glyph, glyph_rotated};
 use crate::ui::theme::{Theme, pressed};
 
 /// A 1px ring inset along a box's edge (`box-shadow: inset 0 0 0 1px`):
-/// it takes no layout space.
-fn inset_ring(color: Hsla, width: Pixels) -> BoxShadow {
+/// it takes no layout space. (Shared with the designed view's buttons.)
+pub(crate) fn inset_ring(color: Hsla, width: Pixels) -> BoxShadow {
     BoxShadow::new(px(0.), px(0.), color)
         .spread_radius(width)
         .inset()
@@ -893,17 +893,4 @@ pub(crate) fn caption(text: impl Into<SharedString>, theme: &Theme) -> Div {
         .font_weight(theme.typography.medium)
         .text_color(theme.text_muted)
         .child(text.into())
-}
-
-/// The host's frame around an extension's own view (#99): 4px of padding
-/// (a press there focuses the view without reaching it), radius 10, the
-/// field's white 6% inset ring — the focus color while the view has the
-/// keyboard. Layout-free: the ring is a shadow, not a border. The view's
-/// own drawing keeps the colors its extension gave it.
-pub(crate) fn frame(theme: &Theme) -> Div {
-    let controls = &theme.geometry.controls;
-    div()
-        .p(controls.frame_padding)
-        .rounded(controls.frame_radius)
-        .shadow(well_shadows(false, theme))
 }

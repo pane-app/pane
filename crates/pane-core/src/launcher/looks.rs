@@ -155,6 +155,36 @@ pub(super) fn remember(
     extra
 }
 
+/// Remembers the designed view's items' looks (#240): the presentation's,
+/// resolved in the open command's package folder as a command's list's
+/// are, with their loads started.
+pub(super) fn remember_designed(state: &mut State, looks: Vec<(String, ItemLook)>) {
+    let component = state.open.clone().unwrap_or_default();
+    let package = owner(&state.packages, &component);
+    let identity: Option<PackageIdentity> = package.map(|package| package.identity.clone());
+    let folder = package
+        .map(|package| package.location.clone())
+        .or_else(|| component.parent().map(Path::to_path_buf))
+        .unwrap_or_default();
+    state.looks.by_item = looks
+        .into_iter()
+        .map(|(id, look)| (id, resolved(look, &folder)))
+        .collect();
+    state.looks.owner = identity.as_ref().map(PackageIdentity::key);
+    state.looks.identity = identity.clone();
+    state.looks.folder = folder;
+    if !state.looks.as_shown {
+        for look in state.looks.by_item.values() {
+            want_look(state, look);
+        }
+    }
+}
+
+/// Remembers no looks: the open designed view's tree names no list.
+pub(super) fn remember_none(state: &mut State) {
+    state.looks.by_item.clear();
+}
+
 /// Starts loading what `look`'s icon and its accessories' icons need, for
 /// the open command's package.
 pub(super) fn want_look(state: &State, look: &ItemLook) {

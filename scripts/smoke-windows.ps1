@@ -541,7 +541,8 @@ Stop-Pane $process
 # Restarted, root lists Greeting again, after Rust sample.
 $process = Start-Pane "stderr-color.log"
 
-# The Rust command's color picker (its sixth item), which the guest draws:
+# The Rust command's color picker (its sixth item), which launches the
+# package's color command: a designed view whose canvas the guest draws:
 # Right chooses purple, and a click on the dark green swatch chooses it. The
 # chosen color fills its swatch and the preview, far more pixels than any
 # other swatch covers. The command is opened by typing its name, as the

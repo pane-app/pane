@@ -124,10 +124,11 @@ fn package(folder: &Path) -> PathBuf {
 
 /// The value the open form holds in field `id`.
 fn field_value(window: &Entity<LauncherWindow>, cx: &mut VisualTestContext, id: &str) -> String {
-    let view = cx.read_entity(window, |window, _| window.launcher().view());
-    let form = view.form().expect("a form is open");
-    let field = form.fields.iter().find(|field| field.id == id);
-    field.expect("the field exists").value.clone()
+    window.update(cx, |window, cx| {
+        window
+            .designed_field_text(id, cx)
+            .expect("the field exists")
+    })
 }
 
 /// Selects the row titled `title` and presses Enter.

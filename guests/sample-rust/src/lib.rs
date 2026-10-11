@@ -1,20 +1,23 @@
 //! Pane's Rust sample command: a list with one action per item, a form, a
-//! color picker the command draws itself, two actions each declared for
-//! some operating systems only, and a root result computed from the query
-//! ("reverse <text>"). Items, titles, results, errors and drawings match the
-//! JavaScript and TypeScript samples.
+//! color picker the command draws itself as a canvas of its designed view,
+//! two actions each declared for some operating systems only, and a root
+//! result computed from the query ("reverse <text>"). Items, titles,
+//! results, errors and drawings match the JavaScript and TypeScript
+//! samples.
 #![no_std]
 
-use core::cell::Cell;
+use core::cell::{Cell, RefCell};
 
-use pane_extension::alloc::{format, string::String, vec, vec::Vec};
+use pane_extension::alloc::{borrow::ToOwned, format, string::String, vec, vec::Vec};
+use pane_extension::commands::{self, CommandRef, LaunchRecord, LaunchType};
 use pane_extension::feedback::{Toast, show_toast};
+use pane_extension::form;
 use pane_extension::root::{RootAction, RootResult, WallTime};
-use pane_extension::{
-    Choice, Command, CustomView, CustomViewInfo, CustomViewRole, Field, FieldKind, FieldValue,
-    Form, FormError, Frame, GuestCustomView, Item, Key, List, Platform, Rect, Shape, Text,
-    TextField, ViewEvent,
+use pane_extension::view::{
+    Answer, CanvasEvent, CanvasRole, Cx, Draw, IntoAnswer, IntoNode, Length, Paint, TextMeasure,
+    TextStyle, View, canvas, column, measure_text,
 };
+use pane_extension::{Color, Command, Item, List, Platform, choice};
 
 struct Sample;
 pane_extension::export!(Sample);
@@ -44,33 +47,113 @@ const GREETINGS: [(&str, &str); 3] = [
     ("welcome", "Welcome"),
 ];
 
-/// The "form" item's form: a name to greet and a greeting to choose.
-fn greeting_form() -> Form {
-    Form {
-        title: "Greet someone".into(),
-        fields: vec![
-            Field {
-                id: "name".into(),
-                label: "Name".into(),
-                kind: FieldKind::Text(TextField {
-                    placeholder: Some("Ada Lovelace".into()),
-                }),
-            },
-            Field {
-                id: "greeting".into(),
-                label: "Greeting".into(),
-                kind: FieldKind::Choice(
+/// The form command's view (#241): the greeting form — every field the
+/// designed tree's forms offer, so the sample shows each kind. A
+/// submission validates the name and answers with the greeting; the
+/// fields' values arrive with the submission, keyed by their keys, and
+/// the name's is remembered: Pane keeps it as the package's settings and
+/// prefills it the next time the form opens.
+struct Greeting {
+    /// The name the last submission answered with, shown as the answer.
+    answered: RefCell<String>,
+    /// Why the last submission was refused, on the name's field.
+    error: RefCell<Option<&'static str>>,
+}
+
+impl Greeting {
+    /// The form's tree, as the command's view renders it: the listeners the
+    /// tree names run with the command's view, whichever command opened it.
+    fn render(&self, cx: &mut Cx<Designed>) -> Answer {
+        let submit = cx.form_listener(|view, values| {
+            let Designed::Form(Greeting { answered, error }) = view else {
+                return;
+            };
+            let name = values.text("name").unwrap_or_default().trim().to_owned();
+            let greeting = values
+                .text("greeting")
+                .and_then(|value| {
                     GREETINGS
                         .iter()
-                        .map(|&(id, label)| Choice {
-                            id: id.into(),
-                            label: label.into(),
-                        })
-                        .collect(),
-                ),
-            },
-        ],
-        submit_label: "Greet".into(),
+                        .find(|&&(id, _)| id == value)
+                        .map(|&(_, label)| label)
+                })
+                .unwrap_or("Hello");
+            if name.is_empty() {
+                *error.borrow_mut() = Some("Enter a name");
+                return;
+            }
+            if name.chars().count() > 40 {
+                *error.borrow_mut() = Some("Use at most 40 characters");
+                return;
+            }
+            *error.borrow_mut() = None;
+            *answered.borrow_mut() = format!("{greeting}, {name}, from the Rust guest");
+        });
+        let error = self.error.borrow().clone();
+        let answered = self.answered.borrow().clone();
+        let choice = |value: &str, label: &str| choice(value).label(label);
+        // Every field is a builder of its own type, so the list holds the
+        // nodes they build.
+        let fields = || {
+            vec![
+                form::text_field("name")
+                    .title("Name")
+                    .placeholder("Ada Lovelace")
+                    .remember()
+                    .error(error.clone().map(str::to_owned).unwrap_or_default())
+                    .auto_focus()
+                    .into_node(),
+                form::password_field("secret").title("Secret").into_node(),
+                form::text_area("notes").title("Notes").into_node(),
+                form::date_picker("day").title("Day").into_node(),
+                form::date_time_picker("at").title("At").into_node(),
+                form::dropdown("greeting")
+                    .title("Greeting")
+                    .options([
+                        choice("hello", "Hello").section("Plain"),
+                        choice("morning", "Good morning").section("Warm"),
+                        choice("welcome", "Welcome").section("Warm"),
+                    ])
+                    .default_value("hello")
+                    .into_node(),
+                form::tag_picker("tags")
+                    .title("Tags")
+                    .options([
+                        choice("friend", "Friend"),
+                        choice("colleague", "Colleague"),
+                        choice("family", "Family"),
+                    ])
+                    .into_node(),
+                form::file_picker("file").title("File").into_node(),
+                form::folder_picker("folder")
+                    .title("Folder")
+                    .allow_multiple()
+                    .into_node(),
+                form::checkbox("updates").label("Send updates").into_node(),
+                form::toggle("quiet").label("Quiet mode").into_node(),
+            ]
+        };
+        let mut view = form::Form::new()
+            .key("form")
+            .navigation_title("Greet someone")
+            .submit_title("Greet")
+            .on_submit(submit);
+        // The answer draws over the form as its first child, the form
+        // staying the tree's root: the window keeps a field's state by
+        // the path of its key, and wrapping the form in a column would
+        // move every field's path — losing the text, the caret and the
+        // focus the user left in them (#238's rule).
+        if !answered.is_empty() {
+            view = view.child(
+                pane_extension::view::text(answered.as_str())
+                    .style(pane_extension::view::TextStyle::Title)
+                    .into_node(),
+            );
+        }
+        for field in fields() {
+            view = view.child(field);
+        }
+        view.into_answer()
     }
 }
 
@@ -94,9 +177,10 @@ const COLUMNS: i32 = COLORS.len() as i32;
 const ROWS: i32 = SHADES.len() as i32;
 
 /// An open color picker: a grid of swatches and a preview of the chosen
-/// color. Arrow keys, Home and End move the choice; pressing or dragging the
-/// pointer over the grid chooses the swatch under it. Pane creates one per
-/// opened view (`open_view`) and drops it when the view closes.
+/// color, drawn as the canvas of its designed view. Arrow keys, Home and
+/// End move the choice; pressing or dragging the pointer over the grid
+/// chooses the swatch under it. Pane opens one per opened view (the
+/// "color" command) and drops it when the view closes.
 struct ColorPicker {
     column: Cell<i32>,
     row: Cell<i32>,
@@ -114,20 +198,34 @@ impl ColorPicker {
     }
 
     /// Chooses the swatch nearest to `x`, `y`.
-    fn choose(&self, x: i32, y: i32) {
-        self.column.set(x.div_euclid(STEP).clamp(0, COLUMNS - 1));
-        self.row.set(y.div_euclid(STEP).clamp(0, ROWS - 1));
+    fn choose(&self, x: f32, y: f32) {
+        self.column
+            .set((x as i32).div_euclid(STEP).clamp(0, COLUMNS - 1));
+        self.row.set((y as i32).div_euclid(STEP).clamp(0, ROWS - 1));
+    }
+
+    /// Where the choice now is.
+    fn at(&self) -> (i32, i32) {
+        (self.column.get(), self.row.get())
+    }
+
+    /// Moves the choice by `columns` and `rows`, clamped at the edges.
+    fn moved(&self, columns: i32, rows: i32) {
+        let (column, row) = self.at();
+        self.column.set((column + columns).clamp(0, COLUMNS - 1));
+        self.row.set((row + rows).clamp(0, ROWS - 1));
     }
 }
 
-fn rect(x: i32, y: i32, size: u32, fill: u32) -> Shape {
-    Shape::Rect(Rect {
-        x,
-        y,
-        width: size,
-        height: size,
-        fill,
-    })
+/// The frame colour the chosen swatch and the hex code are drawn in.
+fn frame() -> Paint {
+    Paint::Color(Color::hex("#f1f3f5"))
+}
+
+/// A swatch's own colour, drawn exactly as the sample authored it: the
+/// smoke checks the pixels of these.
+fn swatch(fill: u32) -> Paint {
+    Paint::Exact(Color::hex(hex(fill)))
 }
 
 /// "#RRGGBB" for 0xRRGGBB.
@@ -135,81 +233,165 @@ fn hex(rgb: u32) -> String {
     format!("#{rgb:06X}")
 }
 
-impl GuestCustomView for ColorPicker {
-    async fn render(&self) -> Frame {
-        let (column, row) = (self.column.get(), self.row.get());
+impl ColorPicker {
+    /// The picker's tree, as the command's view renders it.
+    fn render(&mut self, cx: &mut Cx<Designed>) -> Answer {
+        let (column, row) = self.at();
         let (hue, shades) = COLORS[column as usize];
         let chosen = shades[row as usize];
-        // A light frame around the chosen swatch, then the swatches.
-        let mut shapes = vec![rect(column * STEP, row * STEP, STEP as u32, 0xf1f3f5)];
+        // A light frame around the chosen swatch, then the swatches, the
+        // preview and its hex code. The hex code is measured
+        // (`pane:extension/view.measure-text`), so the text drawn under
+        // the preview fits what it says.
+        let code = hex(chosen);
+        let measured = measure_text(
+            &code,
+            TextMeasure {
+                style: Some(TextStyle::Caption),
+                ..TextMeasure::default()
+            },
+        );
+        let mut ops = vec![
+            Draw::rect(
+                (column * STEP) as f32,
+                (row * STEP) as f32,
+                STEP as f32,
+                STEP as f32,
+            )
+            .filled(frame()),
+        ];
         for (x, (_, column)) in (0..).zip(COLORS) {
             for (y, fill) in (0..).zip(column) {
-                shapes.push(rect(x * STEP + 2, y * STEP + 2, SWATCH, fill));
+                ops.push(
+                    Draw::rect(
+                        (x * STEP + 2) as f32,
+                        (y * STEP + 2) as f32,
+                        SWATCH as f32,
+                        SWATCH as f32,
+                    )
+                    .filled(swatch(fill)),
+                );
             }
         }
-        shapes.push(rect(COLUMNS * STEP + 12, 2, 64, chosen));
-        shapes.push(Shape::Text(Text {
-            x: COLUMNS * STEP + 12,
-            y: 74,
-            content: hex(chosen),
-            color: 0xf1f3f5,
-        }));
+        ops.push(Draw::rect((COLUMNS * STEP + 12) as f32, 2., 64., 64.).filled(swatch(chosen)));
+        ops.push(
+            Draw::text(code)
+                .at((COLUMNS * STEP + 12) as f32, 68. + measured.1)
+                .style(TextStyle::Caption)
+                .color(frame()),
+        );
         let name = match SHADES[row as usize] {
             "" => String::from(hue),
             shade => format!("{shade} {}", hue.to_lowercase()),
         };
-        Frame {
-            width: (COLUMNS * STEP + 88) as u32,
-            height: (ROWS * STEP) as u32,
-            shapes,
-            value: format!("{name}, {}", hex(chosen)),
-        }
-    }
-
-    async fn handle_event(&self, event: ViewEvent) -> Result<(), String> {
-        match event {
-            ViewEvent::Key(key) => {
-                let (column, row) = (self.column.get(), self.row.get());
-                let (column, row) = match key {
-                    Key::Left => (column - 1, row),
-                    Key::Right => (column + 1, row),
-                    Key::Up => (column, row - 1),
-                    Key::Down => (column, row + 1),
-                    Key::Home => (0, row),
-                    Key::End => (COLUMNS - 1, row),
-                };
-                self.column.set(column.clamp(0, COLUMNS - 1));
-                self.row.set(row.clamp(0, ROWS - 1));
-            }
-            // Only a press on the grid chooses a swatch and starts a drag.
-            ViewEvent::PointerDown(at) => {
-                if (0..COLUMNS * STEP).contains(&at.x) && (0..ROWS * STEP).contains(&at.y) {
-                    self.dragging.set(true);
-                    self.choose(at.x, at.y);
-                }
-            }
-            ViewEvent::PointerMove(at) => {
-                if self.dragging.get() {
-                    self.choose(at.x, at.y);
-                }
-            }
-            ViewEvent::PointerUp(_) => self.dragging.set(false),
-        }
-        Ok(())
+        pane_extension::view::column()
+            .key("picker")
+            .navigation_title("Choose a color")
+            .child(
+                canvas()
+                    .key("grid")
+                    .width(Length::Px((COLUMNS * STEP + 88) as f32))
+                    .height(Length::Px((ROWS * STEP) as f32))
+                    .role(CanvasRole::ColorWell)
+                    .label("Color")
+                    .value(format!("{name}, {}", hex(chosen)))
+                    .on_key(cx.value_listener(|view, key| {
+                        if let Designed::Color(picker) = view {
+                            picker.keyed(key);
+                        }
+                    }))
+                    .on_pointer_down(cx.canvas_listener(|view, event| {
+                        if let Designed::Color(picker) = view {
+                            picker.pointed(event);
+                        }
+                    }))
+                    .on_pointer_move(cx.canvas_listener(|view, event| {
+                        if let Designed::Color(picker) = view {
+                            picker.pointed(event);
+                        }
+                    }))
+                    .on_pointer_up(cx.canvas_listener(|view, _| {
+                        if let Designed::Color(picker) = view {
+                            picker.dragging.set(false);
+                        }
+                    }))
+                    .ops(ops),
+            )
+            .into_answer()
     }
 }
 
-/// An error about the field `field`.
-fn invalid(field: &str, message: &str) -> FormError {
-    FormError {
-        field: Some(field.into()),
-        message: message.into(),
+impl ColorPicker {
+    /// A key the canvas is focused for: the arrows, Home and End move the
+    /// choice.
+    fn keyed(&self, key: &str) {
+        match key {
+            "left" => self.moved(-1, 0),
+            "right" => self.moved(1, 0),
+            "up" => self.moved(0, -1),
+            "down" => self.moved(0, 1),
+            "home" => {
+                self.column.set(0);
+            }
+            "end" => {
+                self.column.set(COLUMNS - 1);
+            }
+            _ => {}
+        }
+    }
+
+    /// A pointer event the canvas is dragged with: a press on the grid
+    /// chooses a swatch and starts the drag; a move during one chooses
+    /// under the pointer.
+    fn pointed(&self, event: CanvasEvent) {
+        let (x, y, pressed) = match event {
+            CanvasEvent::PointerDown { x, y, .. } => (x, y, true),
+            CanvasEvent::PointerMove { x, y } => (x, y, false),
+            _ => return,
+        };
+        let on_grid =
+            (0..COLUMNS * STEP).contains(&(x as i32)) && (0..ROWS * STEP).contains(&(y as i32));
+        if pressed {
+            // Only a press on the grid chooses a swatch and starts a drag.
+            if on_grid {
+                self.dragging.set(true);
+                self.choose(x, y);
+            }
+        } else if self.dragging.get() {
+            self.choose(x, y);
+        }
+    }
+}
+
+/// The view either designed command of this package opens: the greeting
+/// form's, or the color picker's, whichever command Pane launched
+/// ([`Command::open_designed_view`] hands one of these to Pane).
+enum Designed {
+    Form(Greeting),
+    Color(ColorPicker),
+}
+
+impl View for Designed {
+    fn render(&mut self, cx: &mut Cx<Self>) -> impl IntoAnswer {
+        match self {
+            Designed::Form(form) => form.render(cx),
+            Designed::Color(picker) => picker.render(cx),
+        }
     }
 }
 
 /// Runs the action of the item `id` and shows a toast with what [`outcome`]
-/// answers; each item's action is this with its id.
+/// answers; each item's action is this with its id. The "Choose a color"
+/// item launches the command of its designed view instead.
 async fn act(id: &str) -> Result<(), String> {
+    if id == "color" {
+        let color = CommandRef {
+            source: None,
+            command: "color".into(),
+        };
+        return commands::launch(&color, LaunchType::UserInitiated, &[], None)
+            .map_err(|problem| format!("could not open the color picker: {problem}"));
+    }
     let done = outcome(id).await?;
     show_toast(Toast::success(done));
     Ok(())
@@ -249,7 +431,7 @@ async fn outcome(id: &str) -> Result<String, String> {
 }
 
 impl Command for Sample {
-    type CustomView = ColorPicker;
+    type DesignedView = Designed;
 
     async fn render() -> Result<List, String> {
         let item =
@@ -274,17 +456,24 @@ impl Command for Sample {
                 "Roll a number",
                 "A random number from this instance",
             ),
-            item("form", "Greet someone", "Fill in a form the guest checks").form(greeting_form()),
             item(
+                "form",
+                "Greet someone",
+                "A form the guest checks, on the designed tree",
+            )
+            .on_action(|| async {
+                let form = CommandRef {
+                    source: None,
+                    command: "form".into(),
+                };
+                commands::launch(&form, LaunchType::UserInitiated, &[], None)
+                    .map_err(|problem| format!("could not open the form: {problem}"))
+            }),
+            acting(
                 "color",
                 "Choose a color",
                 "Pick a color in a view the guest draws",
-            )
-            .custom_view(CustomViewInfo {
-                title: "Choose a color".into(),
-                label: "Color".into(),
-                role: CustomViewRole::ColorWell,
-            }),
+            ),
             // Elsewhere Pane lists these as unavailable, says why, and
             // never runs their actions.
             acting(
@@ -302,38 +491,18 @@ impl Command for Sample {
         ]))
     }
 
-    async fn submit_form(item_id: String, values: Vec<FieldValue>) -> Result<String, FormError> {
-        if item_id != "form" {
-            return Err(FormError {
-                field: None,
-                message: format!("unknown form: {item_id}"),
-            });
+    async fn open_designed_view(
+        command: String,
+        _launch: LaunchRecord,
+    ) -> Result<Designed, String> {
+        match command.as_str() {
+            "form" => Ok(Designed::Form(Greeting {
+                answered: RefCell::new(String::new()),
+                error: RefCell::new(None),
+            })),
+            "color" => Ok(Designed::Color(ColorPicker::new())),
+            _ => Err(format!("unknown designed view: {command}")),
         }
-        let value = |id: &str| {
-            values
-                .iter()
-                .find(|field| field.id == id)
-                .map_or("", |field| field.value.as_str())
-        };
-        let name = value("name").trim();
-        if name.is_empty() {
-            return Err(invalid("name", "Enter a name"));
-        }
-        if name.chars().count() > 40 {
-            return Err(invalid("name", "Use at most 40 characters"));
-        }
-        let greeting = value("greeting");
-        let Some(&(_, greeting)) = GREETINGS.iter().find(|&&(id, _)| id == greeting) else {
-            return Err(invalid("greeting", "Choose a greeting"));
-        };
-        Ok(format!("{greeting}, {name}, from the Rust guest"))
-    }
-
-    async fn open_view(item_id: String) -> Result<CustomView, String> {
-        if item_id != "color" {
-            return Err(format!("unknown view: {item_id}"));
-        }
-        Ok(CustomView::new(ColorPicker::new()))
     }
 }
 

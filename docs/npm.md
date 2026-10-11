@@ -228,9 +228,8 @@ local or an npm package. The plan, claims and rollback are #42's:
   name a `git:` source ([Git](git.md#dependencies-from-git)).
 - An operation call by identity takes `npm:<name>` (without a version) as
   it takes `local:<folder>`.
-- One whose component imports `wasi:http` is recorded, and listed, as using
-  the network ([command search](command-search.md)), as the package itself
-  would be.
+- One whose component imports `wasi:http` is recorded, and listed, as
+  using the network, as the package itself would be.
 
 ## What is refused
 

@@ -398,6 +398,7 @@ pub(crate) fn monitor_choices(layout: &DisplayLayout) -> Vec<Choice> {
             // with its reason, not offered: choosing it would pretend a
             // placement that cannot be made.
             unavailable_reason: unsupported(layout, monitor).map(SharedString::from),
+            section: None,
         })
         .collect()
 }

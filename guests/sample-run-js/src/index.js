@@ -9,6 +9,8 @@
 import { showToast } from "@pane-app/extension/feedback";
 import { getPreferenceValues } from "@pane-app/extension/preferences";
 import { run as runProgram } from "@pane-app/extension/programs";
+import { List, createView, useState } from "@pane-app/extension/view";
+import { jsxs } from "@pane-app/extension/jsx-runtime";
 import {
   completions,
   deleteFromHistory,
@@ -22,8 +24,6 @@ const NOTHING =
   "Run was sent no command line: give it an alias or make it a fallback in Settings, then type " +
   "a command line in root search";
 
-/** The prefix of a history entry's item id, followed by its line. */
-const ENTRY = "entry:";
 /** The prefix of a search result's item id, followed by the line Enter runs. */
 const LINE = "line:";
 
@@ -176,19 +176,7 @@ export const command = {
 
   async render(launch) {
     if (launch.command === WITH_COMPLETIONS) {
-      return {
-        title: "Run with Completions",
-        items: [
-          {
-            id: "hint",
-            title: "Type a command line",
-            subtitle: "What you ran and installed completes it as you type",
-            onAction: async () => {
-              showToast({ title: "Type a command line to run it" });
-            },
-          },
-        ],
-      };
+      throw new Error(`\`${WITH_COMPLETIONS}\` opens a designed view; it has no list`);
     }
     const entries = host(history);
     if (entries.length === 0) {
@@ -221,46 +209,61 @@ export const command = {
     };
   },
 
-  async runSearchResult(id) {
-    if (id.startsWith(ENTRY)) {
-      await runLine(id.slice(ENTRY.length), false, "user-initiated");
-    } else if (id.startsWith(LINE)) {
-      await runLine(id.slice(LINE.length), false, "user-initiated");
-    } else {
-      throw new Error(`unknown item: ${id}`);
+  async openView(command) {
+    if (command !== WITH_COMPLETIONS) {
+      throw new Error(`unknown command: ${command}`);
     }
-  },
-
-  async submitForm() {
-    throw { message: "this sample has no forms" };
-  },
-
-  async openView() {
-    throw new Error("this sample has no custom views");
+    return createView(Completions);
   },
 };
 
-/** @type {import("@pane-app/extension").CommandSearch} */
-export const commandSearch = {
-  // The completions for the text typed in "Run with Completions"' field,
-  // with the text's own row first: Enter runs the text as typed, then
-  // each completion's line.
-  async search(command, query) {
-    if (command !== WITH_COMPLETIONS) throw new Error(`unknown command: ${command}`);
-    const text = query.trim();
-    if (text === "") return [];
-    const found = host(() => completions(text));
-    return [
-      {
-        id: `${LINE}${text}`,
-        title: `Run “${text}”`,
+/** The view "Run with Completions" opens (#240): a List that handles its
+ * search itself, the completions of the text typed as its items — the
+ * text's own row first, Enter running it as typed, then each completion's
+ * line. What the view runs says what it did in a toast, and the list is
+ * drawn again after it. */
+function Completions() {
+  const [text, setText] = useState("");
+  const trimmed = text.trim();
+  const items = [];
+  if (trimmed === "") {
+    items.push(
+      jsxs(List.Item, {
+        key: "hint",
+        title: "Type a command line",
+        subtitle: "What you ran and installed completes it as you type",
+        onClick: async () => {
+          showToast({ title: "Type a command line to run it" });
+        },
+        children: ["Type a command line"],
+      }),
+    );
+  } else {
+    items.push(
+      jsxs(List.Item, {
+        key: `${LINE}${trimmed}`,
+        title: `Run “${trimmed}”`,
         subtitle: "Enter runs it as typed",
-      },
-      ...found.map((/** @type {import("pane:extension/run@0.1.0").Completion} */ completion) => ({
-        id: `${LINE}${completion.line}`,
-        title: completion.line,
-        subtitle: subtitleOf(completion.source),
-      })),
-    ];
-  },
-};
+        onClick: () => runLine(trimmed, false, "user-initiated"),
+        children: [`Run “${trimmed}”`],
+      }),
+    );
+    for (const completion of host(() => completions(trimmed))) {
+      items.push(
+        jsxs(List.Item, {
+          key: `${LINE}${completion.line}`,
+          title: completion.line,
+          subtitle: subtitleOf(completion.source),
+          onClick: () => runLine(completion.line, false, "user-initiated"),
+          children: [completion.line],
+        }),
+      );
+    }
+  }
+  return jsxs(List, {
+    navigationTitle: "Run with Completions",
+    searchPlaceholder: "Type a command line…",
+    onSearchText: (/** @type {string} */ typed) => setText(typed),
+    children: items,
+  });
+}

@@ -1,0 +1,17 @@
+# Test fixture: the navigation sample, a designed view whose stack Pane
+# owns (#239): rows push a detail view that pushes deeper, pops with a
+# result the rows answer through `onPop`, and pops to root through the
+# window host function. `"mode": "designed"` in its pane.json
+# (docs/designed-tree.md).
+[package]
+name = "sample-nav"
+version = "0.1.0"
+edition.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+pane-extension.workspace = true

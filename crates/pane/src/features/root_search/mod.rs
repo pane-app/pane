@@ -114,6 +114,16 @@ impl QueryField {
             &input,
             window,
             |this, input, _: &TextChanged, window, cx| {
+                // A designed view's List whose view handles the search itself
+                // (#240): the field's changes are throttled, one event in
+                // flight, so fast typing asks only for the text the user
+                // stops at.
+                if this.designed_list_searches() {
+                    let typed = input.read(cx).as_str().to_owned();
+                    this.designed_search_typed(&typed, cx);
+                    cx.notify();
+                    return;
+                }
                 // Results computed from the query (the calculator's answer)
                 // arrive later, without holding up typing. The announcer waits
                 // for them before it says the selected row (#132).
@@ -178,6 +188,12 @@ impl QueryField {
         }
     }
 
+    /// The field's editing state, which the window's other search headers
+    /// build theirs from (a designed List's, #240).
+    pub(crate) fn entity(&self) -> &Entity<EditableTextState> {
+        &self.input
+    }
+
     pub(crate) fn focus(&self, window: &mut Window, cx: &mut App) {
         window.focus(&self.input.focus_handle(cx), cx);
     }
@@ -219,12 +235,10 @@ impl LauncherWindow {
                     self.query.focus(window, cx);
                 }
             }
-            // A form of Pane's own (the npm or Git package form), or a form or
-            // custom view opened from a command's search, has taken focus
-            // already.
-            None if was_shown && self.form.is_none() && self.custom_view.is_none() => {
-                window.focus(&self.focus_handle, cx)
-            }
+            // A form of Pane's own (the npm or Git package form), or a form
+            // or designed view opened from a command's search, has taken
+            // focus already: the designed controls cover both.
+            None if was_shown && self.designed.is_none() => window.focus(&self.focus_handle, cx),
             None => {}
         }
     }

@@ -19,7 +19,7 @@
 // log" writes a line longer than Pane keeps, then more lines in a second
 // than Pane keeps; "Fail" throws, which the extension answers with as an
 // error and logs with its stack.
-import type { Command, CustomView, Item, List } from "@pane-app/extension";
+import type { Command, DesignedView, Item, List } from "@pane-app/extension";
 import { showToast } from "@pane-app/extension/feedback";
 import { get, set } from "pane:extension/settings@0.1.0";
 import * as cache from "pane:extension/cache@0.1.0";
@@ -168,13 +168,8 @@ async function outcome(itemId: string): Promise<string | null> {
   }
 }
 
-async function submitForm(itemId: string): Promise<string> {
-  // Any Error thrown from submitForm is a message about the whole form.
-  throw new Error(`unknown form: ${itemId}`);
+async function openView(commandId: string): Promise<DesignedView> {
+  throw new Error(`unknown designed view: ${commandId}`);
 }
 
-async function openView(itemId: string): Promise<CustomView> {
-  throw new Error(`unknown view: ${itemId}`);
-}
-
-export const command: Command = { render, submitForm, openView };
+export const command: Command = { render, openView };

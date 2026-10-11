@@ -19,14 +19,14 @@
 use pane_extension::alloc::{format, string::String, vec, vec::Vec};
 use pane_extension::feedback::{Toast, show_toast};
 use pane_extension::indexed::{IndexedAction, IndexedResult, OpenTarget};
-use pane_extension::{Command, LaunchRecord, NoCustomView};
+use pane_extension::{Command, LaunchRecord};
 
 struct Keywords;
 pane_extension::export!(Keywords);
 pane_extension::indexed::export!(Keywords);
 
 impl Command for Keywords {
-    type CustomView = NoCustomView;
+    type DesignedView = pane_extension::view::NoDesignedView;
 
     /// Empties the bin, saying so. The provider command is never run.
     async fn run(command: String, _launch: LaunchRecord) -> Result<(), String> {

@@ -285,7 +285,7 @@ The one record a command receives on every way in: how it was launched (by the u
 _Avoid_: Launch props (Raycast's name), arguments (one part of it)
 
 **Command mode**:
-What a command declares in its package manifest entry: `view`, it opens a screen, or `no-view`, invoking it runs it and opens none (ADR 0037). Pane reads it before running anything, to decide at Enter whether to open a screen.
+What a command declares in its package manifest entry: `view`, it opens a screen, `no-view`, invoking it runs it and opens none, or `designed`, its screen is a designed view (ADR 0037). Pane reads it before running anything, to decide at Enter whether to open a screen and which of its entry points to call. Transitional: `view` retires into `designed` once the List and the Form move onto the tree.
 _Avoid_: Command type, menu-bar command (not offered)
 
 **No-view command**:
@@ -421,7 +421,7 @@ A command of an enabled package that needs a required capability or required dep
 _Avoid_: Pending (Cordis's word), paused extension (stopped after its own failure), disabled extension (the user's choice), unavailable action (excluded by its platforms)
 
 **Extension runtime**:
-The part of Pane that runs every installed extension's code (the Wasmtime engine; the runtime is a thread in Pane's process today), shared by all extensions; the window, root search's own rows and the extension pages in Settings do not depend on it.
+The part of Pane that runs every installed extension's code (the Wasmtime engine; the runtime is a thread in Pane's process today), shared by all extensions; the window, root search's own rows and the extension pages in Settings do not depend on it. An extension's code runs inside the calls Pane asks of it — and, while one of its designed views is open, between them too: the runtime keeps a guest that still has work running, so a view's own arrival can ask Pane to draw it again (#243).
 _Avoid_: Engine (one part of it)
 
 **Runtime crash**:
@@ -429,7 +429,7 @@ A failure of the extension runtime itself, not attributable to any one extension
 _Avoid_: Extension crash, paused runtime
 
 **Unresponsive call**:
-A guest call whose extension computed for five seconds in all without finishing, holding every other extension's calls behind it; Pane stops it where the guest yields (every guest yields to the runtime at each epoch tick), drops its instance and says so, and, since the extension's own code was running, counts it towards pausing that extension as a crash. Only the guest's own computing counts: time it spends waiting (on a clock, a save, a helper, another extension), time inside Pane's host calls, time the system gave other threads and starting its instance are not, so a healthy extension is never stopped for them.
+A guest call whose extension computed for five seconds in all without finishing; Pane stops it where the guest yields (every guest yields to the runtime at each epoch tick), drops its instance and says so, and, since the extension's own code was running, counts it towards pausing that extension as a crash. Only the guest's own computing counts: time it spends waiting (on a clock, a save, a helper, another extension), time inside Pane's host calls, time the system gave other threads and starting its instance are not, so a healthy extension is never stopped for them. A guest computing between Pane's calls (its instance kept running for a designed view, #243) is bounded the same way. Waiting never holds another extension's calls behind it; computing holds only its own instance's.
 _Avoid_: Timeout (waiting is not limited), hung extension, frozen
 
 **Runtime hang**:
@@ -521,19 +521,27 @@ The operating system and processor a native helper's file is built for, written 
 _Avoid_: Platform (a supported platform is an operating system alone), triple
 
 **Form**:
-A set of fields an extension command asks the user to fill in and submit; the launcher renders its standard controls and the extension validates the submitted values.
+A set of fields an extension command asks the user to fill in, submitted as an action: a `form` node of a designed view whose children are the author's own layout with the fields in it, so fields sit in any arrangement the tree allows. Each field carries a title, a note, an error the extension's next render sets, a default, an auto-focus and a remembered value Pane keeps as the package's settings; submission collects their values and runs the form's listener, Enter in a single-line field submitting as Ctrl+Enter does in a text area. Pane's own forms (the argument form, the Setup screen) are the same components in a tree the launcher answers. Typed form (the retired WIT shape) is gone.
 _Avoid_: Dialog, custom view
 
 **Custom view**:
-An interactive view an extension draws itself from shapes the launcher paints, receiving the user's key and pointer input while it is open; the launcher keeps focus and its accessible representation. It is now a canvas: a leaf node of a UI tree, beside components (ADR 0036).
+What an extension drew itself before the designed tree: a view of shapes the launcher painted, taking the keys and pointer input the extension asked for (ADR 0036's Q13). It became the canvas (#242); the term is retired.
 _Avoid_: Webview, custom control (a UI component is Pane's own)
 
+**Canvas**:
+A leaf node of a UI tree an extension draws into with drawing operations — paths with fills and strokes, rectangles, circles, images, text, clip and transform — taking pointer, wheel and key input and named to assistive technology as one control with a role, a label and a value (ADR 0036; #242, the custom view's successor). Its size comes from its style, named in the view's render context; a change of it is the resize event.
+_Avoid_: Drawing layer, paint surface, bitmap (it is a node of the tree)
+
 **UI tree**:
-What a command's view renders: a tree of layout nodes (row, column, stack, scroll, wrap) and UI components that Pane renders and runs (ADR 0036). Authors write it with a GPUI-like builder in Rust or JSX in JavaScript and TypeScript; the SDKs carry it as versioned JSON the author never sees. Pane keeps each node's state by the key the author gave it, and asks for the tree again after an event.
+What a command's view renders: a tree of layout nodes (row, column, stack, scroll, wrap) and UI components that Pane renders and runs (ADR 0036). Authors write it with a GPUI-like builder in Rust or JSX in JavaScript and TypeScript; the SDKs carry it as versioned JSON the author never sees (`docs/designed-tree.md`). A designed view's tree is carried through its `view` resource: Pane asks for it when the view opens and again after each event, and keeps each node's state by the key the author gave it (#238).
 _Avoid_: DOM, webview, view model
 
+**Navigation stack**:
+The stack of designed views an opened command's screen holds, owned by Pane (#239): the root view the command opened and each view a view's answer pushed above it, the top of the stack on screen. A view's answer pushes, replaces or pops (with a result); the back key pops without asking, showing the view below's last tree and then telling it the view above popped; `pop-to-root` and Shift+Esc drop the whole stack. Popped and replaced views are dropped, never used again; at most 32 views are held.
+_Avoid_: Navigation history (nothing is remembered), view stack (a layout node of the same name), back stack
+
 **UI component**:
-One of Pane's shared building blocks that a UI tree names, the same ones Pane's own UI draws: rich row, icon tile, keycap, tag, button, input, select, toggle, Markdown and others, and the standard views built from them (List, Detail, Grid, Form). They are versioned as a set; a node Pane does not know draws the author's fallback or its children.
+One of Pane's shared building blocks that a UI tree names, the same ones Pane's own UI draws: rich row, icon tile, keycap, tag, button, input, select, toggle, Markdown and others, and the standard views built from them (List, Detail, Grid, Form). They are versioned as a set — each document names the `MAJOR.MINOR` it targets, a newer minor degrades property by property, and another major is refused naming both — so a node Pane does not know draws the author's fallback or its children. The first set (1.0) has the column, the row, the text and the button.
 _Avoid_: Component alone (a package's built WebAssembly component), widget, custom view (drawn by the extension)
 
 **Theme token**:

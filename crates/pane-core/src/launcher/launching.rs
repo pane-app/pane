@@ -6,7 +6,10 @@
 //! Enter whether to open a screen without running guest code. A view
 //! command opens as it always did, its `render` receiving the record (and
 //! the same record each time its screen is drawn again while it is open). A
-//! no-view command's `run` is called once per launch and no screen opens:
+//! designed command (`"mode": "designed"`, ADR 0036) opens a designed view
+//! instead: `open-view` receives the record once and its screen is the tree
+//! its `view.render` answers, which the window draws (see `designed_views`).
+//! A no-view command's `run` is called once per launch and no screen opens:
 //! root search, or whatever is shown, stays as it is. Its answer shows
 //! nothing (#141): the command says what happened through a toast or a HUD
 //! (see `feedback`). An error it answers with is shown as a failure toast
@@ -162,8 +165,9 @@ impl Launcher {
     }
 
     /// Launches `opening` with nothing more to ask: a no-view command runs
-    /// ([`Launcher::run_no_view`]), a view command opens its screen
-    /// ([`Launcher::open_command`]).
+    /// ([`Launcher::run_no_view`]), a designed command opens its designed
+    /// view ([`Launcher::open_designed_command`]), and a view command opens
+    /// its screen ([`Launcher::open_command`]).
     pub(super) async fn launch_ready(
         &self,
         epoch: u64,
@@ -172,6 +176,8 @@ impl Launcher {
     ) {
         if opening.no_view {
             self.run_no_view(epoch, opening, data).await
+        } else if opening.designed {
+            self.open_designed_command(epoch, opening, data).await
         } else {
             self.open_command(epoch, opening, data).await
         }
@@ -202,7 +208,6 @@ impl Launcher {
         let Opening {
             component,
             command,
-            search,
             launch,
             ..
         } = opening;
@@ -248,8 +253,8 @@ impl Launcher {
                 super::Opening {
                     component: component.clone(),
                     command: command.clone(),
-                    search,
                     no_view: true,
+                    designed: false,
                     launch: launch.clone(),
                     initial_search: None,
                 },
@@ -397,8 +402,8 @@ impl Launcher {
         if let Some(reason) = unavailable {
             return Err(format!("{} of {title}: {reason}", registration.title));
         }
-        let no_view = package.mode_of(command) == CommandMode::NoView;
-        if request.launch_type == LaunchType::Background && !no_view {
+        let mode = package.mode_of(command);
+        if request.launch_type == LaunchType::Background && mode != CommandMode::NoView {
             return Err(format!(
                 "{} of {title} opens a view, so it cannot be launched in the background; \
                  launch it user-initiated",
@@ -420,7 +425,7 @@ impl Launcher {
         if let Some(context) = &request.context {
             check_context(context)?;
         }
-        let mut opening = Opening::of(&registration, no_view, LaunchSource::Command);
+        let mut opening = Opening::of(&registration, mode, LaunchSource::Command);
         opening.launch = LaunchRecord {
             launch_type: request.launch_type,
             source: LaunchSource::Command,
@@ -430,7 +435,7 @@ impl Launcher {
             command: Some(request.command.clone()),
         };
         if request.launch_type == LaunchType::UserInitiated {
-            if no_view {
+            if mode == CommandMode::NoView {
                 // As the user invoking it where they are: the screen stays.
                 Launcher::begin_run(state);
             } else {

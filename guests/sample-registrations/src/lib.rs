@@ -26,7 +26,7 @@ use core::cell::RefCell;
 use pane_extension::alloc::{borrow::ToOwned, format, string::String, string::ToString};
 use pane_extension::feedback::{Toast, show_toast};
 use pane_extension::registrations::{self, Change, Events, Item};
-use pane_extension::{Command, List, NoCustomView, content, publish, settings};
+use pane_extension::{Command, List, content, publish, settings};
 
 /// The command's id in `pane.json`, which the dynamic root item is under.
 const COMMAND: &str = "registrations";
@@ -182,7 +182,7 @@ fn name_of(input: &str) -> Result<String, String> {
 }
 
 impl Command for Registrations {
-    type CustomView = NoCustomView;
+    type DesignedView = pane_extension::view::NoDesignedView;
 
     async fn render() -> Result<List, String> {
         let signed_in = PROVISION.0.borrow().is_some();

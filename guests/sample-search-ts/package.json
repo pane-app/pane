@@ -5,10 +5,7 @@
   "description": "Pane's online search sample, Package search, in TypeScript",
   "license": "Apache-2.0 OR MIT",
   "type": "module",
-  "main": "src/index.ts",
-  "pane": {
-    "search": true
-  },
+  "main": "src/index.tsx",
   "devDependencies": {
     "@pane-app/extension": "file:../js",
     "esbuild": "0.28.2",

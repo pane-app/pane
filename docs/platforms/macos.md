@@ -694,7 +694,7 @@ Screenshots from run [36371205770](https://github.com/wasimysaid/pane/actions/ru
   with a Quartz mouse event posted through Python `ctypes`, converting the
   screenshot's pixels to points (half on Retina). Each step must show the
   chosen color over at least 3000 pixels. In run [36378453278](https://github.com/wasimysaid/pane/actions/runs/36378453278) (commit `1487dc8`, macOS 15.7.9, arm64) every step passed: the picker opened on blue (#1E88E5), Right moved to purple (#8E24AA) and the click chose dark green (#1B5E20); posting the Quartz event needed no permission beyond the one System Events has. Accessibility: see
-  [custom views](../custom-views.md#accessibility).
+  [the canvas](../designed-tree.md#the-canvas).
 - **Operations (#22):** the operations phase (screenshots 31 and 32) installs
   the JavaScript operations sample, then the Rust one, opens the Rust
   sample's command and fills its form with the JavaScript package's identity

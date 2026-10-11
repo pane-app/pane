@@ -238,11 +238,7 @@ fn address_row(result: &RootResult, text: &str) -> Option<(Row, Entry)> {
         Entry::Open(opening) => opening.clone(),
         Entry::Unavailable(_) => {
             let target = result.target.as_ref()?;
-            Opening::of(
-                &target.registration,
-                target.no_view,
-                LaunchSource::RootSearch,
-            )
+            Opening::of(&target.registration, target.mode, LaunchSource::RootSearch)
         }
         _ => return None,
     };

@@ -20,14 +20,12 @@
 use pane_extension::alloc::{format, string::String, vec::Vec};
 use pane_extension::file_index::{self, FileEntry, IndexState, SearchOptions};
 use pane_extension::root::{RootAction, RootResult, WallTime};
-use pane_extension::search::SearchResult;
 use pane_extension::typed_folder::{self, FolderEntry};
-use pane_extension::{Command, CustomView, FieldValue, FormError, Item, List, NoCustomView};
+use pane_extension::{Command, Item, List};
 
 struct Sample;
 pane_extension::export!(Sample);
 pane_extension::root::export!(Sample);
-pane_extension::search::export!(Sample);
 
 /// The most entries one query lists.
 const MAX_RESULTS: u32 = 20;
@@ -57,7 +55,7 @@ fn typed(query: &str) -> Option<Vec<FolderEntry>> {
 }
 
 impl Command for Sample {
-    type CustomView = NoCustomView;
+    type DesignedView = pane_extension::view::NoDesignedView;
 
     async fn render() -> Result<List, String> {
         let status = file_index::status();
@@ -75,31 +73,6 @@ impl Command for Sample {
                 ),
             )),
         )
-    }
-
-    async fn submit_form(item_id: String, _values: Vec<FieldValue>) -> Result<String, FormError> {
-        Err(FormError {
-            field: None,
-            message: format!("unknown form: {item_id}"),
-        })
-    }
-
-    async fn open_view(item_id: String) -> Result<CustomView, String> {
-        Err(format!("unknown view: {item_id}"))
-    }
-}
-
-impl pane_extension::search::Guest for Sample {
-    async fn search(_command: String, query: String) -> Result<Vec<SearchResult>, String> {
-        Ok(found(&query)?
-            .into_iter()
-            .map(|entry| SearchResult {
-                title: entry.name,
-                id: entry.path,
-                subtitle: None,
-                file: Some(entry.id),
-            })
-            .collect())
     }
 }
 

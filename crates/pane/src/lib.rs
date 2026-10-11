@@ -85,7 +85,6 @@ pub(crate) fn bind_keys_with(
         KeyBinding::new("space", TickChoice, Some(app::CHOICE_CONTEXT)),
     ]);
     let text_editing = ui::input::bind_text_editing(cx);
-    extension_views::form::bind_keys(cx, &text_editing);
     features::root_search::bind_keys(cx, &text_editing, keyboard);
     features::root_search::arguments::bind_keys(cx, &text_editing);
     features::clipboard_history::bind_keys(cx, &text_editing, keyboard);
@@ -97,7 +96,7 @@ pub(crate) fn bind_keys_with(
     features::actions_panel::bind_keys(cx, &text_editing);
     features::settings::bind_keys(cx);
     ui::select::bind_keys(cx);
-    extension_views::custom_view::bind_keys(cx);
+    extension_views::designed::bind_keys(cx);
     keyboard::bind_keys(cx, keyboard, navigation);
 }
 

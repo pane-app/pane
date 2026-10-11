@@ -39,7 +39,7 @@ use core::ffi::c_void;
 wit_bindgen::generate!({ path: "../../../wit", world: "extension" });
 
 use exports::pane::extension::command::{
-    CustomView, FieldValue, FormError, Frame, Guest, GuestCustomView, LaunchRecord, ViewEvent,
+    Guest, GuestView, LaunchRecord, Outcome, Rendered, UiEvent, View,
 };
 use pane::extension::feedback::{Toast, ToastStyle, show_toast};
 
@@ -134,21 +134,21 @@ fn list(version: u32) -> String {
 struct Trees;
 export!(Trees);
 
-/// A view type that is never opened.
-enum NoView {}
+/// A designed view type that is never opened.
+enum NoDesignedView {}
 
-impl GuestCustomView for NoView {
-    async fn render(&self) -> Frame {
+impl GuestView for NoDesignedView {
+    async fn render(&self, _context: String) -> Result<Rendered, String> {
         match *self {}
     }
 
-    async fn handle_event(&self, _event: ViewEvent) -> Result<(), String> {
+    async fn handle_event(&self, _event: UiEvent) -> Result<Outcome, String> {
         match *self {}
     }
 }
 
 impl Guest for Trees {
-    type CustomView = NoView;
+    type View = NoDesignedView;
 
     async fn render(_launch: LaunchRecord) -> Result<String, String> {
         STATE.drawn.set(STATE.drawn.get() + 1);
@@ -199,15 +199,8 @@ impl Guest for Trees {
         ))
     }
 
-    async fn submit_form(item_id: String, _values: Vec<FieldValue>) -> Result<String, FormError> {
-        Err(FormError {
-            field: None,
-            message: format!("unknown form: {item_id}"),
-        })
-    }
-
-    async fn open_view(item_id: String) -> Result<CustomView, String> {
-        Err(format!("unknown view: {item_id}"))
+    async fn open_view(command: String, _launch: LaunchRecord) -> Result<View, String> {
+        Err(format!("unknown designed view: {command}"))
     }
 }
 

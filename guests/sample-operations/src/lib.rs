@@ -17,12 +17,15 @@
 //! meanwhile stops it; the "wait" item calls it.
 #![no_std]
 
-use pane_extension::alloc::{format, string::String, string::ToString, vec, vec::Vec};
-use pane_extension::operations::call;
-use pane_extension::{
-    Choice, Command, CustomView, Field, FieldKind, FieldValue, Form, FormError, Item, List,
-    NoCustomView, TextField, publish, settings,
+use core::cell::RefCell;
+
+use pane_extension::alloc::{
+    borrow::ToOwned, format, string::String, string::ToString, vec, vec::Vec,
 };
+use pane_extension::form::{self, FormValues};
+use pane_extension::operations::call;
+use pane_extension::view::{Cx, IntoAnswer, Pending, View};
+use pane_extension::{Command, Item, LaunchRecord, List, publish, settings};
 use serde_json::{Value, json};
 
 struct Operations;
@@ -43,112 +46,25 @@ async fn greet(source: &str, name: &str) -> Result<String, String> {
     }
 }
 
-/// The form of the "greet" item.
-fn greet_form() -> Form {
-    let text = |id: &str, label: &str, placeholder: &str| Field {
-        id: id.into(),
-        label: label.into(),
-        kind: FieldKind::Text(TextField {
-            placeholder: Some(placeholder.into()),
-        }),
-    };
-    let choice = |id: &str, label: &str| Choice {
-        id: id.into(),
-        label: label.into(),
-    };
-    Form {
-        title: "Greet through another extension".into(),
-        fields: vec![
-            text(
-                "source",
-                "Package source",
-                "local:/path/to/sample-operations-js",
-            ),
-            text("name", "Name", "Rust"),
-            Field {
-                id: "times".into(),
-                label: "Ask".into(),
-                kind: FieldKind::Choice(vec![
-                    choice("once", "Once"),
-                    choice("twice", "Twice at once"),
-                ]),
-            },
-        ],
-        submit_label: "Greet".into(),
-    }
-}
-
-/// The form of the "wait" item.
-fn wait_form() -> Form {
-    Form {
-        title: "Wait in another extension".into(),
-        fields: vec![Field {
-            id: "source".into(),
-            label: "Package source".into(),
-            kind: FieldKind::Text(TextField {
-                placeholder: Some("local:/path/to/sample-operations-js".into()),
-            }),
-        }],
-        submit_label: "Wait".into(),
-    }
-}
-
-fn form_error(message: String) -> FormError {
-    FormError {
-        field: None,
-        message,
-    }
-}
-
 impl Command for Operations {
-    type CustomView = NoCustomView;
+    type DesignedView = Calling;
 
     async fn render() -> Result<List, String> {
         Ok(List::new("Call from Rust").items([
             Item::new("greet", "Greet through another extension")
                 .subtitle("Calls its greet operation through Pane")
-                .form(greet_form()),
+                .on_action(|| async { open_form("greet") }),
             Item::new("wait", "Wait in another extension")
                 .subtitle("Calls its wait operation, which takes ten seconds")
-                .form(wait_form()),
+                .on_action(|| async { open_form("wait") }),
         ]))
     }
 
-    async fn submit_form(item_id: String, values: Vec<FieldValue>) -> Result<String, FormError> {
-        if item_id != "greet" && item_id != "wait" {
-            return Err(form_error(format!("unknown form: {item_id}")));
+    async fn open_designed_view(command: String, _launch: LaunchRecord) -> Result<Calling, String> {
+        match command.as_str() {
+            "greet" | "wait" => Ok(Calling::new(command == "wait")),
+            _ => Err("this command opens no designed view".into()),
         }
-        let value = |id: &str| {
-            values
-                .iter()
-                .find(|field| field.id == id)
-                .map_or("", |field| field.value.as_str())
-        };
-        let source = value("source").trim();
-        if source.is_empty() {
-            return Err(FormError {
-                field: Some("source".into()),
-                message: "Enter the package's source".into(),
-            });
-        }
-        if item_id == "wait" {
-            call(source.into(), "wait".into(), 1, "{}".into())
-                .await
-                .map_err(|error| form_error(error.explain()))?;
-            return Ok("Waited in the other extension".into());
-        }
-        let name = value("name");
-        if value("times") == "twice" {
-            // Both calls are made at once; Pane serves them one after another.
-            let (first, second) = futures::join!(greet(source, name), greet(source, name));
-            let (first, second) = (first.map_err(form_error)?, second.map_err(form_error)?);
-            return Ok(format!("{first} / {second}"));
-        }
-        greet(source, name).await.map_err(form_error)
-    }
-
-    async fn open_view(item_id: String) -> Result<CustomView, String> {
-        Err(format!("unknown view: {item_id}"))
     }
 }
 
@@ -172,4 +88,159 @@ impl publish::Guest for Operations {
         }
         Ok(json!({ "greeting": format!("Hello, {name}, from Rust") }).to_string())
     }
+}
+
+/// Opens the form command `which`, as the user would.
+fn open_form(which: &'static str) -> Result<(), String> {
+    pane_extension::commands::launch(
+        &pane_extension::commands::CommandRef {
+            source: None,
+            command: which.into(),
+        },
+        pane_extension::commands::LaunchType::UserInitiated,
+        &[],
+        None,
+    )
+}
+
+/// The form command's view (#241): the fields the operation's arguments
+/// ask for, whose submission calls it. The call runs as the view's own
+/// work ([`Pending`]): its answer, or why there is none, draws over the
+/// form.
+struct Calling {
+    /// Whether the view is the `wait` form; the `greet` one otherwise.
+    waiting: bool,
+    /// The fields' values, as the view last drew them.
+    source: RefCell<String>,
+    name: RefCell<String>,
+    times: RefCell<String>,
+    /// The call a submission started, its answer on its way.
+    pending: Option<Pending<String>>,
+    /// Why the last submission was refused: its field and message.
+    error: RefCell<(String, String)>,
+}
+
+impl Calling {
+    fn new(waiting: bool) -> Calling {
+        Calling {
+            waiting,
+            source: RefCell::new(String::new()),
+            name: RefCell::new(String::new()),
+            times: RefCell::new("once".into()),
+            pending: None,
+            error: RefCell::new((String::new(), String::new())),
+        }
+    }
+}
+
+impl View for Calling {
+    fn render(&mut self, cx: &mut Cx<Self>) -> impl IntoAnswer {
+        let waiting = self.waiting;
+        let submit = cx.form_listener(move |this, values| {
+            let source = values.text("source").unwrap_or_default().trim().to_owned();
+            let name = values.text("name").unwrap_or_default().to_owned();
+            let times = values.text("times").unwrap_or("once").to_owned();
+            if source.is_empty() {
+                *this.error.borrow_mut() = ("source".into(), "Enter the package's source".into());
+                return;
+            }
+            *this.error.borrow_mut() = (String::new(), String::new());
+            *this.source.borrow_mut() = source.clone();
+            *this.name.borrow_mut() = name.clone();
+            *this.times.borrow_mut() = times.clone();
+            // The call runs as the view's own work: its answer draws the
+            // moment it arrives (#243).
+            let pending = if waiting {
+                Pending::loading(async move {
+                    match call(source.into(), "wait".into(), 1, "{}".into()).await {
+                        Ok(_) => "Waited in the other extension".to_owned(),
+                        Err(error) => error.explain(),
+                    }
+                })
+            } else {
+                Pending::loading(async move {
+                    let input = json!({ "name": name }).to_string();
+                    let times = if times == "twice" { 2 } else { 1 };
+                    match call(source.into(), "greet".into(), times, input).await {
+                        Ok(answer) => match serde_json::from_str::<Value>(&answer) {
+                            Ok(answer) => match answer.get("greeting").and_then(Value::as_str) {
+                                Some(greeting) => greeting.to_owned(),
+                                None => "the answer has no greeting".to_owned(),
+                            },
+                            Err(error) => format!("{error}"),
+                        },
+                        Err(error) => error.explain(),
+                    }
+                })
+            };
+            this.pending = Some(pending);
+        });
+        // What the call answered, when it has: drawn over the form.
+        if let Some(pending) = &mut self.pending
+            && let Some(answer) = pending.ready()
+        {
+            let answer = answer.clone();
+            self.pending = None;
+            let mut view = form_of(self, submit, answer.clone());
+            let _ = &mut view;
+            return pane_extension::view::column()
+                .gap(pane_extension::view::Space::M)
+                .child(
+                    pane_extension::view::text(answer.as_str())
+                        .style(pane_extension::view::TextStyle::Title),
+                )
+                .child(view)
+                .into_answer();
+        }
+        if self.pending.is_some() {
+            return pane_extension::view::text("Calling the other extension…").into_answer();
+        }
+        form_of(self, submit, String::new()).into_answer()
+    }
+}
+
+/// The form the view draws: the fields the operation's arguments ask
+/// for, its answer over them.
+fn form_of(
+    view: &Calling,
+    submit: pane_extension::view::FormListener,
+    answer: String,
+) -> form::Form {
+    let _ = answer;
+    let error = |field: &str| {
+        let error = view.error.borrow();
+        (error.0 == field)
+            .then(|| error.1.clone())
+            .unwrap_or_default()
+    };
+    let mut form = form::Form::new()
+        .key("form")
+        .submit_title("Call")
+        .on_submit(submit)
+        .child(
+            form::text_field("source")
+                .title("Package source")
+                .placeholder("local:/path/to/sample-operations-js")
+                .default_value(view.source.borrow().clone())
+                .error(error("source"))
+                .auto_focus(),
+        );
+    if !view.waiting {
+        form = form
+            .child(
+                form::text_field("name")
+                    .title("Name")
+                    .default_value(view.name.borrow().clone()),
+            )
+            .child(
+                form::dropdown("times")
+                    .title("Ask")
+                    .options([
+                        pane_extension::view::choice("once").label("Once"),
+                        pane_extension::view::choice("twice").label("Twice at once"),
+                    ])
+                    .default_value("once"),
+            );
+    }
+    form
 }

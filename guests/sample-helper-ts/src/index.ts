@@ -11,7 +11,7 @@
 // A promise cannot be cancelled, so the run is left behind when the timer
 // wins; Pane ends the helper's process as soon as the call that started it
 // returns.
-import type { Command, CustomView, Item, List } from "@pane-app/extension";
+import type { Command, DesignedView, Item, List } from "@pane-app/extension";
 import { showToast } from "@pane-app/extension/feedback";
 import { run, type HelperError } from "pane:extension/helpers@0.1.0";
 import { set } from "pane:extension/settings@0.1.0";
@@ -112,11 +112,7 @@ export const command: Command = {
     };
   },
 
-  async submitForm(itemId: string): Promise<string> {
-    throw { message: `unknown form: ${itemId}` };
-  },
-
-  async openView(itemId: string): Promise<CustomView> {
-    throw new Error(`unknown view: ${itemId}`);
+  async openView(itemId: string): Promise<DesignedView> {
+    throw new Error(`unknown designed view: ${itemId}`);
   },
 };

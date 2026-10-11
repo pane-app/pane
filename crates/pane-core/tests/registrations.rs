@@ -806,9 +806,8 @@ fn an_alias_of_a_dynamic_item_says_why_while_it_is_not_registered() {
         launcher.open_result_action(&row.id, pane_core::ResultAction::Alias),
         "the alias form opened for the dynamic item's row"
     );
-    let form = launcher.view().form().cloned().expect("the alias form");
-    launcher.set_field_value(&form.fields[0].id, "reg");
-    block_on(launcher.submit_form());
+    assert!(launcher.view().form().is_some(), "the alias form opened");
+    block_on(launcher.submit_pane_form(vec![("alias".to_owned(), "reg".to_owned())]));
     // Typing the alias finds the row.
     to_root(&launcher);
     block_on(launcher.set_query("reg"));

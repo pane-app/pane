@@ -51,7 +51,7 @@ What is **not** a failure of the package:
 - In JavaScript and TypeScript, **anything a handler throws** is an error
   it answers with: the build wraps the exported handlers
   ([`guests/js/adapt.js`](../guests/js/adapt.js)), so a thrown `Error`
-  from `submitForm` rejects the form as a whole rather than trapping.
+  from a handler shows a failure toast rather than trapping.
 - A failure of the **runtime itself**, with no attributable package, pauses
   nothing: a reload or Retry that cannot start the package because Pane's
   runtime is unavailable (it could not start, or its thread has stopped)

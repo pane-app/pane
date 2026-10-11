@@ -34,9 +34,7 @@ use pane_extension::alloc::{format, string::String, string::ToString, vec::Vec};
 use pane_extension::capabilities::{call, call_every, providers};
 use pane_extension::feedback::{Toast, show_toast};
 use pane_extension::operations;
-use pane_extension::{
-    Command, CustomView, FieldValue, FormError, Item, List, NoCustomView, publish, settings,
-};
+use pane_extension::{Command, Item, List, publish, settings};
 use serde_json::{Value, json};
 
 struct Fixture;
@@ -240,24 +238,13 @@ async fn outcome(item_id: &str) -> Result<String, String> {
 }
 
 impl Command for Fixture {
-    type CustomView = NoCustomView;
+    type DesignedView = pane_extension::view::NoDesignedView;
 
     async fn render() -> Result<List, String> {
         let items = ITEMS
             .into_iter()
             .map(|(title, ..)| Item::new(title, title).on_action(move || act(title)));
         Ok(List::new("Capabilities fixture").items(items))
-    }
-
-    async fn submit_form(item_id: String, _values: Vec<FieldValue>) -> Result<String, FormError> {
-        Err(FormError {
-            field: None,
-            message: format!("unknown form: {item_id}"),
-        })
-    }
-
-    async fn open_view(item_id: String) -> Result<CustomView, String> {
-        Err(format!("unknown view: {item_id}"))
     }
 }
 

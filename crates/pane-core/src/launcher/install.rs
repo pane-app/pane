@@ -25,9 +25,10 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use super::choice;
+use super::pane_form::{self, PaneFieldKind, PaneForm, PaneFormField};
 use super::{
-    Changing, Entry, FormField, FormPurpose, FormView, GIT_REPOSITORY_FIELD, Launcher,
-    LauncherView, Mode, NPM_PACKAGE_FIELD, OpenForm, Row, Screen, State, Status, off_thread,
+    Changing, Entry, FormPurpose, GIT_REPOSITORY_FIELD, Launcher, LauncherView, Mode,
+    NPM_PACKAGE_FIELD, Row, Screen, State, Status, next_form_id, off_thread,
 };
 use crate::defaults::DefaultExtension;
 use crate::dependencies::{self, Assumptions, Plan, RequiredState};
@@ -38,7 +39,6 @@ use crate::packages::{
     InstalledPackage, MANIFEST_FILE, PackageError, PackageIdentity, SourcePackage, SourceSpec,
 };
 use crate::platform::{self, Platform};
-use crate::runtime::FieldKind;
 use crate::{helpers, operations};
 
 /// Where a package to preview or install comes from.
@@ -759,60 +759,59 @@ impl Launcher {
         }
     }
 
-    /// Shows Pane's own form asking which npm package to install.
+    /// Shows Pane's own form asking which npm package to install: a
+    /// designed tree now (#241), its field a text field, as every form
+    /// Pane itself asks is.
     pub(in crate::launcher) fn show_npm_form(&self, state: &mut State) {
-        let form = FormView {
-            fields: vec![FormField {
-                id: NPM_PACKAGE_FIELD.into(),
-                label: "npm package: its name, and a version to install that one".into(),
-                kind: FieldKind::Text {
-                    placeholder: Some("such as @scope/name or name@1.2.3".into()),
-                },
+        let form = PaneForm::of(
+            next_form_id(),
+            "Install extension from npm",
+            "Show package",
+            vec![PaneFormField {
+                key: NPM_PACKAGE_FIELD.into(),
+                kind: PaneFieldKind::Text,
+                title: "npm package: its name, and a version to install that one".into(),
+                placeholder: Some("such as @scope/name or name@1.2.3".into()),
+                info: None,
                 value: String::new(),
-                error: None,
-                description: None,
                 required: false,
             }],
-            submit_label: "Show package".into(),
-            setup: None,
-        };
-        let view = LauncherView::new(Screen::Form(form), "Install extension from npm");
-        let return_to = std::mem::replace(&mut state.view, view);
-        state.form = Some(OpenForm {
-            purpose: FormPurpose::Npm,
-            return_to,
-            submitting: false,
-        });
-        state.screen_epoch += 1;
+            None,
+        );
+        pane_form::open_pane_form(
+            state,
+            FormPurpose::Npm,
+            form,
+            "Install extension from npm".into(),
+        );
     }
 
-    /// Shows Pane's own form asking which Git repository to install from.
+    /// Shows Pane's own form asking which Git repository to install from,
+    /// as the npm one is.
     pub(in crate::launcher) fn show_git_form(&self, state: &mut State) {
-        let form = FormView {
-            fields: vec![FormField {
-                id: GIT_REPOSITORY_FIELD.into(),
-                label: "Git repository: its address, and @ a branch, tag or commit to install \
+        let form = PaneForm::of(
+            next_form_id(),
+            "Install extension from Git",
+            "Show package",
+            vec![PaneFormField {
+                key: GIT_REPOSITORY_FIELD.into(),
+                kind: PaneFieldKind::Text,
+                title: "Git repository: its address, and @ a branch, tag or commit to install \
                         that one"
                     .into(),
-                kind: FieldKind::Text {
-                    placeholder: Some("such as https://github.com/owner/repo@v1.0.0".into()),
-                },
+                placeholder: Some("such as https://github.com/owner/repo@v1.0.0".into()),
+                info: None,
                 value: String::new(),
-                error: None,
-                description: None,
                 required: false,
             }],
-            submit_label: "Show package".into(),
-            setup: None,
-        };
-        let view = LauncherView::new(Screen::Form(form), "Install extension from Git");
-        let return_to = std::mem::replace(&mut state.view, view);
-        state.form = Some(OpenForm {
-            purpose: FormPurpose::Git,
-            return_to,
-            submitting: false,
-        });
-        state.screen_epoch += 1;
+            None,
+        );
+        pane_form::open_pane_form(
+            state,
+            FormPurpose::Git,
+            form,
+            "Install extension from Git".into(),
+        );
     }
 
     /// Installs the package in `folder` as an explicit install request, with

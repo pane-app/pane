@@ -8,11 +8,14 @@
 // draft" opens the draft's form, whose text it saves. Nothing is written
 // to Pane's extension data: without the handoff, a replacement loses both.
 // The state is a value this module versions itself, which
-// `@pane-app/extension/state` serialises. Items, titles and answers match
-// the Rust and JavaScript handoff samples.
-import type { Command, Form } from "@pane-app/extension";
+// `@pane-app/extension/state` serialises. The draft's form is a designed
+// view the item pushes (#241), as the typed form it was is retired. Items,
+// titles and answers match the Rust and JavaScript handoff samples.
+import type { Command } from "@pane-app/extension";
 import type { Lifecycle } from "@pane-app/extension/state";
 import { showToast } from "@pane-app/extension/feedback";
+import { Button, Column, Push, TextInput, pop, useState } from "@pane-app/extension/view";
+import { jsxs } from "@pane-app/extension/jsx-runtime";
 import { load, save } from "@pane-app/extension/state";
 
 /**
@@ -34,19 +37,6 @@ function state(): Kept {
   }
   return kept;
 }
-
-/** The draft's form: one text field. */
-const DRAFT_FORM: Form = {
-  title: "Edit the draft",
-  fields: [
-    {
-      id: "draft",
-      label: "Draft",
-      kind: { tag: "text", val: { placeholder: "What a replacement must keep" } },
-    },
-  ],
-  submitLabel: "Save",
-};
 
 /** `text` in quotes, or "nothing" for empty. */
 function quoted(text: string): string {
@@ -96,20 +86,37 @@ export const command: Command = {
           id: "draft",
           title: `Edit the draft (${draft.split(/\s+/).filter(Boolean).length} words)`,
           subtitle: `The draft is ${quoted(draft)}`,
-          form: DRAFT_FORM,
+          onClick: Push(jsxs(DraftView, { children: [] })),
         },
       ],
     };
   },
-
-  // The draft form's answer: the draft becomes the text typed, and the
-  // screen says so.
-  async submitForm(itemId: string, values: { id: string; value: string }[]) {
-    if (itemId !== "draft") {
-      throw { message: `unknown form: ${itemId}` };
-    }
-    const text = values.find((field) => field.id === "draft")?.value ?? "";
-    state().draft = text;
-    return `Saved the draft ${quoted(text)}`;
-  },
 };
+
+/** The draft's form as a designed view (#241): a text field and a Save
+ * button. Saving pops the view, which re-renders the list with the draft
+ * it kept. */
+function DraftView() {
+  const [text, setText] = useState(state().draft);
+  return jsxs(Column, {
+    navigationTitle: "Edit the draft",
+    gap: "m",
+    children: [
+      jsxs(TextInput, {
+        key: "draft",
+        label: "Draft",
+        placeholder: "What a replacement must keep",
+        value: text,
+        onInput: (value: string) => setText(value),
+        children: [text],
+      }),
+      jsxs(Button, {
+        onClick: () => {
+          state().draft = text;
+          pop(`Saved the draft ${quoted(text)}`);
+        },
+        children: ["Save"],
+      }),
+    ],
+  });
+}

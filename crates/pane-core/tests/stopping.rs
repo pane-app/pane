@@ -281,7 +281,7 @@ fn repeated_disables_and_reloads_leave_nothing_running(fixture: &Fixture) {
         block_on(installed.launcher.set_enabled(&installed.identity, false));
         pending.assert_stopped();
         assert_eq!(block_on(installed.runtime.running()), Vec::<PathBuf>::new());
-        assert_eq!(block_on(installed.runtime.view_count()), 0);
+        assert_eq!(block_on(installed.runtime.designed_view_count()), 0);
         block_on(installed.launcher.set_enabled(&installed.identity, true));
 
         let pending = installed.start_slow_save();
