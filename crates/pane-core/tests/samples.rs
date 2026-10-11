@@ -115,7 +115,7 @@ impl Sample {
             .view()
             .rows
             .iter()
-            .position(|row| row.id == "form")
+            .position(|row| row.id.ends_with("#form"))
             .expect("the form command is listed");
         launcher.select(index);
         block_on(launcher.activate_selected());
@@ -175,7 +175,7 @@ impl Sample {
             .view()
             .rows
             .iter()
-            .position(|row| row.id == "color")
+            .position(|row| row.id.ends_with("#color"))
             .expect("the color command is listed");
         launcher.select(index);
         block_on(launcher.activate_selected());

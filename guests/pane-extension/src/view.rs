@@ -5613,7 +5613,7 @@ fn write_length(tree: &mut String, length: Length) -> Result<(), String> {
     match length {
         Length::Token(space) => write_space(tree, space),
         Length::Px(pixels) => {
-            let _ = write!(tree, "{pixels}px");
+            let _ = write!(tree, "{pixels}");
             Ok(())
         }
         Length::Fraction(fraction) => {

@@ -12,7 +12,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use futures::executor::block_on;
-use pane_core::{Launcher, PackageIdentity, Runtime, SavedData, Screen, Status};
+use pane_core::{FormValue, Launcher, PackageIdentity, Runtime, SavedData, Screen, Status};
 use tempfile::TempDir;
 
 #[path = "support/platforms.rs"]
@@ -141,12 +141,20 @@ fn samples(dirs: &Dirs) -> Launcher {
 /// ("once" or "twice"), returning the outcome.
 fn greet(launcher: &Launcher, command: &str, source: &str, name: &str, times: &str) -> Status {
     open_item(launcher, command, "Greet through another extension");
-    assert!(launcher.view().form().is_some(), "{command}: no form");
-    block_on(launcher.submit_pane_form(vec![
-        ("source".to_owned(), (source).to_owned()),
-        ("name".to_owned(), (name).to_owned()),
-        ("times".to_owned(), (times).to_owned()),
-    ]));
+    // The form is a designed tree's (#241), submitted through the
+    // designed seam.
+    assert!(
+        matches!(launcher.view().screen, Screen::DesignedView(_)),
+        "{command}: no form"
+    );
+    block_on(launcher.submit_designed_form(
+        None,
+        vec![
+            ("source".to_owned(), FormValue::Text(source.to_owned())),
+            ("name".to_owned(), FormValue::Text(name.to_owned())),
+            ("times".to_owned(), FormValue::Text(times.to_owned())),
+        ],
+    ));
     launcher.view().status
 }
 
@@ -268,10 +276,16 @@ fn a_target_starts_only_when_it_is_called() {
     );
     assert_eq!(dirs.running(), ["sample_operations.wasm"]);
 
-    block_on(launcher.submit_pane_form(vec![
-        ("source".to_owned(), dirs.source(JAVASCRIPT).to_owned()),
-        ("name".to_owned(), ("Rust").to_owned()),
-    ]));
+    block_on(launcher.submit_designed_form(
+        None,
+        vec![
+            (
+                "source".to_owned(),
+                FormValue::Text(dirs.source(JAVASCRIPT).to_owned()),
+            ),
+            ("name".to_owned(), FormValue::Text("Rust".to_owned())),
+        ],
+    ));
     assert_eq!(
         dirs.running(),
         ["sample_operations.wasm", "sample_operations_js.wasm"]

@@ -1129,7 +1129,7 @@ fn open_installed_color_view(launcher: &Launcher) {
         .view()
         .rows
         .iter()
-        .position(|row| row.id == "color")
+        .position(|row| row.id.ends_with("#color"))
         .expect("the color command is listed");
     launcher.select(color);
     block_on(launcher.activate_selected());

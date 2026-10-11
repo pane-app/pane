@@ -176,6 +176,27 @@ fn form_shown(window: &Entity<LauncherWindow>, cx: &mut VisualTestContext) -> La
     })
 }
 
+/// The errors under the fields of the form view on screen, keyed: a
+/// field's refusal is drawn under it (#241), not in the status line.
+fn field_errors(view: &LauncherView) -> Vec<(String, String)> {
+    let Screen::DesignedView(shown) = &view.screen else {
+        panic!("no form view: {:?}", view.screen);
+    };
+    let mut errors = Vec::new();
+    fn at(node: &pane_core::Node, into: &mut Vec<(String, String)>) {
+        if let (Some(key), pane_core::NodeKind::TextInput(input)) = (&node.key, &node.kind) {
+            if let Some(error) = &input.field.error {
+                into.push((key.clone(), error.clone()));
+            }
+        }
+        for child in &node.children {
+            at(child, into);
+        }
+    }
+    at(&shown.tree.root, &mut errors);
+    errors
+}
+
 /// The values of the fields of the form view on screen, in order: the
 /// tree's fields, each starting at its default (#241).
 fn values(view: &LauncherView) -> Vec<String> {
@@ -268,15 +289,20 @@ fn create_quicklink_opens_its_form_and_saves_from_the_keyboard(cx: &mut TestAppC
     cx.simulate_input("github.com/pane-app/pane/issues");
     cx.simulate_keystrokes("enter");
     let view = settle(&window, cx);
+    // The refusal is drawn under the Link field, and the form stays open.
     assert_eq!(
-        view.status,
-        Status::Error(
-            "Link: Enter a link with its scheme, such as https:// or mailto:, or the full path \
-             of a file, folder or application"
-                .into()
-        )
+        field_errors(&view),
+        [(
+            "link".to_owned(),
+            "Enter a link with its scheme, such as https:// or mailto:, or the full path of a \
+             file, folder or application"
+                .to_owned()
+        )]
     );
-    assert!(view.form().is_some(), "the form stays open");
+    assert!(
+        matches!(view.screen, Screen::DesignedView(_)),
+        "the form stays open"
+    );
     // To the start of the field: text fields on macOS have no binding for
     // Home (Mac keyboards have none), only Command-Left.
     cx.simulate_keystrokes(if cfg!(target_os = "macos") {
@@ -312,7 +338,7 @@ fn create_quicklink_opens_its_form_and_saves_from_the_keyboard(cx: &mut TestAppC
     // Escape from the form leaves the command for root search.
     cx.simulate_keystrokes("escape");
     let view = enter_on("create quicklink", "Create Quicklink", &window, cx);
-    assert!(view.form().is_some());
+    assert!(matches!(view.screen, Screen::DesignedView(_)));
     cx.simulate_keystrokes("escape");
     let view = settle(&window, cx);
     assert!(matches!(view.screen, Screen::Root { .. }), "{view:?}");

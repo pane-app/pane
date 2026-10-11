@@ -13,7 +13,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use futures::executor::block_on;
-use pane_core::{Launcher, PackageIdentity, Runtime, SavedData, Status};
+use pane_core::{FormValue, Launcher, PackageIdentity, Runtime, SavedData, Screen, Status};
 use tempfile::TempDir;
 
 #[path = "support/platforms.rs"]
@@ -181,12 +181,20 @@ fn greet(launcher: &Launcher, source: &str) -> Status {
     block_on(launcher.activate_selected());
     select_title(launcher, "Greet through another extension");
     block_on(launcher.activate_selected());
-    assert!(launcher.view().form().is_some(), "no form");
-    block_on(launcher.submit_pane_form(vec![
-        ("source".to_owned(), (source).to_owned()),
-        ("name".to_owned(), ("Ada").to_owned()),
-        ("times".to_owned(), ("once").to_owned()),
-    ]));
+    // The form is a designed tree's (#241), submitted through the
+    // designed seam.
+    assert!(
+        matches!(launcher.view().screen, Screen::DesignedView(_)),
+        "no form"
+    );
+    block_on(launcher.submit_designed_form(
+        None,
+        vec![
+            ("source".to_owned(), FormValue::Text(source.to_owned())),
+            ("name".to_owned(), FormValue::Text("Ada".to_owned())),
+            ("times".to_owned(), FormValue::Text("once".to_owned())),
+        ],
+    ));
     launcher.view().status
 }
 
@@ -1041,7 +1049,10 @@ fn a_call_by_dependency_id_reaches_only_the_operations_declared_for_it() {
     block_on(launcher.activate_selected());
     select_title(&launcher, "Wait in another extension");
     block_on(launcher.activate_selected());
-    block_on(launcher.submit_pane_form(vec![("source".to_owned(), ("greeter").to_owned())]));
+    block_on(launcher.submit_designed_form(
+        None,
+        vec![("source".to_owned(), FormValue::Text("greeter".to_owned()))],
+    ));
 
     assert_eq!(
         launcher.view().status,

@@ -3671,14 +3671,9 @@ mod tests {
 
     #[test]
     fn markdown_reads_and_is_bounded() {
-        let read = tree(
-            r##"{"type":"markdown","markdown":"# Hi
-
-Some *prose*.
-
-- [x] done"}"##,
-        )
-        .unwrap();
+        let read =
+            tree(r##"{"type":"markdown","markdown":"# Hi\n\nSome *prose*.\n\n- [x] done"}"##)
+                .unwrap();
         let NodeKind::Markdown(markdown) = &read.root.kind else {
             panic!("markdown: {:?}", read.root.kind);
         };

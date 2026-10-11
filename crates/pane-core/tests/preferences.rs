@@ -421,6 +421,8 @@ fn the_setup_screen_asks_only_for_required_unset_values_then_launches(fixture: &
         Some("Required"),
         "an empty value is not saved"
     );
+    // A value is: the same submission saves it and launches.
+    block_on(launcher.submit_pane_form(vec![("apiKey".to_owned(), "abc".to_owned())]));
     let view = launcher.view();
     assert_eq!(view.screen, Screen::Root { query: "rp".into() });
     assert_eq!(

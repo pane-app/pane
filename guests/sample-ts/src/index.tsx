@@ -350,7 +350,7 @@ function GreetingForm(): Element {
     setAnswer(`${GREETINGS[greeting]}, ${name}, from the TypeScript guest`);
   };
   const form = (
-    <Form key="form" submitTitle="Greet" onSubmit={submit}>
+    <Form key="form" navigationTitle="Greet someone" submitTitle="Greet" onSubmit={submit}>
       <Form.TextField
         key="name"
         id="name"

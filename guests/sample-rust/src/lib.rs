@@ -135,6 +135,7 @@ impl Greeting {
         };
         let mut view = form::Form::new()
             .key("form")
+            .navigation_title("Greet someone")
             .submit_title("Greet")
             .on_submit(submit);
         for field in fields() {

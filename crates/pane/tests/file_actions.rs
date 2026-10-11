@@ -17,9 +17,13 @@ use std::time::{Duration, Instant};
 use futures::executor::block_on;
 use gpui::{AppContext, Entity, TestAppContext, VisualTestContext};
 use pane::LauncherWindow;
+use pane_core::defaults::ArtifactSource;
 use pane_core::file_index::{IndexerConfig, WalkOptions};
-use pane_core::{Launcher, LauncherView, LinkOpener, Runtime, Screen, Status};
+use pane_core::{DefaultExtension, Launcher, LauncherView, LinkOpener, Runtime, Screen, Status};
 use tempfile::TempDir;
+
+#[path = "../../pane-core/tests/support/artifacts.rs"]
+mod artifacts;
 
 #[path = "support/settle.rs"]
 mod settle;
@@ -27,6 +31,7 @@ mod settle;
 #[path = "../../pane-core/tests/support/system.rs"]
 mod recording;
 
+use artifacts::Artifacts;
 use recording::{Done, RecordingSystem};
 use settle::settle;
 
@@ -60,6 +65,7 @@ fn same_file(reported: &Path, made: &Path) -> bool {
 /// What Pane keeps for one test, and the fakes it acts through.
 struct World {
     _data: TempDir,
+    _artifacts: Artifacts,
     _temp: TempDir,
     /// The folder standing for the home folder, which the file index
     /// covers, named plainly inside `_temp` (whose own name starts with a
@@ -70,13 +76,15 @@ struct World {
 }
 
 impl World {
-    /// Pane with Files installed and its file index of a folder holding
-    /// `plan.txt` and `run plan.bat` settled.
+    /// Pane with Files acquired as its own default extension, and its
+    /// file index of a folder holding `plan.txt` and `run plan.bat`
+    /// settled: the registered Files command is the one command whose
+    /// search field Pane itself fills (#177), which an install into the
+    /// data folder's local identity is not.
     fn launcher(cx: &mut TestAppContext) -> (World, Launcher) {
-        let package =
-            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/guests/packages/files");
+        let package = guests().join("packages/files");
         assert!(
-            package.exists(),
+            package.is_dir(),
             "{} is missing; run `cargo xtask guests`",
             package.display()
         );
@@ -87,6 +95,30 @@ impl World {
         fs::create_dir(&folder).unwrap();
         fs::write(folder.join("plan.txt"), "plan").unwrap();
         fs::write(folder.join("run plan.bat"), "@echo off").unwrap();
+        let mut files: Vec<(String, Vec<u8>)> = fs::read_dir(&package)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|path| path.is_file())
+            .map(|path| {
+                let name = path.file_name().unwrap().to_str().unwrap().to_owned();
+                (name, fs::read(&path).unwrap())
+            })
+            .collect();
+        files.sort();
+        let manifest: serde_json::Value = serde_json::from_slice(
+            &files
+                .iter()
+                .find(|(path, _)| path == "pane.json")
+                .expect("the package has a pane.json")
+                .1,
+        )
+        .unwrap();
+        let borrowed: Vec<(&str, Vec<u8>)> = files
+            .iter()
+            .map(|(path, contents)| (path.as_str(), contents.clone()))
+            .collect();
+        let artifacts = Artifacts::start();
+        artifacts.publish("files", manifest["version"].as_str().unwrap(), &borrowed);
         let runtime = Runtime::start().unwrap();
         let system = Arc::new(RecordingSystem::default());
         runtime.set_applications(system.clone());
@@ -100,10 +132,17 @@ impl World {
             ..IndexerConfig::native(&data.path().join("cache"), folder.clone(), Vec::new())
         };
         let launcher = Launcher::with_packages(Ok(runtime), vec![], data.path().join("extensions"))
+            .with_defaults(
+                ArtifactSource::local(artifacts.url()).unwrap(),
+                vec![DefaultExtension {
+                    id: "files".into(),
+                    title: "Files".into(),
+                }],
+            )
             .with_link_opener(Arc::new(opener.clone()))
             .with_system(system.clone())
             .with_file_index(index);
-        block_on(launcher.install_package(&package));
+        block_on(launcher.acquire_defaults());
         assert!(
             matches!(launcher.view().status, Status::Result(_)),
             "{:?}",
@@ -118,6 +157,7 @@ impl World {
         launcher.show_root_search();
         let world = World {
             _data: data,
+            _artifacts: artifacts,
             _temp: temp,
             folder,
             opener,
@@ -129,6 +169,11 @@ impl World {
 
 /// Opens the window over `launcher`, then Search Files in it as a user
 /// does, and types `query` in its field.
+/// The folder `cargo xtask guests` builds into.
+fn guests() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/guests")
+}
+
 fn search_files<'a>(
     cx: &'a mut TestAppContext,
     launcher: Launcher,

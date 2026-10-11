@@ -227,7 +227,7 @@ fn open_color_command(launcher: &Launcher) {
         .view()
         .rows
         .iter()
-        .position(|row| row.id == "color")
+        .position(|row| row.id.ends_with("#color"))
         .expect("the color command is listed");
     launcher.select(index);
     block_on(launcher.activate_selected());
@@ -259,7 +259,7 @@ fn faulty_view(runtime: &Runtime) -> Installed {
         .view()
         .rows
         .iter()
-        .position(|row| row.id == "counter")
+        .position(|row| row.id.ends_with("#counter"))
         .expect("the counter command is listed");
     launcher.select(index);
     block_on(launcher.activate_selected());
@@ -363,7 +363,7 @@ fn a_view_that_opens_after_the_user_left_is_closed_again() {
         .view()
         .rows
         .iter()
-        .position(|row| row.id == "color")
+        .position(|row| row.id.ends_with("#color"))
         .unwrap();
     launcher.select(index);
 
@@ -498,7 +498,7 @@ fn a_crash_in_a_view_closes_it_and_the_command_keeps_working() {
         .view()
         .rows
         .iter()
-        .position(|row| row.id == "counter")
+        .position(|row| row.id.ends_with("#counter"))
         .unwrap();
     launcher.select(index);
     block_on(launcher.activate_selected());

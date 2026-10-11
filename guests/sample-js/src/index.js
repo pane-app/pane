@@ -355,6 +355,7 @@ function GreetingForm() {
   };
   const form = jsxs(Form, {
     key: "form",
+    navigationTitle: "Greet someone",
     submitTitle: "Greet",
     onSubmit: submit,
     children: [
