@@ -1086,7 +1086,7 @@ fn open_color<'a>(
 ) -> (
     Entity<LauncherWindow>,
     tempfile::TempDir,
-    &mut VisualTestContext,
+    &'a mut VisualTestContext,
 ) {
     let (window, data, cx) = open_installed(cx, &sample.component.replace('_', "-"));
     cx.simulate_keystrokes("enter");
