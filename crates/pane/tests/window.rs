@@ -109,7 +109,7 @@ fn open_installed<'a>(
 ) -> (
     Entity<LauncherWindow>,
     tempfile::TempDir,
-    &'a mut VisualTestContext,
+    &mut VisualTestContext,
 ) {
     let data = tempfile::tempdir().unwrap();
     let folder = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -1086,7 +1086,7 @@ fn open_color<'a>(
 ) -> (
     Entity<LauncherWindow>,
     tempfile::TempDir,
-    &'a mut VisualTestContext,
+    &mut VisualTestContext,
 ) {
     let (window, data, cx) = open_installed(cx, &sample.component.replace('_', "-"));
     cx.simulate_keystrokes("enter");
@@ -1277,7 +1277,7 @@ fn open_counter(
     Entity<LauncherWindow>,
     tempfile::TempDir,
     gpui::Point<gpui::Pixels>,
-    &'a mut VisualTestContext,
+    &mut VisualTestContext,
 ) {
     let data = tempfile::tempdir().unwrap();
     let component =
