@@ -24,6 +24,7 @@
 
 use core::cell::RefCell;
 use pane_extension::alloc::{
+    borrow::ToOwned,
     format,
     string::{String, ToString},
     vec,
