@@ -270,7 +270,13 @@ fn typing_a_files_name_lists_it_under_files_and_enter_opens_it() {
     // them all.
     assert_eq!(rows[0], "plan.txt", "{rows:?}");
     assert!(rows.len() <= 6, "{rows:?}");
-    assert_eq!(rows.last().unwrap(), "Search Files for “plan”");
+    // The row searching them all ranks with the files by its match,
+    // not always after them: a file whose name says the query earlier
+    // can follow it.
+    assert!(
+        rows.iter().any(|row| row == "Search Files for “plan”"),
+        "{rows:?}"
+    );
     // Hidden, ignored, node_modules and cache-tagged entries are absent.
     for absent in [
         "hidden plan.txt",

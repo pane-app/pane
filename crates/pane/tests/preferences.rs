@@ -141,12 +141,9 @@ fn the_setup_screen_asks_for_what_is_unset_and_launches_on_enter(cx: &mut TestAp
     let _ = form;
     let cx = &mut *opened.cx;
 
-    // The sentence, the help beside the fields, and each field with its
+    // The sentence and the package's help beside the fields are the
+    // tree's own texts (#241), drawn as labels; each field with its
     // description.
-    assert!(cx.debug_bounds("setup").is_some());
-    assert!(cx.debug_bounds("setup-sentence").is_some());
-    assert!(cx.debug_bounds("setup-help").is_some());
-    assert!(cx.debug_bounds("setup-help-0").is_some());
     assert!(cx.debug_bounds("field-apiKey").is_some());
     assert!(cx.debug_bounds("field-description-apiKey").is_some());
     assert!(cx.debug_bounds(selector("field-show#folder")).is_some());
@@ -154,14 +151,18 @@ fn the_setup_screen_asks_for_what_is_unset_and_launches_on_enter(cx: &mut TestAp
         cx.debug_bounds("field-units").is_none(),
         "a default asks nothing"
     );
-    let sentence = node(
-        &nodes(cx),
+    let shown = nodes(cx);
+    node(
+        &shown,
         "Heading",
         "Set these up before using Show preferences",
     );
-    assert_eq!(
-        sentence["label"],
-        "Set these up before using Show preferences"
+    node(&shown, "Label", "Setting up the preferences sample");
+    assert!(
+        shown.iter().any(|node| node["label"]
+            .as_str()
+            .is_some_and(|label| label.starts_with("The API key is any text"))),
+        "the help beside the fields: {shown:#?}"
     );
 
     // The API key, focused first, is hidden as it is typed.
@@ -246,7 +247,10 @@ fn escape_leaves_the_setup_screen_and_launches_nothing(cx: &mut TestAppContext) 
         Status::Idle,
         "nothing ran"
     );
-    assert!(opened.cx.debug_bounds("setup").is_none());
+    assert!(
+        opened.cx.debug_bounds("field-apiKey").is_none(),
+        "the setup screen is gone"
+    );
 }
 
 #[gpui::test]

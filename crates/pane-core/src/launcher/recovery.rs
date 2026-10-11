@@ -323,11 +323,13 @@ mod tests {
             launcher.back();
         }
         block_on(launcher.set_query("choose a color"));
+        // The color command, found by its id: its row is titled as its
+        // manifest titles it, not as the query that finds it.
         let color = launcher
             .view()
             .rows
             .iter()
-            .position(|row| row.title == "Choose a color")
+            .position(|row| row.id.ends_with("#color"))
             .unwrap();
         launcher.select(color);
         block_on(launcher.activate_selected());

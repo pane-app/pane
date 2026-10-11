@@ -199,8 +199,19 @@ fn applications_rank_with_commands_by_title() {
     search(&launcher, "rust");
 
     // The exact title first, then the title starting with the query, then
-    // the one containing it.
-    assert_eq!(titles(&launcher), ["Rust", "Rust sample", "Trusty Notes"]);
+    // the one containing it. The sample's other commands match with it —
+    // the color picker by its own title, the form through the package's —
+    // and rank after the titles that match alone.
+    assert_eq!(
+        titles(&launcher),
+        [
+            "Rust",
+            "Rust sample",
+            "Rust sample color picker",
+            "Trusty Notes",
+            "Greet someone"
+        ]
+    );
 }
 
 #[test]

@@ -626,8 +626,10 @@ fn an_invalid_mode_is_refused_at_install_with_the_reason() {
     assert!(
         error.contains(
             "command `report` has the mode \"menu-bar\"; a command's `mode` is \"view\" (it \
-             opens a screen, the default), \"no-view\" (it runs without one) or \"provider\" \
-             (it only answers root search)"
+             opens a screen of items, the default), \"no-view\" (it runs without one), \
+             \"provider\" (it only answers root search) or \"designed\" (it opens a screen the \
+             extension designs as a tree Pane renders; the `view` mode retires into it once \
+             the List and the Form move onto the tree)"
         ),
         "{error}"
     );

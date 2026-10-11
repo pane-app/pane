@@ -120,6 +120,12 @@ fn open_item(launcher: &Launcher, command: &str, item: &str) {
     assert_eq!(launcher.view().screen, Screen::Command, "{command} opened");
     select_title(launcher, item);
     block_on(launcher.activate_selected());
+    // The item's action launches the form's command on Pane's own launch
+    // thread: wait for it to open before reading the screen.
+    assert!(
+        launcher.wait_for_launches(std::time::Duration::from_secs(20)),
+        "{item} did not launch"
+    );
 }
 
 // The samples: each command's form calls `greet` of the package whose
@@ -1167,8 +1173,15 @@ fn start_sample_wait(dirs: &Dirs, launcher: &Launcher, caller: &str, target: &st
         sample_titles(caller).1,
         "Wait in another extension",
     );
-    let submitting =
-        launcher.submit_pane_form(vec![("source".to_owned(), dirs.source(target).to_owned())]);
+    // The form is a designed tree's (#241), submitted through the
+    // designed seam.
+    let submitting = launcher.submit_designed_form(
+        None,
+        vec![(
+            "source".to_owned(),
+            FormValue::Text(dirs.source(target).to_owned()),
+        )],
+    );
     let started = Instant::now();
     let thread = thread::spawn(move || block_on(submitting));
     while dirs.waiting().as_deref() != Some("started") {

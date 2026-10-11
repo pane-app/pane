@@ -361,7 +361,7 @@ fn a_newer_minor_is_drawn_and_another_major_is_refused() {
             pane.status(),
             Status::Error(message)
                 if message.contains("UI component set 2.0")
-                    && message.contains("this Pane renders 1.0")
+                    && message.contains("this Pane renders 1.3")
         ),
         "{:?}",
         pane.status()

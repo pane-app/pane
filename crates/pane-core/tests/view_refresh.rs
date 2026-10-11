@@ -19,7 +19,7 @@
 use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use futures::executor::block_on;
 use pane_core::clipboard::{Clock, ManualClock, SystemClock};
@@ -162,6 +162,22 @@ impl Pane {
     }
 }
 
+/// Waits until the open view's texts are `expected`: the samples load
+/// their caption through a WASI monotonic wait, which sleeps real time
+/// even under the manual clock the rest of the test drives.
+fn until_texts(pane: &Pane, expected: &[&str], because: &str) {
+    let expected: Vec<String> = expected.iter().map(|text| (*text).to_owned()).collect();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let shown = pane.texts();
+        if shown == expected {
+            return;
+        }
+        assert!(Instant::now() < deadline, "{because}: {shown:?}");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
 /// Every text `node`'s tree draws, appended to `into`, in order.
 fn collect_texts(node: &Node, into: &mut Vec<String>) {
     let plain = |text: &pane_core::Text| match &text.content {
@@ -246,13 +262,15 @@ fn the_timer_sample_shows_its_loading_state_then_its_data_then_advances() {
             "the {language} sample's loading state"
         );
 
-        pane.clock.advance(ms(100));
-        pane.settled();
-        assert_eq!(
-            pane.texts(),
-            ["A second at a time", "Elapsed: 0s"],
-            "the {language} sample's data"
+        // The caption is a WASI monotonic wait the guest holds: it sleeps
+        // real time, which the manual clock does not move, so its arrival
+        // is waited for rather than advanced to.
+        until_texts(
+            &pane,
+            &["A second at a time", "Elapsed: 0s"],
+            &format!("the {language} sample's data"),
         );
+        pane.settled();
 
         // A second less than the interval: nothing yet.
         pane.clock.advance(ms(999));
@@ -283,7 +301,13 @@ fn a_hidden_timer_catches_up_with_one_refresh_not_the_ticks_it_missed() {
     {
         let pane = Pane::new(&[package]);
         pane.open("", title);
-        pane.clock.advance(ms(100));
+        // The caption's arrival, as above: a real wait the manual clock
+        // does not move.
+        until_texts(
+            &pane,
+            &["A second at a time", "Elapsed: 0s"],
+            &format!("the {language} sample's data"),
+        );
         pane.settled();
 
         // The window hides: the view refreshes nothing while it is not

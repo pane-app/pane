@@ -181,6 +181,12 @@ fn greet(launcher: &Launcher, source: &str) -> Status {
     block_on(launcher.activate_selected());
     select_title(launcher, "Greet through another extension");
     block_on(launcher.activate_selected());
+    // The item's action launches the form's command on Pane's own launch
+    // thread: wait for it to open before reading the screen.
+    assert!(
+        launcher.wait_for_launches(std::time::Duration::from_secs(20)),
+        "the form's command did not launch"
+    );
     // The form is a designed tree's (#241), submitted through the
     // designed seam.
     assert!(

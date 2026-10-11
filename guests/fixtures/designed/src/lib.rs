@@ -578,7 +578,7 @@ fn components() -> String {
          {{\"type\":\"text\",\"text\":\"Surface\",\"level\":\"secondary\",         \"background\":\"danger\",\"radius\":\"m\",\"hover\":{{\"background\":\"accent\"}}}},\
          {{\"type\":\"text\",\"text\":\"Corrected\",\"color\":\"#88ccff\"}},\
          {{\"type\":\"text\",\"text\":\"Exact\",\"color\":{{\"raw\":\"#ff6363\"}}}}\
-         ]}}]}}"
+         ]}}]}}}}"
     )
 }
 

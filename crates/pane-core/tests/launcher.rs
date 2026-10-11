@@ -557,7 +557,20 @@ fn replacing_a_components_code_closes_its_views() {
     let installed = sample_color_view(&runtime);
     let launcher = &installed.launcher;
 
-    runtime.forget([guest("sample_rust")]);
+    // The installed copy's component, which is the path the runtime
+    // holds: forgetting the built one forgets nothing.
+    let component = installed
+        .launcher
+        .packages()
+        .iter()
+        .find(|package| package.title() == "Rust sample")
+        .expect("the sample is installed")
+        .commands()
+        .first()
+        .expect("the sample has a command")
+        .component
+        .clone();
+    runtime.forget([component]);
     send_key(launcher, "right");
 
     let view = launcher.view();

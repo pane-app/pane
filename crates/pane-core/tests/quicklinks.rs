@@ -760,7 +760,14 @@ fn duplicate_opens_the_form_filled_in_as_a_copy() {
             ]
         )
     );
-    let (said, errors) = submit(&launcher, &[]);
+    let (said, errors) = submit(
+        &launcher,
+        &[
+            ("name", "Docs copy"),
+            ("link", "https://docs.example.com"),
+            ("application", "Zed"),
+        ],
+    );
     assert_eq!(said, Status::Result("Created “Docs copy”".into()));
     assert!(errors.is_empty(), "{errors:?}");
     open_search(&launcher);
@@ -919,7 +926,14 @@ fn a_pinned_quicklink_keeps_its_slot_through_a_restart_and_a_rename() {
         // Renamed, it is still the one pinned.
         open_search(&launcher);
         run(&launcher, "Docs", EDIT);
-        let (said, errors) = submit(&launcher, &[("name", "Manual")]);
+        let (said, errors) = submit(
+            &launcher,
+            &[
+                ("name", "Manual"),
+                ("link", "https://docs.example.com"),
+                ("application", ""),
+            ],
+        );
         assert_eq!(said, Status::Result("Saved “Manual”".into()));
         assert!(errors.is_empty(), "{errors:?}");
     }
@@ -1115,7 +1129,14 @@ fn quicklinks_the_first_version_saved_survive_the_upgrade_with_its_pin() {
     // Edited and saved, the next start reads what this one saved.
     open_search(&launcher);
     run(&launcher, "Docs", EDIT);
-    let (said, errors) = submit(&launcher, &[("application", "Notepad")]);
+    let (said, errors) = submit(
+        &launcher,
+        &[
+            ("name", "Docs"),
+            ("link", "https://docs.example.com"),
+            ("application", "Notepad"),
+        ],
+    );
     assert_eq!(said, Status::Result("Saved “Docs”".into()));
     assert!(errors.is_empty(), "{errors:?}");
     drop(launcher);
