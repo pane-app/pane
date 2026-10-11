@@ -282,7 +282,7 @@ impl ColorPicker {
             "" => String::from(hue),
             shade => format!("{shade} {}", hue.to_lowercase()),
         };
-        column()
+        pane_extension::view::column()
             .key("picker")
             .navigation_title("Choose a color")
             .child(

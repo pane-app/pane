@@ -260,7 +260,10 @@ impl View for Search {
                                 if let Search::Rows { opening, .. } = this {
                                     // The details fetch in the render that
                                     // answers this press.
-                                    *opening = Some(Pending::loading(outcome(&id)));
+                                    let opened = id.clone();
+                                    *opening = Some(Pending::loading(async move {
+                                        outcome(&opened).await
+                                    }));
                                 }
                             })),
                     );
