@@ -892,9 +892,13 @@ pub(crate) fn identity_key(source: &str) -> Option<String> {
     match SourceSpec::parse(source) {
         Ok(SourceSpec::Local(path)) if Path::new(&path).is_absolute() => Some(source.to_owned()),
         Ok(SourceSpec::Npm(spec)) if spec.version.is_none() => Some(source.to_owned()),
-        Ok(SourceSpec::Git(spec)) if spec.reference.is_none() => {
-            Some(crate::packages::PackageIdentity::git(&spec.repository).key())
-        }
+        Ok(SourceSpec::Git(spec)) if spec.reference.is_none() => Some(match &spec.extension {
+            // One extension of a collection: the id after `#` is part of
+            // the identity it names (ADR 0044), so the call reaches that
+            // extension, not the repository's root.
+            Some(id) => crate::packages::PackageIdentity::git_extension(&spec.repository, id).key(),
+            None => crate::packages::PackageIdentity::git(&spec.repository).key(),
+        }),
         _ => None,
     }
 }

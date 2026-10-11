@@ -333,11 +333,11 @@ The version of the interface an extension is built against, which its package ma
 _Avoid_: SDK version, manifest version (the format of `pane.json` itself)
 
 **Collection**:
-A Git repository or folder whose root lists several extension packages, each in a folder of its own under an extension id. The user installs some or all of them, and each one installed is a package of its own.
+A Git repository or folder whose root lists several extension packages, each in a folder of its own under an extension id. The user installs some or all of them, and each one installed is a package of its own. Where its host serves Git's partial-clone filter, Pane fetches the revision without its file contents and then only the chosen extensions' folders, so a large collection downloads only what is installed; a host without the filter is fetched whole.
 _Avoid_: Monorepo, bundle, extension pack, marketplace
 
 **Extension id**:
-The name a collection gives one of its extensions, unique within the collection and kept across its releases; with the repository, it forms that extension's package identity.
+The name a collection gives one of its extensions, unique within the collection and kept across its releases; with the repository, it forms that extension's package identity. A collection may rename one — its index's `renamed` map naming the old id's new one, or `null` for one it removed (ADR 0044): an old id resolves to the extension's current one wherever an id is resolved, and an installed copy keeps the id it was installed with, its updates following the map to the current id's files.
 _Avoid_: Slug, path (an extension's folder can move; its id stays)
 
 **Source-only package**:
@@ -353,11 +353,11 @@ An extension package distributed as a Git repository whose root holds its packag
 _Avoid_: Cloned extension, repository checkout (Pane keeps no repository)
 
 **Release revision**:
-A Git revision of a Git-distributed package whose commit holds the built components its manifest names, such as a release tag or a release branch its author commits the built files to; only a release revision can be installed. A revision holding only the source is a source-only package.
+A Git revision of a Git-distributed package whose commit holds the built components its manifest names, such as a release tag or a release branch its author commits the built files to; only a release revision can be installed. A repository of one extension tags its releases `v<semver>`, and a collection tags each extension's `<id>/v<semver>` (ADR 0044). A revision holding only the source is a source-only package.
 _Avoid_: Release (a Pane release), build
 
 **Tracked reference**:
-The branch a Git-distributed package was installed from (the repository's default branch when none was named): an update fetches that branch again, whatever commit it has moved to. A tag or a commit named by its id is a pinned revision instead, which an update keeps; naming another reference changes either.
+The branch a Git-distributed package was installed from (the repository's default branch when none was named): an update fetches that branch again, whatever commit it has moved to. A tag or a commit named by its id is a pinned revision instead, which an update keeps — an extension of a collection installed from its own release tag being the exception, its newer releases being followed; naming another reference changes either.
 _Avoid_: Channel, floating version
 
 **Pinned version**:

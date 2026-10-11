@@ -413,7 +413,10 @@ fn sections(state: &State) -> Vec<Section> {
 
 /// The update results view's sections (see [`sections`]): each group's
 /// label over its first row listed, in the order Updated, Waiting,
-/// Skipped, Failed, a group with nothing listed hidden.
+/// Skipped, No longer offered, Failed, a group with nothing listed
+/// hidden. The No longer offered group holds the extensions of collections
+/// the pass found no longer offered by them (ADR 0044, #310): a notice,
+/// not a fault.
 fn update_sections(state: &State) -> Vec<Section> {
     let results = &state.update_results.results;
     let mut sections = Vec::new();
@@ -421,6 +424,7 @@ fn update_sections(state: &State) -> Vec<Section> {
         ("Updated", &results.updated),
         ("Waiting", &results.waiting),
         ("Skipped", &results.skipped),
+        ("No longer offered", &results.removed),
         ("Failed", &results.failed),
     ] {
         let first = state

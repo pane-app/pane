@@ -1,8 +1,9 @@
 //! The update results of the updater's passes (#256): what each pass
-//! updated, skipped and failed, per package, kept as Pane's own record
-//! beside `updates.json` (`update-results.json`) so the latest pass that
-//! found something new survives a restart, and shown as a screen of the
-//! launcher's ([`crate::Launcher::update_results`], the same record).
+//! updated, skipped, found no longer offered and failed, per package, kept
+//! as Pane's own record beside `updates.json` (`update-results.json`) so
+//! the latest pass that found something new survives a restart, and shown
+//! as a screen of the launcher's ([`crate::Launcher::update_results`], the
+//! same record).
 //!
 //! The record is written by the updater's own thread as a pass collects
 //! its outcomes (see `updates`): a pass that updated, failed or skipped
@@ -16,29 +17,34 @@
 //! disabled, paused, a newer version that needs a newer Pane or is not
 //! available on this system), an update still waiting for its package to
 //! grow quiet says so, and a failure says why, ending that the extension
-//! keeps running its installed code. The record also keeps when the
+//! keeps running its installed code. A notice says the collection no
+//! longer offers the extension of it (ADR 0044, #310): the newer
+//! revision's index renamed the id to `null`, or named no entry at all;
+//! the installed copy keeps running and is never uninstalled silently.
+//! The record also keeps when the
 //! updater last checked, which the Settings Extensions group's page
 //! says under its "Check for updates" button.
 //!
 //! **The announcement.** A background pass that failed something is
 //! announced once, the next time the launcher is shown: a failure toast
 //! ("1 extension update failed") carrying View Details, which opens the
-//! results screen. Successes and skips stay quiet. The announcement is
-//! keyed on the record's pass, so a new failing pass re-arms it; it is
-//! not repeated for the same one. A pass the user asked for announces
-//! its own failures — its ending toast (see
+//! results screen. Successes, skips and notices stay quiet. The
+//! announcement is keyed on the record's pass, so a new failing pass
+//! re-arms it; it is not repeated for the same one. A pass the user
+//! asked for announces its own failures — its ending toast (see
 //! [`Launcher::begin_update_pass_toast`]) is the announcement, so the
 //! background one stays silent.
 //!
 //! **The view.** The screen [`crate::Screen::UpdateResults`] lists the
-//! groups in the order Updated, Waiting, Skipped, Failed, hiding empty
-//! ones, each row the extension's icon, title, detail and a status tag,
-//! searched by what the user types (see [`crate::Launcher::set_query`])
-//! and driven by the launcher's own list keys. Each row's entry opens
-//! its extension's page in Settings; the Actions panel offers that,
-//! copying the details, Retry on a Failed row (which checks that
-//! extension alone) and Update Now on a Skipped row whose only reason is
-//! the user's switch. The window draws it (see `pane`'s
+//! groups in the order Updated, Waiting, Skipped, No longer offered,
+//! Failed, hiding empty ones, each row the extension's icon, title,
+//! detail and a status tag, searched by what the user types (see
+//! [`crate::Launcher::set_query`]) and driven by the launcher's own list
+//! keys. Each row's entry opens its extension's page in Settings; the
+//! Actions panel offers that, copying the details, Retry on a Failed row
+//! (which checks that extension alone) and Update Now on a Skipped row
+//! whose only reason is the user's switch — a notice offers neither,
+//! there being nothing to retry. The window draws it (see `pane`'s
 //! `features::update_results`); Pane's Settings window draws it in place
 //! of the Extensions page when its operation opens it (ADR 0043).
 
@@ -65,14 +71,17 @@ fn failure_title(failed: usize) -> String {
     }
 }
 
-/// The asked pass's ending toast, for the `updated` extensions it updated
-/// and the `failed` it failed: a success that says what was updated, or
-/// that everything is up to date — the user asked, so up to date is an
-/// answer, not a silence — or a failure that says how many failed. It
-/// carries View Details, which opens the results view. What the pass
-/// deferred (a package in use) is in the record, waiting, and not counted
-/// here: the toast ends when the pass has nothing more it can do now.
-fn ending_toast(updated: usize, failed: usize) -> Toast {
+/// The asked pass's ending toast, for the `updated` extensions it updated,
+/// the `failed` it failed, and the `removed` it found no longer offered by
+/// their collections (ADR 0044, #310): a success that says what was
+/// updated, or that everything is up to date — the user asked, so up to
+/// date is an answer, not a silence — or a failure that says how many
+/// failed. A notice is neither: it counts in the summary's tail, not as a
+/// fault. It carries View Details, which opens the results view. What the
+/// pass deferred (a package in use) is in the record, waiting, and not
+/// counted here: the toast ends when the pass has nothing more it can do
+/// now.
+fn ending_toast(updated: usize, failed: usize, removed: usize) -> Toast {
     let extensions = |count: usize| {
         if count == 1 {
             "extension"
@@ -80,16 +89,38 @@ fn ending_toast(updated: usize, failed: usize) -> Toast {
             "extensions"
         }
     };
-    let (style, title) = match (updated, failed) {
-        (0, 0) => (ToastStyle::Success, "Extensions are up to date".into()),
-        (updated, 0) => (
+    let (style, title) = match (updated, failed, removed) {
+        (0, 0, 0) => (ToastStyle::Success, "Extensions are up to date".into()),
+        (updated, 0, 0) => (
             ToastStyle::Success,
             format!("Updated {updated} {}", extensions(updated)),
         ),
-        (0, failed) => (ToastStyle::Failure, failure_title(failed)),
-        (updated, failed) => (
+        (0, failed, 0) => (ToastStyle::Failure, failure_title(failed)),
+        (0, 0, removed) => (
+            ToastStyle::Success,
+            format!("{removed} {} no longer offered", extensions(removed)),
+        ),
+        (updated, 0, removed) => (
+            ToastStyle::Success,
+            format!(
+                "Updated {updated} {}, {removed} no longer offered",
+                extensions(updated)
+            ),
+        ),
+        (0, failed, removed) => (
+            ToastStyle::Failure,
+            format!("{}, {removed} no longer offered", failure_title(failed)),
+        ),
+        (updated, failed, 0) => (
             ToastStyle::Failure,
             format!("Updated {updated} {}, {failed} failed", extensions(updated)),
+        ),
+        (updated, failed, removed) => (
+            ToastStyle::Failure,
+            format!(
+                "Updated {updated} {}, {failed} failed, {removed} no longer offered",
+                extensions(updated)
+            ),
         ),
     };
     Toast {
@@ -148,6 +179,13 @@ pub struct UpdateResults {
     /// The packages the pass considered and did not update, each with why.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub skipped: Vec<UpdateResult>,
+    /// The extensions of collections the pass found no longer offered by
+    /// them: their newer revisions' indexes renamed the id to `null`, or
+    /// named no entry at all (ADR 0044, #310). A notice, not a fault:
+    /// each keeps running its installed code, and is never uninstalled
+    /// silently.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub removed: Vec<UpdateResult>,
     /// The packages the pass failed to update, each with the explanation,
     /// ending [`KEEPS_RUNNING`].
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -160,6 +198,7 @@ impl UpdateResults {
         self.updated.is_empty()
             && self.waiting.is_empty()
             && self.skipped.is_empty()
+            && self.removed.is_empty()
             && self.failed.is_empty()
     }
 
@@ -170,6 +209,7 @@ impl UpdateResults {
             .iter()
             .chain(&self.waiting)
             .chain(&self.skipped)
+            .chain(&self.removed)
             .chain(&self.failed)
             .find(|row| row.identity.key() == target)
     }
@@ -229,6 +269,8 @@ struct Recorded {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     skipped: Vec<UpdateResult>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    removed: Vec<UpdateResult>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     failed: Vec<UpdateResult>,
     /// When the updater last checked, in clock milliseconds; absent in a
     /// record from before it was kept.
@@ -260,6 +302,7 @@ impl Record {
                 updated: read.updated,
                 waiting: read.waiting,
                 skipped: read.skipped,
+                removed: read.removed,
                 failed: read.failed,
             },
         }
@@ -273,6 +316,7 @@ impl Record {
             updated: self.results.updated.clone(),
             waiting: self.results.waiting.clone(),
             skipped: self.results.skipped.clone(),
+            removed: self.results.removed.clone(),
             failed: self.results.failed.clone(),
             last_checked: self.last_checked,
         };
@@ -400,6 +444,7 @@ impl Pass {
         self.results.updated.extend(results.updated);
         self.results.waiting.extend(results.waiting);
         self.results.skipped.extend(results.skipped);
+        self.results.removed.extend(results.removed);
         self.results.failed.extend(results.failed);
     }
 
@@ -427,6 +472,7 @@ impl Pass {
             &mut self.results.updated,
             &mut self.results.waiting,
             &mut self.results.skipped,
+            &mut self.results.removed,
             &mut self.results.failed,
         ] {
             group.sort_by_cached_key(|row| at(&row.identity));
@@ -519,6 +565,25 @@ impl Pass {
         });
     }
 
+    /// The pass found the package `identity`, titled `title`, no longer
+    /// offered by the collection it is one extension of: the newer
+    /// revision it read renamed the id to `null`, or named no entry at
+    /// all (ADR 0044, #310). A notice, not a fault — the pass's summary
+    /// counts it as neither — so there is nothing to retry, and the
+    /// installed copy keeps running; Pane never uninstalls one silently.
+    /// Any row waiting for the package to grow quiet is settled: nothing
+    /// will replace it.
+    pub(in crate::launcher) fn removed(&mut self, identity: PackageIdentity, title: String) {
+        self.found_new = true;
+        self.settle(&identity);
+        self.results.removed.push(UpdateResult {
+            identity,
+            title,
+            detail: format!("The collection no longer offers this extension. {KEEPS_RUNNING}"),
+            updated_to: None,
+        });
+    }
+
     /// The pass failed the package `identity`, titled `title`: `why` says
     /// what failed, and the detail ends that it keeps running its
     /// installed code. Any row waiting for the package to grow quiet is
@@ -540,7 +605,7 @@ impl Pass {
     }
 
     /// Takes the waiting row of the package `identity` away, its wait
-    /// settled by an update or a failure of the same package.
+    /// settled by an update, a failure, or a notice of the same package.
     fn settle(&mut self, identity: &PackageIdentity) {
         self.results.waiting.retain(|row| row.identity != *identity);
     }
@@ -569,8 +634,10 @@ impl Launcher {
     /// page in Settings and copying its details: Retry on a Failed row,
     /// which checks that extension alone, and Update Now on a Skipped row
     /// whose only reason is the user's switch — its automatic updates
-    /// turned off, globally or for it — which updates it. Read from the
-    /// record and the state as they are now: a row's package that is no
+    /// turned off, globally or for it — which updates it. A notice offers
+    /// neither (ADR 0044, #310): the collection no longer offers the
+    /// extension, so there is nothing to retry or update now. Read from
+    /// the record and the state as they are now: a row's package that is no
     /// longer installed, or no longer one a pass could look at, offers
     /// neither.
     pub fn update_results_row_actions(&self, target: &str) -> Vec<UpdateResultsAction> {
@@ -587,6 +654,12 @@ impl Launcher {
             .failed
             .iter()
             .any(|failed| failed.identity == row.identity);
+        let removed = state
+            .update_results
+            .results
+            .removed
+            .iter()
+            .any(|removed| removed.identity == row.identity);
         let mut actions = Vec::new();
         if failed
             && updates::eligible_when_asked(package)
@@ -594,7 +667,7 @@ impl Launcher {
         {
             actions.push(UpdateResultsAction::Retry);
         }
-        if !failed && updates::only_the_switch(&state, package) {
+        if !failed && !removed && updates::only_the_switch(&state, package) {
             actions.push(UpdateResultsAction::UpdateNow);
         }
         actions
@@ -728,7 +801,8 @@ impl Launcher {
     ) {
         let updated = pass.results.updated.len();
         let failed = pass.results.failed.len();
-        let ending = ending_toast(updated, failed);
+        let removed = pass.results.removed.len();
+        let ending = ending_toast(updated, failed, removed);
         // The progress toast this ends — unless another toast replaced it
         // meanwhile (an announcement of the record's earlier failure,
         // say), in which case the summary is put anew: it is the pass's
@@ -863,9 +937,10 @@ impl Launcher {
 }
 
 /// The results screen's rows and entries for `results` under `query`:
-/// each group in the order Updated, Waiting, Skipped, Failed, the empty
-/// ones hidden, the rows whose title or detail holds the trimmed `query`
-/// (ignoring case), each opening its extension's page in Settings.
+/// each group in the order Updated, Waiting, Skipped, No longer offered,
+/// Failed, the empty ones hidden, the rows whose title or detail holds the
+/// trimmed `query` (ignoring case), each opening its extension's page in
+/// Settings.
 fn result_rows(results: &UpdateResults, query: &str) -> (Vec<Row>, Vec<Entry>) {
     // What the search holds: the rows whose title or detail holds the
     // trimmed query, ignoring case; all of them for a blank one.
@@ -876,6 +951,7 @@ fn result_rows(results: &UpdateResults, query: &str) -> (Vec<Row>, Vec<Entry>) {
         &results.updated,
         &results.waiting,
         &results.skipped,
+        &results.removed,
         &results.failed,
     ] {
         for row in group {
@@ -996,6 +1072,44 @@ mod tests {
         assert!(record.results.skipped[0].detail.ends_with(KEEPS_RUNNING));
     }
 
+    /// A pass that found an extension no longer offered by its collection
+    /// records it as a notice (ADR 0044, #310): not a failure, so nothing
+    /// is announced and there is nothing to retry, but something new, so a
+    /// background pass records it — and the row settles any waiting one.
+    #[test]
+    fn a_pass_that_found_an_extension_no_longer_offered_records_a_notice() {
+        let mut record = Record::default();
+        let identity = PackageIdentity::git_extension(
+            &crate::git::GitSpec::parse("https://github.com/owner/tools")
+                .unwrap()
+                .repository,
+            "clock",
+        );
+        let mut pass = Pass::after(&record, false);
+        pass.waiting(identity.clone(), "Clock".into());
+        pass.removed(identity, "Clock".into());
+        assert!(pass.found_new, "the notice is something new");
+        assert!(record.record(&pass));
+        assert_eq!(record.results.removed.len(), 1);
+        assert!(record.results.waiting.is_empty(), "the notice settled it");
+        assert!(record.results.failed.is_empty(), "a notice is no fault");
+        assert_eq!(record.unannounced(), None, "nothing to announce");
+        let [row] = &record.results.removed[..] else {
+            panic!("the notice's row");
+        };
+        assert_eq!(
+            row.detail,
+            format!("The collection no longer offers this extension. {KEEPS_RUNNING}")
+        );
+        // The record round-trips with the group, and one from before it
+        // existed still reads, as empty.
+        let (_, text) = record.text(std::path::Path::new("/none"));
+        assert!(text.contains("\"removed\""), "{text}");
+        let read = r#"{"version":1,"pass":3,"failed":[]}"#;
+        let read: Recorded = serde_json::from_str(read).unwrap();
+        assert!(read.removed.is_empty(), "a record from before the group");
+    }
+
     #[test]
     fn a_failure_is_announced_once_until_a_new_pass_records() {
         let mut record = Record::default();
@@ -1105,35 +1219,63 @@ mod tests {
 
     #[test]
     fn the_ending_toast_says_what_the_pass_came_to() {
-        let shown = |updated: usize, failed: usize| {
-            let toast = ending_toast(updated, failed);
+        let shown = |updated: usize, failed: usize, removed: usize| {
+            let toast = ending_toast(updated, failed, removed);
             (toast.style, toast.title)
         };
         assert_eq!(
-            shown(0, 0),
+            shown(0, 0, 0),
             (ToastStyle::Success, "Extensions are up to date".into())
         );
         assert_eq!(
-            shown(1, 0),
+            shown(1, 0, 0),
             (ToastStyle::Success, "Updated 1 extension".into())
         );
         assert_eq!(
-            shown(3, 0),
+            shown(3, 0, 0),
             (ToastStyle::Success, "Updated 3 extensions".into())
         );
         assert_eq!(
-            shown(0, 2),
+            shown(0, 2, 0),
             (ToastStyle::Failure, "2 extension updates failed".into())
         );
         assert_eq!(
-            shown(2, 1),
+            shown(2, 1, 0),
             (ToastStyle::Failure, "Updated 2 extensions, 1 failed".into())
         );
         assert_eq!(
-            shown(1, 1),
+            shown(1, 1, 0),
             (ToastStyle::Failure, "Updated 1 extension, 1 failed".into())
         );
-        for toast in [ending_toast(0, 0), ending_toast(2, 1)] {
+        // A notice is neither: a pass that found only one says so, without
+        // looking like a fault.
+        assert_eq!(
+            shown(0, 0, 1),
+            (ToastStyle::Success, "1 extension no longer offered".into())
+        );
+        assert_eq!(
+            shown(0, 0, 2),
+            (ToastStyle::Success, "2 extensions no longer offered".into())
+        );
+        assert_eq!(
+            shown(1, 0, 1),
+            (
+                ToastStyle::Success,
+                "Updated 1 extension, 1 no longer offered".into()
+            )
+        );
+        assert_eq!(
+            shown(2, 1, 1),
+            (
+                ToastStyle::Failure,
+                "Updated 2 extensions, 1 failed, 1 no longer offered".into()
+            )
+        );
+        for toast in [
+            ending_toast(0, 0, 0),
+            ending_toast(2, 1, 0),
+            ending_toast(0, 0, 1),
+        ] {
             assert_eq!(
                 toast.primary.as_ref().map(|action| action.title.as_str()),
                 Some(VIEW_DETAILS)
