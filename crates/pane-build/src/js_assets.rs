@@ -20,7 +20,7 @@ use std::path::Path;
 /// needs of it, and the adapter and `console` the bundled entry imports.
 /// Staged at `<work>/js` beside the package, where its `file:../js`
 /// devDependency resolves.
-const SDK: [(&str, &str); 40] = [
+const SDK: [(&str, &str); 46] = [
     (
         "LICENSE-APACHE",
         include_str!("../../../guests/js/LICENSE-APACHE"),
@@ -34,6 +34,14 @@ const SDK: [(&str, &str); 40] = [
     (
         "applications.d.ts",
         include_str!("../../../guests/js/applications.d.ts"),
+    ),
+    (
+        "capabilities.d.ts",
+        include_str!("../../../guests/js/capabilities.d.ts"),
+    ),
+    (
+        "capabilities.js",
+        include_str!("../../../guests/js/capabilities.js"),
     ),
     (
         "clipboard.d.ts",
@@ -104,7 +112,17 @@ const SDK: [(&str, &str); 40] = [
         "programs.js",
         include_str!("../../../guests/js/programs.js"),
     ),
+    (
+        "registrations.d.ts",
+        include_str!("../../../guests/js/registrations.d.ts"),
+    ),
+    (
+        "registrations.js",
+        include_str!("../../../guests/js/registrations.js"),
+    ),
     ("run.d.ts", include_str!("../../../guests/js/run.d.ts")),
+    ("state.d.ts", include_str!("../../../guests/js/state.d.ts")),
+    ("state.js", include_str!("../../../guests/js/state.js")),
     (
         "system-commands-host.d.ts",
         include_str!("../../../guests/js/system-commands-host.d.ts"),
@@ -142,7 +160,7 @@ const SDK: [(&str, &str); 40] = [
 ];
 
 /// Pane's WIT, copied into the world's `deps/pane-extension/`.
-const PANE_WIT: [(&str, &str); 20] = [
+const PANE_WIT: [(&str, &str); 21] = [
     ("extension.wit", include_str!("../../../wit/extension.wit")),
     ("commands.wit", include_str!("../../../wit/commands.wit")),
     ("feedback.wit", include_str!("../../../wit/feedback.wit")),
@@ -174,6 +192,10 @@ const PANE_WIT: [(&str, &str); 20] = [
     ("clipboard.wit", include_str!("../../../wit/clipboard.wit")),
     ("service.wit", include_str!("../../../wit/service.wit")),
     ("programs.wit", include_str!("../../../wit/programs.wit")),
+    (
+        "registrations.wit",
+        include_str!("../../../wit/registrations.wit"),
+    ),
     ("run.wit", include_str!("../../../wit/run.wit")),
     ("windows.wit", include_str!("../../../wit/windows.wit")),
     (

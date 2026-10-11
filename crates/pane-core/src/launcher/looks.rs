@@ -192,7 +192,7 @@ pub(super) fn loads_as_shown(state: &State) -> bool {
 }
 
 /// `look` with its icons resolved in `folder` (see [`Icon::resolved`]).
-fn resolved(look: ItemLook, folder: &Path) -> ItemLook {
+pub(super) fn resolved(look: ItemLook, folder: &Path) -> ItemLook {
     let icon = |icon: Option<Icon>| icon.and_then(|icon| icon.resolved(folder));
     ItemLook {
         icon: icon(look.icon),

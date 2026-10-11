@@ -967,3 +967,246 @@ fn uninstalling_a_required_dependency_shows_its_dependent_and_the_choices_in_the
     );
     assert!(launcher.packages().is_empty());
 }
+
+/// Writes a package titled `title` in `folder` whose command and `echo`
+/// operation the operations fixture serves, declaring `dependencies` (JSON
+/// array contents).
+fn command_package(folder: &Path, title: &str, dependencies: &str) -> PathBuf {
+    let guest = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../target/guests/operations_fixture.wasm");
+    assert!(
+        guest.exists(),
+        "{} is missing; run `cargo xtask guests`",
+        guest.display()
+    );
+    fs::create_dir_all(folder).unwrap();
+    fs::copy(guest, folder.join("fixture.wasm")).unwrap();
+    let manifest = format!(
+        r#"{{
+            "manifestVersion": 1,
+            "title": "{title}",
+            "apiVersion": "0.1",
+            "commands": [{{ "id": "call", "title": "Call", "component": "fixture.wasm" }}],
+            "operations": [{{ "id": "echo", "version": 1, "component": "fixture.wasm" }}],
+            "dependencies": [{dependencies}]
+        }}"#
+    );
+    fs::write(folder.join("pane.json"), manifest).unwrap();
+    folder.to_path_buf()
+}
+
+#[gpui::test]
+fn a_waiting_command_s_row_shows_the_reason_and_enter_offers_the_fix(cx: &mut TestAppContext) {
+    let (sources, data) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    cx.executor().allow_parking();
+    cx.update(pane::bind_keys);
+    let greeter = command_package(&sources.path().join("greeter"), "Greeter", "");
+    let caller = command_package(
+        &sources.path().join("caller"),
+        "Caller",
+        r#"{ "id": "greeter", "source": "local:../greeter",
+             "operations": [{ "id": "echo", "version": 1 }] }"#,
+    );
+    let launcher =
+        Launcher::with_packages(Runtime::start(), vec![], data.path().join("extensions"));
+    cx.foreground_executor()
+        .block_on(launcher.install_package(&caller));
+    // The greeter is disabled, so Caller's command waits for it (#152).
+    let greeter = PackageIdentity::local(&greeter).unwrap();
+    cx.foreground_executor()
+        .block_on(launcher.set_enabled(&greeter, false));
+
+    let (window, cx) =
+        cx.add_window_view(|window, cx| LauncherWindow::new(launcher.clone(), window, cx));
+    cx.simulate_resize(gpui::size(gpui::px(640.), gpui::px(420.)));
+
+    // The waiting command stays listed, with what it needs under its row.
+    let view = settle(&window, cx);
+    assert_eq!(view.rows[0].title, "Call");
+    assert_eq!(view.selected, Some(0));
+    assert_eq!(
+        view.rows[0]
+            .unavailable
+            .as_ref()
+            .map(|reason| reason.reason().to_owned()),
+        Some("Needs Greeter, which is disabled".to_owned())
+    );
+    assert!(
+        cx.debug_bounds("unavailable-reason-Call").is_some(),
+        "the waiting command's reason is rendered"
+    );
+
+    // Enter shows the reason, with the row that fixes it.
+    cx.simulate_keystrokes("enter");
+    let view = settle(&window, cx);
+    assert_eq!(view.title, "Why Call cannot run");
+    assert!(
+        cx.debug_bounds("detail-Needs Greeter, which is disabled.")
+            .is_some(),
+        "the reason is rendered"
+    );
+    assert_eq!(titles(&view), ["Enable Greeter"]);
+    assert!(cx.debug_bounds("row-Enable Greeter").is_some());
+
+    // Choosing it enables the greeter; the command comes back by itself.
+    cx.simulate_keystrokes("enter");
+    let view = settle(&window, cx);
+    assert_eq!(view.status, Status::Result("Enabled Greeter".into()));
+    assert!(matches!(view.screen, Screen::Root { .. }));
+    assert_eq!(view.rows[0].unavailable, None);
+    // Its command opens again.
+    cx.simulate_keystrokes("enter");
+    assert_eq!(settle(&window, cx).screen, Screen::Command);
+}
+
+/// The `provides` of a package providing the fixture's capability, as
+/// manifest members.
+const PROVIDES: &str = r#","provides": [{ "capability": "fixture:greet@1", "component":
+     "fixture.wasm", "operations": ["greet"] }]"#;
+
+/// Writes a package titled `title` in `folder` around the capabilities
+/// fixture component, with `members` (manifest members, each starting with
+/// a comma) and, when `command` is not empty, one command titled `command`
+/// that calls the capability.
+fn capability_package(folder: &Path, title: &str, command: &str, members: &str) -> PathBuf {
+    let guest = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../target/guests/capabilities_fixture.wasm");
+    assert!(
+        guest.exists(),
+        "{} is missing; run `cargo xtask guests`",
+        guest.display()
+    );
+    fs::create_dir_all(folder).unwrap();
+    fs::copy(guest, folder.join("fixture.wasm")).unwrap();
+    let manifest = if command.is_empty() {
+        format!(r#"{{ "manifestVersion": 1, "title": "{title}", "apiVersion": "0.1"{members} }}"#)
+    } else {
+        format!(
+            r#"{{ "manifestVersion": 1, "title": "{title}", "apiVersion": "0.1",
+                 "commands": [{{ "id": "fixture", "title": "{command}",
+                                 "component": "fixture.wasm" }}]{members} }}"#
+        )
+    };
+    fs::write(folder.join("pane.json"), manifest).unwrap();
+    folder.to_path_buf()
+}
+
+#[gpui::test]
+fn the_install_preview_lists_the_capabilities_a_package_uses(cx: &mut TestAppContext) {
+    let (sources, data) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    capability_package(&sources.path().join("greeter"), "Greeter", "", PROVIDES);
+    let caller = capability_package(
+        &sources.path().join("caller"),
+        "Caller",
+        "Call",
+        r#","uses": [{ "capability": "fixture:greet@1", "operations": ["greet"],
+             "default": "local:../greeter" }]"#,
+    );
+    let (window, cx) = open(cx, &data);
+
+    // No provider is installed, so the preview says Pane installs the
+    // default provider Caller names, and the Install row says so too.
+    let view = choose_folder(&window, cx, Some(caller));
+    assert!(
+        cx.debug_bounds(
+            "detail-Uses fixture:greet@1: no installed extension provides it; Pane installs \
+             Greeter, which Caller names"
+        )
+        .is_some(),
+        "the capability line is rendered"
+    );
+    assert_eq!(titles(&view), ["Install"]);
+    assert_eq!(
+        view.rows[0].subtitle.as_deref(),
+        Some(
+            "Copy the package into Pane and add its commands, and install Greeter, which it \
+              names"
+        )
+    );
+
+    // Installing installs the default provider with it, and its command
+    // calls through the capability.
+    cx.simulate_keystrokes("enter");
+    let view = settle(&window, cx);
+    assert_eq!(
+        view.status,
+        Status::Result("Installed Caller with Greeter, which it names".into())
+    );
+    assert_eq!(
+        titles(&view),
+        [
+            "Call",
+            INSTALL_ROW,
+            NPM_ROW,
+            GIT_ROW,
+            MANAGE_ROW,
+            SETTINGS_ROW
+        ]
+    );
+
+    cx.simulate_keystrokes("enter");
+    assert_eq!(settle(&window, cx).screen, Screen::Command);
+    cx.simulate_keystrokes("enter");
+    assert_eq!(
+        settle_shown(&window, cx),
+        Status::Result(
+            r#"answered: {"greeting":"Hello, Ada","operation":"fixture:greet@1/greet"}"#.into()
+        )
+    );
+}
+
+#[gpui::test]
+fn disable_only_disables_the_dependency_alone_and_its_dependent_waits(cx: &mut TestAppContext) {
+    let (sources, data) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    command_package(&sources.path().join("greeter"), "Greeter", "");
+    let caller = command_package(
+        &sources.path().join("caller"),
+        "Caller",
+        r#"{ "id": "greeter", "source": "local:../greeter",
+             "operations": [{ "id": "echo", "version": 1 }] }"#,
+    );
+    let (window, cx) = open(cx, &data);
+    install(&window, cx, &caller);
+
+    // The row of the greeter asks about its dependents first, with Disable
+    // only between Disable all and Cancel.
+    let view = click_in_extension_list(&window, cx, "row-Greeter");
+    assert_eq!(
+        titles(&view),
+        ["Disable all 2", "Disable only Greeter", "Cancel"]
+    );
+    assert_eq!(view.selected, Some(0));
+    assert!(cx.debug_bounds("row-Disable only Greeter").is_some());
+
+    // Choosing it disables the greeter alone.
+    let view = press_enter_on(&window, cx, "Disable only Greeter");
+    assert_eq!(view.status, Status::Result("Disabled Greeter".into()));
+    assert_eq!(view.rows[view.selected.unwrap()].title, "Greeter");
+
+    // Caller stays enabled, and its command waits for the greeter.
+    cx.simulate_keystrokes("escape");
+    let view = settle(&window, cx);
+    let call = view
+        .rows
+        .iter()
+        .find(|row| row.title == "Call")
+        .cloned()
+        .expect("the command is listed");
+    assert_eq!(
+        call.unavailable.as_ref().map(|why| why.reason().to_owned()),
+        Some("Needs Greeter, which is disabled".to_owned())
+    );
+
+    // Enabling the greeter again brings the command back by itself.
+    let view = click_in_extension_list(&window, cx, "row-Greeter");
+    assert_eq!(view.status, Status::Result("Enabled Greeter".into()));
+    cx.simulate_keystrokes("escape");
+    let view = settle(&window, cx);
+    let call = view
+        .rows
+        .iter()
+        .find(|row| row.title == "Call")
+        .cloned()
+        .expect("the command is listed");
+    assert_eq!(call.unavailable, None);
+}

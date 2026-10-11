@@ -684,6 +684,39 @@ struct WireAnswer {
     entries: Option<Vec<WireAction>>,
 }
 
+/// The dynamic root item `json` describes: the item shape of
+/// docs/list-tree.md plus the `mode` that makes it a dynamic command, or
+/// why it cannot be read. Kept here, as the tree's items are, so the JSON
+/// stays at the edge of the runtime (see `registrations`).
+pub(super) fn dynamic_item(json: &str) -> Result<crate::registrations::DynamicItem, String> {
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct WireDynamic {
+        #[serde(flatten)]
+        item: WireItem,
+        /// "view" or "no-view", which makes the item a dynamic command.
+        #[serde(default)]
+        mode: Option<String>,
+    }
+    let wired: WireDynamic = serde_json::from_str(json).map_err(|error| {
+        format!("the item is not the item shape docs/list-tree.md describes: {error}")
+    })?;
+    let mode = match wired.mode.as_deref() {
+        None => None,
+        Some("view") => Some(crate::registrations::DynamicMode::View),
+        Some("no-view") => Some(crate::registrations::DynamicMode::NoView),
+        Some(other) => {
+            return Err(format!(
+                "the item's mode “{other}” is neither “view” nor “no-view”"
+            ));
+        }
+    };
+    Ok(crate::registrations::DynamicItem {
+        item: item(wired.item)?,
+        mode,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

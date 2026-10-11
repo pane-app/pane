@@ -1105,6 +1105,9 @@ fn a_development_build_reloaded_while_the_helper_runs_ends_its_process() {
         (1, false, false)
     );
     assert_eq!(builds.load(Ordering::SeqCst), 1);
+    // The reload's outcome is kept while the reopened command screen
+    // shows, and appears when the author leaves it.
+    rows::to_root(&installed.launcher);
     assert_eq!(
         installed.launcher.view().status,
         Status::Result("Reloaded Helper sample".into())

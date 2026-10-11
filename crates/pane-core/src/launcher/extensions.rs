@@ -20,14 +20,17 @@ use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 use super::pausing::{self, Pauses};
 use super::{
-    Entry, Launcher, LauncherView, Row, Screen, State, first_index, network, programs, retained,
-    updates,
+    Entry, Launcher, LauncherView, Pending, Row, Screen, State, Status, first_index, install,
+    network, programs, retained, updates,
 };
-use super::{Pending, Status};
+use crate::dependencies;
 use crate::packages::{InstalledPackage, PackageIdentity, Store};
+use crate::platform;
+use crate::waiting::{Fix, Reason, Waiting};
 
 impl Launcher {
     /// The extension list, as Settings reads it: its rows, read without
@@ -87,6 +90,7 @@ impl Launcher {
         let (package_rows, package_entries) = extension_rows(
             &state.packages,
             &state.paused,
+            &state.waiting,
             developed,
             &state.update_controls.off,
         );
@@ -508,24 +512,34 @@ fn operation(state: &State, row: Row, entry: &Entry) -> Option<ExtensionOperatio
     })
 }
 
-/// One row per installed package, saying whether it is enabled or paused
-/// and which source it is, so copies with the same title can be told apart;
-/// then the rows that reload each enabled package, each followed, if Pane
-/// paused it, by a row that retries it and one that shows why it is paused;
-/// then one row per package to clear its cache, and one to uninstall it, in
-/// the same order.
+/// One row per installed package, saying whether it is enabled, paused or
+/// waiting for what it requires, and which source it is, so copies with
+/// the same title can be told apart; then the rows that reload each
+/// enabled package, each followed, if Pane paused it, by a row that
+/// retries it and one that shows why it is paused; then one row per
+/// package to clear its cache, and one to uninstall it, in the same
+/// order.
 fn extension_rows(
     packages: &[InstalledPackage],
     paused: &Pauses,
+    waiting: &Waiting,
     developed: impl Fn(&PackageIdentity) -> bool,
     off: &std::collections::HashSet<String>,
 ) -> (Vec<Row>, Vec<Entry>) {
     let failure = |package: &InstalledPackage| paused.of(&package.identity).cloned();
     let toggles = packages.iter().map(|package| {
+        let wait = waiting
+            .reason(&package.identity)
+            .map(|reason| ExtensionWait::Whole(reason.what()));
         let state = match (package.enabled, failure(package).map(|pause| pause.after)) {
-            (false, _) => "Disabled",
-            (true, None) => "Enabled",
-            (true, Some(cause)) => cause.state(),
+            // A disabled or paused package does not wait: it says its own
+            // state, as before.
+            (false, _) => "Disabled".to_owned(),
+            (true, Some(cause)) => cause.state().to_owned(),
+            (true, None) => match wait {
+                Some(wait) => format!("Enabled · {}", wait.status()),
+                None => "Enabled".to_owned(),
+            },
         };
         let developing = if developed(&package.identity) {
             " · Developing"
@@ -921,6 +935,468 @@ impl Launcher {
 /// not the pane-app organization.
 fn in_pane_app_organization(repository: &str) -> bool {
     repository.starts_with("github.com/pane-app/")
+}
+
+// ------------------------------------------------ what it needs and provides
+
+/// What the extension list's status line says of an installed package
+/// that waits for what it requires (#157): "Enabled · Waiting for
+/// <what>", or "Enabled · Some commands wait for <what>" when the
+/// requirement is narrowed to some commands, so a user can find the
+/// broken extensions without opening each. Read from the waiting model
+/// (see `waiting`): required dependencies and required capabilities, the
+/// narrowing included.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ExtensionWait {
+    /// The whole package waits for `what`.
+    Whole(String),
+    /// Only some commands wait for `what`; the package's other commands
+    /// stay available. A use narrowed with `commands`.
+    SomeCommands(String),
+}
+
+impl ExtensionWait {
+    /// "Waiting for <what>" or "Some commands wait for <what>", as the
+    /// status line shows it after "Enabled · ".
+    pub fn status(&self) -> String {
+        match self {
+            ExtensionWait::Whole(what) => format!("Waiting for {what}"),
+            ExtensionWait::SomeCommands(what) => format!("Some commands wait for {what}"),
+        }
+    }
+}
+
+/// What the page of an installed extension in Settings says about what it
+/// needs, what it provides and the groups of packages that require one
+/// another it is part of (#157), as [`Launcher::extension_details`]
+/// reads it. The rows are data from the launcher's own records — the
+/// waiting model and the manifests — never run, and their wording lives
+/// here, as the dependency plan's does: what each row says is what each
+/// is.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ExtensionDetails {
+    /// Each requirement that is not met, in the order the manifest
+    /// declares them: required dependencies and required capabilities,
+    /// each with its fix row.
+    pub requirements: Vec<UnmetRequirement>,
+    /// Each capability the package provides, in the order its manifest
+    /// declares them, with the installed packages that use each.
+    pub provides: Vec<ProvidedCapability>,
+    /// Each group of packages that require one another, as their
+    /// declarations say, that the package is part of. Healthy groups are
+    /// listed too: they run, as ADR 0041 decides.
+    pub cycles: Vec<RequirementCycle>,
+}
+
+/// One requirement of a package that is not met, as its page in Settings
+/// lists it (#157): the chain down to what is actually missing, with the
+/// fix row beside it, which [`Launcher::run_extension_fix`] runs. The row
+/// disappears when the package comes back.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UnmetRequirement {
+    /// "Needs Greeter, which is disabled", or, down a chain, "Needs Notes
+    /// Sync, which waits for Auth: Auth is disabled": what is not met,
+    /// naming the root cause, not the package that waits for it.
+    pub title: String,
+    /// The fix row beside it, which applies at once; `None` when nothing
+    /// Pane can do directly (the chain of waits cannot be named).
+    pub fix: Option<RequirementFix>,
+}
+
+/// The fix row beside an unmet requirement, as a package's page in
+/// Settings shows and runs it (#157): what it says and what it does
+/// through [`Launcher::run_extension_fix`]. The capability rows —
+/// installing a use's default, choosing a provider in Settings (#154),
+/// installing any extension that provides the capability, which opens the
+/// install forms — are rows of this same shape.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RequirementFix {
+    /// What the row says: "Enable Greeter", "Retry Greeter", "Install
+    /// Greeter again".
+    pub title: String,
+    /// What it does.
+    pub action: FixAction,
+}
+
+/// What a fix row beside an unmet requirement does (see
+/// [`RequirementFix`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum FixAction {
+    /// Enable the disabled package the chain of waits ends at: the
+    /// dependents come back by themselves.
+    Enable(PackageIdentity),
+    /// Retry the paused package the chain of waits ends at.
+    Retry(PackageIdentity),
+    /// Install again the package the chain of waits ends at, which is not
+    /// installed, from where it came: its identity names its folder, its
+    /// npm package or its Git repository.
+    Install(PackageIdentity),
+    /// Install a provider of the capability the chain of waits ends at,
+    /// opening one of the install forms: the one for the default's source
+    /// the use names, or npm's, where a published provider is named.
+    InstallProvider {
+        /// The capability whose provider the row installs.
+        capability: String,
+        /// The default the use names, written as a dependency's source is,
+        /// for the form it opens.
+        default: Option<String>,
+    },
+    /// Choose a provider in Settings' Capabilities section, which the
+    /// extensions page holds: the capability has two or more installed
+    /// providers, and none can serve it now.
+    ChooseProvider,
+}
+
+/// One capability a package provides, as its page in Settings lists it
+/// (#157): whether the package is the provider Pane routes the
+/// capability's calls to, and the installed packages that use the
+/// capability.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ProvidedCapability {
+    /// The capability's name, such as `acme:translate@1`.
+    pub capability: String,
+    /// Whether the package is the provider Pane routes the capability's
+    /// calls to: the user's chosen provider, or, until they choose, the
+    /// first provider in install order that can serve it (#154).
+    pub chosen: bool,
+    /// The titles of the installed packages whose `pane.json` declares
+    /// they use the capability, required or optional, in install order.
+    pub consumers: Vec<String>,
+}
+
+/// One group of packages that require one another that a package is part
+/// of, as its page in Settings lists it (#157), healthy groups included:
+/// they run, as ADR 0041 decides.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RequirementCycle {
+    /// "Requires itself through B and C": the other members of the group,
+    /// as the row's title names them.
+    pub title: String,
+}
+
+impl Launcher {
+    /// What the extension list's status line says of the installed
+    /// package with `identity` while it waits for what it requires
+    /// (#157): "Waiting for <what>", or "Some commands wait for <what>"
+    /// when the requirement is narrowed to some commands. `None` while it
+    /// does not wait: a disabled or paused package says its own state, as
+    /// before. Read without running anything; the waiting model's
+    /// reading, recomputed as its own changes are (see `waiting`).
+    pub fn extension_wait(&self, identity: &PackageIdentity) -> Option<ExtensionWait> {
+        let state = self.lock();
+        wait_of(&state, identity)
+    }
+
+    /// What the page of the installed extension with `identity` says
+    /// about what it needs, what it provides and the groups of packages
+    /// that require one another it is part of (#157): read from the
+    /// launcher's records — the waiting model and the manifests — never
+    /// running anything. `None` for a package that is not installed.
+    /// Optional requirements never show as unmet, and the requirement
+    /// rows disappear when what they name comes back.
+    pub fn extension_details(&self, identity: &PackageIdentity) -> Option<ExtensionDetails> {
+        let state = self.lock();
+        details_of(&state, identity)
+    }
+
+    /// Runs the fix row `fix` beside an unmet requirement on a package's
+    /// page in Settings (#157), as the pages run the launcher's
+    /// operations: the launcher stays on the screen the user had, and
+    /// what the fix came to is that screen's status (an install lands on
+    /// root search, as an install does). Await the returned future for
+    /// the fix to finish. A fix that no longer applies — what it fixes
+    /// came back by itself, or the package changed meanwhile — does
+    /// nothing.
+    pub fn run_extension_fix(
+        &self,
+        fix: &RequirementFix,
+    ) -> impl Future<Output = ()> + Send + 'static {
+        let mut state = self.lock();
+        state.sent_from = None;
+        let pending = match &fix.action {
+            FixAction::Enable(target) => match state.package(target) {
+                // Still disabled: enabling it brings the dependents back
+                // by themselves. Enabled again (or uninstalled) meanwhile,
+                // the fix would disable it, so it does nothing.
+                Some(package) if !package.enabled => {
+                    self.activation(&mut state, Entry::Toggle(target.clone()))
+                }
+                _ => Pending::Nothing,
+            },
+            FixAction::Retry(target) => {
+                // Still paused: retrying it starts it again. Retried or
+                // unpaused meanwhile, there is nothing to do.
+                if state.paused.is_paused(target) {
+                    self.activation(&mut state, Entry::Retry(target.clone()))
+                } else {
+                    Pending::Nothing
+                }
+            }
+            FixAction::Install(target) => {
+                // Installed again meanwhile, or an identity that names no
+                // source to install from: nothing to run (the row offering
+                // it was not shown).
+                if state.package(target).is_none()
+                    && let Some(request) = install_request_of(target)
+                {
+                    state.view.status = Status::Running {
+                        since: Instant::now(),
+                    };
+                    Pending::Install(install::Begun::unplanned(request))
+                } else {
+                    Pending::Nothing
+                }
+            }
+            FixAction::InstallProvider { default, .. } => {
+                // Opens the install form for the default's source, or
+                // npm's, where a published provider is named.
+                let entry = match default
+                    .as_deref()
+                    .and_then(|source| crate::packages::SourceSpec::parse(source).ok())
+                {
+                    Some(crate::packages::SourceSpec::Local(_)) => Entry::InstallFromFolder,
+                    Some(crate::packages::SourceSpec::Git(_)) => Entry::AskGit,
+                    _ => Entry::AskNpm,
+                };
+                self.activation(&mut state, entry)
+            }
+            FixAction::ChooseProvider => {
+                // The Capabilities section of the extensions page lists
+                // the providers to choose among.
+                self.activation(&mut state, Entry::Manage)
+            }
+        };
+        let work = self.pending_work(&state, pending);
+        drop(state);
+        work
+    }
+}
+
+/// What the extension list's status line says of the package with
+/// `identity` (see [`Launcher::extension_wait`]), under the launcher's
+/// lock.
+fn wait_of(state: &State, identity: &PackageIdentity) -> Option<ExtensionWait> {
+    // The whole package waits for what its requirements name; else only
+    // the commands a use is narrowed to wait, and the package runs.
+    if let Some(reason) = state.waiting.reason(identity) {
+        return Some(ExtensionWait::Whole(reason.what()));
+    }
+    let whats: Vec<String> = state
+        .waiting
+        .command_reasons(identity)
+        .into_iter()
+        .map(|reason| reason.what())
+        .collect();
+    let what = platform::join(&whats);
+    (!whats.is_empty()).then_some(ExtensionWait::SomeCommands(what))
+}
+
+/// What the page of the installed package with `identity` says about what
+/// it needs, what it provides and the groups it is part of (see
+/// [`Launcher::extension_details`]), under the launcher's lock.
+fn details_of(state: &State, identity: &PackageIdentity) -> Option<ExtensionDetails> {
+    let package = state.package(identity)?;
+    // What is not met, from the waiting model (see `waiting`): required
+    // dependencies and required capabilities, each with its chain and
+    // fix.
+    let requirements = state
+        .waiting
+        .reason(identity)
+        .map(|reason| requirements_of(state, identity, reason))
+        .unwrap_or_default();
+    // What it provides, with the provider Pane routes calls to and the
+    // consumers of each.
+    let provides = match &package.manifest {
+        Ok(manifest) => manifest
+            .provides
+            .iter()
+            .filter(|provides| platform::unavailable(provides.platforms.as_deref(), "it").is_none())
+            .map(|provides| ProvidedCapability {
+                capability: provides.capability.clone(),
+                chosen: chosen_of(state, identity, &provides.capability),
+                consumers: consumers_of(state, &provides.capability),
+            })
+            .collect(),
+        Err(_) => Vec::new(),
+    };
+    Some(ExtensionDetails {
+        requirements,
+        provides,
+        cycles: cycles_of(state, identity),
+    })
+}
+
+/// The unmet requirements the waiting model's `reason` names, as the page
+/// of the package with `identity` lists them: each with the chain down to
+/// what is actually missing and the fix row beside it.
+fn requirements_of(
+    state: &State,
+    identity: &PackageIdentity,
+    reason: &Reason,
+) -> Vec<UnmetRequirement> {
+    reason
+        .requirements
+        .iter()
+        .map(|requirement| UnmetRequirement {
+            title: format!("Needs {}", requirement.what),
+            fix: fix_row_of(state, identity, &requirement.fix),
+        })
+        .collect()
+}
+
+/// The groups of packages that require one another the package with
+/// `identity` is part of, found from the declarations alone: each naming
+/// the other members, in installed order.
+fn cycles_of(state: &State, identity: &PackageIdentity) -> Vec<RequirementCycle> {
+    let mut cycles = Vec::new();
+    for group in dependencies::requirement_groups(&state.packages) {
+        let Some(at) = group.iter().position(|member| member == identity) else {
+            continue;
+        };
+        let through: Vec<String> = group
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| *index != at)
+            .map(|(_, member)| state.title_of(member))
+            .collect();
+        cycles.push(RequirementCycle {
+            title: format!("Requires itself through {}", platform::join(&through)),
+        });
+    }
+    cycles
+}
+
+/// The fix row beside one unmet requirement on the page of the package
+/// with `identity`, as the waiting model's fix for it becomes it (see
+/// `Fix`); `None` when nothing Pane can do directly, or what the fix
+/// installs again names no source to install from.
+fn fix_row_of(state: &State, identity: &PackageIdentity, fix: &Fix) -> Option<RequirementFix> {
+    let action = match fix {
+        Fix::Enable(target) => FixAction::Enable(target.clone()),
+        Fix::Retry(target) => FixAction::Retry(target.clone()),
+        // A package whose identity names no source to install again from
+        // (a default extension, which Pane acquires itself) offers no
+        // row.
+        Fix::Install(target) => match install_request_of(target) {
+            Some(_) => FixAction::Install(target.clone()),
+            None => return None,
+        },
+        Fix::InstallProvider {
+            capability,
+            default,
+        } => FixAction::InstallProvider {
+            capability: capability.clone(),
+            default: default.clone(),
+        },
+        Fix::Choose => FixAction::ChooseProvider,
+        Fix::Manage => return None,
+    };
+    let title = match &action {
+        FixAction::Enable(target) => {
+            format!("Enable {}", state.title_of(target))
+        }
+        FixAction::Retry(target) => {
+            format!("Retry {}", state.title_of(target))
+        }
+        FixAction::Install(target) => {
+            format!("Install {} again", state.title_of(target))
+        }
+        // The default the use names, which the waiting package's own
+        // pane.json names it by.
+        FixAction::InstallProvider {
+            default: Some(default),
+            ..
+        } => format!("Install {default} (named by {})", state.title_of(identity)),
+        FixAction::InstallProvider { capability, .. } => {
+            format!("Install an extension that provides {capability}")
+        }
+        FixAction::ChooseProvider => "Choose a provider in Settings".into(),
+    };
+    Some(RequirementFix { title, action })
+}
+
+/// Whether the package with `identity` is the provider Pane routes calls
+/// to `capability` to: the user's chosen provider, or, until they choose,
+/// the first provider in install order that can serve it (see #154).
+fn chosen_of(state: &State, identity: &PackageIdentity, capability: &str) -> bool {
+    let providers: Vec<&InstalledPackage> = state
+        .packages
+        .iter()
+        .filter(|package| dependencies::provides_capability(package, capability))
+        .collect();
+    // The user's recorded choice, when the package it names is installed.
+    if let Some(key) = state.capability_choices.chosen.provider_of(capability)
+        && let Some(chosen) = providers
+            .iter()
+            .find(|package| package.identity.key() == key)
+    {
+        return chosen.identity == *identity;
+    }
+    providers
+        .iter()
+        .find(|package| can_serve(state, package))
+        .is_some_and(|package| package.identity == *identity)
+}
+
+/// The installed packages whose `pane.json` declares they use
+/// `capability`, required or optional, by title, in install order.
+fn consumers_of(state: &State, capability: &str) -> Vec<String> {
+    state
+        .packages
+        .iter()
+        .filter(|package| uses(package, capability))
+        .map(InstalledPackage::title)
+        .collect()
+}
+
+/// Whether `package`'s manifest declares it uses `capability`, required or
+/// optional.
+fn uses(package: &InstalledPackage, capability: &str) -> bool {
+    let Ok(manifest) = &package.manifest else {
+        return false;
+    };
+    manifest
+        .uses
+        .iter()
+        .any(|used| used.capability == capability)
+}
+
+/// Whether `package`'s code may serve a call now, as the operation router
+/// decides it: enabled, not paused, not waiting for what it needs, its
+/// copy readable and built for this system.
+fn can_serve(state: &State, package: &InstalledPackage) -> bool {
+    package.enabled
+        && package.manifest.is_ok()
+        && !state.paused.is_paused(&package.identity)
+        && state.waiting.reason(&package.identity).is_none()
+        && platform::unavailable(
+            package
+                .manifest
+                .as_ref()
+                .ok()
+                .and_then(|manifest| manifest.platforms.as_deref()),
+            "this package",
+        )
+        .is_none()
+}
+
+/// The install request that installs the package with `identity` again,
+/// as the fix row beside a requirement that ends at it runs: its folder,
+/// npm package or Git repository, as its identity names them; `None` for
+/// an identity that names no source to install from.
+fn install_request_of(identity: &PackageIdentity) -> Option<install::Request> {
+    if let Some(folder) = identity.local_folder() {
+        return Some(install::Request::Folder(folder.to_path_buf()));
+    }
+    if let Some(name) = identity.npm_name() {
+        return crate::npm::NpmSpec::parse(name)
+            .ok()
+            .map(install::Request::Npm);
+    }
+    let repository = identity.git_repository()?;
+    crate::git::GitSpec::parse(repository)
+        .ok()
+        .map(install::Request::Git)
 }
 
 /// What [`Launcher::begin_command_switch`] left to do.

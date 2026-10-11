@@ -159,9 +159,15 @@ Development is turned on per installed, enabled package, from its **Develop
    available command. A start that fails pauses the package with Retry and
    diagnostics, and **the earlier code is not restored** (Q31,
    [pausing](pausing.md)); the next save that builds reloads it, which ends
-   the pause. Settings are kept; nothing live is carried over, and a
-   running helper of the package is stopped before its copy is replaced,
-   as a Reload does. The
+   the pause. Settings are kept, and nothing else live is carried over
+   except the [state handoff](generations.md#the-state-handoff) (ADR 0041,
+   #159): a component that opted in hands its in-memory state to the new
+   code, and the command screen that was open opens again on the new code
+   with its launch record, so the author is back where they were without
+   navigating back. A snapshot that was dropped — a call still running in
+   the old instance — late, oversized or rejected is reported in the
+   extension log below, and a running helper of the package is stopped
+   before its copy is replaced, as a Reload does. The
    components are then copied to where `pane.json` names them in the source
    folder, so a later **Reload** reloads the same build. If the package is
    being changed otherwise when the build ends (a **Reload**, an update),

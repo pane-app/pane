@@ -15,8 +15,10 @@
 //! read the preferences its package declares with [`preferences`]. It
 //! may compute results from root search's query with [`root`], run a continuing
 //! service while its package's code may run with [`service`], call
-//! operations other packages publish with [`operations::call`], serve those
-//! its own package publishes with [`publish`], find and open installed
+//! operations other packages publish with [`operations::call`] or a
+//! capability by its name with [`capabilities::call`], serve the operations
+//! its own package publishes and the capabilities it provides with
+//! [`publish`], find and open installed
 //! applications with [`applications`], supply root results ahead of the
 //! query with [`indexed`], run its package's native helpers with
 //! [`helpers`] and the system's own programs with [`programs`], what
@@ -27,7 +29,15 @@
 //! requests with [`http`], keep clipboard history with
 //! [`clipboard_history`], and lock, log out, restart, shut down, sleep,
 //! hibernate, turn off the displays of or start the screen saver of the
-//! computer with [`system_commands`]. It prints and logs to its package's extension log
+//! computer with [`system_commands`]. It registers at run time what it
+//! owns and no declaration can name ([`registrations`], ADR 0041): dynamic
+//! root items, timers, folder watchers and run-time capabilities its
+//! package provides while it holds a provision for them — each a handle
+//! whose drop undoes it, undone too when the instance that made it goes or
+//! the package's code is replaced. A package whose `pane.json` declares
+//! `"activate"` has that entry point called when its code may run
+//! ([`lifecycle`]), so its registrations exist without waiting for the
+//! user. It prints and logs to its package's extension log
 //! with [`info!`], [`warn!`], [`println!`] and the like ([`log`]). The crate
 //! is `no_std` so the component imports only WASI 0.3 interfaces; it supplies
 //! the allocator and a panic handler that logs the panic and traps, which the
@@ -66,9 +76,118 @@ pub mod actions;
 pub mod feedback;
 pub mod icon;
 mod list;
+pub mod registrations;
 pub mod system;
 pub use icon::{Accessory, Color, Icon, Mask, Tint, Tone};
 pub use pane::extension::{cache, content, credentials, operations, settings};
+
+/// Calling a capability by name (`pane:extension/operations`, ADR 0041):
+/// a named, versioned set of operations, written `<namespace>:<name>@<major>`
+/// such as `acme:translate@1`, that any installed package may provide and
+/// this one calls without naming the package. The package's `pane.json`
+/// declares each capability it uses, with the operations it calls, under
+/// `uses`; a call to one it does not declare is refused.
+///
+/// [`call`] routes the call through Pane, which picks the provider: the
+/// first one installed that can serve it, never this package itself, and
+/// serves it as a published operation is served, with the operation
+/// qualified by its capability (`acme:translate@1/translate`).
+/// [`call_every`] calls every provider that can serve a use the package
+/// declared `"use": "all"`, each answering with its source, title and
+/// result or error. [`providers`] asks which providers can serve a
+/// capability now — their source and title — and [`available`] is the
+/// first of them, for an optional use:
+///
+/// ```ignore
+/// use pane_extension::capabilities::{available, call, call_every};
+///
+/// let answer = call("acme:translate@1", "translate", input)
+///     .await
+///     .map_err(|error| error.explain())?;
+/// let every = call_every("acme:notes@1", "search", input)
+///     .await
+///     .map_err(|error| error.explain())?;
+/// if available("acme:spellcheck@2").is_none() {
+///     // The optional capability has no provider; degrade gracefully.
+/// }
+/// ```
+///
+/// The errors and their kinds are those of [`operations::call`], each
+/// message naming the capability: `not-found` when no installed package
+/// provides it, `disabled` when every provider is disabled, `unavailable`
+/// when every provider is paused, waiting or for another system. A
+/// fan-out is `refused` unless the package declared the use with
+/// `"use": "all"`; the providers that cannot serve are skipped, and with
+/// none the answer is an empty list.
+pub mod capabilities {
+    use alloc::string::String;
+    use alloc::vec::Vec;
+
+    pub use crate::pane::extension::operations::{
+        CallError, CallErrorKind, Provider, ProviderAnswer,
+    };
+
+    /// Calls `operation` of the capability `capability`, such as
+    /// "acme:translate@1", through Pane, and returns its result. Any
+    /// installed package may provide the capability: Pane routes the call
+    /// to the provider that can serve it, and starts it if it is not
+    /// running. `input` and the result are JSON text.
+    ///
+    /// The caller's `pane.json` must declare the capability and the
+    /// operation under `uses`; a call to one it does not declare is
+    /// refused, with the message saying to declare it. On failure the
+    /// future resolves with a [`CallError`] whose message names the
+    /// capability.
+    pub async fn call(
+        capability: &str,
+        operation: &str,
+        input: String,
+    ) -> Result<String, CallError> {
+        crate::pane::extension::operations::call_capability(
+            capability.into(),
+            operation.into(),
+            input,
+        )
+        .await
+    }
+
+    /// The installed packages that provide `capability` and can serve a
+    /// call to it now, in the order Pane calls them: each provider's
+    /// source, as [`operations::call`](crate::operations::call) names it by,
+    /// and its title. This package is never among them, and with no such
+    /// provider the list is empty.
+    pub fn providers(capability: &str) -> Vec<Provider> {
+        crate::pane::extension::operations::providers(capability.into())
+    }
+
+    /// Calls `operation` of the capability `capability` on every provider
+    /// that can serve it now, through Pane, and returns each one's answer,
+    /// with its source, its title and its result or error, so the caller
+    /// can merge them. Each provider is its own call, with the same input;
+    /// the providers that cannot serve are skipped, and with none the
+    /// answer is an empty list.
+    ///
+    /// The caller's `pane.json` must declare the capability under `uses`
+    /// with `"use": "all"`; fanning out a `"use": "one"` capability is
+    /// `refused`, as is one the package does not declare. On failure the
+    /// future resolves with a [`CallError`] whose message names the
+    /// capability.
+    pub async fn call_every(
+        capability: &str,
+        operation: &str,
+        input: String,
+    ) -> Result<Vec<ProviderAnswer>, CallError> {
+        crate::pane::extension::operations::call_every(capability.into(), operation.into(), input)
+            .await
+    }
+
+    /// The provider of `capability` that a call reaches, with its source and
+    /// title, or `None` when no provider can serve it now: whether an
+    /// optional capability is worth showing, answered in one call.
+    pub fn available(capability: &str) -> Option<Provider> {
+        providers(capability).into_iter().next()
+    }
+}
 
 /// Pane's launcher window, as the command that runs in it sees it
 /// (`pane:extension/window`): [`window::close`] hides it, choosing what its
@@ -334,6 +453,130 @@ pub mod applications {
 /// what the copying application marked as not to be kept or what came from
 /// a program the user excluded. [`clipboard_history::set_capture`] turns it
 /// on, off or pauses it; [`clipboard_history::entries`] lists what is kept.
+/// The lifecycle of a package's code, as a component opts into it
+/// (ADR 0041): the activation entry point its `pane.json` may declare
+/// (`"activate": "<component>"`, #158), and the state handoff to the code
+/// that replaces it (#159). A component exports the lifecycle interface
+/// beside its `command` with [`lifecycle::export!`], implementing
+/// [`lifecycle::Guest`]; Pane calls `activate` only for the component its
+/// `pane.json` names, while the state handoff serves any component that
+/// exports the interface:
+///
+/// ```ignore
+/// pane_extension::export!(Handoff);
+/// pane_extension::lifecycle::export!(Handoff);
+///
+/// impl pane_extension::lifecycle::Guest for Handoff {
+///     async fn activate() { /* register what it registers */ }
+///     async fn snapshot() -> Option<Vec<u8>> {
+///         pane_extension::state::save(&MY_STATE)
+///     }
+///     async fn restore(state: Vec<u8>) -> Result<(), String> {
+///         MY_STATE.set(state::load(&state)?);
+///         Ok(())
+///     }
+/// }
+/// ```
+///
+/// `snapshot` and `restore` have defaults that keep nothing and restore
+/// nothing, so a component only declaring the activation entry point is
+/// unchanged. The state is opaque bytes the author versions
+/// ([`crate::state`] serialises a value); it is asked of each idle
+/// instance before the old generation ends — on Reload, an Update and a
+/// development-mode reload, never after a crash, a pause, a failure to
+/// start, Retry, a disable followed by an enable, or a restart of Pane —
+/// within Pane's 1-second deadline and 1-megabyte limit, and restored on
+/// the new code's first start, before any other call into it.
+pub mod lifecycle {
+    use alloc::string::String;
+    use alloc::vec::Vec;
+
+    wit_bindgen::generate!({
+        path: "wit",
+        world: "lifecycle-provider",
+        pub_export_macro: true,
+        default_bindings_module: "pane_extension::lifecycle",
+    });
+
+    /// The lifecycle of a component: the activation entry point, and the
+    /// state handoff to the code that replaces this one. Implement it and
+    /// call [`lifecycle::export!`] beside [`crate::export!`].
+    pub trait Guest {
+        /// Activates the package: registers what it registers. Pane calls
+        /// it when the package's code may run and it is not waiting, and
+        /// again when the instance that ran it is dropped while the
+        /// generation continues. Without an `activate` in its `pane.json`,
+        /// Pane never calls this.
+        async fn activate();
+
+        /// The state this instance hands to its replacement: opaque bytes
+        /// the author versions, `None` for nothing. Asked of each idle
+        /// instance before the old generation ends, within Pane's
+        /// 1-second deadline and 1-megabyte limit, and kept in memory
+        /// only. [`crate::state::save`] serialises a value.
+        async fn snapshot() -> Option<Vec<u8>> {
+            None
+        }
+
+        /// Restores the state a replaced instance handed over, on this
+        /// instance's first start and before any other call into it. An
+        /// error discards the state and the extension starts fresh, which
+        /// is not a failure. [`crate::state::load`] deserialises what
+        /// [`crate::state::save`] wrote.
+        async fn restore(state: Vec<u8>) -> Result<(), String> {
+            let _ = state;
+            Err("this component keeps no state across a replacement".into())
+        }
+    }
+
+    impl<T: Guest> exports::pane::extension::lifecycle::Guest for T {
+        async fn activate() {
+            <T as Guest>::activate().await
+        }
+
+        async fn snapshot() -> Option<Vec<u8>> {
+            <T as Guest>::snapshot().await
+        }
+
+        async fn restore(state: Vec<u8>) -> Result<(), String> {
+            <T as Guest>::restore(state).await
+        }
+    }
+}
+
+/// The state handoff's serialization helpers (ADR 0041): what a component
+/// that opts in ([`crate::lifecycle`]) hands to the code that replaces it,
+/// as opaque bytes it versions itself. `save` serialises a value as JSON
+/// and `load` reads it back; the bytes are Pane's to bound (1 second to
+/// answer, 1 MiB at most) and never reach a disk. Version the state
+/// yourself: a `restore` that cannot read what an older release wrote
+/// answers an error, and the extension starts fresh.
+pub mod state {
+    use alloc::format;
+    use alloc::string::String;
+    use alloc::vec::Vec;
+    use serde::Serialize;
+    use serde::de::DeserializeOwned;
+
+    /// The state `value` hands to the new code, as
+    /// [`lifecycle::Guest::snapshot`](crate::lifecycle::Guest::snapshot)
+    /// answers it: JSON, `None` when it cannot be written, which hands
+    /// nothing over.
+    pub fn save<T: Serialize>(value: &T) -> Option<Vec<u8>> {
+        serde_json::to_vec(value).ok()
+    }
+
+    /// The state a replaced instance handed over, as
+    /// [`lifecycle::Guest::restore`](crate::lifecycle::Guest::restore)
+    /// receives it: what [`save`] wrote for a value of `T`, or an error
+    /// that says why it cannot be read — a new shape of the state, or
+    /// bytes another version wrote.
+    pub fn load<T: DeserializeOwned>(state: &[u8]) -> Result<T, String> {
+        serde_json::from_slice(state)
+            .map_err(|error| format!("the state handed over cannot be read: {error}"))
+    }
+}
+
 pub mod clipboard_history {
     wit_bindgen::generate!({
         path: "wit",

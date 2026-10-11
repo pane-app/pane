@@ -149,13 +149,16 @@ on display, retrying every second until the package is quiet, listed in
 the update results as "Waiting until <title> is not in use" until it
 applies — and applying as the preview's Update row does: the identity,
 saved data, disabled state, hotkeys and aliases are kept, the old
-generation ends, managed background work restarts with the new code, and
-the outcome is the pass's update results, a quiet row with the old and
-the new commit ("1a2b3c4d5e6f → 6f5e4d3c2b1a"). The user can also ask
-for a check at once — root search's **Check for Extension Updates**
-command, or the Settings Extensions page's **Check for updates** button —
-which looks at every tracked package, turned off, disabled and paused
-ones included, and whose toast follows the pass (see
+generation ends, managed background work restarts with the new code —
+a component that opts in to the [state
+handoff](generations.md#the-state-handoff) (ADR 0041, #159) keeps what
+it had in memory — and the outcome is the pass's update results, a
+quiet row with the old and the new commit ("1a2b3c4d5e6f →
+6f5e4d3c2b1a"). The user can also ask for a check at once — root
+search's **Check for Extension Updates** command, or the Settings
+Extensions page's **Check for updates** button — which looks at every
+tracked package, turned off, disabled and paused ones included, and whose
+toast follows the pass (see
 [npm](npm.md#updating-by-itself)).
 
 What differs is what a check reads and what it fetches. A check of a

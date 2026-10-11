@@ -1,0 +1,224 @@
+package pane:extension@0.1.0;
+
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+//
+// What an extension registers at run time and owns (ADR 0041): dynamic
+// root items, timers, folder watchers and run-time provisions, each a
+// resource the guest owns. Dropping the handle undoes it; so does the
+// instance holding it going away (a crash, a stopped call, an unresponsive
+// stop, a search cancellation), and the generation ending (the package is
+// disabled, paused, reloaded, updated or uninstalled): nothing an
+// extension registered outlives its code, and the author writes no
+// cleanup. Declarations in `pane.json` are unchanged; a package that
+// wants its registrations made without waiting for the user declares an
+// activation entry point (`"activate"`, the lifecycle interface below).
+//
+// Every registration belongs to the generation of the code that made it:
+// using a handle whose generation ended is refused, as host imports
+// already refuse stopped code ("this code of the extension was
+// replaced"). Each is tagged with its package, instance and generation
+// and undone through the host's one undo list per generation, which
+// dropping the handle removes its entry from.
+//
+// Kept apart from extension.wit so a component that registers nothing is
+// unchanged: the interface is imported by the `extension-with-data` world,
+// and a component that never calls it does not import it. A component
+// that registers timers or watchers also exports `events` (below), which
+// their firings are delivered to; one whose package declares `"activate"`
+// exports `lifecycle`. Rust commands import and export them through
+// pane-extension (`pane_extension::registrations`,
+// `pane_extension::registrations::export_events!(Events)`,
+// `pane_extension::lifecycle::export!`); JS/TS commands as the module
+// "pane:extension/registrations@0.1.0" (guests/js/registrations.d.ts)
+// and the `"pane"` options `"events"`, `"activate"` and `"snapshot"` in
+// package.json. The header follows `package`: comments above it would
+// document the package, which extension.wit already does.
+
+interface registrations {
+  /// A dynamic root item under one of the package's commands, as the
+  /// guest owns it: a root search row in the item shape of
+  /// docs/list-tree.md (id, title, subtitle, icon, accessories, actions)
+  /// plus the `mode` that makes it a dynamic command. Dropping it removes
+  /// the row; the generation's end removes every one.
+  resource root-item {
+    /// Replaces the item this handle owns with `item` (the same JSON
+    /// shape `add-root-item` takes): the row shows what the new item
+    /// says, keeping its id. Refused, with the reason, when the item
+    /// cannot be read, its size is beyond the limit, or this code of the
+    /// extension was replaced.
+    update: func(item: string) -> result<_, string>;
+  }
+
+  /// A timer the guest owns, `after` (one firing) or `every` (one every
+  /// interval), from 1 second to 30 days. Each firing is a call into the
+  /// component's `events` export with the timer's tag, under the
+  /// generation's crash, pause and unresponsive rules; firings that fall
+  /// due while one is pending are coalesced into one, and so are firings
+  /// that fall due while the package waits for what it needs: none of its
+  /// code runs then, and one firing is delivered when it can run again.
+  resource timer;
+
+  /// A folder watcher the guest owns: changes under `path` (a folder the
+  /// system can watch), recursive or not, through the native watcher
+  /// development mode uses. Changes are coalesced for half a second and
+  /// delivered to the component's `events` export with the watcher's tag
+  /// and the paths that changed; an overflow is delivered as one "rescan"
+  /// event. A path Pane cannot watch is refused when the watcher is made.
+  resource watcher;
+
+  /// A run-time provision the guest owns: the package provides the
+  /// capability its `pane.json` marks `atRunTime` while this is held,
+  /// served by the instance holding it. Dropping it, or that instance
+  /// going away, withdraws the provider at once, and the capability's
+  /// consumers fall back to another provider or wait. A capability the
+  /// manifest does not declare and mark is refused.
+  resource provision;
+
+  /// Registers a dynamic root item under the command with manifest id
+  /// `command` (its id in `pane.json`, served by this component), from
+  /// `item`: the item shape of docs/list-tree.md as JSON — id, title,
+  /// subtitle, icon, accessories, actions (each action's `onAction` names
+  /// a callback its `handle-event` receives when the row is invoked) —
+  /// plus `mode`, which makes it a dynamic command: invoking it launches
+  /// its command with a launch record naming the item's id. Without one,
+  /// invoking the row runs its first action's callback. The item is
+  /// matched and ranked like an indexed result, and its size is bounded
+  /// as one is. Refused, with the reason, when `command` is not one of
+  /// this component's commands, the item cannot be read or is beyond the
+  /// limit, the package holds the limit of items, or this code of the
+  /// extension was replaced.
+  add-root-item: func(command: string, item: string) -> result<root-item, string>;
+
+  /// Registers a timer that fires once, `seconds` from now (1 to
+  /// 2592000), each firing a call into the component's `events` export
+  /// with `tag`. Refused, naming the bounds, when `seconds` is beyond
+  /// them, when the package holds the limit of timers, when the component
+  /// does not export `events`, or when this code of the extension was
+  /// replaced.
+  timer-after: func(seconds: u64, tag: string) -> result<timer, string>;
+
+  /// Registers a timer that fires every `seconds` (1 to 2592000) until it
+  /// is dropped or the generation ends, as `timer-after` is refused.
+  timer-every: func(seconds: u64, tag: string) -> result<timer, string>;
+
+  /// Registers a watcher of `path`, recursive or not, each coalesced
+  /// change a call into the component's `events` export with `tag` and
+  /// the paths that changed, relative to the watched folder. Refused,
+  /// with the reason, when the path cannot be watched, when the package
+  /// holds the limit of watchers, when the component does not export
+  /// `events`, or when this code of the extension was replaced.
+  watch-folder: func(path: string, recursive: bool, tag: string) -> result<watcher, string>;
+
+  /// Registers a provision of the capability `capability`, as
+  /// `pane-samples:greet@1`: the package provides it while this is held.
+  /// Refused, with the reason, when the manifest does not declare it
+  /// under `provides` with `atRunTime`, when the package holds the limit
+  /// of provisions, or when this code of the extension was replaced.
+  provide-capability: func(capability: string) -> result<provision, string>;
+}
+
+/// The events of what the package registered: timer firings and folder
+/// watcher changes, delivered as calls into the component that registered
+/// them. A component that registers a timer or a watcher exports this
+/// interface beside `command`; one that registers none is unchanged.
+interface events {
+  /// One change of a folder watcher: its tag, and either the paths that
+  /// changed, relative to the watched folder, or a rescan.
+  record watcher-event {
+    /// The tag the watcher was registered with.
+    tag: string,
+    changes: watcher-changes,
+  }
+
+  /// What a folder watcher reports: the paths that changed, coalesced, or
+  /// an overflow — too many changes were lost, and the extension should
+  /// rescan the folder itself.
+  variant watcher-changes {
+    paths(list<string>),
+    rescan,
+  }
+
+  /// One event of what the package registered.
+  variant event {
+    /// A timer fired: its tag.
+    timer(string),
+    /// A folder watcher's changes, coalesced.
+    watcher(watcher-event),
+  }
+
+  /// Handles `event`: the firing of a timer (its tag) or the coalesced
+  /// changes of a watcher. The call belongs to the generation of the code
+  /// that registered, so it is stopped by a disable, a reload, an update,
+  /// an uninstall or a pause, and a trap in it is a crash of the package
+  /// like any call's, counted towards pausing it. An error is the
+  /// extension's own, logged to its package's extension log.
+  handle-event: async func(event: event) -> result<_, string>;
+}
+
+/// The lifecycle of a package's code, as its component exports it: the
+/// activation entry point a `pane.json` may declare under `"activate"`
+/// (#158), and the state handoff to the code that replaces it (ADR 0041,
+/// #159). The component a `pane.json` names there exports this interface
+/// beside `command`, as any component may: a component that exports it
+/// opts in to handing its in-memory state to its new code, while
+/// `activate` is called only for the component `"activate"` names. Pane
+/// calls `activate` when the package's code may run and it is not
+/// waiting — at install, enable, start, reload, update, Retry and on
+/// coming back from waiting — and again when the instance that ran it is
+/// dropped while the generation continues unpaused, so registrations
+/// made in it are made again. A trap in it is a crash, counted towards
+/// pausing the package; during a reload's start it is a startup failure.
+/// An opt-in exception to lazy activation (ADR 0005, amended by
+/// ADR 0041): without it, a package's code first runs when the user asks
+/// for one of its commands.
+interface lifecycle {
+  /// Activates the package: registers what it registers. Pane never
+  /// calls it twice in one instance; the instance it runs in lives on
+  /// until the generation ends, so registrations made in it live as long
+  /// as the code that made them.
+  activate: async func();
+
+  /// The state this instance hands to its replacement: opaque bytes the
+  /// author versions, asked of each running instance that exports this
+  /// interface and is idle (no call pending in it) before the old
+  /// generation ends — only once the replacement passed its checks, on
+  /// Reload, an Update and a development-mode reload, never after a
+  /// crash, a pause, a failure to start, Retry, a disable followed by an
+  /// enable, or a restart of Pane. `None` hands over nothing. The bytes
+  /// are kept in memory only, never written to disk, and bounded: a
+  /// snapshot over 1 MiB is dropped, and so is one that does not answer
+  /// within 1 second, so a handoff never delays a replacement by more
+  /// than that. Development mode's diagnostics report a dropped,
+  /// oversized or late snapshot.
+  snapshot: async func() -> option<list<u8>>;
+
+  /// Restores the state a replaced instance handed over, on this
+  /// instance's first start and before any other call into it: the new
+  /// code's instance of the same component file receives the bytes. An
+  /// error discards the state and is not a failure: the extension starts
+  /// fresh. A trap is a crash; during a reload's start it is a startup
+  /// failure, so the package is paused and the state is lost. A snapshot
+  /// whose component the new code no longer has is discarded. The SDKs
+  /// offer helpers that serialise a value (serde in Rust, JSON in
+  /// JavaScript and TypeScript), but the bytes are the author's to
+  /// version.
+  restore: async func(state: list<u8>) -> result<_, string>;
+}
+
+/// The registrations import alone, for guest bindings.
+world registrations-user {
+  import registrations;
+}
+
+/// The events export alone: a component that registers timers or watchers
+/// exports it besides the `extension` world's `command`.
+world events-provider {
+  export events;
+}
+
+/// The lifecycle export alone: the component a package's `pane.json`
+/// names under `"activate"` exports it besides the `extension` world's
+/// `command`, as any component does that opts in to the state handoff.
+world lifecycle-provider {
+  export lifecycle;
+}

@@ -209,6 +209,9 @@ impl Launcher {
                     );
                 }
                 runtime.forget(all);
+                // Any state the old code handed to a replacement it never
+                // ran (ADR 0041) goes with the package.
+                runtime.drop_restores(&identity.key());
             }
             components.extend(commands);
             // Its pause goes with it, in memory only: if the uninstall cannot
@@ -223,6 +226,9 @@ impl Launcher {
         // Their hotkeys are released now, and forgotten once they are
         // uninstalled.
         self.sync_hotkeys(state);
+        // Their dependents now wait for them, rather than fail (see
+        // `waiting`).
+        state.recheck_waiting();
         // Their results kept for root search go, and so does an answer from
         // one being awaited.
         Launcher::forget_indexes(state);
@@ -311,6 +317,8 @@ impl Launcher {
                     }
                 }
                 self.sync_hotkeys(&mut state);
+                // Nothing waits for them any more: they are back.
+                state.recheck_waiting();
                 let message = match titles.as_slice() {
                     [title] => format!(
                         "Could not uninstall {title}: {error}. It is still installed and \
@@ -334,6 +342,8 @@ impl Launcher {
             let forget_subtitles = self.forget_subtitles_of(&mut self.lock(), identity);
             let forget_confirmations = self.forget_confirmations_of(&mut self.lock(), identity);
             let forget_arguments = self.forget_arguments_of(&mut self.lock(), identity);
+            let forget_capability_choices =
+                self.forget_capability_choices_of(&mut self.lock(), identity);
             let forget_learned = self.forget_learned_of(&mut self.lock(), identity);
             let forget_history = self.forget_history_of(&mut self.lock(), identity);
             let files = self.lock().files.clone();
@@ -360,6 +370,14 @@ impl Launcher {
                 if let Some(Err(error)) = forget_arguments.map(|forget| forget()) {
                     problems.push(format!(
                         "could not forget its remembered arguments: {error}"
+                    ));
+                }
+                // Uninstalling the chosen provider of a capability forgets
+                // the choice, so a stale one never lingers (see
+                // `capability_choices`).
+                if let Some(Err(error)) = forget_capability_choices.map(|forget| forget()) {
+                    problems.push(format!(
+                        "could not forget the capabilities it was chosen for: {error}"
                     ));
                 }
                 if let Some(Err(error)) = forget_learned.map(|forget| forget()) {
@@ -418,6 +436,10 @@ impl Launcher {
         }
         let status = outcome(&titles, saved, &problems);
         let mut state = self.lock();
+        // The data kept for them is recorded now: who waits for them names
+        // them by the title it was kept under, as the fix row beside the
+        // requirement does (see `waiting`).
+        state.recheck_waiting();
         self.end_uninstall(&mut state, epoch, &identities, status);
     }
 

@@ -3,7 +3,9 @@
 //! installed package that requires it (directly or through each other,
 //! disabled ones included, optional users excluded) with each one's saved
 //! data, and offers Uninstall all with the saved-data choice of a single
-//! uninstall, or Cancel. Cancel changes nothing; Uninstall all removes
+//! uninstall, or Cancel. A package that is the last provider of a
+//! capability other packages use is asked about them too: the line naming
+//! who will wait for a provider. Cancel changes nothing; Uninstall all removes
 //! exactly the shown set as uninstalling each would, in one record, and
 //! reports a copy or data it could not remove against the package it
 //! belongs to. Installing the dependency again installs it alone. Real
@@ -701,4 +703,94 @@ fn uninstall_all_forgets_the_folder_granted_to_each_package() {
     assert_eq!(granted_folders(&dirs), Vec::<String>::new());
     dirs.launcher();
     assert_eq!(granted_folders(&dirs), Vec::<String>::new());
+}
+
+// A package that provides a capability other packages use (ADR 0041):
+// capabilities add no package to the closure — another provider may
+// serve — and the question says instead who will wait for a provider.
+
+/// The `provides` of a package providing the fixture's capability, as
+/// manifest members, beside the `echo` it publishes.
+const PROVIDES: &str = r#","provides": [{ "capability": "fixture:greet@1", "component":
+     "fixture.wasm", "operations": ["greet"] }],
+     "operations": [{ "id": "echo", "version": 1, "component": "fixture.wasm" }]"#;
+
+/// A required dependency on the provider's `echo`, as manifest members.
+const NEEDS: &str = r#","dependencies": [{ "id": "p", "source": "local:../p",
+     "operations": [{ "id": "echo", "version": 1 }] }]"#;
+
+/// The `uses` of a package using the fixture's capability, as manifest
+/// members.
+const USES: &str = r#","uses": [{ "capability": "fixture:greet@1", "operations": ["greet"] }]"#;
+
+impl Dirs {
+    /// Writes a capabilities fixture package in folder `name`, titled
+    /// "Package <name>", whose one command is titled `command` and calls
+    /// the fixture's capability, with `members` (manifest members, each
+    /// starting with a comma): its `provides`, `uses`, `operations` or
+    /// `dependencies`.
+    fn capability(&self, name: &str, command: &str, members: &str) -> PathBuf {
+        let folder = self.folder(name);
+        fs::create_dir_all(&folder).unwrap();
+        fs::copy(
+            guest("capabilities_fixture.wasm"),
+            folder.join("fixture.wasm"),
+        )
+        .unwrap();
+        let manifest = format!(
+            r#"{{
+                "manifestVersion": 1,
+                "title": "Package {name}",
+                "apiVersion": "0.1",
+                "commands": [
+                    {{ "id": "fixture", "title": "{command}", "component": "fixture.wasm" }}
+                ]{members}
+            }}"#
+        );
+        fs::write(folder.join("pane.json"), manifest).unwrap();
+        folder
+    }
+}
+
+#[test]
+fn uninstalling_the_last_provider_of_a_capability_says_who_waits_for_it() {
+    let dirs = Dirs::new();
+    // p provides the capability d requires by dependency and c uses; c is
+    // not in the closure, so it is named as waiting for a provider.
+    dirs.capability("p", "Greeting provider", PROVIDES);
+    dirs.capability("d", "Dependent greeting", NEEDS);
+    dirs.capability("c", "Greeting user", USES);
+    let launcher = dirs.launcher();
+    block_on(launcher.install_package(&dirs.folder("d")));
+    block_on(launcher.install_package(&dirs.folder("c")));
+
+    ask_to_uninstall(&launcher, "Package p");
+
+    let details = launcher.view().details().join("\n");
+    assert!(
+        details.contains(
+            "Package c will wait for fixture:greet@1 until another extension provides it"
+        ),
+        "{details}"
+    );
+    assert!(!details.contains("Package d will wait"), "{details}");
+    assert_eq!(
+        titles(&launcher),
+        [
+            "Uninstall all 2 and keep saved data",
+            "Uninstall all 2 and delete saved data",
+            "Cancel"
+        ]
+    );
+    assert_eq!(press(&launcher, "Cancel"), Status::Idle);
+
+    // With another provider left, there is no line.
+    dirs.capability("q", "Second greeting provider", PROVIDES);
+    block_on(launcher.install_package(&dirs.folder("q")));
+    ask_to_uninstall(&launcher, "Package p");
+    let details = launcher.view().details().join("\n");
+    assert!(
+        !details.contains("will wait for fixture:greet@1"),
+        "{details}"
+    );
 }

@@ -1,0 +1,18 @@
+{
+  "manifestVersion": 1,
+  "title": "TypeScript capabilities sample",
+  "version": "0.1.0",
+  "apiVersion": "0.1",
+  "commands": [
+    {
+      "id": "greet",
+      "title": "Greet from TypeScript",
+      "subtitle": "Calls the pane-samples:greet@1 capability, whichever extension provides it",
+      "component": "sample_capabilities_ts.wasm"
+    }
+  ],
+  "uses": [
+    { "capability": "pane-samples:greet@1", "operations": ["greet"], "use": "all" },
+    { "capability": "pane-samples:farewell@1", "operations": ["farewell"], "optional": true }
+  ]
+}

@@ -1,5 +1,13 @@
 # Extensions are managed in Settings, one page per extension
 
+**Amended:** [#154](https://github.com/pane-app/pane/issues/154) (2026)
+adds a Capabilities section to the group's own page: each capability with
+two or more installed providers is listed with a dropdown of its providers
+(the chosen one, or the first installed, in force), the extensions that
+use it, and, while the chosen provider cannot serve, who serves instead.
+A choice is Pane's own record, and applies to the next call without
+reloading anything. Preserve the original text below.
+
 Accepted 2026-10-07 by the user's decision, after trying the default extensions beside Raycast for Windows 2.6.1 (specification #161, its slice 7; ticket #168). It changes where extensions are managed, not how: the operations, their records and their confirmations stay the launcher's own.
 
 Pane's Settings window has an **Extensions** group after Pane's own pages. Its sidebar entry heads the group, with a + menu that installs from a folder, npm or Git, and under it every installed extension has an entry of its own: its icon, its title, and a mark in a word while it is paused, broken or updating. The group's own page lists the installed extensions, what governs them all (automatic updates), what belongs to none of them (the extension runtime's rows, data kept for an uninstalled extension) and the install sources.

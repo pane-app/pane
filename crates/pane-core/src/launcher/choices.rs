@@ -225,6 +225,14 @@ impl Launcher {
             .iter()
             .flat_map(|package| package.commands())
             .find(|registration| registration.id == command)
-            .map_or_else(|| command.to_owned(), |registration| registration.title)
+            .map_or_else(
+                || {
+                    // A dynamic root item's row id names its row (#158).
+                    super::dynamic::pinned_by_id(state, command)
+                        .map(|found| found.row.title)
+                        .unwrap_or_else(|| command.to_owned())
+                },
+                |registration| registration.title,
+            )
     }
 }

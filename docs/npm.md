@@ -151,7 +151,11 @@ are provisional choices.
 makes: the identity, the saved data (settings, content, credentials),
 the disabled state, the hotkeys and the aliases are kept; the old code's
 generation ends, stopping what is still pending of it; and the new code
-runs from the next call, as an update starts no code itself. The outcome
+runs from the next call, as an update starts no code itself. A package
+whose component opts in to the [state
+handoff](generations.md#the-state-handoff) (ADR 0041, #159) keeps what it
+had in memory: the old instance is asked for a bounded snapshot before its
+generation ends, and the new code's first start restores it. The outcome
 is the pass's update results ("0.1.0 → 0.2.0" in the view): a
 successful background update is quiet — the list shows the new version —
 while a failure is announced once, the next time the launcher is shown,
