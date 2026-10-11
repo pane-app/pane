@@ -9,8 +9,9 @@
 //! device pixels of a 2x display, and more than enough for 1x and 1.5x.
 //! The default extensions' own tiles live in their repositories now
 //! (#285), whose packages these tests cannot read; the tile machinery is
-//! the same for every package's, so the samples carry it. That an
-//! extension's bare symbol is still drawn bare is `icons.rs`'s.
+//! the same for every package's, so the samples carry it. That a built-in
+//! glyph an extension names draws on Pane's neutral command tile, and its
+//! other icons bare, is `icons.rs`'s.
 
 use gpui::{Bounds, Entity, Pixels, TestAppContext, VisualTestContext, prelude::*, px};
 use pane::LauncherWindow;
@@ -170,6 +171,10 @@ fn the_tiles_draw_in(theme: &str, cx: &mut TestAppContext) {
                 "{title} draws {file} in the {theme} theme"
             );
             assert!(
+                !drawn(cx, format!("icon-{title}-tile")),
+                "{title}'s tile is the image it ships: nothing of Pane's behind it"
+            );
+            assert!(
                 !drawn(cx, format!("icon-{title}-mask-rounded")),
                 "{title}'s tile is drawn as its file is, unclipped"
             );
@@ -234,6 +239,10 @@ fn the_actions_panel_names_a_sample_command_with_its_tile(cx: &mut TestAppContex
             assert!(
                 drawn(cx, format!("icon-actions-header-image-{file}")),
                 "the header draws {title}'s {file}"
+            );
+            assert!(
+                !drawn(cx, "icon-actions-header-tile"),
+                "the header draws the tile {title} ships, bare as the row does"
             );
             cx.simulate_keystrokes("escape");
             settle(&window, cx);

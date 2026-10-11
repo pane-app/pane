@@ -269,7 +269,7 @@ fn going_back_while_a_form_is_submitted_discards_its_answer() {
     launcher.set_field_value("name", "Ada");
 
     let pending = launcher.submit_form();
-    assert_eq!(launcher.view().status, Status::Running);
+    assert!(matches!(launcher.view().status, Status::Running { .. }));
     launcher.back();
     block_on(pending);
 
@@ -285,7 +285,7 @@ fn submitting_again_while_a_submission_is_pending_is_ignored() {
 
     let second = launcher.submit_form();
     block_on(second);
-    assert_eq!(launcher.view().status, Status::Running);
+    assert!(matches!(launcher.view().status, Status::Running { .. }));
     block_on(first);
 
     // Only the empty submission ran. Its rejection reports the name, but
@@ -419,7 +419,7 @@ fn a_view_that_opens_after_the_user_left_is_closed_again() {
     launcher.select(5);
 
     let opening = launcher.activate_selected();
-    assert_eq!(launcher.view().status, Status::Running);
+    assert!(matches!(launcher.view().status, Status::Running { .. }));
     launcher.back();
     block_on(opening);
 

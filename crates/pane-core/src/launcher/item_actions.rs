@@ -40,6 +40,7 @@
 use std::borrow::Cow;
 use std::future::Future;
 use std::pin::Pin;
+use std::time::Instant;
 
 use super::{Entry, Launcher, Screen, State, Status, looks, own_actions, owner};
 use crate::icons::Icon;
@@ -262,7 +263,9 @@ impl Launcher {
         if let (Some(callback), Some(component)) = (callback, state.open.clone()) {
             // The status line is about this action from now on.
             state.sent_from = None;
-            state.view.status = Status::Running;
+            state.view.status = Status::Running {
+                since: Instant::now(),
+            };
             let data = self.data_in(&state, &component);
             run = Some((state.screen_epoch, component, callback, data));
         }

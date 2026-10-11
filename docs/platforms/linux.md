@@ -1143,6 +1143,11 @@ until the first record is collected and the user confirms ceilings.
 ## Remaining limits
 
 - Wayland, a real desktop session and hardware GPU drivers are untested.
+- The HUD's window is placed where the specification has it (centred, its
+  bottom edge 150 logical pixels above the monitor's bottom) on Windows,
+  macOS and X11; Wayland lets a client place no such window, so there the
+  HUD reads as a toast-like message the compositor places (the
+  specification's fallback, `crates/pane/src/features/hud.rs`).
 - Clipboard history works through X11 only: on Wayland (with or without
   XWayland) it says why it cannot watch, and only the X11 combination
   (Xvfb in CI) is claimed; a real desktop's programs, password managers and

@@ -47,8 +47,11 @@
 //! toast, or the status line) as its name. AccessKit announces only a node
 //! with a live setting of its own, and the strip's children would inherit
 //! one, so the announcer says the message too when it is a toast or an
-//! outcome (a result, an error); "Running…" and progress are the strip's
-//! own. When the message and the selection change together, the message
+//! outcome (a result, an error), and the busy state too once waited-for
+//! work has outlasted the loading bar's threshold (#248) — a quick action
+//! is never announced as busy; progress is the strip's own, as a line
+//! that changes fast would keep the selection's text waiting behind it.
+//! When the message and the selection change together, the message
 //! is said first and the selection's text waits [`STATUS_LEAD`] for it, at
 //! most: a later message does not hold it back again. It is said only if
 //! the list still shows what it was made of; otherwise (a panel closed,
@@ -508,12 +511,17 @@ fn opening(opening: &Opening, count: usize, target: &Target) -> Option<String> {
 }
 
 /// Whether the announcer says the footer's message as the launcher's
-/// `status` and its toast (`toast`, whether one is shown) make it: a toast,
-/// or an outcome (a result, an error). "Running…" and progress are the
-/// strip's own: a progress line that changes fast would otherwise keep
-/// the selection's text waiting behind it.
-pub(crate) fn says_message(status: &Status, toast: bool) -> bool {
-    toast || matches!(status, Status::Result(_) | Status::Error(_))
+/// `status`, its toast (`toast`, whether one is shown) and the window's
+/// reading of the busy state (`busy`: waited-for work past the loading
+/// bar's threshold, #248) make it: a toast, an outcome (a result, an
+/// error), or the busy state once the waited-for work has outlasted the
+/// threshold — the quick action is never announced as busy. Progress
+/// stays the strip's own: a progress line that changes fast would
+/// otherwise keep the selection's text waiting behind it.
+pub(crate) fn says_message(status: &Status, toast: bool, busy: bool) -> bool {
+    toast
+        || matches!(status, Status::Result(_) | Status::Error(_))
+        || (busy && matches!(status, Status::Running { .. }))
 }
 
 /// The name of the section row `index` is in, among `sections`.
@@ -539,6 +547,7 @@ impl LauncherWindow {
         cx: &App,
     ) -> Option<Listing> {
         self.panel_listing(cx)
+            .or_else(|| self.toast_details_listing())
             .or_else(|| self.menu_listing())
             .or_else(|| self.screen_listing(view, sections, nothing_found))
     }
@@ -869,13 +878,42 @@ mod tests {
     }
 
     #[test]
-    fn only_a_toast_or_an_outcome_is_said_of_the_footer() {
-        assert!(says_message(&Status::Result("Copied".into()), false));
-        assert!(says_message(&Status::Error("Failed".into()), false));
-        assert!(says_message(&Status::Running, true), "a toast");
-        assert!(!says_message(&Status::Running, false));
-        assert!(!says_message(&Status::Progress("3 of 9".into()), false));
-        assert!(!says_message(&Status::Idle, false));
+    fn only_a_toast_an_outcome_or_late_busy_work_is_said_of_the_footer() {
+        assert!(says_message(&Status::Result("Copied".into()), false, false));
+        assert!(says_message(&Status::Error("Failed".into()), false, false));
+        assert!(
+            says_message(
+                &Status::Running {
+                    since: Instant::now()
+                },
+                true,
+                false
+            ),
+            "a toast"
+        );
+        // The busy state is said only once waited-for work has outlasted
+        // the loading bar's threshold (#248): beneath it, a quick action,
+        // never.
+        assert!(!says_message(
+            &Status::Running {
+                since: Instant::now()
+            },
+            false,
+            false
+        ));
+        assert!(says_message(
+            &Status::Running {
+                since: Instant::now()
+            },
+            false,
+            true
+        ));
+        assert!(!says_message(
+            &Status::Progress("3 of 9".into()),
+            false,
+            true
+        ));
+        assert!(!says_message(&Status::Idle, false, true));
     }
 
     /// A later message never holds a waiting selection back again: it is

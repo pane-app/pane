@@ -340,7 +340,7 @@ fn ready(launcher: &Launcher, state: &State, target: &str, action: ResultAction)
 pub(in crate::launcher) fn selected_action(state: &State) -> SelectedAction {
     // An action is already running: the status line reports it, and the
     // definition keeps the button from dispatching another one meanwhile.
-    let busy = matches!(state.view.status, Status::Running);
+    let busy = matches!(state.view.status, Status::Running { .. });
     let acting = |label: &str| SelectedAction {
         label: label.into(),
         available: !busy,

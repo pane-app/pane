@@ -42,6 +42,14 @@ use a11y::{announcement, no_row_has_focus};
 /// the selected row (#132), on the test platform's controlled clock.
 const SETTLE: Duration = Duration::from_millis(300);
 
+/// The toast key on this system: Ctrl+T (Command+T on macOS), which
+/// opens the toast's details (#249).
+const TOAST_KEY: &str = if cfg!(target_os = "macos") {
+    "cmd-t"
+} else {
+    "ctrl-t"
+};
+
 /// Lets typing settle for the announcer: its time runs on the test
 /// platform's clock, which only the test advances.
 fn typing_settles(cx: &mut VisualTestContext) {
@@ -1751,10 +1759,16 @@ fn a_pin_sharing_its_title_says_its_rows_subtitle(cx: &mut TestAppContext) {
     );
 }
 
+/// A long outcome — the kind of message a picker or download failure
+/// reports — is the toast (#249): its first line, truncated, with a details
+/// affordance, in a strip that stays one line tall. The full text opens in
+/// the details popover above the footer, wrapped and scrollable, by the
+/// toast key and by a click; Escape and the popover's own close button
+/// close the details, leaving the toast.
 #[gpui::test]
-fn a_long_error_wraps_grows_and_scrolls_inside_the_footer(cx: &mut TestAppContext) {
+fn a_long_outcome_shows_its_first_line_and_opens_in_full_above_the_footer(cx: &mut TestAppContext) {
     // The kind of message a picker or download failure reports: long
-    // enough to wrap past the footer's 50px floor and past its cap.
+    // enough to wrap past the popover's cap.
     let detail = "the operation could not be completed because the target \
                   system refused the connection and every retry failed, so \
                   nothing was installed and the previous state was kept";
@@ -1764,117 +1778,111 @@ fn a_long_error_wraps_grows_and_scrolls_inside_the_footer(cx: &mut TestAppContex
     launcher.show_error(message.clone());
     let (window, cx) = open_launcher(cx, launcher);
 
-    // A narrow window: the message wraps within the footer's width — not
-    // one line clipped at the window's right edge — the footer grows past
-    // its 50px floor, and the message is taller than the capped strip, so
-    // the overflow must scroll rather than disappear.
+    // A narrow window: the toast's one line and its controls all have to
+    // fit.
     cx.simulate_resize(gpui::size(px(380.), px(420.)));
     let view = settle(&window, cx);
     assert_eq!(view.status, Status::Error(message.clone()));
     let footer = cx
         .debug_bounds("status-error")
         .expect("the footer is rendered");
-    let text = cx
-        .debug_bounds("status-message")
-        .expect("the message is rendered");
+    let line = cx
+        .debug_bounds("toast-title")
+        .expect("the toast's one line");
+    let affordance = cx
+        .debug_bounds("toast-details-button")
+        .expect("the details affordance");
     assert!(
-        text.right() <= footer.right(),
-        "the message wraps within the footer, not past its right edge"
+        line.right() <= footer.right(),
+        "the first line fits in the strip: {line:?} in {footer:?}"
     );
     assert!(
-        text.size.height > px(60.),
-        "the message wrapped to several lines: {:?}",
-        text.size.height
+        line.size.height < px(30.),
+        "one line, not several: {:?}",
+        line.size.height
     );
     assert!(
-        footer.size.height > px(50.),
-        "the footer grew past its 50px floor: {:?}",
+        footer.size.height <= px(55.),
+        "the strip stays one line tall: {:?}",
         footer.size.height
-    );
-    assert!(
-        footer.size.height <= px(147.5),
-        "the footer is capped at 35% of the panel: {:?}",
-        footer.size.height
-    );
-    assert!(
-        text.size.height > footer.size.height,
-        "the overflow is scrollable, not cut"
     );
 
-    // A short window: the cap follows the panel down (35% of 200px), so
-    // the list keeps most of the window, and the overflow still scrolls.
-    cx.simulate_resize(gpui::size(px(640.), px(200.)));
+    // The toast key opens the full text in the popover above the footer.
+    cx.simulate_keystrokes(TOAST_KEY);
     settle(&window, cx);
+    let details = cx
+        .debug_bounds("toast-details")
+        .expect("the details popover");
     let footer = cx
         .debug_bounds("status-error")
         .expect("the footer is rendered");
-    let text = cx
-        .debug_bounds("status-message")
-        .expect("the message is rendered");
     assert!(
-        footer.size.height <= px(70.5),
-        "the cap follows the panel height: {:?}",
-        footer.size.height
+        details.bottom() <= footer.top() + px(1.),
+        "the popover is above the footer: {details:?}, {footer:?}"
     );
-    assert!(text.size.height > footer.size.height);
+    // The full text is wrapped, not one clipped line, and scrolls past
+    // the popover's cap rather than being cut.
+    let text = cx
+        .debug_bounds("toast-details-text")
+        .expect("the full text's viewport");
+    let full = cx
+        .debug_bounds("toast-details-title")
+        .expect("the full text");
+    assert!(
+        full.size.height > px(60.),
+        "the text wrapped to several lines: {:?}",
+        full.size.height
+    );
+    assert!(
+        text.size.height <= px(200.5) && full.size.height > text.size.height + px(20.),
+        "the overflow scrolls past the cap: text {:?}, full {:?}",
+        text.size.height,
+        full.size.height
+    );
 
-    // The wheel over the footer scrolls the message itself, the same
-    // event the list's wheel test dispatches (negative scrolls down): the
-    // message's painted position moves up.
-    let before = text.top();
+    // The wheel over the text scrolls it (negative scrolls down): the
+    // text's painted position moves up.
+    let before = full.top();
     cx.simulate_event(gpui::ScrollWheelEvent {
-        position: footer.center(),
+        position: text.center(),
         delta: gpui::ScrollDelta::Pixels(gpui::point(px(0.), px(-80.))),
         modifiers: Modifiers::none(),
         touch_phase: gpui::TouchPhase::Moved,
     });
     cx.run_until_parked();
     redraw(&window, cx);
-    let text = cx
-        .debug_bounds("status-message")
-        .expect("the message is rendered");
+    let full = cx
+        .debug_bounds("toast-details-title")
+        .expect("the full text");
     assert!(
-        text.top() < before,
-        "the message scrolled up within the footer"
+        full.top() < before,
+        "the text scrolled up inside the popover"
     );
 
-    // Scrolled far down, the wheel reaches the end: the last line lands
-    // inside the strip.
-    cx.simulate_event(gpui::ScrollWheelEvent {
-        position: footer.center(),
-        delta: gpui::ScrollDelta::Pixels(gpui::point(px(0.), px(-4000.))),
-        modifiers: Modifiers::none(),
-        touch_phase: gpui::TouchPhase::Moved,
-    });
-    cx.run_until_parked();
-    redraw(&window, cx);
-    let footer = cx
-        .debug_bounds("status-error")
-        .expect("the footer is rendered");
-    let text = cx
-        .debug_bounds("status-message")
-        .expect("the message is rendered");
+    // Escape closes the details, leaving the toast.
+    cx.simulate_keystrokes("escape");
+    settle(&window, cx);
     assert!(
-        text.bottom() <= footer.bottom() + px(1.),
-        "the last line can be scrolled into view"
+        cx.debug_bounds("toast-details").is_none(),
+        "the details closed"
     );
+    assert!(cx.debug_bounds("toast").is_some(), "the toast stays");
 
-    // And back up: the first line is reachable again.
-    cx.simulate_event(gpui::ScrollWheelEvent {
-        position: footer.center(),
-        delta: gpui::ScrollDelta::Pixels(gpui::point(px(0.), px(4000.))),
-        modifiers: Modifiers::none(),
-        touch_phase: gpui::TouchPhase::Moved,
-    });
-    cx.run_until_parked();
-    redraw(&window, cx);
-    let text = cx
-        .debug_bounds("status-message")
-        .expect("the message is rendered");
+    // A click on the affordance opens them again, and the popover's own
+    // close button closes them.
+    cx.simulate_click(affordance.center(), Modifiers::none());
+    settle(&window, cx);
+    assert!(cx.debug_bounds("toast-details").is_some(), "open by click");
+    let close = cx
+        .debug_bounds("toast-details-close")
+        .expect("the popover's close button");
+    cx.simulate_click(close.center(), Modifiers::none());
+    settle(&window, cx);
     assert!(
-        text.top() >= before - px(1.),
-        "the first line scrolls back into view"
+        cx.debug_bounds("toast-details").is_none(),
+        "closed by the popover's button"
     );
+    assert!(cx.debug_bounds("toast").is_some(), "the toast stays");
 }
 
 /// The idle footer's selected action: its button, right-aligned in the
@@ -2186,16 +2194,16 @@ fn the_footer_button_labels_the_action_from_identity_not_the_row_title(cx: &mut 
     node(&nodes, "Button", "Enable");
 }
 
-/// A long status takes the hint's place, and the primary action steps
-/// aside while Actions stays; the message stays readable: it wraps within
-/// the strip's room and the strip grows with it.
+/// A long outcome takes the hint's place, and the primary action steps
+/// aside while Actions stays; the toast's one line stays readable: the
+/// first line of the message, truncated, short of the buttons, with the
+/// details affordance (#249).
 #[gpui::test]
-fn a_long_status_replaces_the_idle_strip_and_stays_readable(cx: &mut TestAppContext) {
+fn a_long_outcome_replaces_the_idle_strip_as_one_readable_line(cx: &mut TestAppContext) {
     let detail = "the operation could not be completed because the target \
                   system refused the connection and every retry failed, so \
                   nothing was installed and the previous state was kept";
-    let message =
-        format!("Could not open a folder picker: {detail}. {detail}. {detail}. {detail}.");
+    let message = format!("Could not open a folder picker: {detail}. {detail}.");
     let launcher = Launcher::new(Runtime::start(), Vec::new());
     launcher.show_error(message.clone());
     let (window, cx) = open_launcher(cx, launcher);
@@ -2203,12 +2211,9 @@ fn a_long_status_replaces_the_idle_strip_and_stays_readable(cx: &mut TestAppCont
     let view = settle(&window, cx);
     assert_eq!(view.status, Status::Error(message));
 
-    let footer = cx
-        .debug_bounds("status-error")
-        .expect("the footer is rendered");
-    let text = cx
-        .debug_bounds("status-message")
-        .expect("the message is rendered");
+    let line = cx
+        .debug_bounds("toast-title")
+        .expect("the toast's one line");
     assert!(
         cx.debug_bounds("primary-action").is_none(),
         "no primary action while a status shows"
@@ -2218,21 +2223,20 @@ fn a_long_status_replaces_the_idle_strip_and_stays_readable(cx: &mut TestAppCont
         .expect("Actions stays while a status shows");
     assert!(
         cx.debug_bounds("footer-hint").is_none(),
-        "the message takes the hint's place"
+        "the toast takes the hint's place"
     );
     assert!(
-        text.right() <= actions.left(),
-        "the message wraps short of Actions: {text:?}, {actions:?}"
+        line.right() <= actions.left(),
+        "the one line fits short of Actions: {line:?}, {actions:?}"
     );
     assert!(
-        text.size.height > px(50.),
-        "the message wrapped to several lines: {:?}",
-        text.size.height
+        line.size.height < px(30.),
+        "one line, not several: {:?}",
+        line.size.height
     );
     assert!(
-        footer.size.height > px(50.),
-        "the footer grew past its 50px floor: {:?}",
-        footer.size.height
+        cx.debug_bounds("toast-details-button").is_some(),
+        "the details affordance"
     );
 }
 
@@ -3540,7 +3544,7 @@ mod clipboard_split {
         loop {
             cx.run_until_parked();
             let status = cx.read_entity(window, |window, _| window.launcher().view().status);
-            if status != pane_core::Status::Running {
+            if !matches!(status, pane_core::Status::Running { .. }) {
                 return;
             }
             assert!(std::time::Instant::now() < deadline, "timed out");

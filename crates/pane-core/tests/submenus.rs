@@ -279,7 +279,7 @@ fn choosing_an_entry_runs_it_once() {
         let pane = Pane::open(fixture);
         block_on(pane.launcher.open_submenu(DELTA, OPEN_WITH));
         let chosen = pane.launcher.run_submenu_entry(DELTA, 2);
-        assert_eq!(pane.status(), Status::Running);
+        assert!(matches!(pane.status(), Status::Running { .. }));
         // The same choice again, as a repeat would make it: nothing is open
         // to run it from.
         let again = pane.launcher.run_submenu_entry(DELTA, 2);

@@ -4,7 +4,8 @@
 //! image's fallback at once, and, once Pane downloaded the image, the
 //! window draws it by itself, told by the launcher that it changed, in a
 //! row as in an action's icon in the Actions panel; an address without an
-//! image keeps its fallback. The rules (limits,
+//! image keeps its fallback. The fallback and the image alike draw bare,
+//! with no tile behind them (ADR 0035, #247). The rules (limits,
 //! de-duplication, the cache, system icons) are `pane-core`'s
 //! `web_icons.rs`.
 
@@ -170,9 +171,11 @@ fn a_web_image_draws_its_fallback_while_it_loads_then_the_image(cx: &mut TestApp
         "icon-Slow web image-image-{}.png",
         web_image_stem(&format!("{}/images/slow.png", server.url()))
     );
-    // Held back by the server: the fallback, drawn with the list.
+    // Held back by the server: the fallback, drawn with the list, bare
+    // where the image will draw (ADR 0035, #247).
     assert!(drawn(cx, "icon-Slow web image-glyph-clock"));
     assert!(drawn(cx, "icon-Same slow image-glyph-clock"));
+    assert!(!drawn(cx, "icon-Slow web image-tile"));
     assert!(!drawn(cx, slow.as_str()));
 
     let favicon = format!(
@@ -185,6 +188,10 @@ fn a_web_image_draws_its_fallback_while_it_loads_then_the_image(cx: &mut TestApp
     server.release();
     until_drawn(cx, &slow);
     assert!(!drawn(cx, "icon-Slow web image-glyph-clock"));
+    assert!(
+        !drawn(cx, "icon-Slow web image-tile"),
+        "the image draws bare"
+    );
     until_drawn(
         cx,
         &format!(
@@ -217,6 +224,10 @@ fn an_actions_web_image_draws_its_fallback_then_the_image_in_the_panel(cx: &mut 
     settle(&window, cx);
     assert!(cx.read_entity(&window, |window, _| window.actions_open()));
     assert!(drawn(cx, "icon-action-Open Image-glyph-clock"));
+    assert!(
+        !drawn(cx, "icon-action-Open Image-tile"),
+        "an action's icon draws bare, at the glyph's size"
+    );
 
     server.release();
     until_drawn(

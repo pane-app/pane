@@ -580,7 +580,9 @@ Checked through GPUI's accessibility tree
   - the footer's message when it is a toast or an outcome (a result, an
     error), which the strip keeps as its name under its `Status` role:
     AccessKit announces only a node with a live setting of its own, so the
-    announcer says it too. "Running…" and progress are the strip's alone.
+    announcer says it too — and the busy state, once waited-for work has
+    outlasted the loading bar's 300 ms threshold (#248), so a quick action
+    is never announced as busy. Progress is the strip's alone.
     When the message and the selection change together, the message is said
     first and the selection 500 ms later, at most: a later message does not
     hold it back again, and it is dropped if the list no longer shows it (a

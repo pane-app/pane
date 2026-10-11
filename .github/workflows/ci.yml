@@ -54,9 +54,27 @@ jobs:
     runs-on: windows-2025
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      # Derive the immutable revision from Pane so this job cannot silently
+      # exercise a different renderer than the default-startup smoke.
+      - name: Read Pane's renderer pin
+        id: renderer-pin
+        shell: python
+        run: |
+          import os, pathlib, re, tomllib
+          manifest = tomllib.loads(pathlib.Path("crates/pane/Cargo.toml").read_text())
+          dependency = manifest["dependencies"]["gpui"]
+          assert dependency["git"] == "https://github.com/hoangvu12/gpui-ce"
+          revision = dependency["rev"]
+          assert re.fullmatch(r"[0-9a-f]{40}", revision), "renderer requires an exact commit"
+          with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+              output.write(f"revision={revision}\n")
+      - uses: actions/checkout@v4
         with:
           repository: hoangvu12/gpui-ce
-          ref: 5d27954ce5305447bb97d1d7b89b0db9b7a2c59c
+          ref: ${{ steps.renderer-pin.outputs.revision }}
           path: renderer
           persist-credentials: false
       - name: Install renderer test toolchain
@@ -116,18 +134,22 @@ jobs:
           workspaces: renderer
           key: macos-renderer-1.98.1
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      - name: Check recursive native layer background clearing
+      - name: Check native layer clearing and vibrancy material selection
         working-directory: renderer
         shell: bash
         run: |
           cargo +1.98.1 test --locked -j1 -p gpui_ce_macos --features font-kit --lib remove_layer_background_clears_cgcolor_recursively 2>&1 | tee renderer-test.log
           grep -q '1 passed; 0 failed' renderer-test.log
+          cargo +1.98.1 test --locked -j1 -p gpui_ce_macos --features font-kit --lib blurred_view 2>&1 | tee renderer-material-test.log
+          grep -q '2 passed; 0 failed' renderer-material-test.log
       - name: Upload macOS renderer result
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: macos-renderer-result
-          path: renderer/renderer-test.log
+          path: |
+            renderer/renderer-test.log
+            renderer/renderer-material-test.log
           if-no-files-found: warn
 
   licenses:

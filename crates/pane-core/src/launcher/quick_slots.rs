@@ -36,6 +36,7 @@
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 use serde_json::{Map, Value};
 
@@ -807,7 +808,7 @@ impl Launcher {
         // Only root search's slots, and never while an action already runs:
         // a second press or click during an opening invokes nothing.
         let ready = matches!(state.view.screen, Screen::Root { .. })
-            && state.view.status != Status::Running;
+            && !matches!(state.view.status, Status::Running { .. });
         let target = state.quick_slots.chosen.get(index).cloned();
         let entry = match target.filter(|_| ready) {
             Some(target) => match resolve(self, state, &target).outcome {
@@ -835,7 +836,9 @@ impl Launcher {
             Some(_) => {
                 // The status line is about this action from now on.
                 state.sent_from = None;
-                state.view.status = Status::Running;
+                state.view.status = Status::Running {
+                    since: Instant::now(),
+                };
             }
             None => {}
         }
@@ -934,7 +937,9 @@ impl Launcher {
         let (changed, said) = change(self, state, target, action);
         let save = match &changed {
             SlotChange::Changed(_) => {
-                state.view.status = Status::Running;
+                state.view.status = Status::Running {
+                    since: Instant::now(),
+                };
                 Some((state.screen_epoch, said))
             }
             SlotChange::AlreadyPinned(_) => {

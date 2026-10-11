@@ -36,8 +36,11 @@
 //! The generic command glyph is the reference's terminal prompt.
 //!
 //! Tiles come in the reference's sizes ([`TileSize`]): the result row's
-//! 28, a pinned slot's 42 and the Actions header's 18. (The reference's
-//! 34px toast tile has no Pane counterpart: Pane shows no launch toast.)
+//! 28, a pinned slot's 30 and the Actions header's 18. The neutral
+//! command tile is also what a built-in glyph an extension names is drawn
+//! on at those sizes (ADR 0035's one exception to bare extension icons —
+//! see [`neutral_chrome`]). (The reference's 34px toast tile has no Pane
+//! counterpart: Pane shows no launch toast.)
 
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
@@ -403,23 +406,32 @@ pub(crate) fn tile_at(size: TileSize, tone: IconTone, glyph: Glyph, theme: &Them
                     .size(glyph_size)
                     .text_color(glyph_color),
             ),
-        None => tile
-            .bg(theme.tile_background)
-            // inset 0 0 0 1px rgba(255,255,255,.08), inset 0 1px 0
-            // rgba(255,255,255,.1)
-            .shadow(vec![
-                gpui::BoxShadow::new(px(0.), px(0.), theme.tile_border)
-                    .spread_radius(px(1.))
-                    .inset(),
-                gpui::BoxShadow::new(px(0.), px(1.), theme.tile_highlight).inset(),
-            ])
-            .child(
-                svg()
-                    .data(glyph.svg_bytes())
-                    .size(glyph_size)
-                    .text_color(theme.tile_foreground),
-            ),
+        None => neutral_chrome(tile, theme).child(
+            svg()
+                .data(glyph.svg_bytes())
+                .size(glyph_size)
+                .text_color(theme.tile_foreground),
+        ),
     }
+}
+
+/// The neutral command tile's own look on `tile`, already sized and
+/// rounded: the theme's translucent wash with its inset edge and top
+/// highlight (the reference's `.tile`). What [`tile_at`] draws
+/// [`IconTone::Command`]'s glyph on — and, by ADR 0035's one exception
+/// to bare extension icons, what a built-in glyph an extension names is
+/// drawn on at the tile sizes (`crate::ui::extension_icon`), so a
+/// command naming one of Pane's glyphs reads as a command.
+pub(crate) fn neutral_chrome<T: Styled>(tile: T, theme: &Theme) -> T {
+    tile.bg(theme.tile_background)
+        // inset 0 0 0 1px rgba(255,255,255,.08), inset 0 1px 0
+        // rgba(255,255,255,.1)
+        .shadow(vec![
+            gpui::BoxShadow::new(px(0.), px(0.), theme.tile_border)
+                .spread_radius(px(1.))
+                .inset(),
+            gpui::BoxShadow::new(px(0.), px(1.), theme.tile_highlight).inset(),
+        ])
 }
 
 #[cfg(test)]

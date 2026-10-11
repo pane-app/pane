@@ -196,8 +196,10 @@ pub enum EscapeBehavior {
 /// Windows' do, so none meets the Ctrl chords the launcher already has
 /// (Ctrl+K opens the Actions panel); on macOS, where Option types
 /// characters, they hold Control, as Raycast for Mac's do. Raycast's
-/// left and right keys (B and F, H and L) move through its grids; Pane's
-/// lists have no left or right selection, so those stay unbound.
+/// left and right keys (B and F, H and L) move between its search
+/// fields: Pane's take Left and Right between the query and the
+/// argument fields, as Raycast's do between its query and the inline
+/// argument fields beside it (#258).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum NavigationBindings {
@@ -220,6 +222,20 @@ impl NavigationBindings {
             NavigationBindings::Emacs => Some(("alt-p", "alt-n")),
             NavigationBindings::Vim if mac => Some(("ctrl-k", "ctrl-j")),
             NavigationBindings::Vim => Some(("alt-k", "alt-j")),
+        }
+    }
+
+    /// The choice's Left and Right, the keys that move between the query
+    /// and the argument fields: backward's then forward's. As the
+    /// selection keys', Alt on Windows and Linux, Control on macOS.
+    pub fn left_right(self) -> Option<(&'static str, &'static str)> {
+        let mac = cfg!(target_os = "macos");
+        match self {
+            NavigationBindings::None => None,
+            NavigationBindings::Emacs if mac => Some(("ctrl-b", "ctrl-f")),
+            NavigationBindings::Emacs => Some(("alt-b", "alt-f")),
+            NavigationBindings::Vim if mac => Some(("ctrl-h", "ctrl-l")),
+            NavigationBindings::Vim => Some(("alt-h", "alt-l")),
         }
     }
 }
@@ -666,6 +682,7 @@ mod tests {
             "alt"
         };
         assert_eq!(NavigationBindings::None.bindings(), None);
+        assert_eq!(NavigationBindings::None.left_right(), None);
         assert_eq!(
             NavigationBindings::Emacs.bindings(),
             Some((
@@ -678,6 +695,22 @@ mod tests {
             Some((
                 format!("{modifier}-k").as_str(),
                 format!("{modifier}-j").as_str()
+            ))
+        );
+        // Left and Right: B and F under the Emacs choice, H and L under
+        // the Vim one (#258).
+        assert_eq!(
+            NavigationBindings::Emacs.left_right(),
+            Some((
+                format!("{modifier}-b").as_str(),
+                format!("{modifier}-f").as_str()
+            ))
+        );
+        assert_eq!(
+            NavigationBindings::Vim.left_right(),
+            Some((
+                format!("{modifier}-h").as_str(),
+                format!("{modifier}-l").as_str()
             ))
         );
     }

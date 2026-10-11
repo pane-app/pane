@@ -2141,7 +2141,8 @@ fn filtering_never_animates_the_popup_contents(cx: &mut TestAppContext) {
 /// about it fades: the pointer over the trigger asks for no frame (the
 /// Settings board's controls change at once). Its list's rows are the
 /// Actions panel's entry family: at least 36 high, the highlighted one on
-/// the white 11% wash, never a root row's.
+/// the selection wash (the text colour at 10%, #245), never a root row's
+/// old wash.
 #[gpui::test]
 fn the_select_is_a_settings_field_whose_washes_change_at_once(cx: &mut TestAppContext) {
     let (_window, _settings, mut sc, _data) = open_select(cx);
@@ -2177,7 +2178,7 @@ fn the_select_is_a_settings_field_whose_washes_change_at_once(cx: &mut TestAppCo
         "the pointer over the trigger asks for no frame"
     );
 
-    // The list: the committed choice highlighted on white 11%.
+    // The list: the committed choice highlighted on the selection wash.
     click(&mut sc, "launcher-monitor");
     sc.run_until_parked();
     settle_frames(&mut sc);
@@ -2186,8 +2187,8 @@ fn the_select_is_a_settings_field_whose_washes_change_at_once(cx: &mut TestAppCo
         .expect("the committed choice's row");
     assert!(row.size.height >= px(36.), "an entry's floor: {row:?}");
     assert!(
-        paint::paints_fill_at(&mut sc, row, 0xFFFFFF1C),
-        "the highlighted entry's white 11%"
+        paint::paints_fill_at(&mut sc, row, 0xEDEDEF1A),
+        "the highlighted entry's selection wash"
     );
     assert!(!paint::paints_fill_at(&mut sc, row, 0xFFFFFF16));
 

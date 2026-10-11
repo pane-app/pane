@@ -1363,10 +1363,7 @@ mod extension {
 
     /// The HUD titled `title` in `style`.
     fn hud(title: &str, style: ToastStyle) -> Hud {
-        Hud {
-            title: title.into(),
-            style,
-        }
+        Hud::new(style, title)
     }
 
     /// The command titled `title`'s manifest id, as the confirmation's
