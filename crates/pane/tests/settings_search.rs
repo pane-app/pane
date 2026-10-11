@@ -280,29 +280,31 @@ fn arrows_move_the_selection_and_the_pointer_opens_what_is_clicked(cx: &mut Test
     sc.run_until_parked();
 
     // "theme" matches the General page's three theme choices — by the
-    // group they sit in, since no title holds the word — in registration
-    // order; the first is selected.
+    // group they sit in, since no title holds the word. Settings search
+    // ranks through root search's matcher (#193): the three place the
+    // query the same way in their group, so the comparator's last step
+    // orders them by title — Dark, Light, System; the first is selected.
     sc.simulate_keystrokes(find_shortcut());
     sc.simulate_input("theme");
     sc.run_until_parked();
     assert_eq!(
         selected_result(&mut sc).as_deref(),
-        Some("System"),
+        Some("Dark"),
         "the first result is selected"
     );
 
-    // The arrows move the selection, and stop at the ends: System, Light,
-    // then Dark.
+    // The arrows move the selection, and stop at the ends: Dark, Light,
+    // then System.
     sc.simulate_keystrokes("down");
     assert_eq!(selected_result(&mut sc).as_deref(), Some("Light"));
     sc.simulate_keystrokes("down");
-    assert_eq!(selected_result(&mut sc).as_deref(), Some("Dark"));
+    assert_eq!(selected_result(&mut sc).as_deref(), Some("System"));
     sc.simulate_keystrokes("up");
     assert_eq!(selected_result(&mut sc).as_deref(), Some("Light"));
     sc.simulate_keystrokes("down down down");
     assert_eq!(
         selected_result(&mut sc).as_deref(),
-        Some("Dark"),
+        Some("System"),
         "Down at the end stays at the last result"
     );
 

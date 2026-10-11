@@ -188,6 +188,8 @@ fn the_launcher_hands_extensions_and_installs_to_settings() {
             "Install extension from Git…",
             Some(SettingsTarget::InstallFromGit),
         ),
+        ("Create Extension…", None),
+        ("Import Extension…", None),
         ("Settings…", Some(SettingsTarget::Settings)),
         ("Greeting", None),
     ] {

@@ -10,7 +10,7 @@
 //!
 //! The sample calls each host function as it is: it does not close Pane's
 //! window first, as the Switch Windows default extension does
-//! (guests/switch-windows), so a test can read what it answered — and a
+//! (pane-app/switch-windows), so a test can read what it answered — and a
 //! test drives this sample with a fake of the windows, so nothing it
 //! switches to is a real window. The JavaScript and TypeScript samples
 //! answer the same.

@@ -24,7 +24,7 @@ mod matching;
 use pane_extension::alloc::{format, string::String, vec::Vec};
 use pane_extension::feedback::{Toast, show_toast};
 use pane_extension::files::{self, FolderState};
-use pane_extension::root::{RootAction, RootResult};
+use pane_extension::root::{RootAction, RootResult, WallTime};
 use pane_extension::search::SearchResult;
 use pane_extension::{Command, CustomView, FieldValue, FormError, Item, List, NoCustomView};
 
@@ -113,7 +113,7 @@ impl pane_extension::search::Guest for Files {
 impl pane_extension::root::Guest for Files {
     /// The files the query typed in root search finds, each opening the
     /// file (Pane gives it the same actions as in Search Files).
-    async fn results_for(query: String) -> Result<Vec<RootResult>, String> {
+    async fn results_for(query: String, _at: WallTime) -> Result<Vec<RootResult>, String> {
         Ok(found(&query)?
             .into_iter()
             .map(|(id, relative)| RootResult {
@@ -123,6 +123,7 @@ impl pane_extension::root::Guest for Files {
                 id: relative,
                 subtitle: None,
                 action: RootAction::OpenFile(id),
+                answer: None,
             })
             .collect())
     }

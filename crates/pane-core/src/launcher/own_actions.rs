@@ -9,9 +9,11 @@
 //! performs them itself; no extension is called.
 //!
 //! **A file** (ADR 0017 and ADR 0034: the extension names it by the id
-//! Pane gave it, never by a path). Pane checks it again before acting, as it
-//! always did before opening one (`crate::files`, and for the file index
-//! `crate::file_index::Indexer::checked`). A folder the index found has
+//! Pane gave it, never by a path — a typed folder's entries the same way,
+//! #204). Pane checks it again before acting, as it always did before
+//! opening one (`crate::files`, `crate::typed_folder` for a typed folder,
+//! and for the file index `crate::file_index::Indexer::checked`). A folder
+//! the index or a typed listing found has
 //! Open (Enter: the file manager), Show in Explorer, Copy Path, Copy Name,
 //! Copy File and Move to Recycle Bin. A document's actions are
 //! Open (Enter), Show in Explorer (Ctrl+Enter; Finder or the File Manager
@@ -25,18 +27,26 @@
 //! screen, in the status line.
 //!
 //! **A computed answer.** Copy answer (Enter: the window puts the text on
-//! the clipboard, `Launcher::selected_copy`) and Paste answer (Ctrl+Enter):
-//! Pane pastes it into the application that was in front, closing its
+//! the clipboard, `Launcher::selected_copy`; also the platform's copy
+//! chord, Ctrl+C — Command+C on macOS, which a focused field's own copy of
+//! its selection takes first) and Paste answer (Ctrl+Enter): Pane pastes
+//! it into the application that was in front, closing its
 //! window, or where it cannot paste yet (#125) copies it instead and says
-//! so in a HUD ([`crate::system::PASTE_FALLBACK`]).
+//! so in a HUD ([`crate::system::PASTE_FALLBACK`]). A command that answered
+//! further ways to copy the answer (the calculator's colours and dates,
+//! #196) has them after those, each copying its own text.
 
 use std::path::PathBuf;
+use std::time::Instant;
 
 use super::files::FileRow;
 use super::item_actions::Listed;
 use super::{Entry, Launcher, Screen, State, Status, off_thread};
 use crate::feedback::{Caller, GivenConfirmation, Hud, ToastStyle, WindowPresence};
-use crate::runtime::{Action, ActionKind, ActionStyle, ActionSubmenu, SubmenuEntries};
+use crate::keyboard::Binding;
+use crate::runtime::{
+    Action, ActionKind, ActionStyle, ActionSubmenu, AnswerDetail, SubmenuEntries,
+};
 use crate::system::{self, Clip, PASTE_FALLBACK, SystemError};
 
 /// The callback ids of Pane's own actions. A row of Pane's never reaches a
@@ -121,12 +131,55 @@ pub(super) fn file_actions(file: &FileRow) -> Vec<Action> {
     actions
 }
 
-/// The actions of a computed answer, in order.
-fn answer_actions() -> Vec<Action> {
-    vec![
-        action("Copy answer", COPY_ANSWER),
+/// The actions of a computed answer, in order: its copy runs with Enter
+/// and the platform's copy chord, Ctrl+C (Command+C on macOS). A focused
+/// field's own copy of its selection comes first (the fork propagates a
+/// copy that has nothing selected), so the chord reaches the answer only
+/// when nothing is selected in the field (#251). Then each further way
+/// to copy it the command answered (the calculator's colour and date
+/// answers, #196).
+fn answer_actions(detail: Option<&AnswerDetail>) -> Vec<Action> {
+    let mut actions = vec![
+        Action {
+            shortcut: Some(Ok(copy_chord())),
+            ..action("Copy answer", COPY_ANSWER)
+        },
         action("Paste answer", PASTE_ANSWER),
-    ]
+    ];
+    for (index, copy) in detail
+        .into_iter()
+        .flat_map(|detail| detail.copies.iter())
+        .enumerate()
+    {
+        actions.push(action(
+            copy.title.clone(),
+            &format!("{COPY_ANSWER}/{index}"),
+        ));
+    }
+    actions
+}
+
+/// The answer detail of the computed answer listed at `index`, when it
+/// has one.
+fn answer_detail(state: &State, index: usize) -> Option<&AnswerDetail> {
+    let row = state.view.rows.get(index)?;
+    state
+        .computed
+        .iter()
+        .find(|computed| computed.row.id == row.id)
+        .and_then(|computed| computed.answer.as_ref())
+}
+
+/// The platform's copy chord: Command+C on macOS, Ctrl+C elsewhere. Not
+/// one of Pane's own keys ([`crate::keyboard::PaneKeys`]), so an item's
+/// action may bind it.
+fn copy_chord() -> Binding {
+    let modifier = if cfg!(target_os = "macos") {
+        "cmd"
+    } else {
+        "ctrl"
+    };
+    Binding::parse(&format!("{modifier}-c")).expect("the copy chord is a binding")
 }
 
 /// What Enter does with `file`, as the footer names it.
@@ -150,7 +203,7 @@ pub(super) fn listed(state: &State, index: usize) -> Option<Listed> {
     let row = state.view.rows.get(index)?;
     let actions = match state.entries.get(index)? {
         Entry::File(file) => file_actions(file),
-        Entry::Copy(_) => answer_actions(),
+        Entry::Copy(_) => answer_actions(answer_detail(state, index)),
         _ => return None,
     };
     Some(Listed {
@@ -164,8 +217,11 @@ pub(super) fn listed(state: &State, index: usize) -> Option<Listed> {
 #[derive(Clone)]
 pub(super) enum Own {
     File(FileRow),
-    /// A computed answer, by its text.
-    Answer(String),
+    /// A computed answer, by its text and the further ways to copy it.
+    Answer {
+        text: String,
+        copies: Vec<crate::runtime::AnswerCopy>,
+    },
 }
 
 /// The selected row, if Pane performs its actions itself.
@@ -174,7 +230,12 @@ pub(super) fn selected(state: &State) -> Option<Own> {
     listed(state, index)?;
     match state.entries.get(index)? {
         Entry::File(file) => Some(Own::File(file.clone())),
-        Entry::Copy(text) => Some(Own::Answer(text.clone())),
+        Entry::Copy(text) => Some(Own::Answer {
+            text: text.clone(),
+            copies: answer_detail(state, index)
+                .map(|detail| detail.copies.clone())
+                .unwrap_or_default(),
+        }),
         _ => None,
     }
 }
@@ -194,6 +255,8 @@ pub(super) enum Work {
     CopyPath(FileRow),
     CopyName(FileRow),
     CopyFile(FileRow),
+    /// A computed answer's further copy, by its text.
+    CopyAnswer(String),
     Trash(FileRow),
     Paste(String),
 }
@@ -203,7 +266,18 @@ pub(super) enum Work {
 /// answer, which is Enter's (the window copies).
 pub(super) fn work(own: Own, callback: &str, title: &str) -> Option<Work> {
     match own {
-        Own::Answer(text) => (callback == PASTE_ANSWER).then_some(Work::Paste(text)),
+        Own::Answer { text, copies } => {
+            if callback == PASTE_ANSWER {
+                return Some(Work::Paste(text));
+            }
+            // One of the answer's further copies: `pane.copy-answer/<n>`.
+            let copy = callback
+                .strip_prefix(COPY_ANSWER)
+                .and_then(|rest| rest.strip_prefix('/'))
+                .and_then(|index| index.parse::<usize>().ok())
+                .and_then(|index| copies.get(index))?;
+            Some(Work::CopyAnswer(copy.text.clone()))
+        }
         Own::File(file) => {
             if let Some(application) = callback
                 .strip_prefix(OPEN_WITH)
@@ -245,7 +319,9 @@ pub(super) fn primary(file: FileRow) -> Work {
 pub(super) fn begin(state: &mut State, work: &Work) {
     state.sent_from = None;
     if !matches!(work, Work::Trash(_) | Work::Paste(_)) {
-        state.view.status = Status::Running;
+        state.view.status = Status::Running {
+            since: Instant::now(),
+        };
     }
 }
 
@@ -408,6 +484,15 @@ impl Launcher {
                     Err(why) => Ended::Failed(format!("Could not copy {name}: {why}")),
                 }
             }
+            Work::CopyAnswer(text) => {
+                let system = self.system();
+                let copied = text;
+                let answer = off_thread(move || system.copy(&Clip::Text(copied), false)).await;
+                match answer {
+                    Ok(()) => Ended::Hud(COPIED.into()),
+                    Err(why) => Ended::Failed(format!("Could not copy the answer: {why}")),
+                }
+            }
             Work::Trash(file) => self.trash_file(epoch, file).await,
             Work::Paste(text) => {
                 let system = self.system();
@@ -452,7 +537,9 @@ impl Launcher {
             Err(why) => return Ended::Failed(why),
         }
         if let Some(mut state) = self.lock_if_current(epoch) {
-            state.view.status = Status::Running;
+            state.view.status = Status::Running {
+                since: Instant::now(),
+            };
         }
         let system = self.system();
         let moved = self
@@ -470,8 +557,10 @@ impl Launcher {
     }
 
     /// Checks `file` again, off the calling thread (see
-    /// `crate::files::FileAccess::checked_file`; a program or script only
-    /// where `programs`), then does `act` with its checked path there.
+    /// `crate::files::FileAccess::checked_file`, and
+    /// `crate::typed_folder::TypedFolders::checked` for an entry of the
+    /// folder the user typed, #204; a program or script only where
+    /// `programs`), then does `act` with its checked path there.
     async fn on_file(
         &self,
         file: &FileRow,
@@ -485,10 +574,18 @@ impl Launcher {
         }
         let files = self.lock().files.clone();
         let (owner, id) = (file.owner.clone(), file.id.clone());
+        // An entry of the folder the user typed is checked against its
+        // listing, rather than the package's grant.
+        let typed = file.typed;
         off_thread(move || {
             let files =
                 files.ok_or_else(|| String::from("Pane's extension runtime is unavailable"))?;
-            act(files.checked_file(&owner, &id, programs)?)
+            let checked = if typed {
+                files.typed().checked(&owner, &id, programs)?
+            } else {
+                files.checked_file(&owner, &id, programs)?
+            };
+            act(checked)
         })
         .await
     }
@@ -522,10 +619,7 @@ impl Launcher {
             };
         }
         match ended {
-            Ended::Hud(title) => self.show_hud(Hud {
-                title,
-                style: ToastStyle::Success,
-            }),
+            Ended::Hud(title) => self.show_hud(Hud::new(ToastStyle::Success, title)),
             Ended::Quiet | Ended::Failed(_) => self.changed(),
         }
     }
@@ -568,10 +662,7 @@ impl Launcher {
                     if let Some(mut state) = self.lock_if_current(epoch) {
                         state.view.status = Status::Idle;
                     }
-                    self.show_hud(Hud {
-                        title: PASTE_FALLBACK.into(),
-                        style: ToastStyle::Success,
-                    });
+                    self.show_hud(Hud::new(ToastStyle::Success, PASTE_FALLBACK));
                     return;
                 }
                 Err(why) => Some(format!("Could not copy it: {why}")),
@@ -589,10 +680,7 @@ impl Launcher {
             state.feedback.presence == WindowPresence::Hidden
         };
         match failed {
-            Some(why) if hidden => self.show_hud(Hud {
-                title: why,
-                style: ToastStyle::Failure,
-            }),
+            Some(why) if hidden => self.show_hud(Hud::new(ToastStyle::Failure, why)),
             _ => self.changed(),
         }
     }

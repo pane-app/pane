@@ -210,12 +210,13 @@ fn reloading_stops_a_pending_call_and_the_new_code_runs(fixture: &Fixture) {
     block_on(installed.launcher.reload(&installed.identity));
     pending.assert_stopped();
 
-    // The command of the old code closed; its answer never shows, not even
-    // over the new code's screens.
+    // The command's screen that was on display opens again on the new
+    // code, with its original launch record (ADR 0041); the stopped call's
+    // answer never shows, not even over the new code's screens.
     let view = installed.launcher.view();
     assert!(
-        matches!(view.screen, Screen::Root { .. }),
-        "{:?}",
+        matches!(view.screen, Screen::Command),
+        "the command's root view reopens: {:?}",
         view.screen
     );
     assert_eq!(

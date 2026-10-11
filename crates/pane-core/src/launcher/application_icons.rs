@@ -103,14 +103,28 @@ pub(super) fn shown(state: &State, id: &str) -> Icon {
 
 /// The application icon of the root row with id `row` (`<command
 /// id>:<result id>`, as a quick slot names an indexed result), when the
-/// kept result with that id opens an installed application.
+/// kept result with that id opens an installed application: its kept
+/// image, or — not there yet or failed — the reference itself with the
+/// placeholder standing in for it, the shape the window draws an icon
+/// that has not loaded in (its fallback), so the placeholder shows in the
+/// icon's place rather than as an icon of its own.
 pub(super) fn of_row(state: &State, row: &str) -> Option<Icon> {
     state
         .indexes
         .results()
         .find(|result| result.row.id == row)
         .and_then(|result| match &result.entry {
-            Entry::OpenApplication { id, .. } => Some(shown(state, id)),
+            Entry::OpenApplication { id, .. } => {
+                let shown = shown(state, id);
+                Some(if matches!(&shown.source, IconSource::Image { .. }) {
+                    shown
+                } else {
+                    Icon {
+                        fallback: Some(Box::new(shown)),
+                        ..Icon::new(IconSource::Application(id.clone()))
+                    }
+                })
+            }
             _ => None,
         })
 }

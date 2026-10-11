@@ -184,8 +184,9 @@ record that cannot be written after the data is deleted only by a Unix test.
 The smoke's alias phase (screenshots 66 to 74, [aliases and fallbacks](../aliases.md#checks))
 gives Echo, the query sample's command, the alias "ec" and makes it a
 fallback on its extension's page in Settings (its alias cell and fallback
-switch, #168), sends "ec hello" and, from the unselected
-fallback row chosen with Down, "zqx" to it, and checks that with the
+switch, #168), sends "ec hello" and "zqx" to it — the first fallback
+preselected when nothing else matches (ADR 0031), so Enter sends "zqx"
+without a move — and checks that with the
 extension disabled "ec hello" lists nothing. Nothing in it is specific to
 Windows (no system API is involved); **not run on Windows yet**.
 
@@ -618,8 +619,10 @@ zip, because a Windows user unzips with whatever is at hand — holding
 `pane.exe`, `install.ps1` and a README (the development profile, so its
 program takes its pins from `PANE_DEFAULTS`) and the application-update
 artifacts; no default-extension payload is written — first setup fetches
-the five defaults from the commits this release pins. The smoke clones
-their repositories at those commits from their real addresses on GitHub
+the eight defaults from the commits this release pins: the five that run
+everywhere plus the three Windows-only ones installed beside them on
+Windows. The smoke clones their repositories at those commits from their
+real addresses on GitHub
 (its own setup, on the runner) and serves the clones on 127.0.0.1 over
 Git's smart HTTP protocol (`scripts/repository_server.py`; nothing the
 Pane under test does reaches the network
@@ -638,7 +641,7 @@ make; a running process's own environment cannot be read on Windows, so
 what is checked is the environment `Start-Process` hands the child),
 taking its pins from the override and its artifact source from the local
 server the smoke serves the update index on. It fetches the
-five default extensions by itself, with Pane's own Git client
+eight default extensions by itself, with Pane's own Git client
 (`installed.json` must record each under
 `"default"`, with the repository, release tag, commit and pinned state of
 its pin — checked by `scripts/check_git_record.py` — and no sample: the
@@ -680,7 +683,7 @@ README answers is answered.
 
 | Step | Evidence |
 | --- | --- |
-| The clean machine's Pane acquired the five default extensions, and no sample (#162), and lists their commands | pending CI (frame 500) |
+| The clean machine's Pane acquired the eight default extensions (the five that run everywhere and the Windows-only three beside them), and no sample (#162), and lists their commands | pending CI (frame 500) |
 | "6*7" answers 42 | pending CI (frame 501) |
 | Enter copies the answer | pending CI (frame 502) |
 

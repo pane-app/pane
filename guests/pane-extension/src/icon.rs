@@ -321,10 +321,10 @@ impl Accessory {
 /// How an item looks beyond its title and subtitle.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct Look {
-    icon: Option<Icon>,
-    title_tooltip: Option<String>,
-    subtitle_tooltip: Option<String>,
-    accessories: Vec<Accessory>,
+    pub(crate) icon: Option<Icon>,
+    pub(crate) title_tooltip: Option<String>,
+    pub(crate) subtitle_tooltip: Option<String>,
+    pub(crate) accessories: Vec<Accessory>,
 }
 
 impl Item {

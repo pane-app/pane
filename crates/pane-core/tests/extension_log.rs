@@ -267,7 +267,16 @@ fn a_developed_package_logs_what_it_writes_in_order_with_levels() {
 fn a_crash_logs_the_panic_and_pane_s_own_lines_follow_it() {
     let pane = Pane::new();
     let (folder, identity) = pane.developing("sample_settings");
-    assert!(matches!(pane.run("Crash"), Status::Error(_)));
+    // A crash of a developed package shows as the error overlay (#214),
+    // over the command's view; the panic line and Pane's own are in its
+    // log either way.
+    pane.run("Crash");
+    let view = pane.launcher.view();
+    assert!(matches!(view.screen, Screen::Crash { .. }));
+    assert_eq!(view.title, "Dev crashed");
+    assert!(view.details()[0].starts_with("The extension crashed:"));
+    pane.launcher.back();
+    assert!(matches!(pane.launcher.view().screen, Screen::Command));
     let lines = pane.log(&identity);
     let panicked = written(&lines)
         .into_iter()
@@ -396,11 +405,20 @@ fn javascript_and_typescript_log_through_console_and_log_what_they_throw() {
         );
 
         // What a handler throws is the error it answers with, and is
-        // logged with its stack.
-        assert_eq!(
-            pane.run("Fail"),
-            Status::Error("The extension reported an error: failed on purpose".into()),
-            "{source}"
+        // logged with its stack: a developed package shows it as the error
+        // overlay (#214), whose trace is that stack.
+        pane.run("Fail");
+        let view = pane.launcher.view();
+        assert!(matches!(view.screen, Screen::Crash { .. }), "{source}");
+        assert_eq!(view.title, "Dev failed", "{source}");
+        let details = view.details().to_vec();
+        assert!(
+            details[0].contains("The extension reported an error: failed on purpose"),
+            "{source}: {details:?}"
+        );
+        assert!(
+            details[1..].iter().any(|line| line.contains("at ")),
+            "{source}: {details:?}"
         );
         let lines = written(&pane.log(&identity));
         let thrown = lines

@@ -9,6 +9,11 @@
 //! identity, or files of its own (`made`); nothing reaches the network or
 //! a real Git host.
 //!
+//! The pins these helpers make name no platform, so every system sets
+//! them up, as the five committed ones do; a test that needs the platform
+//! gate builds the pin itself — the fields are public, so a clone of one
+//! can name a system (`pin.platform = Some(…)`).
+//!
 //! Only these tests run `git` (the `repo_server` module does, with none
 //! of the user's configuration); Pane itself never does. The module
 //! needs `repo_server` included beside it.
@@ -111,6 +116,7 @@ pub fn made(
             repository,
             tag: tag.into(),
             commit,
+            platform: None,
         },
     )
 }

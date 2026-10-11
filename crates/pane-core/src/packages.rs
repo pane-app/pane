@@ -15,6 +15,7 @@ use std::fs;
 use std::io;
 use std::path::{Component as PathPart, Path, PathBuf};
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::arguments::{self, ManifestArgument};
@@ -433,8 +434,30 @@ use pane_build::without_verbatim_prefix;
 pub struct Manifest {
     pub title: String,
     /// What the package does, in a sentence (`"description"`): its page in
-    /// Settings shows it under the title. `None` when it does not say.
+    /// Settings, the install preview and the Extensions group in Settings
+    /// show it. `None` when it does not say.
     pub description: Option<String>,
+    /// Who wrote the package (`"author"`, #224): parsed and held for the
+    /// authoring tooling and future use; `None` when it does not say.
+    pub author: Option<String>,
+    /// The package's own page on the web (`"homepage"`, #224): `None` when
+    /// it does not say.
+    pub homepage: Option<String>,
+    /// Where the package's source lives (`"repository"`, #224): also where
+    /// "Report issue" opens when the manifest gives no `issues`; `None`
+    /// when it does not say.
+    pub repository: Option<String>,
+    /// Where the package's users should report its problems (`"issues"`,
+    /// #224): what "Report issue" opens with a prefilled report; `None`
+    /// when it does not say.
+    pub issues: Option<String>,
+    /// The package's license (`"license"`, #224), as an identifier or a
+    /// human-readable name; `None` when it does not say.
+    pub license: Option<String>,
+    /// The words a person would search for to find the package
+    /// (`"keywords"`, #224), at most [`MAX_KEYWORDS`], empty entries
+    /// dropped.
+    pub keywords: Vec<String>,
     pub version: Option<String>,
     /// The package's own icon (`"icon"`, #139): a built-in icon or an
     /// image the package ships. `None` for none, which Pane shows as a
@@ -471,6 +494,21 @@ pub struct Manifest {
     /// The preferences the package declares for all its commands
     /// (`"preferences"`; see `preferences`).
     pub preferences: Vec<Preference>,
+    /// The capabilities the package provides (`"provides"`): each a named,
+    /// versioned set of operations that other packages call through Pane by
+    /// the capability's name, without naming this package (ADR 0041).
+    pub provides: Vec<ManifestProvides>,
+    /// The capabilities the package uses (`"uses"`): the operations its
+    /// code calls through Pane by each capability's name.
+    pub uses: Vec<ManifestUse>,
+    /// The package's activation entry point (`"activate"`): the component,
+    /// relative to the package folder, that exports `activate` (ADR 0041),
+    /// which Pane calls when the package's code may run and is not
+    /// waiting, and again when the instance that ran it is dropped while
+    /// the generation continues. `None` without one: a package's code
+    /// first runs when the user asks for one of its commands (lazy
+    /// activation, ADR 0005).
+    pub activate: Option<PathBuf>,
 }
 
 /// A native helper a package ships: a prebuilt program per target (operating
@@ -567,6 +605,61 @@ pub struct ManifestOperation {
     pub platforms: Option<Vec<Platform>>,
 }
 
+/// A capability a package provides (`"provides"` in its `pane.json`): a
+/// named, versioned set of operations that other packages call through Pane
+/// by the capability's name, such as `acme:translate@1`, instead of by this
+/// package's identity (ADR 0041). The component named there serves them
+/// through the export that serves published operations, with each operation
+/// qualified by its capability; a capability's operations are reached only
+/// through the capability, unless the package publishes them in
+/// `operations` too.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ManifestProvides {
+    /// The capability's name, `<namespace>:<name>@<major>`.
+    pub capability: String,
+    /// The component serving it, relative to the package folder.
+    pub component: PathBuf,
+    /// The operations the capability is made of.
+    pub operations: Vec<String>,
+    /// The operating systems it works on; `None` for every system the
+    /// package supports. Elsewhere the package does not provide the
+    /// capability.
+    pub platforms: Option<Vec<Platform>>,
+    /// Whether the package provides it only at run time (`"atRunTime"`):
+    /// only while its code holds a provision for it, as an owned
+    /// registration (#158). The capability is still known from the
+    /// manifest, so install plans, cycles and Settings work from the
+    /// manifest alone; a provision the manifest does not declare and
+    /// mark is refused.
+    pub at_run_time: bool,
+}
+
+/// A capability a package uses (`"uses"` in its `pane.json`): the operations
+/// its code calls through Pane by the capability's name, never naming the
+/// package that serves them.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ManifestUse {
+    pub capability: String,
+    /// The operations the package calls, each reached only through the
+    /// capability.
+    pub operations: Vec<String>,
+    /// Whether the package needs it (the default) or only uses it when some
+    /// installed package provides it (`"optional": true`).
+    pub required: bool,
+    /// Whether the package calls one provider (`"use": "one"`, the default)
+    /// or every provider (`"all"`). Read and checked here; fanning a call
+    /// out to every provider comes later.
+    pub use_all: bool,
+    /// A provider Pane installs when no installed package provides the
+    /// capability, written as a dependency's source is. Read and checked
+    /// here; installing a default comes later.
+    pub default: Option<String>,
+    /// The manifest ids of the commands that need the capability; `None`
+    /// when the whole package needs it. Read and checked here; commands
+    /// waiting for a capability come later.
+    pub commands: Option<Vec<String>>,
+}
+
 /// The scheduled work a command declares: every `every_seconds` seconds
 /// while the package's code may run (see `launcher/schedules`), the action
 /// of its component's item `item` runs (a view command), or the command
@@ -586,7 +679,8 @@ pub struct ManifestSchedule {
 /// What a command does when it is launched (`"mode"` in its `pane.json`
 /// entry, ADR 0037). Pane reads it from the manifest, so it knows at Enter
 /// whether to open a screen without running any guest code.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
 pub enum CommandMode {
     /// `"view"`, also the mode of a command whose entry does not say: it
     /// opens a screen, its list (`render`).
@@ -609,6 +703,58 @@ pub enum CommandMode {
     Provider,
 }
 
+/// When root search lists a command (`"when"` in its `pane.json` entry,
+/// #195). The default, `Always`, is what commands did before: a row with
+/// a blank query and whenever the query matches it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum CommandWhen {
+    /// `"always"`, also the `when` of a command whose entry does not say
+    /// one: the command's row is listed with a blank query and while the
+    /// user searches.
+    #[default]
+    Always,
+    /// `"blank"`: only while nothing is typed, so the command is never
+    /// found by a query, however well it matches.
+    Blank,
+    /// `"searching"`: only while the user types something, so the blank
+    /// query's list does not hold it.
+    Searching,
+}
+
+impl CommandWhen {
+    /// Whether a command with this `when` is listed while the query is
+    /// blank (`true`) or has text (`false`).
+    pub fn listed(self, blank: bool) -> bool {
+        match (self, blank) {
+            (CommandWhen::Always, _) => true,
+            (CommandWhen::Blank, true) => true,
+            (CommandWhen::Blank, false) => false,
+            (CommandWhen::Searching, true) => false,
+            (CommandWhen::Searching, false) => true,
+        }
+    }
+}
+
+/// What root search matches a command's row by (`"matches"` in its
+/// `pane.json` entry, #195). The default, `Title`, is what commands did
+/// before.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum CommandMatches {
+    /// `"title"`, also the `matches` of a command whose entry does not say
+    /// one: the row is listed when the query matches its title, subtitle
+    /// or package title, as ever.
+    #[default]
+    Title,
+    /// `"url"`: only for a query that is a typed web address, which the
+    /// row is sent as its launch record's fallback text when invoked;
+    /// never matched by title.
+    Url,
+    /// `"file-path"`: only for a path-like query, resolved and sent as
+    /// its launch record's fallback text when invoked; never matched by
+    /// title.
+    FilePath,
+}
+
 /// The shortest interval a command's schedule may declare: 1 second.
 /// Provisional (#47), pending the user's decision on scheduling intervals.
 pub const MIN_SCHEDULE_SECONDS: u64 = 1;
@@ -620,6 +766,9 @@ pub const MAX_SCHEDULE_SECONDS: u64 = 30 * 86_400;
 
 /// The longest item id a command's schedule may name, in characters.
 const MAX_SCHEDULE_ITEM: usize = 256;
+
+/// The most keywords a package's manifest may list.
+pub const MAX_KEYWORDS: usize = 20;
 
 /// A command a package contributes to root search.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -645,6 +794,18 @@ pub struct ManifestCommand {
     /// Whether it opens a screen, runs without one, or only answers root
     /// search (`"mode"`; `view` when the entry does not say).
     pub mode: CommandMode,
+    /// The keywords the command declares (`"keywords"`, #197), which
+    /// find its row in root search as its subtitle does: an author's
+    /// search terms, distinct from the user's aliases.
+    pub keywords: Vec<String>,
+    /// When root search lists the command (`"when"`, #195; `Always` when
+    /// the entry does not say one).
+    pub when: CommandWhen,
+    /// What root search matches the command's row by (`"matches"`, #195;
+    /// `Title` when the entry does not say one): its title as usual, or
+    /// only URL-like or path-like queries, which the row is then sent as
+    /// its launch record's fallback text when invoked.
+    pub matches: CommandMatches,
     /// Whether the command takes a query (`"takesQuery": true`): text typed
     /// into root search that Pane sends it when the user invokes it through
     /// its alias or as a fallback, as its launch record's fallback text.
@@ -684,112 +845,338 @@ impl ManifestCommand {
     }
 }
 
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct ManifestJson {
+#[derive(Deserialize, JsonSchema)]
+#[serde(rename = "Manifest", rename_all = "camelCase")]
+pub(crate) struct ManifestJson {
+    /// The name the package is known by, in Title Case: root search and the
+    /// extension's page in Settings show it. Not empty.
     title: String,
+    /// What the package does, in a sentence: Pane shows it in the install
+    /// preview and in the Extensions group in Settings. Empty when it does
+    /// not say.
     #[serde(default)]
     description: Option<String>,
+    /// Who wrote the package, as people write it ("Ada Lovelace"). Empty
+    /// when it does not say.
+    #[serde(default)]
+    author: Option<String>,
+    /// The package's own page on the web, which people can open to read
+    /// more about it. Empty when it does not say.
+    #[serde(default)]
+    homepage: Option<String>,
+    /// Where the package's source lives (a web page or a Git repository
+    /// address); also where "Report issue" opens when the manifest gives
+    /// no `issues`. Empty when it does not say.
+    #[serde(default)]
+    repository: Option<String>,
+    /// Where the package's users should report its problems, which "Report
+    /// issue" opens with a prefilled report. Empty when it does not say;
+    /// Pane then falls back to `repository`.
+    #[serde(default)]
+    issues: Option<String>,
+    /// The package's license, as an identifier ("MIT", "Apache-2.0") or a
+    /// human-readable name. Empty when it does not say.
+    #[serde(default)]
+    license: Option<String>,
+    /// The words a person would search for to find the package, one word or
+    /// short phrase each: at most 20, and empty entries are ignored.
+    #[serde(default)]
+    #[schemars(schema_with = "crate::schema::keywords")]
+    keywords: Vec<String>,
+    /// The package's own version, as dotted numbers ("1.2.0"): Pane shows
+    /// it in the install preview and on the extension's page. Empty when it
+    /// does not say.
     #[serde(default)]
     version: Option<String>,
-    /// Checked by [`icons::parse_manifest_icon`].
+    /// What the package's own icon is: a built-in icon's name, or an
+    /// image the package ships. Without one, Pane draws a tile from the
+    /// package's first letter; a published extension's icon is a
+    /// 512×512 image.
     #[serde(default)]
+    #[schemars(with = "Option<crate::schema::Icon>")]
     icon: Option<serde_json::Value>,
+    /// The extension API the package needs, such as "0.1": the version of
+    /// Pane's `pane:extension` interface it was built against. Every
+    /// breaking change to that interface gets a new version.
     api_version: String,
+    /// The operating systems the package supports: `windows`, `macos` and
+    /// `linux`. Without the field it supports every system; an empty list
+    /// supports none, and a package that does not support this system is
+    /// explained instead of installed.
     #[serde(default)]
+    #[schemars(with = "Option<Vec<crate::schema::PlatformId>>")]
     platforms: Option<Vec<String>>,
+    /// What the package contributes to root search. A package needs at
+    /// least one command or one operation.
     #[serde(default)]
     commands: Vec<CommandJson>,
+    /// The operations the package publishes for other extensions to call
+    /// through Pane. Only these are callable: a command is not an
+    /// operation.
     #[serde(default)]
     operations: Vec<OperationJson>,
+    /// The native helpers the package ships: a prebuilt program per
+    /// operating system and processor, which its commands run by name
+    /// through Pane.
     #[serde(default)]
     helpers: Vec<HelperJson>,
+    /// The other packages whose operations this one calls, required or
+    /// optional.
     #[serde(default)]
     dependencies: Vec<DependencyJson>,
+    /// The package asks for access to one folder the user chooses: Pane
+    /// offers its own "Choose folder" row in the package's commands, and
+    /// lists only that folder for it.
     #[serde(default)]
     folder_access: bool,
+    /// The package uses Pane's file index: Pane keeps the index of the home
+    /// folder open, caught up and watched while at least one enabled,
+    /// unpaused package says so, and its commands may search it.
     #[serde(default)]
     file_index: bool,
+    /// The preferences the package declares for all its commands: typed
+    /// fields whose values the user sets in Pane and the commands read.
     #[serde(default)]
+    #[schemars(with = "Vec<crate::schema::Preference>")]
     preferences: Vec<serde_json::Value>,
+    /// The capabilities the package provides (`"provides"`): each a
+    /// named, versioned set of operations that other packages call
+    /// through Pane by the capability's name, such as `acme:translate@1`,
+    /// instead of by this package's identity (ADR 0041).
+    #[serde(default)]
+    provides: Vec<ProvidesJson>,
+    /// The capabilities the package uses (`"uses"`): the operations its
+    /// code calls through Pane by the capability's name, never naming the
+    /// package that serves them.
+    #[serde(default)]
+    uses: Vec<UsesJson>,
+    /// The package's activation entry point (`"activate"`): the component,
+    /// relative to the package folder, that exports `activate` (ADR 0041),
+    /// called when its code may run so its registrations exist without
+    /// waiting for the user.
+    #[serde(default)]
+    activate: Option<String>,
 }
 
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct HelperJson {
+#[derive(Deserialize, JsonSchema)]
+#[serde(rename = "Helper", deny_unknown_fields)]
+pub(crate) struct HelperJson {
+    /// The name the package's commands run the helper by, through Pane.
     id: String,
+    /// The helper's file for each system it is built for, relative to the
+    /// package folder: keyed by target, such as `linux-x86_64` or
+    /// `macos-aarch64`. At least one.
+    #[schemars(schema_with = "crate::schema::targets")]
     targets: BTreeMap<String, String>,
 }
 
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct DependencyJson {
+#[derive(Deserialize, JsonSchema)]
+#[serde(rename = "Dependency", deny_unknown_fields)]
+pub(crate) struct DependencyJson {
+    /// The name the package's code calls the dependency by in place of its
+    /// package identity: unique in the package; lowercase letters, digits
+    /// and `-`.
     id: String,
+    /// Where the dependency is installed from: `local:` and a folder path
+    /// separated by `/`, relative to this package's folder or absolute;
+    /// `npm:` and a package name with an optional exact version
+    /// (`npm:@scope/name@1.2.3`); or `git:` and a repository with an
+    /// optional reference. Other sources are not supported yet.
     source: String,
+    /// Whether the package only uses the dependency when the user installed
+    /// it; the default is to need it, and installing the package installs
+    /// its missing required dependencies with it.
     #[serde(default)]
     optional: bool,
+    /// The operations the package calls, each at the version it calls: the
+    /// dependency is compatible when it publishes all of them.
     operations: Vec<RequiredOperationJson>,
+    /// The operating systems on which the package needs it; without the
+    /// field, every system. Elsewhere it is neither installed nor checked.
     #[serde(default)]
+    #[schemars(with = "Option<Vec<crate::schema::PlatformId>>")]
     platforms: Option<Vec<String>>,
 }
 
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct RequiredOperationJson {
+#[derive(Deserialize, JsonSchema)]
+#[serde(rename = "RequiredOperation", deny_unknown_fields)]
+pub(crate) struct RequiredOperationJson {
+    /// The id of the operation the package calls, as the dependency
+    /// publishes it.
     id: String,
+    /// The version of the operation's input and result the package was
+    /// written for, from 1: any other is refused.
     version: u32,
 }
 
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct OperationJson {
+#[derive(Deserialize, JsonSchema)]
+#[serde(rename = "Operation", deny_unknown_fields)]
+pub(crate) struct OperationJson {
+    /// The operation's id, unique in the package: other extensions call the
+    /// operation by the package's source, this id and its version.
     id: String,
+    /// The version of the operation's input and result: a caller names the
+    /// version it was written for, and any other is refused. From 1; a
+    /// change that breaks callers publishes a new version.
     version: u32,
+    /// The component serving the operation, relative to the package folder;
+    /// often a command's component too.
     component: String,
+    /// The operating systems the operation works on; without the field,
+    /// every system the package supports. Elsewhere a call to it is
+    /// unavailable.
     #[serde(default)]
+    #[schemars(with = "Option<Vec<crate::schema::PlatformId>>")]
     platforms: Option<Vec<String>>,
 }
 
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct CommandJson {
+#[derive(Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ProvidesJson {
+    /// The capability's name, `<namespace>:<name>@<major>`.
+    capability: String,
+    /// The component serving it, relative to the package folder.
+    component: String,
+    /// The operations the capability is made of.
+    operations: Vec<String>,
+    /// The operating systems it works on; without the field, every system
+    /// the package supports. Elsewhere the package does not provide the
+    /// capability.
+    #[serde(default)]
+    platforms: Option<Vec<String>>,
+    /// Whether the package provides it only at run time (`"atRunTime"`):
+    /// only while its code holds a provision for it, as an owned
+    /// registration (#158). The capability is still known from the
+    /// manifest, so install plans, cycles and Settings work from the
+    /// manifest alone; a provision the manifest does not declare and
+    /// mark is refused.
+    #[serde(default)]
+    at_run_time: bool,
+}
+
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct UsesJson {
+    /// The capability's name, `<namespace>:<name>@<major>`.
+    capability: String,
+    /// The operations the package calls, each reached only through the
+    /// capability.
+    operations: Vec<String>,
+    /// Whether the package needs it (the default) or only uses it when some
+    /// installed package provides it (`"optional": true`).
+    #[serde(default)]
+    optional: bool,
+    /// Whether the package calls one provider (`"use": "one"`, the
+    /// default) or every provider (`"all"`).
+    #[serde(default)]
+    r#use: Option<String>,
+    /// A provider Pane installs when no installed package provides the
+    /// capability, written as a dependency's source is.
+    #[serde(default)]
+    default: Option<String>,
+    /// The manifest ids of the commands that need the capability; without
+    /// the field, the whole package needs it.
+    #[serde(default)]
+    commands: Option<Vec<String>>,
+}
+
+#[derive(Deserialize, JsonSchema)]
+#[serde(rename = "Command", rename_all = "camelCase")]
+pub(crate) struct CommandJson {
+    /// The command's id in the package, unique among its commands and
+    /// without `#`: Pane's own records name the command by it.
     id: String,
+    /// The command's name in root search, in Title Case. Not empty.
     title: String,
+    /// One line under the title in root search, saying what the command
+    /// does. Empty when it does not say.
     #[serde(default)]
     subtitle: Option<String>,
-    /// Checked by [`icons::parse_manifest_icon`].
+    /// The command's own icon, drawn instead of the package's: a built-in
+    /// icon's name, or an image the package ships.
     #[serde(default)]
+    #[schemars(with = "Option<crate::schema::Icon>")]
     icon: Option<serde_json::Value>,
+    /// The command's component, relative to the package folder: the
+    /// WebAssembly component Pane runs for it. Not empty, and inside the
+    /// package folder.
     component: String,
+    /// The operating systems the command supports; without the field,
+    /// every system the package supports. Elsewhere it is listed as
+    /// unavailable.
     #[serde(default)]
+    #[schemars(with = "Option<Vec<crate::schema::PlatformId>>")]
     platforms: Option<Vec<String>>,
+    /// What the command does when it is launched: `view` (it opens a
+    /// screen, the default), `no-view` (it runs without one) or `provider`
+    /// (it only answers root search through its `rootResults` or
+    /// `indexedResults`, and is never launched).
     #[serde(default)]
+    #[schemars(with = "Option<CommandMode>")]
     mode: Option<String>,
+    /// The command computes root results from root search's query, such as
+    /// a calculator's answer: its component then also exports
+    /// `pane:extension/root-results`.
+    #[serde(default)]
+    keywords: Vec<String>,
+    #[serde(default)]
+    when: Option<String>,
+    #[serde(default)]
+    matches: Option<String>,
     #[serde(default)]
     root_results: bool,
+    /// The command supplies root results ahead of the query, such as the
+    /// installed applications: its component then also exports
+    /// `pane:extension/indexed-results`.
     #[serde(default)]
     indexed_results: bool,
+    /// The command takes a query: text typed into root search that Pane
+    /// sends it when the user invokes it through its alias or as a
+    /// fallback, as its launch record's fallback text.
     #[serde(default)]
     takes_query: bool,
+    /// The command searches as the user types into its own search field
+    /// once it is open, such as a command searching an online service; root
+    /// search never asks it. Its component then also exports
+    /// `pane:extension/command-search`.
     #[serde(default)]
     search: bool,
+    /// The scheduled work the command declares, if any: every
+    /// `everySeconds` seconds while the package's code may run, Pane runs
+    /// the action of `item` (a view command) or the command itself in the
+    /// background (a no-view command, which names no item).
     #[serde(default)]
     schedule: Option<ScheduleJson>,
+    /// The command runs a continuing service: while the package's code may
+    /// run, Pane calls the component's `run-cycle` export in a cycle the
+    /// service itself paces, with no interval the manifest declares.
     #[serde(default)]
     service: bool,
+    /// The preferences the command declares for itself, besides the
+    /// package's: typed fields whose values the user sets in Pane and the
+    /// command reads. A name the package or another command already
+    /// declares is refused.
     #[serde(default)]
+    #[schemars(with = "Vec<crate::schema::Preference>")]
     preferences: Vec<serde_json::Value>,
-    /// Checked by `arguments::parse`, which says what is wrong in Pane's
-    /// words.
+    /// The typed values the command asks for before each run, in the order
+    /// its fields show them: at most three, each with a `name` and a `type`
+    /// of `text`, `password` or `dropdown`.
     #[serde(default)]
+    #[schemars(schema_with = "crate::schema::arguments")]
     arguments: Option<serde_json::Value>,
 }
 
 /// A command's `schedule`, as `pane.json` writes it.
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct ScheduleJson {
+#[derive(Deserialize, JsonSchema)]
+#[serde(rename = "Schedule", rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct ScheduleJson {
+    /// How often the work runs, in seconds: from 1 to 2,592,000 (30 days).
     every_seconds: u64,
+    /// The id of the item whose action runs, for a view command: Pane asks
+    /// for the command's tree and runs that item's action, as choosing it
+    /// would. A no-view command names no `item`; Pane runs the command
+    /// itself.
     #[serde(default)]
     item: Option<String>,
 }
@@ -906,8 +1293,9 @@ impl Manifest {
     }
 
     /// Every component the manifest names, relative to the package folder,
-    /// with what it serves as people know it: a command's title, or
-    /// "operation `<id>`". A component serving several appears once per use.
+    /// with what it serves as people know it: a command's title, "operation
+    /// `<id>`" or "capability `<name>`". A component serving several appears
+    /// once per use.
     pub(crate) fn components(&self) -> impl Iterator<Item = (String, &Path)> {
         let commands = self
             .commands
@@ -919,7 +1307,20 @@ impl Manifest {
                 operation.component.as_path(),
             )
         });
-        commands.chain(operations)
+        let capabilities = self.provides.iter().map(|provides| {
+            (
+                format!("capability `{}`", provides.capability),
+                provides.component.as_path(),
+            )
+        });
+        let activate = self
+            .activate
+            .as_deref()
+            .map(|component| ("the package's activation entry point".to_owned(), component));
+        commands
+            .chain(operations)
+            .chain(capabilities)
+            .chain(activate)
     }
 
     /// What `component` exports besides `command`, as the manifest says.
@@ -937,7 +1338,12 @@ impl Manifest {
             operations: self
                 .operations
                 .iter()
-                .any(|operation| operation.component == component),
+                .any(|operation| operation.component == component)
+                || self
+                    .provides
+                    .iter()
+                    .any(|provides| provides.component == component),
+            activate: self.activate.as_deref() == Some(component),
         }
     }
 
@@ -973,8 +1379,12 @@ impl Manifest {
         let platforms = parse_platforms(json.platforms, "`platforms`")?;
         let package_preferences =
             preferences::parse(json.preferences, "the package", &[]).map_err(invalid)?;
-        if json.commands.is_empty() && json.operations.is_empty() {
-            return Err(invalid("`commands` is empty".into()));
+        if json.commands.is_empty() && json.operations.is_empty() && json.provides.is_empty() {
+            return Err(invalid(
+                "`commands` is empty and the package provides no capability; declare a command, an \
+                 operation or a capability it provides"
+                    .into(),
+            ));
         }
         let mut commands = Vec::new();
         for command in json.commands {
@@ -1023,6 +1433,33 @@ impl Manifest {
             if mode == CommandMode::Provider {
                 check_provider(&command)?;
             }
+            let when = match command.when.as_deref() {
+                None | Some("always") => CommandWhen::Always,
+                Some("blank") => CommandWhen::Blank,
+                Some("searching") => CommandWhen::Searching,
+                Some(other) => {
+                    return Err(invalid(format!(
+                        "command `{}` has the when \"{}\"; a command's `when` is \"always\" \
+                         (the default), \"blank\" (only while nothing is typed) or \
+                         \"searching\" (only while something is)",
+                        command.id,
+                        other.escape_debug()
+                    )));
+                }
+            };
+            let matches = match command.matches.as_deref() {
+                None | Some("title") => CommandMatches::Title,
+                Some("url") => CommandMatches::Url,
+                Some("file-path") => CommandMatches::FilePath,
+                Some(other) => {
+                    return Err(invalid(format!(
+                        "command `{}` has the matches \"{}\"; a command's `matches` is \
+                         \"title\" (the default), \"url\" or \"file-path\"",
+                        command.id,
+                        other.escape_debug()
+                    )));
+                }
+            };
             let schedule = command
                 .schedule
                 .map(|schedule| parse_schedule(&command.id, mode, schedule))
@@ -1053,7 +1490,10 @@ impl Manifest {
                 icon,
                 component,
                 platforms,
+                keywords: command.keywords,
                 mode,
+                when,
+                matches,
                 root_results: command.root_results,
                 indexed_results: command.indexed_results,
                 takes_query: command.takes_query,
@@ -1129,12 +1569,24 @@ impl Manifest {
             });
         }
         let dependencies = parse_dependencies(json.dependencies)?;
+        let keywords = parse_keywords(json.keywords)?;
+        let provides = parse_provides(json.provides)?;
+        let uses = parse_uses(json.uses, &commands)?;
+        let activate = json
+            .activate
+            .as_deref()
+            .filter(|component| !component.trim().is_empty())
+            .map(|component| inside_package(component, "activate"))
+            .transpose()?;
         Ok(Manifest {
             title: json.title,
-            description: json
-                .description
-                .map(|description| description.trim().to_owned())
-                .filter(|description| !description.is_empty()),
+            description: trimmed(json.description),
+            author: trimmed(json.author),
+            homepage: trimmed(json.homepage),
+            repository: trimmed(json.repository),
+            issues: trimmed(json.issues),
+            license: trimmed(json.license),
+            keywords,
             version: json.version,
             icon,
             api_version: json.api_version,
@@ -1146,6 +1598,9 @@ impl Manifest {
             folder_access: json.folder_access,
             file_index: json.file_index,
             preferences: package_preferences,
+            provides,
+            uses,
+            activate,
         })
     }
 
@@ -1154,6 +1609,27 @@ impl Manifest {
         self.dependencies
             .iter()
             .find(|dependency| dependency.id == id)
+    }
+
+    /// Checks the `default` of each use for a package read from `from` (npm,
+    /// Git or Pane's own downloads): such a package cannot name a `local:`
+    /// folder, whose path is on its author's computer, not the user's, as a
+    /// dependency's source cannot.
+    fn check_published_uses(&self, from: &str) -> Result<(), PackageError> {
+        for used in &self.uses {
+            let Some(source) = &used.default else {
+                continue;
+            };
+            if matches!(SourceSpec::parse(source), Ok(SourceSpec::Local(_))) {
+                return Err(PackageError::InvalidManifest(format!(
+                    "the default `{source}` of the use of `{}` names a local folder, but a \
+                     package from {from} can name only `npm:` and `git:` sources, whose \
+                     packages are published, not a folder on its author's computer",
+                    used.capability
+                )));
+            }
+        }
+        Ok(())
     }
 }
 
@@ -1302,32 +1778,41 @@ impl SourceSpec {
 /// relative or absolute from `/`, never with `\`, a drive letter or a
 /// `//server` share, which one system would read differently from another.
 fn check_source(source: &str, id: &str) -> Result<(), PackageError> {
-    let invalid = |reason: &str| {
-        Err(PackageError::InvalidManifest(format!(
+    match source_problem(source) {
+        None => Ok(()),
+        Some(reason) => Err(PackageError::InvalidManifest(format!(
             "the source `{source}` of dependency `{id}` {reason}"
-        )))
-    };
+        ))),
+    }
+}
+
+/// Why `source` is not a source as a manifest writes it, as a dependency's
+/// source and a use's `default` are: the reason for the caller to name in
+/// its message; `None` when it is one.
+fn source_problem(source: &str) -> Option<String> {
     let path = match SourceSpec::parse(source) {
-        Ok(SourceSpec::Npm(_) | SourceSpec::Git(_)) => return Ok(()),
+        Ok(SourceSpec::Npm(_) | SourceSpec::Git(_)) => return None,
         Ok(SourceSpec::Local(path)) => path,
-        Err(SourceError::Npm(why)) => return invalid(&format!("is not an npm package: {why}")),
-        Err(SourceError::Git(why)) => return invalid(&format!("is not a Git repository: {why}")),
+        Err(SourceError::Npm(why)) => return Some(format!("is not an npm package: {why}")),
+        Err(SourceError::Git(why)) => return Some(format!("is not a Git repository: {why}")),
         Err(SourceError::UnknownKind) => {
-            return invalid(
+            return Some(
                 "must be `local:` followed by a folder path, `npm:` followed by a package name \
-                 or `git:` followed by a repository; other sources are not supported yet",
+                 or `git:` followed by a repository; other sources are not supported yet"
+                    .into(),
             );
         }
     };
     if path.is_empty() {
-        return invalid("must be `local:` followed by a folder path");
+        return Some("must be `local:` followed by a folder path".into());
     }
     let drive =
         path.len() >= 2 && path.as_bytes()[1] == b':' && path.as_bytes()[0].is_ascii_alphabetic();
     if path.contains('\\') || drive || path.starts_with("//") {
-        return invalid(
+        return Some(
             "must separate folders with `/`, without a drive letter, `\\` or a `//server` \
-             share, so that every system reads it alike (such as `local:../greeter`)",
+             share, so that every system reads it alike (such as `local:../greeter`)"
+                .into(),
         );
     }
     // A `#` may name one extension of a collection at the folder the source
@@ -1336,12 +1821,39 @@ fn check_source(source: &str, id: &str) -> Result<(), PackageError> {
     if let Some((_, id)) = path.rsplit_once('#')
         && !crate::collections::is_id(id)
     {
-        return invalid(&format!(
+        return Some(format!(
             "names the extension id `{id}` of a collection, which must be lowercase letters, \
              digits and `-`"
         ));
     }
-    Ok(())
+    None
+}
+
+/// `text` as a manifest's optional text field holds it: trimmed, with an
+/// empty answer read as the field's absence (as `description` always was).
+fn trimmed(text: Option<String>) -> Option<String> {
+    text.map(|text| text.trim().to_owned())
+        .filter(|text| !text.is_empty())
+}
+
+/// The `keywords` of a manifest, checked: at most
+/// [`MAX_KEYWORDS`], each trimmed, empty ones dropped (an empty entry reads
+/// as its absence, as an empty `description` does).
+fn parse_keywords(keywords: Vec<String>) -> Result<Vec<String>, PackageError> {
+    let keywords: Vec<String> = keywords
+        .into_iter()
+        .map(|keyword| keyword.trim().to_owned())
+        .filter(|keyword| !keyword.is_empty())
+        .collect();
+    if keywords.len() > MAX_KEYWORDS {
+        return Err(PackageError::InvalidManifest(format!(
+            "`keywords` lists {} entries; at most {} — keep it to the words a person would \
+             search for",
+            keywords.len(),
+            MAX_KEYWORDS
+        )));
+    }
+    Ok(keywords)
 }
 
 fn parse_dependencies(json: Vec<DependencyJson>) -> Result<Vec<ManifestDependency>, PackageError> {
@@ -1398,6 +1910,174 @@ fn parse_dependencies(json: Vec<DependencyJson>) -> Result<Vec<ManifestDependenc
         });
     }
     Ok(dependencies)
+}
+
+/// Why `capability` is not a capability name, if it is not
+/// `<namespace>:<name>@<major>` with lowercase letters, digits and `-` in the
+/// namespace and the name and a positive major version: the one grammar of
+/// capability names (ADR 0041). `None` when it is one.
+pub(crate) fn capability_problem(capability: &str) -> Option<String> {
+    let part = |part: &str| {
+        !part.is_empty()
+            && part
+                .chars()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+    };
+    let problem = match capability.split_once(':') {
+        None => "it has no `:` separating the namespace from the name".to_owned(),
+        Some((namespace, rest)) => match rest.split_once('@') {
+            None => "it has no `@` and a major version".to_owned(),
+            Some((name, major)) => {
+                if !major.bytes().all(|b| b.is_ascii_digit())
+                    || major.parse::<u64>().is_err()
+                    || major == "0"
+                {
+                    format!("its major version `{major}` is not a number from 1")
+                } else if !part(namespace) {
+                    format!("its namespace `{namespace}` must be lowercase letters, digits and `-`")
+                } else if !part(name) {
+                    format!("its name `{name}` must be lowercase letters, digits and `-`")
+                } else {
+                    return None;
+                }
+            }
+        },
+    };
+    Some(format!(
+        "the capability name `{capability}` is malformed ({problem}); a capability is \
+         `<namespace>:<name>@<major>`, such as `acme:translate@1`, with lowercase letters, \
+         digits and `-` and a major version from 1"
+    ))
+}
+
+/// The operations `entry` lists, as its `operations` are written: unique and
+/// named, or why the manifest is invalid. `what` names the entry in the
+/// message, such as "the capability `acme:translate@1`".
+fn parse_capability_operations(
+    operations: Vec<String>,
+    what: &str,
+) -> Result<Vec<String>, PackageError> {
+    let invalid = |message: String| PackageError::InvalidManifest(message);
+    let mut named: Vec<String> = Vec::new();
+    for operation in operations {
+        if operation.is_empty() {
+            return Err(invalid(format!(
+                "{what} lists an operation with no name; every operation needs a name"
+            )));
+        }
+        if named.contains(&operation) {
+            return Err(invalid(format!(
+                "the operation `{operation}` of {what} is listed twice"
+            )));
+        }
+        named.push(operation);
+    }
+    if named.is_empty() {
+        return Err(invalid(format!(
+            "{what} lists no `operations`; name those it is made of"
+        )));
+    }
+    Ok(named)
+}
+
+fn parse_provides(json: Vec<ProvidesJson>) -> Result<Vec<ManifestProvides>, PackageError> {
+    let invalid = |message: String| PackageError::InvalidManifest(message);
+    let mut provides: Vec<ManifestProvides> = Vec::new();
+    for entry in json {
+        if let Some(problem) = capability_problem(&entry.capability) {
+            return Err(invalid(problem));
+        }
+        let what = format!("the capability `{}`", entry.capability);
+        // A package may provide several majors of one capability, one entry
+        // each; the same major twice would be two providers of one thing.
+        if provides
+            .iter()
+            .any(|seen| seen.capability == entry.capability)
+        {
+            return Err(invalid(format!(
+                "{what} is provided twice; declare each capability, at each major version, \
+                 once"
+            )));
+        }
+        let operations = parse_capability_operations(entry.operations, &what)?;
+        let platforms = parse_platforms(entry.platforms, &format!("`platforms` of {what}"))?;
+        provides.push(ManifestProvides {
+            capability: entry.capability,
+            component: inside_package(&entry.component, "component")?,
+            operations,
+            platforms,
+            at_run_time: entry.at_run_time,
+        });
+    }
+    Ok(provides)
+}
+
+fn parse_uses(
+    json: Vec<UsesJson>,
+    commands: &[ManifestCommand],
+) -> Result<Vec<ManifestUse>, PackageError> {
+    let invalid = |message: String| PackageError::InvalidManifest(message);
+    let mut uses: Vec<ManifestUse> = Vec::new();
+    for entry in json {
+        if let Some(problem) = capability_problem(&entry.capability) {
+            return Err(invalid(problem));
+        }
+        let what = format!("the use of `{}`", entry.capability);
+        if uses.iter().any(|seen| seen.capability == entry.capability) {
+            return Err(invalid(format!(
+                "{what} is declared twice; declare each capability once, with every operation \
+                 it calls"
+            )));
+        }
+        let operations = parse_capability_operations(entry.operations, &what)?;
+        let use_all = match entry.r#use.as_deref() {
+            None | Some("one") => false,
+            Some("all") => true,
+            Some(other) => {
+                return Err(invalid(format!(
+                    "{what} has \"use\": \"{}\"; `use` is \"one\" (the default: call one \
+                     provider) or \"all\" (call every provider)",
+                    other.escape_debug()
+                )));
+            }
+        };
+        if let Some(default) = &entry.default
+            && let Some(reason) = source_problem(default)
+        {
+            return Err(invalid(format!(
+                "the default `{default}` of {what} {reason}"
+            )));
+        }
+        let entry_commands = match entry.commands {
+            None => None,
+            Some(named) if named.is_empty() => {
+                return Err(invalid(format!(
+                    "the `commands` of {what} is empty; remove `commands` to need the \
+                     capability for the whole package, or name the commands that need it"
+                )));
+            }
+            Some(named) => {
+                for command in &named {
+                    if !commands.iter().any(|declared| declared.id == *command) {
+                        return Err(invalid(format!(
+                            "the `commands` of {what} names `{command}`, which the package \
+                             does not declare as a command"
+                        )));
+                    }
+                }
+                Some(named)
+            }
+        };
+        uses.push(ManifestUse {
+            capability: entry.capability,
+            operations,
+            required: !entry.optional,
+            use_all,
+            default: entry.default,
+            commands: entry_commands,
+        });
+    }
+    Ok(uses)
 }
 
 /// `file` (a `what`, such as a component) as a path, if it is a relative
@@ -1710,6 +2390,7 @@ impl SourcePackage {
             }
             Err(error) => return Err(error),
         };
+        manifest.check_published_uses("npm")?;
         Ok(SourcePackage {
             identity: PackageIdentity::npm(&name),
             folder,
@@ -1911,6 +2592,7 @@ impl SourcePackage {
             }
             Err(error) => return Err(error),
         };
+        manifest.check_published_uses("Git")?;
         for (_, component) in manifest.components() {
             let path = component.to_string_lossy().replace('\\', "/");
             if origin.lfs_pointers.contains(&path) {
@@ -1975,6 +2657,7 @@ impl SourcePackage {
             }
             Err(error) => return Err(error),
         };
+        manifest.check_published_uses("Pane's own downloads")?;
         for (_, component) in manifest.components() {
             let path = component.to_string_lossy().replace('\\', "/");
             if origin.lfs_pointers.contains(&path) {
@@ -2542,6 +3225,9 @@ impl InstalledPackage {
                     component: self.location.join(&command.component),
                     takes_query: command.accepts_fallback_text(),
                     search: command.search,
+                    keywords: command.keywords.clone(),
+                    when: command.when,
+                    matches: command.matches,
                 };
                 let unavailable = package.clone().or_else(|| {
                     platform::unavailable(command.platforms.as_deref(), "this command")
@@ -3616,7 +4302,17 @@ fn copy_package(package: &SourcePackage, location: &Path) -> io::Result<()> {
             // never see it half-written and get Linux's `ETXTBSY`.
             runner::copy_executable(&source, &target)?;
         } else {
-            fs::copy(source, target)?;
+            fs::copy(&source, &target)?;
+            // A development build of JavaScript or TypeScript keeps a source
+            // map beside its component; it comes with the component, so the
+            // extension log's stack traces keep mapping to the sources after
+            // the install or reload that copied it (#214). Most components
+            // keep no map, as `pane-build`'s copying of one also knows.
+            if let Some(map) = map_beside(&source)
+                && map.is_file()
+            {
+                fs::copy(&map, map_beside(&target).expect("the target is named"))?;
+            }
         }
     }
     for file in helper_files {
@@ -3629,6 +4325,13 @@ fn copy_package(package: &SourcePackage, location: &Path) -> io::Result<()> {
         fs::copy(&help, location.join(preferences::HELP_FILE))?;
     }
     copy_images(package, location)
+}
+
+/// The source map kept beside the component at `component`, when there is
+/// one: its file name plus `.map` (#214).
+pub(crate) fn map_beside(component: &Path) -> Option<PathBuf> {
+    let name = component.file_name()?.to_str()?;
+    Some(component.with_file_name(format!("{name}.map")))
 }
 
 /// The folder of a package whose images its lists name (#139), as

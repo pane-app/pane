@@ -21,7 +21,7 @@ success-output = "immediate"
 # CI runner, where most tests take seconds. A test found to take minutes
 # is added here.
 [[profile.default.overrides]]
-filter = "test(/memory_peaks/)"
+filter = "test(/memory_peaks|every_.*_template_builds/)"
 priority = 100
 
 # The real-clipboard adapter tests (with PANE_TEST_REAL_CLIPBOARD=1) replace

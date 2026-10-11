@@ -17,7 +17,7 @@ use pane_core::{Launcher, Runtime, Screen, Status};
 #[path = "support/settle.rs"]
 mod settle;
 
-use settle::{enter_flow, until};
+use settle::{enter_flow, settle, until};
 
 fn guest(name: &str) -> PathBuf {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -149,4 +149,65 @@ fn the_window_shows_a_failed_build_and_the_reload_after_a_fix(cx: &mut TestAppCo
     assert!(cx.debug_bounds("status-result").is_some());
     assert!(cx.debug_bounds("row-Why Hello did not build").is_none());
     assert!(cx.debug_bounds("row-Stop developing Hello").is_some());
+}
+
+#[gpui::test]
+fn the_screen_reopens_after_a_development_mode_reload(cx: &mut TestAppContext) {
+    let (sources, data) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let folder = package(&sources.path().join("hello"));
+    cx.executor().allow_parking();
+    cx.update(pane::bind_keys);
+    let (sender, changes) = pane_core::changes::channel();
+    let launcher =
+        Launcher::with_packages(Runtime::start(), vec![], data.path().join("extensions"))
+            .with_development(Arc::new(FakeBuilder), sender);
+    let (window, cx) = cx.add_window_view(|window, cx| {
+        let mut launcher = LauncherWindow::new(launcher, window, cx);
+        launcher.follow_changes(changes, window, cx);
+        launcher.preview_package(&folder, window, cx);
+        launcher
+    });
+    until(&window, cx, |view| {
+        matches!(view.screen, Screen::Package { .. })
+    });
+    cx.simulate_keystrokes("enter");
+    until(&window, cx, |view| {
+        view.status == Status::Result("Installed Hello".into())
+    });
+
+    // Development on, then the command's screen, as its author leaves it
+    // while iterating.
+    enter_flow(&window, cx);
+    select(&window, cx, "Develop Hello");
+    cx.simulate_keystrokes("enter");
+    until(
+        &window,
+        cx,
+        |view| matches!(&view.status, Status::Result(text) if text.starts_with("Developing Hello")),
+    );
+    cx.simulate_keystrokes("escape");
+    settle(&window, cx);
+    cx.simulate_keystrokes("enter");
+    until(&window, cx, |view| matches!(view.screen, Screen::Command));
+    assert_eq!(settle(&window, cx).title, "Rust sample");
+
+    // Each save builds and reloads (ADR 0004): the build that succeeded
+    // ends the old code's generation — closing the screen — and Pane
+    // opens the command again on the new code (ADR 0041), so the author
+    // is back where they were, without navigating back.
+    fs::write(folder.join("source.txt"), "sample_js").unwrap();
+    // The screen that was open opens again on the new code: the author is
+    // back where they were, without navigating back. The reload's own
+    // outcome is kept while the command's screen shows, and appears when
+    // the author leaves it.
+    until(&window, cx, |view| {
+        matches!(view.screen, Screen::Command) && view.title == "JavaScript sample"
+    });
+    let view = settle(&window, cx);
+    assert!(matches!(view.screen, Screen::Command));
+    assert_eq!(view.title, "JavaScript sample");
+    cx.simulate_keystrokes("escape");
+    until(&window, cx, |view| {
+        view.status == Status::Result("Reloaded Hello".into())
+    });
 }

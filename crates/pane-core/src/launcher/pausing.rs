@@ -160,6 +160,12 @@ impl Pauses {
         self.pauses.contains_key(identity)
     }
 
+    /// The identities of the packages that are paused, for the snapshot of
+    /// the installed packages the operation router resolves against.
+    pub(super) fn identities(&self) -> Vec<PackageIdentity> {
+        self.pauses.keys().cloned().collect()
+    }
+
     /// Forgets the pause and failures of the package with `identity`,
     /// returning its pause: it runs in a new generation, or not at all.
     pub(super) fn forget(&mut self, identity: &PackageIdentity) -> Option<Pause> {
@@ -340,6 +346,8 @@ impl Launcher {
             installation.records.record(identity, Some(pause.clone()));
         }
         state.paused.pause(identity.clone(), pause);
+        // Its dependents now wait for it, rather than fail (see `waiting`).
+        state.recheck_waiting();
         // Its results kept for root search go.
         Launcher::forget_indexes(state);
         let components: Vec<PathBuf> = state
@@ -406,6 +414,8 @@ impl Launcher {
             installation.data.resume(identity);
             installation.records.record(identity, None);
         }
+        // Its dependents come back from waiting for it (see `waiting`).
+        state.recheck_waiting();
         pause
     }
 

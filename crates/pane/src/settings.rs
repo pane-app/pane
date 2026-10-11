@@ -478,6 +478,41 @@ impl Settings {
         self.commit(chosen, Taken::Recorded, cx);
     }
 
+    /// How strict root search's matching is; the launcher's next keystroke
+    /// applies it.
+    pub(crate) fn search_sensitivity(&self) -> pane_core::SearchSensitivity {
+        self.chosen.search_sensitivity
+    }
+
+    /// Chooses how strict root search's matching is; the choice takes
+    /// effect as the launcher applies it, on the next keystroke.
+    pub(crate) fn set_search_sensitivity(
+        &mut self,
+        sensitivity: pane_core::SearchSensitivity,
+        cx: &mut Context<Self>,
+    ) {
+        let mut chosen = self.chosen.clone();
+        chosen.search_sensitivity = sensitivity;
+        self.commit(chosen, Taken::Recorded, cx);
+    }
+
+    /// Whether root search learns from what the user chooses; turned off,
+    /// nothing is recorded and ranking acts as if nothing was learned
+    /// until it is reset. The same switch will also stop search history
+    /// (#206).
+    pub(crate) fn learning(&self) -> bool {
+        self.chosen.learning
+    }
+
+    /// Chooses whether root search learns from what the user chooses; the
+    /// launcher applies the choice at once, re-ranking the list it is
+    /// showing.
+    pub(crate) fn set_learning(&mut self, on: bool, cx: &mut Context<Self>) {
+        let mut chosen = self.chosen.clone();
+        chosen.learning = on;
+        self.commit(chosen, Taken::Recorded, cx);
+    }
+
     /// What the launcher's back key does.
     pub(crate) fn escape(&self) -> pane_core::EscapeBehavior {
         self.chosen.escape
@@ -513,11 +548,20 @@ impl Settings {
         &self,
         navigation: pane_core::NavigationBindings,
     ) -> Option<String> {
-        let (previous, next) = navigation.bindings()?;
+        let pairs = [
+            navigation.bindings(),
+            // The choice's Left and Right (#258), between the query and
+            // the argument fields.
+            navigation.left_right(),
+        ];
         KeyboardAction::ALL.into_iter().find_map(|action| {
             let bound = self.chosen.keyboard.binding(action);
             let id = bound.id();
-            (id == previous || id == next).then(|| format!("{bound} is {}", action.title()))
+            pairs
+                .into_iter()
+                .flatten()
+                .find(|(left, right)| id == *left || id == *right)
+                .map(|_| format!("{bound} is {}", action.title()))
         })
     }
 
@@ -1498,6 +1542,23 @@ pub(crate) fn navigation_of(cx: &App) -> pane_core::NavigationBindings {
     cx.try_global::<Shared>()
         .map(|shared| shared.0.read(cx).chosen.navigation)
         .unwrap_or_default()
+}
+
+/// How strict root search's matching is in force, as [`keyboard_of`]
+/// reads the settings: the launcher applies it on its next keystroke.
+pub(crate) fn search_sensitivity_of(cx: &App) -> pane_core::SearchSensitivity {
+    cx.try_global::<Shared>()
+        .map(|shared| shared.0.read(cx).chosen.search_sensitivity)
+        .unwrap_or_default()
+}
+
+/// Whether root search learns from what the user chooses in force, as
+/// [`keyboard_of`] reads the settings: the launcher applies it as the
+/// query changes and as it is made.
+pub(crate) fn learning_of(cx: &App) -> bool {
+    cx.try_global::<Shared>()
+        .map(|shared| shared.0.read(cx).chosen.learning)
+        .unwrap_or(true)
 }
 
 /// Attaches the launcher that owns the window's global-shortcut

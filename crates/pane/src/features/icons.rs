@@ -18,6 +18,12 @@
 //! - An installed command's or package's icon replaces the generic glyph
 //!   in root search, quick slots, the Settings Extensions page and the
 //!   Shortcuts page; Pane's own rows keep their tiles ([`row_icon_of`]).
+//!   A built-in glyph a command's or package's own icon names draws on
+//!   Pane's neutral command tile at the tile sizes (ADR 0035, #247), so a
+//!   command naming one of Pane's glyphs reads as a command, while its
+//!   image icons stay bare; the rows of an open command's list keep
+//!   drawing every icon bare, and so do an application's, a file's and
+//!   every icon standing in for one that has not loaded.
 //! - An installed application's row, and a quick slot pinning one, draw the
 //!   application's own icon bare, its light or dark file as the theme is,
 //!   and a faded application glyph of the same size until it is there
@@ -51,8 +57,11 @@ pub(crate) fn is_dark(theme: &Theme) -> bool {
 }
 
 /// What the installed command or package `id` shows as its icon: its own
-/// (or its package's, or the package's first-letter tile), drawn bare; or,
-/// for anything else (Pane's own rows), Pane's tile for it.
+/// (or its package's, or the package's first-letter tile), drawn bare — a
+/// built-in glyph it names on Pane's neutral command tile (ADR 0035,
+/// #247) — or an application's own icon with its placeholder standing in
+/// until it is there (#172); or, for anything else (Pane's own rows),
+/// Pane's tile for it.
 pub(crate) fn row_icon_of(launcher: &Launcher, id: &str, theme: &Theme) -> RowIcon {
     match launcher.icon_of(id) {
         Some(icon) => RowIcon::Drawn(drawn(&icon, theme)),
@@ -64,16 +73,19 @@ pub(crate) fn row_icon_of(launcher: &Launcher, id: &str, theme: &Theme) -> RowIc
 pub(crate) fn drawn(icon: &Icon, theme: &Theme) -> DrawnIcon {
     let dark = is_dark(theme);
     let tint = icon.tint.map(|tint| color(tint, theme, contrast::GRAPHIC));
-    let fallback = icon
-        .fallback
-        .as_deref()
-        .map(|fallback| Box::new(drawn(fallback, theme)));
+    let fallback = icon.fallback.as_deref().map(|fallback| {
+        // A glyph that stands in for an icon draws where it does, bare:
+        // the neutral command tile is a named glyph's own (ADR 0035).
+        let mut drawn = drawn(fallback, theme);
+        drawn.tile_color = None;
+        Box::new(drawn)
+    });
     let label = icon
         .tooltip
         .clone()
         .filter(|tooltip| !tooltip.trim().is_empty())
         .map(SharedString::from);
-    let (image, what, color) = match &icon.source {
+    let (image, what, color, tile_color) = match &icon.source {
         IconSource::Builtin { name, filled } => (
             IconImage::Glyph(glyph(name, *filled)),
             if *filled {
@@ -82,6 +94,10 @@ pub(crate) fn drawn(icon: &Icon, theme: &Theme) -> DrawnIcon {
                 format!("glyph-{name}")
             },
             tint.unwrap_or(theme.text_body),
+            // On Pane's neutral command tile, the glyph is drawn in the
+            // tile's own foreground, or its tint as the bare glyph's is
+            // (ADR 0035, #247).
+            Some(tint.unwrap_or(theme.tile_foreground)),
         ),
         IconSource::Image {
             light,
@@ -100,6 +116,7 @@ pub(crate) fn drawn(icon: &Icon, theme: &Theme) -> DrawnIcon {
                 },
                 format!("{}-{name}", if tinted { "tinted" } else { "image" }),
                 tint.unwrap_or(theme.text_body),
+                None,
             )
         }
         IconSource::Url(url) => match data_image(url) {
@@ -109,6 +126,7 @@ pub(crate) fn drawn(icon: &Icon, theme: &Theme) -> DrawnIcon {
                     IconImage::Data { image, tinted },
                     "data".to_owned(),
                     tint.unwrap_or(theme.text_body),
+                    None,
                 )
             }
             // Data Pane cannot read: its fallback, else nothing.
@@ -123,6 +141,7 @@ pub(crate) fn drawn(icon: &Icon, theme: &Theme) -> DrawnIcon {
                     IconImage::Glyph(Arc::from(EMPTY_SVG.as_bytes())),
                     "data".to_owned(),
                     theme.text_body,
+                    None,
                 ),
             },
         },
@@ -141,6 +160,7 @@ pub(crate) fn drawn(icon: &Icon, theme: &Theme) -> DrawnIcon {
                 IconImage::Glyph(Arc::from(EMPTY_SVG.as_bytes())),
                 "file".to_owned(),
                 theme.text_body,
+                None,
             ),
         },
         IconSource::Letter(letter) => (
@@ -150,11 +170,13 @@ pub(crate) fn drawn(icon: &Icon, theme: &Theme) -> DrawnIcon {
             },
             format!("letter-{letter}"),
             theme.tile_foreground,
+            None,
         ),
     };
     DrawnIcon {
         image,
         color,
+        tile_color,
         mask: icon.mask.map(|mask| match mask {
             Mask::Circle => IconMask::Circle,
             Mask::RoundedRectangle => IconMask::Rounded,

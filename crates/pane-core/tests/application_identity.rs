@@ -272,7 +272,7 @@ fn an_application_updated_into_a_new_version_folder_keeps_its_id_and_its_pin() {
         "",
     )];
     let launcher = dirs.hosting(&system);
-    block_on(launcher.resolve_quick_slots());
+    block_on(launcher.resolve_root_home());
 
     let slot = &launcher.quick_slots()[0];
     assert!(slot.ready(), "{slot:?}");
@@ -332,7 +332,7 @@ fn pins_made_before_identities_resolve_keep_their_slots_and_are_rewritten() {
     let mine = shortcut("Mail", DESKTOP, r"C:\Mail\mail.exe", "");
     let system = FakeSystem::with(vec![firefox.clone(), mail.clone(), mine.clone()]);
     let launcher = dirs.hosting(&system);
-    block_on(launcher.resolve_quick_slots());
+    block_on(launcher.resolve_root_home());
 
     let slots = launcher.quick_slots();
     let titles: Vec<&str> = slots.iter().map(|slot| slot.title.as_str()).collect();

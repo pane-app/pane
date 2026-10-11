@@ -9,9 +9,12 @@
   "pane": {
     "rootResults": true,
     "search": true,
-    "fileIndex": true
+    "fileIndex": true,
+    "typedFolder": true
   },
   "devDependencies": {
-    "@pane-app/extension": "file:../js"
+    "@pane-app/extension": "file:../js",
+    "esbuild": "0.28.2",
+    "typescript": "7.0.2"
   }
 }

@@ -49,6 +49,9 @@ fn command(id: &str, title: &str) -> CommandRegistration {
             .join("sample_rust.wasm"),
         takes_query: false,
         search: false,
+        keywords: Vec::new(),
+        when: pane_core::CommandWhen::Always,
+        matches: pane_core::CommandMatches::Title,
     }
 }
 
@@ -594,7 +597,7 @@ fn an_application_is_pinned_by_its_identity_and_a_cold_home_resolves_and_opens_i
         waiting.unavailable.as_deref(),
         Some("Waiting for JavaScript applications sample to list it")
     );
-    block_on(launcher.resolve_quick_slots());
+    block_on(launcher.resolve_root_home());
     assert_eq!(launcher.view().query(), Some(""), "nothing was searched");
     let slot = &launcher.quick_slots()[0];
     assert_eq!(slot.title, "Launch Firefox");

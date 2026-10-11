@@ -12,7 +12,7 @@
 //! not available on this computer: there is no hibernation file").
 //!
 //! The sample calls each host function as it is: no confirmation, no HUD
-//! — the System Commands default extension (guests/system-commands) is the
+//! — the System Commands default extension (pane-app/system-commands) is the
 //! one that composes them with ADR 0037's confirm and HUD host functions,
 //! and a test drives this sample with a fake system, so nothing it runs
 //! ever reaches the real one. Set Volume takes no argument of the

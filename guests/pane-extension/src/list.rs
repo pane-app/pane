@@ -629,6 +629,12 @@ impl<T: Command> wit::Guest for T {
                 take(&callback)
             }
         };
+        // An action of a dynamic root item this component registered
+        // (#158): kept while the item is, not taken when it runs, and not
+        // cleared when the list is drawn.
+        if found.is_none() && crate::registrations::run_item_action(&callback).await? {
+            return Ok(ANSWER.into());
+        }
         match found {
             Some(Callback::Run(action)) => {
                 action().await?;

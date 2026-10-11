@@ -33,6 +33,7 @@
 
 use std::collections::{BTreeMap, HashSet};
 use std::future::Future;
+use std::time::Instant;
 
 use super::{
     FormField, FormPurpose, FormView, Launcher, LauncherView, OpenForm, Opening, Screen, State,
@@ -282,7 +283,9 @@ impl Launcher {
                 .map(|field| (field.id.clone(), field.value.clone()))
                 .collect(),
         };
-        state.view.status = Status::Running;
+        state.view.status = Status::Running {
+            since: Instant::now(),
+        };
         Some(submit)
     }
 
@@ -348,7 +351,9 @@ impl Launcher {
             if opening.no_view {
                 Launcher::begin_run(state);
             } else {
-                state.view.status = Status::Running;
+                state.view.status = Status::Running {
+                    since: Instant::now(),
+                };
             }
             let data = self.data_in(state, &opening.component);
             (state.screen_epoch, opening, data)

@@ -16,8 +16,11 @@ Root search lists the command by its title like any other. Enter opens it:
 the query field stays on screen, empty and focused (placeholder "Search"),
 above the command's own list (the items of its tree, see
 [list-tree.md](list-tree.md)). Typing sends the text,
-trimmed, to the command; while it answers the status says "Running…" and
-the rows listed stay; its results then replace the rows, the first
+trimmed, to the command; while it answers the loading bar runs along the
+rule under the same field (#248: nothing for an answer that comes within
+300 ms, the line fading in past that, sweeping while the answer is waited
+for and fading away when it ends — the footer's "Running…" text is gone)
+and the rows listed stay; its results then replace the rows, the first
 selected. Enter on a result runs the command's action for it, whose answer
 shows in the status line, as for any item. Clearing the field shows the
 command's own list as it was last listed, then asks the command for it

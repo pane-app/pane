@@ -177,6 +177,27 @@ pub enum PinnedLayout {
     Vertical,
 }
 
+/// How strict root search's matching is, as the Launcher page records
+/// it. A preference of the matcher, not a mode of the window: the
+/// launcher applies it on the next keystroke after the choice is taken,
+/// the list the query has already made staying as it is.
+///
+/// The thresholds themselves are the scorer's (see
+/// `crate::search`); what the record holds is only which of the three
+/// the user chose.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SearchSensitivity {
+    /// Low: every result the query's letters can make, in order.
+    Low,
+    /// Medium: word starts and tight matches.
+    Medium,
+    /// High: a match must also start the text or a word of it. The
+    /// default, as the reference's fresh installation stores it.
+    #[default]
+    High,
+}
+
 /// What the launcher's back key (Escape by default) does.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum EscapeBehavior {
@@ -196,8 +217,10 @@ pub enum EscapeBehavior {
 /// Windows' do, so none meets the Ctrl chords the launcher already has
 /// (Ctrl+K opens the Actions panel); on macOS, where Option types
 /// characters, they hold Control, as Raycast for Mac's do. Raycast's
-/// left and right keys (B and F, H and L) move through its grids; Pane's
-/// lists have no left or right selection, so those stay unbound.
+/// left and right keys (B and F, H and L) move between its search
+/// fields: Pane's take Left and Right between the query and the
+/// argument fields, as Raycast's do between its query and the inline
+/// argument fields beside it (#258).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum NavigationBindings {
@@ -220,6 +243,20 @@ impl NavigationBindings {
             NavigationBindings::Emacs => Some(("alt-p", "alt-n")),
             NavigationBindings::Vim if mac => Some(("ctrl-k", "ctrl-j")),
             NavigationBindings::Vim => Some(("alt-k", "alt-j")),
+        }
+    }
+
+    /// The choice's Left and Right, the keys that move between the query
+    /// and the argument fields: backward's then forward's. As the
+    /// selection keys', Alt on Windows and Linux, Control on macOS.
+    pub fn left_right(self) -> Option<(&'static str, &'static str)> {
+        let mac = cfg!(target_os = "macos");
+        match self {
+            NavigationBindings::None => None,
+            NavigationBindings::Emacs if mac => Some(("ctrl-b", "ctrl-f")),
+            NavigationBindings::Emacs => Some(("alt-b", "alt-f")),
+            NavigationBindings::Vim if mac => Some(("ctrl-h", "ctrl-l")),
+            NavigationBindings::Vim => Some(("alt-h", "alt-l")),
         }
     }
 }
@@ -306,6 +343,15 @@ pub struct HostSettings {
     pub compact_pinned: bool,
     /// How the pinned home lays out its quick slots.
     pub pinned_layout: PinnedLayout,
+    /// How strict root search's matching is; the launcher applies it on
+    /// the next keystroke.
+    pub search_sensitivity: SearchSensitivity,
+    /// Whether root search learns from what the user chooses — the
+    /// Launcher page's "Learn from what I choose" switch. Turned off,
+    /// nothing is recorded and ranking acts as if nothing was learned;
+    /// what was learned is kept until it is reset. The same switch also
+    /// stops search history (#206).
+    pub learning: bool,
     /// What the launcher's back key does.
     pub escape: EscapeBehavior,
     /// Whether Escape closes the Settings window.
@@ -336,6 +382,8 @@ impl Default for HostSettings {
             window_mode: WindowMode::default(),
             compact_pinned: false,
             pinned_layout: PinnedLayout::default(),
+            search_sensitivity: SearchSensitivity::default(),
+            learning: true,
             escape: EscapeBehavior::default(),
             escape_closes_settings: true,
             navigation: NavigationBindings::default(),
@@ -424,6 +472,8 @@ impl HostSettings {
             window_mode: recorded.window_mode,
             compact_pinned: recorded.compact_pinned,
             pinned_layout: recorded.pinned_layout,
+            search_sensitivity: recorded.search_sensitivity,
+            learning: recorded.learning,
             escape: recorded.escape_behavior,
             escape_closes_settings: recorded.escape_closes_settings,
             navigation: recorded.navigation_bindings,
@@ -462,6 +512,8 @@ impl HostSettings {
             window_mode: self.window_mode,
             compact_pinned: self.compact_pinned,
             pinned_layout: self.pinned_layout,
+            search_sensitivity: self.search_sensitivity,
+            learning: self.learning,
             escape_behavior: self.escape,
             escape_closes_settings: self.escape_closes_settings,
             navigation_bindings: self.navigation,
@@ -533,6 +585,14 @@ struct Recorded {
     /// The pinned home's layout; missing means horizontal.
     #[serde(default)]
     pinned_layout: PinnedLayout,
+    /// How strict root search's matching is; missing means High, the
+    /// default a fresh installation starts from.
+    #[serde(default)]
+    search_sensitivity: SearchSensitivity,
+    /// Whether root search learns from what the user chooses; missing
+    /// means it does, the default.
+    #[serde(default = "learning_by_default")]
+    learning: bool,
     /// The back key's behavior; missing means back, then hide.
     #[serde(default)]
     escape_behavior: EscapeBehavior,
@@ -554,6 +614,11 @@ struct Recorded {
 /// The record's default for the tray visibility (and Escape closing
 /// Settings): on.
 fn shown_by_default() -> bool {
+    true
+}
+
+/// The record's default for learning from what the user chooses: on.
+fn learning_by_default() -> bool {
     true
 }
 
@@ -618,6 +683,8 @@ mod tests {
             window_mode: super::WindowMode::Compact,
             compact_pinned: true,
             pinned_layout: super::PinnedLayout::Vertical,
+            search_sensitivity: super::SearchSensitivity::Medium,
+            learning: false,
             escape: super::EscapeBehavior::Hide,
             escape_closes_settings: false,
             navigation: super::NavigationBindings::Emacs,
@@ -634,6 +701,8 @@ mod tests {
             "\"windowMode\": \"compact\"",
             "\"compactPinned\": true",
             "\"pinnedLayout\": \"vertical\"",
+            "\"searchSensitivity\": \"medium\"",
+            "\"learning\": false",
             "\"escapeBehavior\": \"hide\"",
             "\"escapeClosesSettings\": false",
             "\"navigationBindings\": \"emacs\"",
@@ -666,6 +735,7 @@ mod tests {
             "alt"
         };
         assert_eq!(NavigationBindings::None.bindings(), None);
+        assert_eq!(NavigationBindings::None.left_right(), None);
         assert_eq!(
             NavigationBindings::Emacs.bindings(),
             Some((
@@ -678,6 +748,22 @@ mod tests {
             Some((
                 format!("{modifier}-k").as_str(),
                 format!("{modifier}-j").as_str()
+            ))
+        );
+        // Left and Right: B and F under the Emacs choice, H and L under
+        // the Vim one (#258).
+        assert_eq!(
+            NavigationBindings::Emacs.left_right(),
+            Some((
+                format!("{modifier}-b").as_str(),
+                format!("{modifier}-f").as_str()
+            ))
+        );
+        assert_eq!(
+            NavigationBindings::Vim.left_right(),
+            Some((
+                format!("{modifier}-h").as_str(),
+                format!("{modifier}-l").as_str()
             ))
         );
     }
@@ -900,6 +986,41 @@ mod tests {
         ] {
             assert!(reading(text).is_err(), "{text} reads");
         }
+    }
+
+    #[test]
+    fn the_search_sensitivity_defaults_to_high_and_is_written_and_read() {
+        // Missing: High, the default a fresh installation starts from.
+        assert_eq!(
+            reading(r#"{ "version": 1 }"#).unwrap().search_sensitivity,
+            super::SearchSensitivity::High
+        );
+        // Recorded as the record's camelCase field, and read back.
+        assert_eq!(
+            reading(r#"{ "version": 1, "searchSensitivity": "low" }"#)
+                .unwrap()
+                .search_sensitivity,
+            super::SearchSensitivity::Low
+        );
+        // A value that is not one of the three fails the whole record.
+        let problem = reading(r#"{ "version": 1, "searchSensitivity": "loose" }"#);
+        assert!(problem.is_err(), "{problem:?}");
+    }
+
+    #[test]
+    fn learning_from_choices_defaults_to_on_and_is_written_and_read() {
+        // Missing: on, the default a fresh installation starts from.
+        assert!(HostSettings::default().learning);
+        assert!(reading(r#"{ "version": 1 }"#).unwrap().learning);
+        // Recorded as the record's camelCase field, and read back.
+        assert!(
+            !reading(r#"{ "version": 1, "learning": false }"#)
+                .unwrap()
+                .learning
+        );
+        // A value that is not a boolean fails the whole record.
+        let problem = reading(r#"{ "version": 1, "learning": "off" }"#);
+        assert!(problem.is_err(), "{problem:?}");
     }
 
     #[test]

@@ -6,7 +6,10 @@ use std::time::Duration;
 
 use gpui::{Entity, Modifiers, MouseButton, TestAppContext, VisualTestContext, prelude::*, px};
 use pane::LauncherWindow;
-use pane_core::{CommandRegistration, Launcher, Runtime, Screen, Status};
+use pane_core::{
+    CommandMatches, CommandRegistration, CommandWhen, Launcher, LauncherView, Runtime, Screen,
+    Status,
+};
 
 #[path = "../../pane-core/tests/support/platforms.rs"]
 mod platforms;
@@ -26,6 +29,11 @@ mod samples;
 #[path = "support/paint.rs"]
 mod paint;
 
+#[path = "../../pane-core/tests/support/artifacts.rs"]
+mod artifacts;
+#[path = "support/packages.rs"]
+mod packages;
+
 use settle::{enter_flow, settle, settle_shown, until};
 
 #[path = "support/wait.rs"]
@@ -41,6 +49,14 @@ use a11y::{announcement, no_row_has_focus};
 /// How long the announcer waits after the last keystroke before it says
 /// the selected row (#132), on the test platform's controlled clock.
 const SETTLE: Duration = Duration::from_millis(300);
+
+/// The toast key on this system: Ctrl+T (Command+T on macOS), which
+/// opens the toast's details (#249).
+const TOAST_KEY: &str = if cfg!(target_os = "macos") {
+    "cmd-t"
+} else {
+    "ctrl-t"
+};
 
 /// Lets typing settle for the announcer: its time runs on the test
 /// platform's clock, which only the test advances.
@@ -91,6 +107,9 @@ fn command(title: &str, guest: &str) -> CommandRegistration {
         component,
         takes_query: false,
         search: false,
+        keywords: Vec::new(),
+        when: CommandWhen::Always,
+        matches: CommandMatches::Title,
     }
 }
 
@@ -120,6 +139,15 @@ fn open_launcher(
     cx.add_window_view(|window, cx| LauncherWindow::new(launcher, window, cx))
 }
 
+/// Opens the sample's command from root search with the keyboard: its
+/// name typed, then Enter. Typing first because the blank query's order
+/// (#199) ranks Pane's own rows with the commands by title, so Enter
+/// alone would not always open the sample.
+fn open_sample(cx: &mut VisualTestContext) {
+    cx.simulate_input("sample");
+    cx.simulate_keystrokes("enter");
+}
+
 /// Opens the sample's command with Enter and clicks the row whose debug
 /// selector is `row` (`row-<title>`).
 fn click_row(
@@ -127,7 +155,7 @@ fn click_row(
     cx: &mut VisualTestContext,
     row: &'static str,
 ) -> pane_core::LauncherView {
-    cx.simulate_keystrokes("enter");
+    open_sample(cx);
     settle(window, cx);
     let row = cx.debug_bounds(row).expect("row rendered");
     cx.simulate_click(row.center(), Modifiers::none());
@@ -151,7 +179,7 @@ fn open_by_click(
 fn the_keyboard_opens_the_sample_and_runs_an_action(cx: &mut TestAppContext, sample: &Sample) {
     let (window, cx) = open(cx, sample);
 
-    cx.simulate_keystrokes("enter");
+    open_sample(cx);
     let view = settle(&window, cx);
     assert_eq!(view.screen, Screen::Command);
     assert_eq!(view.title, format!("{} sample", sample.language));
@@ -211,7 +239,7 @@ fn a_validation_error_is_rendered(cx: &mut TestAppContext, sample: &Sample) {
 /// Opens the sample's command and then its form ("Greet someone", the fifth
 /// item) with the keyboard.
 fn open_form(window: &Entity<LauncherWindow>, cx: &mut VisualTestContext) {
-    cx.simulate_keystrokes("enter");
+    open_sample(cx);
     settle(window, cx);
     cx.simulate_keystrokes("down down down down enter");
     let view = settle(window, cx);
@@ -286,7 +314,7 @@ fn an_unavailable_action_is_listed_with_its_reason_and_others_still_run(
     let answer = format!("Ran the {available} in the {} guest", sample.language);
     let (window, cx) = open(cx, sample);
     cx.simulate_resize(gpui::size(gpui::px(640.), gpui::px(420.)));
-    cx.simulate_keystrokes("enter");
+    open_sample(cx);
     let view = settle(&window, cx);
     let index = |title: &str| view.rows.iter().position(|row| row.title == title).unwrap();
 
@@ -634,18 +662,34 @@ fn the_launcher_offers_the_rust_javascript_and_typescript_samples(cx: &mut TestA
     let (window, cx) = open_with(cx, samples::sample_commands());
     let root = settle(&window, cx);
     let titles: Vec<&str> = root.rows.iter().map(|row| row.title.as_str()).collect();
-    // Pane's own Settings row is listed last, whatever is installed (its
-    // window is the Settings milestone's work, covered in tests/settings).
-    let samples = ["Rust sample", "JavaScript sample", "TypeScript sample"];
-    assert_eq!(titles, [samples.as_slice(), &["Settings…"]].concat());
+    // Pane's own Settings row is listed with the commands, by the blank
+    // query's no-query order (#199): its window is the Settings
+    // milestone's work, covered in tests/settings.
+    let samples = ["JavaScript sample", "Rust sample", "TypeScript sample"];
+    assert_eq!(
+        titles,
+        [
+            "JavaScript sample",
+            "Rust sample",
+            "Settings…",
+            "TypeScript sample"
+        ]
+    );
 
-    for (index, title) in samples.iter().enumerate() {
+    for title in samples {
+        // Each sample opens in turn, selected by its place in the list.
+        let view = settle(&window, cx);
+        let index = view
+            .rows
+            .iter()
+            .position(|row| row.title == title)
+            .unwrap_or_else(|| panic!("{title} is not listed"));
+        for _ in 0..index {
+            cx.simulate_keystrokes("down");
+        }
         cx.simulate_keystrokes("enter");
         let view = settle(&window, cx);
-        assert_eq!(
-            (view.screen, view.title.as_str()),
-            (Screen::Command, *title)
-        );
+        assert_eq!((view.screen, view.title.as_str()), (Screen::Command, title));
 
         cx.simulate_keystrokes("escape");
         let view = settle(&window, cx);
@@ -654,9 +698,6 @@ fn the_launcher_offers_the_rust_javascript_and_typescript_samples(cx: &mut TestA
             "{:?}",
             view.screen
         );
-        for _ in 0..=index {
-            cx.simulate_keystrokes("down");
-        }
     }
 }
 
@@ -862,18 +903,28 @@ fn the_mouse_wheel_scrolls_away_until_the_rows_reload(cx: &mut TestAppContext) {
     let (window, cx) = open_launcher(cx, launcher.clone());
     cx.simulate_resize(gpui::size(gpui::px(640.), gpui::px(420.)));
     // An install that finishes after the user has moved on: it reloads root
-    // search in the background and keeps the selected row, the first.
+    // search in the background and keeps the selected row, the first. The
+    // blank query's order (#199) collates Pane's own rows among the
+    // commands, so the first row is Pane's install row and the "Row"
+    // commands no longer lead the list.
     let install = launcher.install_package(&folder);
-    cx.foreground_executor()
-        .block_on(launcher.activate_selected());
+    // The user moves on from the install's moment: the collated blank
+    // list's first row is Pane's install row, which opens nothing in the
+    // launcher, and the extension manager's row is not listed yet — it
+    // lists only while something is installed or retained (#41), and
+    // the twelve registered commands are no packages — so the flow that
+    // row's activation enters is entered directly, leaving the screen
+    // the install began on, as activating the first row did before the
+    // collation (#199) moved Pane's own rows up among the commands.
+    launcher.manage_extensions();
     launcher.back();
     redraw(&window, cx);
-    assert!(row_is_visible(cx, "row-Row 1"));
+    assert!(row_is_visible(cx, "row-Install extension from folder…"));
 
     wheel(cx, -400.);
     redraw(&window, cx);
     assert!(
-        !row_is_visible(cx, "row-Row 1"),
+        !row_is_visible(cx, "row-Install extension from folder…"),
         "redrawing does not undo the wheel"
     );
 
@@ -883,7 +934,7 @@ fn the_mouse_wheel_scrolls_away_until_the_rows_reload(cx: &mut TestAppContext) {
     assert_eq!((view.query(), view.selected), (Some(""), Some(0)));
     assert!(view.rows.iter().any(|row| row.title == "Say hello"));
     assert!(
-        row_is_visible(cx, "row-Row 1"),
+        row_is_visible(cx, "row-Install extension from folder…"),
         "the reloaded list shows the selected row again"
     );
 }
@@ -991,7 +1042,7 @@ fn assistive_technology_sees_the_list_the_selection_and_the_result(cx: &mut Test
 /// Opens the sample's command and then its color picker ("Choose a color",
 /// the sixth item) with the keyboard.
 fn open_color(window: &Entity<LauncherWindow>, cx: &mut VisualTestContext) {
-    cx.simulate_keystrokes("enter");
+    open_sample(cx);
     settle(window, cx);
     cx.simulate_keystrokes("down down down down down enter");
     let view = settle(window, cx);
@@ -1239,6 +1290,15 @@ fn row_titles(window: &Entity<LauncherWindow>, cx: &mut VisualTestContext) -> Ve
     view.rows.into_iter().map(|row| row.title).collect()
 }
 
+/// The title of the row `view` selects, read by title — the blank
+/// query's order (#199) collates Pane's own rows among the commands, so
+/// a row's place is not stable.
+fn selected_title(view: &LauncherView) -> Option<&str> {
+    view.selected
+        .and_then(|selected| view.rows.get(selected))
+        .map(|row| row.title.as_str())
+}
+
 /// Whether root search's query field has keyboard focus.
 fn query_has_focus(window: &Entity<LauncherWindow>, cx: &mut VisualTestContext) -> bool {
     use gpui::Focusable;
@@ -1274,7 +1334,7 @@ fn typing_in_root_search_narrows_the_results_and_enter_opens_the_best_match(
 #[gpui::test]
 fn arrow_keys_move_through_the_matches_while_the_query_keeps_focus(cx: &mut TestAppContext) {
     let (window, cx) = open_with(cx, samples::sample_commands());
-    cx.simulate_input("script");
+    cx.simulate_input("script sample");
     assert_eq!(
         row_titles(&window, cx),
         ["JavaScript sample", "TypeScript sample"]
@@ -1287,7 +1347,7 @@ fn arrow_keys_move_through_the_matches_while_the_query_keeps_focus(cx: &mut Test
     assert!(query_has_focus(&window, cx));
     // Editing keys still edit the query.
     cx.simulate_keystrokes("backspace backspace backspace");
-    assert_eq!(settle(&window, cx).query(), Some("scr"));
+    assert_eq!(settle(&window, cx).query(), Some("script sam"));
 
     cx.simulate_keystrokes("down enter");
     assert_eq!(settle(&window, cx).title, "TypeScript sample");
@@ -1308,9 +1368,9 @@ fn the_production_scenario_edits_searches_selects_opens_and_back_navigates(
     );
 
     // Edits: typing reaches the query field the launcher owns.
-    cx.simulate_input("script");
+    cx.simulate_input("script sample");
     let view = settle(&window, cx);
-    assert_eq!(view.query(), Some("script"));
+    assert_eq!(view.query(), Some("script sample"));
     // Searches: the real root adapter narrows the real commands.
     assert_eq!(
         row_titles(&window, cx),
@@ -1430,23 +1490,27 @@ fn input_method_composition_searches_root(cx: &mut TestAppContext) {
 #[gpui::test]
 fn assistive_technology_sees_the_search_field_and_the_selected_result(cx: &mut TestAppContext) {
     let (window, cx) = open_with(cx, samples::sample_commands());
-    cx.simulate_input("script");
+    cx.simulate_input("script sample");
     settle(&window, cx);
 
     let nodes = accessible_nodes(cx);
     let search = node(&nodes, "EditableComboBox", "Search");
     assert_eq!(
         (&search["value"], &search["placeholder"]),
-        (&"script".into(), &"Search apps and commands…".into())
+        (&"script sample".into(), &"Search apps and commands…".into())
     );
     node(&nodes, "ListBox", "Results");
     node(&nodes, "ListBoxOption", "TypeScript sample");
     // The search field keeps the focus whatever is selected (#132); the
-    // announcer says the selected result once typing has settled.
+    // announcer says the selected result once typing has settled. The
+    // blank query's order (#199) collates the commands by title, so the
+    // JavaScript sample is the first row before this query as after it:
+    // a selection that stayed on its row is not said again, and the move
+    // below is what names the row.
     assert_eq!(focused_label(cx).as_deref(), Some("Search"));
     typing_settles(cx);
+    assert_eq!(announcement(cx), "");
     let count = row_titles(&window, cx).len();
-    until_announced(cx, &format!("JavaScript sample, 1 of {count}"));
     cx.simulate_keystrokes("down");
     assert_eq!(focused_label(cx).as_deref(), Some("Search"));
     assert_eq!(announcement(cx), format!("TypeScript sample, 2 of {count}"));
@@ -1527,6 +1591,63 @@ fn typing_a_root_query_shows_its_answer_and_enter_copies_it(cx: &mut TestAppCont
     replace_query(&window, cx, "42");
     wait_for_rows(&window, cx, &[]);
     assert!(cx.debug_bounds("no-results").is_some());
+}
+
+/// Typing a query whose providers answer within the budget does not
+/// flicker the list through intermediate states (#201): while the Rust
+/// sample answers, the field shows what was typed at once and the
+/// list shown stays the previous query's — the new query's metadata
+/// alone (nothing matches "reverse 42+1" but the answer) never shows. The
+/// published list takes the answer, and the launcher says it is
+/// published, which the keys the window holds for it read (#203). The
+/// calculator that answered arithmetic left with its sources (#285); the
+/// sample answers in its place.
+#[gpui::test]
+fn the_list_does_not_flicker_while_providers_answer_within_the_budget(cx: &mut TestAppContext) {
+    let data = tempfile::tempdir().unwrap();
+    let launcher = with_rust_sample(cx, data.path());
+    let (window, cx) = open_launcher(cx, launcher);
+
+    // A first query's list, published with its answer.
+    cx.simulate_input("reverse 42");
+    wait_for_rows(&window, cx, &["24"]);
+
+    // Typing on: before the search has even begun asking, the field shows
+    // the new query and the list shown is still the previous one.
+    cx.simulate_input("+1");
+    let typed = cx.read_entity(&window, |window, _| {
+        window.launcher().view().query().map(str::to_owned)
+    });
+    let published = cx.read_entity(&window, |window, _| window.launcher().list_published());
+    assert_eq!(
+        typed.as_deref(),
+        Some("reverse 42+1"),
+        "the field shows it at once"
+    );
+    assert!(!published, "the query's list is held while it is answered");
+    assert_eq!(row_titles(&window, cx), ["24"], "the previous list stays");
+
+    // While the sample answers, whatever the window has drawn is one
+    // of the two lists — the previous or the published — never the
+    // intermediate of the new query's title matches alone, which is
+    // empty here (no first row to draw).
+    cx.run_until_parked();
+    let drawn = cx.read_entity(&window, |window, _| {
+        window
+            .drawn_view()
+            .and_then(|view| view.rows.first().map(|row| row.title.clone()))
+    });
+    assert!(
+        drawn.as_deref() == Some("24") || drawn.as_deref() == Some("1+24"),
+        "no intermediate list is drawn: {drawn:?}"
+    );
+
+    // The sample answers within the budget: the published list shows
+    // its answer.
+    wait_for_rows(&window, cx, &["1+24"]);
+    let published = cx.read_entity(&window, |window, _| window.launcher().list_published());
+    assert!(published, "the query's list is published");
+    assert!(cx.debug_bounds("no-results").is_none());
 }
 
 /// Replaces the search field's text with `query`.
@@ -1653,7 +1774,13 @@ fn typing_an_applications_name_shows_it_and_enter_opens_it(cx: &mut TestAppConte
     let (window, cx) = open_launcher(cx, launcher);
 
     cx.simulate_input("fire");
-    wait_for_rows(&window, cx, &["Launch Firefox"]);
+    // Pane's install row matches the four letters fuzzily below the
+    // application's prefix match (#193).
+    wait_for_rows(
+        &window,
+        cx,
+        &["Launch Firefox", "Install extension from Git…"],
+    );
     assert!(
         cx.debug_bounds("row-Launch Firefox").is_some(),
         "the application is rendered"
@@ -1665,7 +1792,9 @@ fn typing_an_applications_name_shows_it_and_enter_opens_it(cx: &mut TestAppConte
     // (#132).
     assert_eq!(focused.as_deref(), Some("Search"), "the field");
     typing_settles(cx);
-    until_announced(cx, "Launch Firefox, 1 of 1");
+    // Two rows: the application's prefix match and Pane's install row
+    // (#193).
+    until_announced(cx, "Launch Firefox, 1 of 2");
 
     cx.simulate_keystrokes("enter");
     let view = settle(&window, cx);
@@ -1694,6 +1823,139 @@ impl pane_core::applications::Applications for TwoPythons {
     fn open(&self, _id: &str) -> Result<(), String> {
         Ok(())
     }
+}
+
+/// What root search learns from what the user chooses (#199): choosing
+/// the second of two equal results a few times puts it first for that
+/// query, so the user's own choice outranks the provider's order.
+#[gpui::test]
+fn choosing_the_second_of_two_equal_results_a_few_times_puts_it_first(cx: &mut TestAppContext) {
+    let data = tempfile::tempdir().unwrap();
+    let runtime = Runtime::start().unwrap();
+    runtime.set_applications(std::sync::Arc::new(TwoPythons));
+    let folder = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../target/guests/packages/sample-applications-js");
+    let launcher = Launcher::with_packages(Ok(runtime), vec![], data.path().join("extensions"));
+    cx.executor().allow_parking();
+    cx.foreground_executor()
+        .block_on(launcher.install_package(&folder));
+    launcher.back();
+    let (window, cx) = open_launcher(cx, launcher);
+
+    // Both Pythons match their name equally, and nothing is learned, so
+    // the provider's own order holds: the first Python's row is first.
+    cx.simulate_input("python");
+    wait_for_rows(&window, cx, &["Launch Python", "Launch Python"]);
+    let listed = |cx: &mut VisualTestContext| {
+        cx.read_entity(&window, |window, _| window.launcher().view().rows)
+    };
+    assert!(
+        listed(cx)[0].id.ends_with("python-Python311"),
+        "the provider's order: {:?}",
+        listed(cx)
+    );
+
+    // The second Python is chosen three times; Enter opens it, and root
+    // search stays as it was.
+    for _ in 0..3 {
+        cx.simulate_keystrokes("down enter");
+        let view = settle(&window, cx);
+        assert_eq!(view.status, Status::Result("Opened Launch Python".into()));
+    }
+    assert!(
+        cx.read_entity(&window, |window, _| window
+            .launcher()
+            .wait_for_learned_recorded(Duration::from_secs(30))),
+        "the uses were recorded"
+    );
+
+    // The query again: the Python the user chose is first, for that query.
+    cx.simulate_keystrokes("escape");
+    settle(&window, cx);
+    cx.simulate_input("python");
+    wait_for_rows(&window, cx, &["Launch Python", "Launch Python"]);
+    let view = settle(&window, cx);
+    assert!(
+        view.rows[0].id.ends_with("python-Python312"),
+        "the chosen Python ranks first: {:?}",
+        view.rows
+    );
+}
+
+/// The Actions panel's "Reset Ranking" (#200): it clears what was learned
+/// for the panel's target — the toast says so — while what was learned for
+/// another result stands.
+#[gpui::test]
+fn reset_ranking_from_the_actions_panel_clears_that_result(cx: &mut TestAppContext) {
+    let data = tempfile::tempdir().unwrap();
+    let runtime = Runtime::start().unwrap();
+    runtime.set_applications(std::sync::Arc::new(TwoPythons));
+    let folder = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../target/guests/packages/sample-applications-js");
+    let launcher = Launcher::with_packages(Ok(runtime), vec![], data.path().join("extensions"));
+    cx.executor().allow_parking();
+    cx.foreground_executor()
+        .block_on(launcher.install_package(&folder));
+    launcher.back();
+    let (window, cx) = open_launcher(cx, launcher);
+
+    // The second Python is chosen three times: it ranks first for that
+    // query, and its use is written.
+    cx.simulate_input("python");
+    wait_for_rows(&window, cx, &["Launch Python", "Launch Python"]);
+    for _ in 0..3 {
+        cx.simulate_keystrokes("down enter");
+        let view = settle(&window, cx);
+        assert_eq!(view.status, Status::Result("Opened Launch Python".into()));
+    }
+    assert!(
+        cx.read_entity(&window, |window, _| window
+            .launcher()
+            .wait_for_learned_recorded(Duration::from_secs(30))),
+        "the uses were recorded"
+    );
+
+    // The panel offers the reset, and Enter on it runs it once: the
+    // status line says the ranking was reset (the reset is Pane's own
+    // action, which reports through the status line, not a toast), and
+    // the panel closes.
+    cx.simulate_keystrokes(OPEN_ACTIONS);
+    settle(&window, cx);
+    assert!(
+        cx.debug_bounds("action-Reset Ranking").is_some(),
+        "the reset is offered"
+    );
+    cx.simulate_input("reset");
+    settle(&window, cx);
+    cx.simulate_keystrokes("enter");
+    let view = settle(&window, cx);
+    assert!(!actions_open(&window, cx));
+    assert_eq!(
+        view.status,
+        Status::Result("Ranking reset for Launch Python".into())
+    );
+    assert!(
+        cx.debug_bounds("status-result").is_some(),
+        "the status line is rendered"
+    );
+
+    // The entry went, and the provider's order is back for the query. The
+    // reset's write runs off the window's thread, so the record is waited
+    // for, as the Settings' reset is.
+    let record = data.path().join("extensions/learned.json");
+    until(&window, cx, |_| {
+        std::fs::read_to_string(&record).is_ok_and(|text| !text.contains("python-Python312"))
+    });
+    cx.simulate_keystrokes("escape");
+    settle(&window, cx);
+    cx.simulate_input("python");
+    wait_for_rows(&window, cx, &["Launch Python", "Launch Python"]);
+    let view = settle(&window, cx);
+    assert!(
+        view.rows[0].id.ends_with("python-Python311"),
+        "the provider's order is back: {:?}",
+        view.rows
+    );
 }
 
 /// A pinned application sharing its name with another says what its row
@@ -1751,10 +2013,16 @@ fn a_pin_sharing_its_title_says_its_rows_subtitle(cx: &mut TestAppContext) {
     );
 }
 
+/// A long outcome — the kind of message a picker or download failure
+/// reports — is the toast (#249): its first line, truncated, with a details
+/// affordance, in a strip that stays one line tall. The full text opens in
+/// the details popover above the footer, wrapped and scrollable, by the
+/// toast key and by a click; Escape and the popover's own close button
+/// close the details, leaving the toast.
 #[gpui::test]
-fn a_long_error_wraps_grows_and_scrolls_inside_the_footer(cx: &mut TestAppContext) {
+fn a_long_outcome_shows_its_first_line_and_opens_in_full_above_the_footer(cx: &mut TestAppContext) {
     // The kind of message a picker or download failure reports: long
-    // enough to wrap past the footer's 50px floor and past its cap.
+    // enough to wrap past the popover's cap.
     let detail = "the operation could not be completed because the target \
                   system refused the connection and every retry failed, so \
                   nothing was installed and the previous state was kept";
@@ -1764,117 +2032,111 @@ fn a_long_error_wraps_grows_and_scrolls_inside_the_footer(cx: &mut TestAppContex
     launcher.show_error(message.clone());
     let (window, cx) = open_launcher(cx, launcher);
 
-    // A narrow window: the message wraps within the footer's width — not
-    // one line clipped at the window's right edge — the footer grows past
-    // its 50px floor, and the message is taller than the capped strip, so
-    // the overflow must scroll rather than disappear.
+    // A narrow window: the toast's one line and its controls all have to
+    // fit.
     cx.simulate_resize(gpui::size(px(380.), px(420.)));
     let view = settle(&window, cx);
     assert_eq!(view.status, Status::Error(message.clone()));
     let footer = cx
         .debug_bounds("status-error")
         .expect("the footer is rendered");
-    let text = cx
-        .debug_bounds("status-message")
-        .expect("the message is rendered");
+    let line = cx
+        .debug_bounds("toast-title")
+        .expect("the toast's one line");
+    let affordance = cx
+        .debug_bounds("toast-details-button")
+        .expect("the details affordance");
     assert!(
-        text.right() <= footer.right(),
-        "the message wraps within the footer, not past its right edge"
+        line.right() <= footer.right(),
+        "the first line fits in the strip: {line:?} in {footer:?}"
     );
     assert!(
-        text.size.height > px(60.),
-        "the message wrapped to several lines: {:?}",
-        text.size.height
+        line.size.height < px(30.),
+        "one line, not several: {:?}",
+        line.size.height
     );
     assert!(
-        footer.size.height > px(50.),
-        "the footer grew past its 50px floor: {:?}",
+        footer.size.height <= px(55.),
+        "the strip stays one line tall: {:?}",
         footer.size.height
-    );
-    assert!(
-        footer.size.height <= px(147.5),
-        "the footer is capped at 35% of the panel: {:?}",
-        footer.size.height
-    );
-    assert!(
-        text.size.height > footer.size.height,
-        "the overflow is scrollable, not cut"
     );
 
-    // A short window: the cap follows the panel down (35% of 200px), so
-    // the list keeps most of the window, and the overflow still scrolls.
-    cx.simulate_resize(gpui::size(px(640.), px(200.)));
+    // The toast key opens the full text in the popover above the footer.
+    cx.simulate_keystrokes(TOAST_KEY);
     settle(&window, cx);
+    let details = cx
+        .debug_bounds("toast-details")
+        .expect("the details popover");
     let footer = cx
         .debug_bounds("status-error")
         .expect("the footer is rendered");
-    let text = cx
-        .debug_bounds("status-message")
-        .expect("the message is rendered");
     assert!(
-        footer.size.height <= px(70.5),
-        "the cap follows the panel height: {:?}",
-        footer.size.height
+        details.bottom() <= footer.top() + px(1.),
+        "the popover is above the footer: {details:?}, {footer:?}"
     );
-    assert!(text.size.height > footer.size.height);
+    // The full text is wrapped, not one clipped line, and scrolls past
+    // the popover's cap rather than being cut.
+    let text = cx
+        .debug_bounds("toast-details-text")
+        .expect("the full text's viewport");
+    let full = cx
+        .debug_bounds("toast-details-title")
+        .expect("the full text");
+    assert!(
+        full.size.height > px(60.),
+        "the text wrapped to several lines: {:?}",
+        full.size.height
+    );
+    assert!(
+        text.size.height <= px(200.5) && full.size.height > text.size.height + px(20.),
+        "the overflow scrolls past the cap: text {:?}, full {:?}",
+        text.size.height,
+        full.size.height
+    );
 
-    // The wheel over the footer scrolls the message itself, the same
-    // event the list's wheel test dispatches (negative scrolls down): the
-    // message's painted position moves up.
-    let before = text.top();
+    // The wheel over the text scrolls it (negative scrolls down): the
+    // text's painted position moves up.
+    let before = full.top();
     cx.simulate_event(gpui::ScrollWheelEvent {
-        position: footer.center(),
+        position: text.center(),
         delta: gpui::ScrollDelta::Pixels(gpui::point(px(0.), px(-80.))),
         modifiers: Modifiers::none(),
         touch_phase: gpui::TouchPhase::Moved,
     });
     cx.run_until_parked();
     redraw(&window, cx);
-    let text = cx
-        .debug_bounds("status-message")
-        .expect("the message is rendered");
+    let full = cx
+        .debug_bounds("toast-details-title")
+        .expect("the full text");
     assert!(
-        text.top() < before,
-        "the message scrolled up within the footer"
+        full.top() < before,
+        "the text scrolled up inside the popover"
     );
 
-    // Scrolled far down, the wheel reaches the end: the last line lands
-    // inside the strip.
-    cx.simulate_event(gpui::ScrollWheelEvent {
-        position: footer.center(),
-        delta: gpui::ScrollDelta::Pixels(gpui::point(px(0.), px(-4000.))),
-        modifiers: Modifiers::none(),
-        touch_phase: gpui::TouchPhase::Moved,
-    });
-    cx.run_until_parked();
-    redraw(&window, cx);
-    let footer = cx
-        .debug_bounds("status-error")
-        .expect("the footer is rendered");
-    let text = cx
-        .debug_bounds("status-message")
-        .expect("the message is rendered");
+    // Escape closes the details, leaving the toast.
+    cx.simulate_keystrokes("escape");
+    settle(&window, cx);
     assert!(
-        text.bottom() <= footer.bottom() + px(1.),
-        "the last line can be scrolled into view"
+        cx.debug_bounds("toast-details").is_none(),
+        "the details closed"
     );
+    assert!(cx.debug_bounds("toast").is_some(), "the toast stays");
 
-    // And back up: the first line is reachable again.
-    cx.simulate_event(gpui::ScrollWheelEvent {
-        position: footer.center(),
-        delta: gpui::ScrollDelta::Pixels(gpui::point(px(0.), px(4000.))),
-        modifiers: Modifiers::none(),
-        touch_phase: gpui::TouchPhase::Moved,
-    });
-    cx.run_until_parked();
-    redraw(&window, cx);
-    let text = cx
-        .debug_bounds("status-message")
-        .expect("the message is rendered");
+    // A click on the affordance opens them again, and the popover's own
+    // close button closes them.
+    cx.simulate_click(affordance.center(), Modifiers::none());
+    settle(&window, cx);
+    assert!(cx.debug_bounds("toast-details").is_some(), "open by click");
+    let close = cx
+        .debug_bounds("toast-details-close")
+        .expect("the popover's close button");
+    cx.simulate_click(close.center(), Modifiers::none());
+    settle(&window, cx);
     assert!(
-        text.top() >= before - px(1.),
-        "the first line scrolls back into view"
+        cx.debug_bounds("toast-details").is_none(),
+        "closed by the popover's button"
     );
+    assert!(cx.debug_bounds("toast").is_some(), "the toast stays");
 }
 
 /// The idle footer's selected action: its button, right-aligned in the
@@ -2098,7 +2360,13 @@ fn a_running_action_cannot_be_dispatched_again_through_the_footer_button(cx: &mu
     let (window, cx) = open_launcher(cx, launcher);
 
     cx.simulate_input("fire");
-    wait_for_rows(&window, cx, &["Launch Firefox"]);
+    // Pane's install row matches the four letters fuzzily below the
+    // application's prefix match (#193).
+    wait_for_rows(
+        &window,
+        cx,
+        &["Launch Firefox", "Install extension from Git…"],
+    );
     let nodes = accessible_nodes(cx);
     node(&nodes, "Button", "Open application");
     let button = cx
@@ -2186,16 +2454,16 @@ fn the_footer_button_labels_the_action_from_identity_not_the_row_title(cx: &mut 
     node(&nodes, "Button", "Enable");
 }
 
-/// A long status takes the hint's place, and the primary action steps
-/// aside while Actions stays; the message stays readable: it wraps within
-/// the strip's room and the strip grows with it.
+/// A long outcome takes the hint's place, and the primary action steps
+/// aside while Actions stays; the toast's one line stays readable: the
+/// first line of the message, truncated, short of the buttons, with the
+/// details affordance (#249).
 #[gpui::test]
-fn a_long_status_replaces_the_idle_strip_and_stays_readable(cx: &mut TestAppContext) {
+fn a_long_outcome_replaces_the_idle_strip_as_one_readable_line(cx: &mut TestAppContext) {
     let detail = "the operation could not be completed because the target \
                   system refused the connection and every retry failed, so \
                   nothing was installed and the previous state was kept";
-    let message =
-        format!("Could not open a folder picker: {detail}. {detail}. {detail}. {detail}.");
+    let message = format!("Could not open a folder picker: {detail}. {detail}.");
     let launcher = Launcher::new(Runtime::start(), Vec::new());
     launcher.show_error(message.clone());
     let (window, cx) = open_launcher(cx, launcher);
@@ -2203,12 +2471,9 @@ fn a_long_status_replaces_the_idle_strip_and_stays_readable(cx: &mut TestAppCont
     let view = settle(&window, cx);
     assert_eq!(view.status, Status::Error(message));
 
-    let footer = cx
-        .debug_bounds("status-error")
-        .expect("the footer is rendered");
-    let text = cx
-        .debug_bounds("status-message")
-        .expect("the message is rendered");
+    let line = cx
+        .debug_bounds("toast-title")
+        .expect("the toast's one line");
     assert!(
         cx.debug_bounds("primary-action").is_none(),
         "no primary action while a status shows"
@@ -2218,21 +2483,20 @@ fn a_long_status_replaces_the_idle_strip_and_stays_readable(cx: &mut TestAppCont
         .expect("Actions stays while a status shows");
     assert!(
         cx.debug_bounds("footer-hint").is_none(),
-        "the message takes the hint's place"
+        "the toast takes the hint's place"
     );
     assert!(
-        text.right() <= actions.left(),
-        "the message wraps short of Actions: {text:?}, {actions:?}"
+        line.right() <= actions.left(),
+        "the one line fits short of Actions: {line:?}, {actions:?}"
     );
     assert!(
-        text.size.height > px(50.),
-        "the message wrapped to several lines: {:?}",
-        text.size.height
+        line.size.height < px(30.),
+        "one line, not several: {:?}",
+        line.size.height
     );
     assert!(
-        footer.size.height > px(50.),
-        "the footer grew past its 50px floor: {:?}",
-        footer.size.height
+        cx.debug_bounds("toast-details-button").is_some(),
+        "the details affordance"
     );
 }
 
@@ -2578,17 +2842,21 @@ fn root_rows_select_under_the_moving_pointer_at_once(cx: &mut TestAppContext) {
     );
     let view = settle(&window, cx);
     settle_frames(cx);
-    assert_eq!(view.selected, Some(0));
+    // The blank query's order (#199) collates the commands by title, so
+    // the JavaScript sample is the first row: the Rust sample is the
+    // unselected row the pointer moves onto, and every row the test
+    // reads is read by its title, never by its place.
+    assert_eq!(selected_title(&view), Some("JavaScript sample"));
 
     let row = cx
-        .debug_bounds("row-JavaScript sample")
+        .debug_bounds("row-Rust sample")
         .expect("an unselected row");
     // The first event after the window shows only records where the
     // pointer is (a window appearing under a resting pointer gets one).
     arrive(cx, row.center());
     assert_eq!(
-        settle(&window, cx).selected,
-        Some(0),
+        selected_title(&settle(&window, cx)),
+        Some("JavaScript sample"),
         "the first event selected nothing"
     );
     cx.simulate_mouse_move(
@@ -2597,7 +2865,11 @@ fn root_rows_select_under_the_moving_pointer_at_once(cx: &mut TestAppContext) {
         Modifiers::none(),
     );
     let view = settle(&window, cx);
-    assert_eq!(view.selected, Some(1), "the pointer's movement selected it");
+    assert_eq!(
+        selected_title(&view),
+        Some("Rust sample"),
+        "the pointer's movement selected it"
+    );
     assert_eq!(settle_frames(cx), 0, "the root wash does not fade");
 
     // The footer's action follows what the pointer selected: Pane's own
@@ -2605,13 +2877,13 @@ fn root_rows_select_under_the_moving_pointer_at_once(cx: &mut TestAppContext) {
     let own = view
         .rows
         .iter()
-        .position(|row| !["Rust sample", "JavaScript sample"].contains(&row.title.as_str()))
-        .expect("Pane lists its own rows after the commands");
+        .position(|row| !matches!(row.title.as_str(), "Rust sample" | "JavaScript sample"))
+        .expect("Pane lists its own rows among the commands");
     let own_row = cx
         .debug_bounds(selector(&format!("row-{}", view.rows[own].title)))
         .expect("Pane's own row is drawn");
     cx.simulate_mouse_move(own_row.center(), None::<MouseButton>, Modifiers::none());
-    assert_eq!(settle(&window, cx).selected, Some(own));
+    assert_eq!(selected_title(&settle(&window, cx)), Some("Settings…"));
     let nodes = accessible_nodes(cx);
     assert!(
         !nodes
@@ -2620,14 +2892,14 @@ fn root_rows_select_under_the_moving_pointer_at_once(cx: &mut TestAppContext) {
         "the footer names the selected row's own action"
     );
     cx.simulate_mouse_move(row.center(), None::<MouseButton>, Modifiers::none());
-    assert_eq!(settle(&window, cx).selected, Some(1));
+    assert_eq!(selected_title(&settle(&window, cx)), Some("Rust sample"));
     node(&accessible_nodes(cx), "Button", "Open command");
 
     // Enter opens what the pointer selected.
     cx.simulate_keystrokes("enter");
     let view = settle(&window, cx);
     assert!(matches!(view.screen, Screen::Command));
-    assert_eq!(view.title, "JavaScript sample");
+    assert_eq!(view.title, "Rust sample");
     settle_frames(cx);
 
     // The opened command's items share root search's visuals (#100):
@@ -2679,6 +2951,55 @@ fn root_rows_sit_under_their_section_labels(cx: &mut TestAppContext) {
     let first = cx.debug_bounds("row-Charlie").expect("the match");
     assert_eq!(first.top(), label.bottom() + px(2.));
     assert!(cx.debug_bounds("section-Commands").is_none());
+}
+
+/// The title characters of the best placement, highlighted in the accent
+/// (#193): scattered letters one run each, in the byte ranges the row's
+/// title draws them by, and nothing for a row whose match sits in its
+/// subtitle.
+#[gpui::test]
+fn the_matched_characters_of_the_best_placement_are_highlighted(cx: &mut TestAppContext) {
+    let mut clearing = command("Clear cache", JAVASCRIPT.component);
+    clearing.subtitle = Some("Delete downloaded files".into());
+    let (window, cx) = open_with(
+        cx,
+        vec![command("Clipboard History", RUST.component), clearing],
+    );
+    settle(&window, cx);
+
+    // "clhis" places c, l at the start of the title and h, i, s in
+    // "History".
+    cx.simulate_input("clhis");
+    let view = settle(&window, cx);
+    assert_eq!(
+        view.rows
+            .iter()
+            .map(|row| row.title.as_str())
+            .collect::<Vec<_>>(),
+        ["Clipboard History"]
+    );
+    assert!(cx.debug_bounds("row-Clipboard History").is_some());
+    let matched = cx.read_entity(&window, |window, _| {
+        window.launcher().presentation().rows[0].matched.clone()
+    });
+    assert_eq!(matched, [0..2, 10..13], "cl and his, the title's own bytes");
+
+    // A row found by its subtitle alone highlights nothing in its title.
+    cx.simulate_keystrokes("escape");
+    settle(&window, cx);
+    cx.simulate_input("del files");
+    let view = settle(&window, cx);
+    assert_eq!(
+        view.rows
+            .iter()
+            .map(|row| row.title.as_str())
+            .collect::<Vec<_>>(),
+        ["Clear cache"]
+    );
+    let matched = cx.read_entity(&window, |window, _| {
+        window.launcher().presentation().rows[0].matched.clone()
+    });
+    assert!(matched.is_empty(), "the match sits in the subtitle");
 }
 
 /// Three root rows — Alpha, Bravo and Charlie, which open the Rust,
@@ -3540,7 +3861,7 @@ mod clipboard_split {
         loop {
             cx.run_until_parked();
             let status = cx.read_entity(window, |window, _| window.launcher().view().status);
-            if status != pane_core::Status::Running {
+            if !matches!(status, pane_core::Status::Running { .. }) {
                 return;
             }
             assert!(std::time::Instant::now() < deadline, "timed out");
@@ -4701,4 +5022,62 @@ fn five_pins_leave_no_room_for_the_pin_hint(cx: &mut TestAppContext) {
     assert!(cx.debug_bounds("pin-hint").is_none());
     let strip = cx.debug_bounds("pinned-strip").expect("the strip");
     assert_eq!(strip.size.height, px(2. + 80. + 6.));
+}
+
+/// How many timer firings the registrations sample's dynamic root item
+/// says it has counted, from its subtitle "N timer firings, ...".
+fn ticks_of(view: &pane_core::LauncherView) -> u64 {
+    view.rows
+        .iter()
+        .find(|row| row.title == "Registrations: counting")
+        .and_then(|row| row.subtitle.as_deref())
+        .and_then(|subtitle| subtitle.split(' ').next())
+        .and_then(|count| count.parse().ok())
+        .unwrap_or(0)
+}
+
+/// A dynamic root item's row is drawn in root search, its action runs
+/// with Enter, and the timer updates the row as it fires (#158): real
+/// key events, the registrations sample, and the activation entry point
+/// that registers the item as Pane may run the code.
+#[gpui::test]
+fn a_dynamic_root_items_row_and_its_action_run(cx: &mut TestAppContext) {
+    let data = tempfile::tempdir().unwrap();
+    let launcher =
+        Launcher::with_packages(Runtime::start(), vec![], data.path().join("extensions"));
+    let (window, cx) = open_launcher(cx, launcher.clone());
+    let folder = tempfile::tempdir().unwrap();
+    let package = packages::assembled_package("sample-registrations", folder.path());
+    cx.foreground_executor()
+        .block_on(launcher.install_package(&package));
+
+    // The activation entry point registered the item: its row is listed
+    // and drawn, nothing counted yet.
+    let view = until(&window, cx, |view| {
+        view.rows
+            .iter()
+            .any(|row| row.title == "Registrations: counting")
+    });
+    let row = view
+        .rows
+        .iter()
+        .find(|row| row.title == "Registrations: counting")
+        .unwrap();
+    assert_eq!(
+        row.subtitle.as_deref(),
+        Some("0 timer firings, 0 watcher changes (Rust)")
+    );
+    assert!(
+        cx.debug_bounds("row-Registrations: counting").is_some(),
+        "the dynamic item's row is rendered"
+    );
+
+    // Enter runs its first action: the count rises in the row.
+    let before = ticks_of(&view);
+    cx.simulate_keystrokes("enter");
+    let view = until(&window, cx, |view| ticks_of(view) > before);
+
+    // The timer fires by the system's clock and updates the row again.
+    let counted = ticks_of(&view);
+    until(&window, cx, |view| ticks_of(view) > counted);
 }

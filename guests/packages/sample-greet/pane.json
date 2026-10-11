@@ -1,0 +1,21 @@
+{
+  "manifestVersion": 1,
+  "title": "Rust greet provider sample",
+  "version": "0.1.0",
+  "apiVersion": "0.1",
+  "commands": [
+    {
+      "id": "greet",
+      "title": "Rust greet provider",
+      "subtitle": "Provides the pane-samples:greet@1 capability, answering in Rust",
+      "component": "sample_greet.wasm"
+    }
+  ],
+  "provides": [
+    {
+      "capability": "pane-samples:greet@1",
+      "component": "sample_greet.wasm",
+      "operations": ["greet"]
+    }
+  ]
+}

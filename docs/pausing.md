@@ -78,8 +78,10 @@ What is **not** a failure of the package:
   reason and send nothing. Another
   package calling its operations is answered `unavailable` with the same
   reason. Root search tells a paused command from one this system does not
-  support by its reason's kind (`Unavailable::Paused` against
-  `Unavailable::OnThisSystem`).
+  support, and from one whose package
+  [waits](dependencies.md#waiting-for-a-required-dependency) for a required
+  dependency, by its reason's kind (`Unavailable::Paused`,
+  `Unavailable::OnThisSystem` and `Unavailable::Waiting`).
 - The status line (the launcher's toast) says "<title> crashed 3 times
   within 5 minutes and is paused" ("stopped responding 3 times", or
   "crashed or stopped responding 3 times", when the count holds stopped
@@ -97,7 +99,10 @@ What is **not** a failure of the package:
 - Its settings, content, cache and credentials are kept. Clearing its cache,
   uninstalling it and the rest of Settings › Extensions work, since none of them
   runs it.
-- Other packages keep running.
+- Other packages keep running. A package that requires the paused one
+  [waits](dependencies.md#waiting-for-a-required-dependency) for it, coming
+  back on Retry, rather than having its calls refused; waiting never
+  counts towards pausing it.
 
 Paused is **not** disabled: disabled is the user's choice and adds nothing
 to root search; paused is Pane's, and says why.
@@ -625,7 +630,7 @@ Quit leaves no marker).
   generation ends.
 - The crash count is not kept across restarts; a package that crashes
   twice per session is never paused.
-- `pane_js.py`'s generated entry, which applies the JS adapter, is not part
+- The build's generated entry, which applies the JS adapter, is not part
   of the prebuilt components' input digest (the adapter itself is): a change
   to that template alone needs `cargo xtask js-guests` by hand.
 - Nothing here is platform-specific (it lives in `pane-core`); it has run on

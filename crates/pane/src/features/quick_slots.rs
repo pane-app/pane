@@ -9,8 +9,9 @@
 //! - **The home shows** while root search's trimmed query is blank — the
 //!   "Pinned" label and the pins above the rows — and a query hides it;
 //!   clearing the query brings it back. When root search comes on screen,
-//!   the core is asked for the indexed results the slots pin, if it never
-//!   listed them ([`pane_core::Launcher::resolve_quick_slots`]).
+//!   the core is asked for the indexed results its home lists below the
+//!   pins, if it has not listed them since root search was last shown
+//!   ([`pane_core::Launcher::resolve_root_home`]).
 //! - **The layout** is the Launcher page's choice: a strip of tiles
 //!   (horizontal), five to a row and wrapping onto more, with the pin hint
 //!   after the last pin while its cell is in the last row; or result rows
@@ -57,7 +58,7 @@ use pane_core::{
     KeyboardAction, LauncherView, PinnedLayout, QuickSlot, ResultAction, Screen, SlotChange,
 };
 
-use crate::app::{KEY_CONTEXT, LauncherWindow};
+use crate::app::{KEY_CONTEXT, LauncherWindow, Spot};
 use crate::ui::extension_icon::RowIcon;
 use crate::ui::pinned::{
     HOME_CHILDREN, PIN_HINT, SlotContent, home, home_rows, pin_hint, pinned_slot, shows_pin_hint,
@@ -187,16 +188,17 @@ fn slot_accessibility(index: usize, slot: &QuickSlot, element: Stateful<Div>) ->
 
 impl LauncherWindow {
     /// Follows the launcher's screen: every pin gets its focus, and when
-    /// root search comes on screen, the indexed results the slots pin are
-    /// asked for if they never were, and the window redraws once they are
-    /// listed.
+    /// root search comes on screen, the results its home lists below the
+    /// pins — the indexed results, asked for if they have not been since
+    /// root search was last shown (#199) — are asked for, and the window
+    /// redraws once they are listed.
     pub(crate) fn sync_home(&mut self, cx: &mut Context<Self>) {
         let pins = self.launcher.quick_slots().len();
         self.ensure_slot_focus(pins, cx);
         let on_root = matches!(self.launcher.screen(), Screen::Root { .. });
         let was = std::mem::replace(&mut self.home.on_root, on_root);
         if on_root && !was {
-            let resolving = self.launcher.resolve_quick_slots();
+            let resolving = self.launcher.resolve_root_home();
             cx.spawn(async move |this, cx| {
                 resolving.await;
                 this.update(cx, |_, cx| cx.notify()).ok();
@@ -428,17 +430,18 @@ impl LauncherWindow {
     /// it: Ctrl and a digit, while the search field, a slot or a command's
     /// list has focus (an overlay's own field never does), picks what that
     /// number names (see [`crate::features::number_hints::numbered`]) — once per press: the
-    /// system's repeats of a held chord run nothing more.
+    /// system's repeats of a held chord run nothing more. Every key press
+    /// ends the look at the numbers first ([`Self::chord_pressed`]): a
+    /// chord or a typed key, whatever it does, is not a look at the
+    /// numbers.
     fn quick_slot_chord(
         &mut self,
         event: &KeyDownEvent,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.chord_pressed(cx);
         let Some(digit) = chord_digit(&event.keystroke) else {
-            // Another key while Ctrl is held: a chord, not a look at the
-            // numbers.
-            self.chord_pressed();
             return;
         };
         let field = self.query_field().focus_handle(cx).is_focused(window);
@@ -450,9 +453,16 @@ impl LauncherWindow {
             return;
         }
         cx.stop_propagation();
-        if !event.is_held {
-            self.pick_number(digit, window, cx);
+        if event.is_held {
+            return;
         }
+        // The chord waits for the current query's list to be published
+        // (#203), as Enter does, and is replayed through this same path —
+        // applied to the row the published list selects.
+        if self.hold_key(event.keystroke.clone(), window, cx) {
+            return;
+        }
+        self.pick_number(digit, window, cx);
     }
 
     /// `content`, the launcher's root, handling the slots' chords, the pin
@@ -565,6 +575,12 @@ impl LauncherWindow {
         theme: &Theme,
         cx: &mut Context<Self>,
     ) -> Stateful<Div> {
+        // Hovering a slot moves no selection, so the row takes the fainter
+        // hover wash, fading out once the pointer leaves (#245).
+        let hover = self
+            .motion
+            .hover
+            .look(Spot::Slot(index), cx.background_executor().now());
         let row = result_row_with(
             RowContent {
                 title: slot.title.clone().into(),
@@ -574,6 +590,7 @@ impl LauncherWindow {
                 unavailable_reason: slot.unavailable.clone().map(Into::into),
                 unavailable_id: ("slot-unavailable", index).into(),
                 selected: false,
+                hover,
                 icon: Some(slot_icon(&self.launcher, &slot, theme)),
             },
             RowMeta {
@@ -582,10 +599,15 @@ impl LauncherWindow {
             },
             theme,
         )
-        .focus_visible(|row| row.bg(theme.row_hover));
+        // The keyboard's focus on the row: the hover wash's own value,
+        // as the row's focus treatment always was a wash.
+        .focus_visible(|row| row.bg(theme.hover_wash));
         let press = crate::ui::result_row::pressed_wash(false, theme);
         let row = row
             .id(("slot", index))
+            .on_hover(cx.listener(move |this, over: &bool, _, cx| {
+                this.motion.hover.set(Spot::Slot(index), *over, cx);
+            }))
             .active(move |row| row.bg(press))
             .debug_selector(move || format!("slot-{}", index + 1));
         slot_accessibility(index, &slot, self.slot_input(index, row, cx))
@@ -638,10 +660,19 @@ impl LauncherWindow {
             title: slot.title.clone().into(),
             icon: slot_icon(&self.launcher, &slot, theme),
             number,
+            // Hovering a slot moves no selection: the fainter wash,
+            // fading out once the pointer leaves (#245).
+            hover: self
+                .motion
+                .hover
+                .look(Spot::Slot(index), cx.background_executor().now()),
             unavailable: slot.unavailable.clone().map(Into::into),
         };
         let tile = self
             .slot_input(index, pinned_slot(content, theme), cx)
+            .on_hover(cx.listener(move |this, over: &bool, _, cx| {
+                this.motion.hover.set(Spot::Slot(index), *over, cx);
+            }))
             // What tells it apart from a result of its title, which its
             // tile has no room to show.
             .when_some(slot.detail.clone(), |tile, detail| {

@@ -110,6 +110,8 @@ impl Launcher {
     pub(super) fn recover_state(&self, state: &mut State) {
         state.changing.clear();
         self.reconcile_pauses(state);
+        // The pauses may have changed, and with them who waits.
+        state.recheck_waiting();
         self.show_root(state, None);
         state.view.status = Status::Error(
             "Pane recovered from an internal error; what was in progress may not have finished. \
@@ -284,7 +286,7 @@ mod tests {
 
     use super::*;
     use crate::launcher::{Changing, CommandRegistration};
-    use crate::packages::{PackageIdentity, Store};
+    use crate::packages::{CommandMatches, CommandWhen, PackageIdentity, Store};
     use crate::runtime::{Runtime, RuntimeFailure};
 
     /// A launcher whose one command is the Rust sample, which draws a
@@ -301,6 +303,9 @@ mod tests {
             component,
             takes_query: false,
             search: false,
+            keywords: Vec::new(),
+            when: CommandWhen::default(),
+            matches: CommandMatches::default(),
         };
         let launcher = Launcher::new(Ok(runtime.clone()), vec![command]);
         block_on(launcher.activate_selected());

@@ -19,6 +19,26 @@ come from npm ([npm](npm.md#dependencies-from-npm)), and since
 [#46](https://github.com/pane-app/pane/issues/46) from a Git repository
 ([Git](git.md#dependencies-from-git)), with the same plan.
 
+A package that requires another can also **wait** for it: while a
+required dependency is missing, disabled, [paused](pausing.md) or waiting
+itself, the dependent's commands stay listed, saying what they need, and
+none of their work runs ([below](#waiting-for-a-required-dependency)).
+Since [#156](https://github.com/pane-app/pane/issues/156) the same holds
+for a required [capability](operations.md#capabilities) that no provider
+can serve, and a use of every provider (`"use": "all"`) never waits:
+a call to it degrades to an empty list.
+
+The capabilities a package **uses** are planned with its dependencies
+([operations](operations.md#capabilities)): the preview lists who provides
+each, installing the package installs the default provider it names when
+no installed package provides the capability, and a capability nobody
+provides stops nothing — the package waits for a provider
+([below](#installing)). Disabling or uninstalling the last provider of a
+capability that other packages require says who will wait for one
+([below](#disabling-a-required-dependency)), and disabling a required
+dependency can leave its dependents waiting rather than disabling them
+too ([below](#disabling-a-required-dependency)).
+
 ## Declaring
 
 ```json
@@ -143,6 +163,36 @@ them, and lists them under the package's details, each source as declared
   <title>, installed" (or "installed but disabled").
 - "Not needed on this system: `x` from local:../x (only on Windows)".
 
+The capabilities the package uses follow, each a line of the same plan
+([operations](operations.md#capabilities)):
+
+- "Uses acme:translate@1: provided by DeepL Translate (installed)": an
+  installed provider is used rather than the package's named default being
+  installed beside it — even a disabled one, which the line says stays
+  disabled, and one paused after an error. A provider this install brings
+  in (a dependency or a default of another use) is named too, as
+  "provided by DeepL Translate (installed with it)".
+- "Uses acme:translate@1: no installed extension provides it; Pane installs
+  DeepL Translate, which Caller names": the `default` the use declares,
+  installed when no provider is installed, so it is the first and serves.
+  It is planned, claimed, installed before the package that names it and
+  rolled back with the rest, as a missing required dependency is, and the
+  Install row's line says it ("…, and install DeepL Translate, which it
+  names").
+- "Uses acme:translate@1: no installed extension provides it; Caller waits
+  until one does": a required use with no provider and no default, or one
+  narrowed to some commands ("…; the commands of Caller that need it wait
+  until one does"). Installing never stops for a missing capability, and
+  the package waits for a provider, coming back by itself once one is
+  installed.
+- "Provides acme:translate@1 (DeepL Translate provides it too; choose in
+  Settings)": a capability the package provides that another installed
+  package (or one installed with it) provides too.
+- "Optional: acme:translate@1, no installed extension provides it; install
+  one to use it": an optional use gates nothing and its default is never
+  installed ("…; Pane does not install `npm:@acme/translate`, which Caller
+  names; install it yourself to use it").
+
 ### Installing what the preview showed
 
 The Install row carries what its plan assumed: the requested manifest, and
@@ -162,10 +212,13 @@ and choose Install once more". An install without a preview
 plan out, then claims the same way before installing.
 
 Installing then adds the missing required packages, each after its own
-required dependencies, then the requested one, and shows "Installed Caller
-with JavaScript operations sample, which it requires". An Update does the
-same for a new copy that adds a required dependency ("Updated Caller with
-…").
+required dependencies, the default providers of the requested package's
+uses, then the requested one, and shows "Installed Caller with JavaScript
+operations sample, which it requires" ("…with DeepL Translate, which it
+names" for a default provider; both: "…with JavaScript operations sample,
+which it requires, and DeepL Translate, which it names"). An Update does
+the same for a new copy that adds a required dependency or uses a
+capability ("Updated Caller with …").
 
 ### What stops an install
 
@@ -199,8 +252,20 @@ installed:", listing each:
   conflict". There is one installed copy per source and no solver choosing
   among versions, so no update advice is given.
 - **Itself**: a package naming its own folder as a dependency.
+- **The default provider of a use**: a `default` that cannot be installed
+  — its folder is missing or not a package, or its components do not pass
+  Pane's checks — stops the install as an uninstallable required dependency
+  does ("Caller names `local:../translate` as the default provider of
+  `acme:translate@1`, from <folder>, which cannot be installed: …"). So
+  does one that does not provide the capability it is named for, not on
+  this system, or without an operation the use calls; an installed copy
+  that does not provide it is not replaced ("…; Pane does not replace the
+  installed copy of DeepL Translate while installing another extension:
+  update it from its folder if a newer copy provides it"). A missing
+  required capability without a default never stops an install: the
+  package waits for a provider.
 - **Too many**: more than 16 packages would be installed with it
-  (`MAX_INSTALLED_WITH`).
+  (`MAX_INSTALLED_WITH`), default providers counted.
 
 An optional dependency never stops an install, whatever its state.
 
@@ -236,10 +301,18 @@ enabled packages require does not disable it yet. Pane shows "Disable
   closure**, each as "<title>, which requires <what brought it in> ·
   <identity>", nearest first, and those in it the user disabled already as
   "Already disabled: …" (they are not changed);
+- when the package is the last installed provider of a capability that
+  enabled packages outside the closure require, a line naming them:
+  "Caller and Other will wait for acme:translate@1 until another extension
+  provides it". With another provider left there is no line, and
+  capabilities add no package to the closure, since another provider may
+  serve;
 - "Each keeps its settings and saved data. Enabling <title> again does not
   enable them: enable each in Settings › Extensions.";
 - the rows **Disable all N** (N counts the package itself; first and
-  selected) and **Cancel** ("Keep them all enabled").
+  selected), **Disable only <title>** ("The extensions that require it wait
+  for it, and come back when it is enabled again") and **Cancel** ("Keep
+  them all enabled").
 
 Cancel, or Back, returns to the extension's page in Settings (the launcher
 to root search; to the extension list with the package's row selected
@@ -254,6 +327,15 @@ search, an open one closes, its instances stop and its generation ends
 ([generations](generations.md)), its hotkeys are released, and its
 settings, content, cache and credentials are kept. A package with no enabled
 required dependents is disabled at once, as before.
+
+**Disable only** disables the package alone, as `Launcher::set_enabled`
+does: "Disabled Greeter", keeping every dependent enabled. Each of them
+then [waits](#waiting-for-a-required-dependency) for it — its commands say
+what they need, and none of their work runs — and comes back by itself
+once it is enabled again. The packages using a capability it provides wait
+for a provider the same way, once that waiting covers capabilities. A
+package disabled already, or uninstalled meanwhile, is not disabled again:
+nothing changes and the list is shown again.
 
 If, when Disable all is chosen, an enabled package requires it that was not
 shown (one was installed or enabled meanwhile), nothing is disabled and the
@@ -275,14 +357,15 @@ too), though not disabled again.
 
 **Enabling again** enables only the package pressed: its dependents stay
 disabled, across restarts too, until the user enables each. Enabling a
-dependent whose required dependency is still disabled is allowed; its calls
-to it answer `disabled`, as before.
+dependent whose required dependency is still disabled is allowed, and the
+dependent then [waits](#waiting-for-a-required-dependency) for it, coming
+back by itself once it is enabled.
 
 **Pausing is not disabling.** When Pane [pauses](pausing.md) a required
 dependency after it failed, nothing else changes and nothing is asked:
-its dependents stay enabled, and their calls to it are refused while it is
-paused. The user disabling a paused package still asks about its
-dependents (and ends the pause, as disabling does).
+its dependents stay enabled and [wait](#waiting-for-a-required-dependency)
+for it, coming back on Retry. The user disabling a paused package still
+asks about its dependents (and ends the pause, as disabling does).
 
 `Launcher::set_enabled` remains the single-package switch it was: it
 disables only the package given, without asking.
@@ -304,6 +387,13 @@ it?" with:
   first. Unlike disabling, disabled dependents are uninstalled too, shown
   as "<title> (disabled), which requires …": without the package they
   require they could never work again;
+- when the package is the last installed provider of a capability that
+  enabled packages outside the closure require, the same line disabling
+  shows: "Caller will wait for acme:translate@1 until another extension
+  provides it". With another provider left there is no line, and
+  capabilities add no package to the closure, since another provider may
+  serve; the packages that use the capability are left installed, waiting
+  for a provider;
 - "Saved data: Greeter none · Caller 1 setting and 1 content record", each
   package's settings and content (the one asked about first), the data the
   choice is about;
@@ -359,19 +449,118 @@ it answer `not-found` meanwhile.
 `Launcher::uninstall` remains the single-package uninstall it was: it
 uninstalls only the package given, without asking.
 
+## Waiting for a required dependency
+
+Added for [#152](https://github.com/pane-app/pane/issues/152), the first
+slice of [#151](https://github.com/pane-app/pane/issues/151) (ADR 0041),
+and extended to capabilities by
+[#156](https://github.com/pane-app/pane/issues/156).
+A command of an enabled, unpaused package **waits** while one of its
+package's required dependencies is missing, disabled, [paused](pausing.md)
+or waiting itself, or while one of its required capabilities
+([operations](operations.md#capabilities)) has no provider that is
+installed, enabled, not paused and not waiting — a provider that is also
+a consumer of the same capability never serving itself. Optional
+dependencies and optional uses never make a command wait, nor does a
+dependency the package needs only on other systems, nor a use narrowed
+to some commands for the commands it does not name, nor a use of every
+provider (`"use": "all"`), which degrades to an empty list instead. Pane
+computes who waits from what `pane.json` already declares and the
+packages' states. Every enabled, unpaused package starts as able to run,
+and any package with an unmet requirement is removed, repeating until
+nothing changes: a cycle of healthy packages runs, and a cycle with one
+member missing waits as a whole. A capability a waiting package provides
+does not count as provided, so its own consumers wait in turn. It is
+recomputed whenever a package is installed, uninstalled, enabled,
+disabled, paused, retried, reloaded or updated.
+
+While a command waits, nothing of it runs: not its view, run entry point,
+actions, arguments or setup screen; its [schedule](schedules.md)'s ticks,
+which are skipped and not replayed; its [service](services.md), which
+does not cycle; and its root and indexed results, which root search does
+not ask for. A package waiting as a whole answers its published
+operations `unavailable` ("<title> is waiting for <what>"). Waiting ends
+no [generation](generations.md) and stops no instance: a call or cycle
+already running finishes, and an open screen stays, its calls answering
+as calls do. Waiting never counts towards [pausing](pausing.md).
+
+The command's row in root search stays listed, saying what it needs
+("Needs <title>, which is <state>", the state being not installed,
+disabled, paused, or waiting for something else; for a capability,
+"Needs <capability>: <provider> is <state>" or "…: no extension provides
+it"), and a chain names what is actually missing ("Needs Notes Sync,
+which waits for Auth: Auth is disabled", or "Needs acme:translate@1:
+DeepL Translate, which waits for acme:auth@1: no extension provides it").
+A use narrowed with `commands` gates only the commands it names: the
+package's other commands stay available, and its status line says some
+commands wait. Pressing Enter shows the reason with a row that fixes it:
+"Enable <title>", "Retry <title>", "Open Manage extensions", or, for a
+capability nobody provides, "Install <default> (named by <title>)" — the
+default its use names — or "Install an extension that provides
+<capability>", which opens the install forms. Its quick slots, aliases,
+global hotkeys and fallbacks say the same reason and run nothing.
+
+When the requirement is met again — the dependency is enabled, retried,
+installed, or its package reloaded or updated, or a provider of the
+capability can serve again — the command comes back by itself, with
+nothing for the user to do: its row is ordinary again, its schedule starts
+from a full interval, its service's first cycle runs at once in the
+instance it still has, and root search asks for its results on the next
+query.
+
+### What Manage extensions shows
+
+Added for [#157](https://github.com/pane-app/pane/issues/157). The
+extension list and an extension's page in Settings say what waits and
+what it needs; the rows are data read from the waiting model and the
+manifests, never running anything.
+
+- The **status line** of an extension in the list gains "Enabled ·
+  Waiting for <what>" while the package waits, or "Enabled · Some
+  commands wait for <what>" when the requirement is narrowed to some
+  commands, so the broken extensions are found without opening each. A
+  disabled or paused extension says its own state, as before.
+- An **extension's page** lists each unmet requirement, with the chain
+  down to what is actually missing ("Needs Notes Sync, which waits for
+  Auth: Auth is disabled"), with a fix row beside it: "Enable <title>",
+  "Retry <title>", or "Install <title> again", which installs the
+  not-installed dependency from where it came (its identity names its
+  folder, npm package or Git repository). A fix applies at once, and the
+  requirement row disappears when the package comes back.
+- The page also lists each **cycle** the extension is part of, found from
+  the declarations alone — required dependencies, and the capabilities
+  one uses and another provides — healthy cycles included: they run, as
+  [ADR 0041](adr/0041-extensions-compose-through-capabilities-that-pane-brokers.md)
+  decides. "Requires itself through B and C: they wait together if one
+  cannot run, and Disable all or Uninstall all affects them together."
+
+Required capabilities join the requirement rows and their fix rows with
+[#156](https://github.com/pane-app/pane/issues/156) — "Install
+<default> (named by <title>)", "Choose a provider in Settings"
+([#154](https://github.com/pane-app/pane/issues/154)) or "Install an
+extension that provides <capability>", which opens the install forms —
+and the status line's narrowing. An optional requirement never shows as
+unmet.
+
 ## For later slices
 
 A plan (`crates/pane-core/src/dependencies.rs`) is data: its required edges
 name the dependent and the target by identity with the target's state, its
-problems are a kind with identities, and its wording is only in `Display`
-and `Plan::lines`, so the dependent traversal of #43 and #44 can reuse the
+capability uses name the consumer and who provides each (or that the
+default it names is installed with it), its problems are a kind with
+identities, and its wording is only in `Display` and `Plan::lines`, so the
+dependent traversal of #43 and #44 can reuse the
 recorded graph (`InstalledPackage::dependency_identity`) without the
 wording. `dependencies::required_dependents` is that traversal: every
 installed package in the required dependent closure, disabled ones included
 (each with `enabled` and the package that brought it in), which #43 filters
 to the enabled ones and #44 uses whole for Uninstall all. Both confirmations
 check the set again when chosen with one step (`still_shown` in
-`launcher/dependents.rs`).
+`launcher/dependents.rs`). `dependencies::last_provided` is the
+capabilities' counterpart for their questions: the capabilities the package
+asked about is the last installed provider of, each with the enabled
+packages that require it — data, the wording living in
+`launcher/dependents.rs`.
 
 ## Checks
 
@@ -385,13 +574,52 @@ check the set again when chosen with one step (`still_shown` in
   refused Windows-style and non-local sources, an update adding a
   dependency, a dependency uninstalled later, changes between the preview
   and Install, packages refused to change during an install, and the
-  sample.
+  sample. The capability lines of the preview are driven there too (#155):
+  an installed, disabled or in-plan provider named with nothing installed
+  beside it, the default provider installed when none is (and named by the
+  Install row and the outcome), a use with no provider and no default
+  waiting, one narrowed to some commands, an optional use whose default is
+  never installed, a default that cannot be installed or does not provide
+  the capability stopping the install, the "choose in Settings" line for
+  an already provided capability, and an update covering the new copy's
+  uses.
 - Unit tests in [`dependencies.rs`](../crates/pane-core/src/dependencies.rs)
   inject a failing install to check the rollback, including where retained
-  data is put back.
+  data is put back, and that a use's default provider is planned, installed
+  and rolled back as a required dependency is.
 - The native smokes install the [dependencies sample](../guests/sample-dependencies/src/lib.rs)
   and show "Hello, Pane, from JavaScript" in the real window (frames 75 to
   77; [Linux](platforms/linux.md#dependencies-42)).
+- [`crates/pane-core/tests/extension_details.rs`](../crates/pane-core/tests/extension_details.rs)
+  drives what Manage extensions shows of them (#157): the status line of
+  a waiting package, each unmet requirement with the chain down to what
+  is actually missing and its fix row (Enable, Retry, installing a
+  not-installed dependency again), what a package provides with which
+  provider serves it and who uses it, and the cycles of dependencies and
+  of capabilities, on every member; an optional requirement never shows.
+- `crates/pane/tests/settings.rs` drives the pages with real key events
+  and clicks: the waiting status line, the requirement, provider and
+  cycle rows of an extension's page, and each fix action.
+- [`crates/pane-core/tests/waiting.rs`](../crates/pane-core/tests/waiting.rs)
+  drives the waiting commands themselves (#152): a dependent waiting while
+  its required dependency is disabled, paused, uninstalled or waiting
+  itself, and coming back on enable, Retry, install or a reload that starts;
+  the reason on the row, Enter's reason and fix rows, the `unavailable`
+  answer to a waiting package's operations, waits three deep and the two
+  cycles; schedules and services waiting and coming back; root results not
+  asked for; the open screen and its calls left alone; and the quick slot,
+  alias and fallback saying the reason and running nothing.
+- [`crates/pane-core/tests/capability_waiting.rs`](../crates/pane-core/tests/capability_waiting.rs)
+  drives the same for capabilities (#156) with the capability samples in
+  all three languages: a consumer waiting with no provider, while its only
+  provider is disabled or waiting for something itself, and staying up
+  while another provider serves; a use narrowed with `commands`; a chain
+  through capabilities and a cycle; a use of every provider and an optional
+  use, with `available` answering as providers come and go; the install fix
+  row and the install forms it opens; the fan-out's order, skips, empty
+  list, each provider's own error and the refused fan-out of a use of one
+  provider; and the schedule, the service and root results waiting and
+  coming back with the manual clock.
 - [`crates/pane-core/tests/disable_dependents.rs`](../crates/pane-core/tests/disable_dependents.rs)
   drives disabling a required dependency through the extension list: the
   question listing the closure (through a dependent of a dependent) before
@@ -400,7 +628,13 @@ check the set again when chosen with one step (`still_shown` in
   settings, enabling the dependency alone (also after a restart), an
   optional user disabled at once, cycles, a dependent enabled or disabled
   while the question is shown, a record that cannot be written, and Pane
-  pausing a dependency disabling nothing else. Unit tests in
+  pausing a dependency disabling nothing else while its dependent waits.
+  The last-provider line (#155) is driven there: the question naming the
+  enabled packages that will wait for a capability once its only provider
+  is disabled, and no line with another provider left. So is Disable only
+  (#155): the row between Disable all and Cancel disabling the dependency
+  alone, its dependent waiting and coming back when it is enabled again.
+  Unit tests in
   [`dependencies.rs`](../crates/pane-core/src/dependencies.rs) cover the
   closure itself.
 - The native smokes' own phase (frames 140 to 143;
@@ -418,8 +652,9 @@ check the set again when chosen with one step (`still_shown` in
   cycles, a dependent appearing (by a reload) or uninstalled while the
   question is shown, the dependency uninstalled alone meanwhile, a record
   that cannot be written (none uninstalled), a second launcher on the same
-  data folder installing a package meanwhile (its record and copy kept), and,
-  on Unix, one dependent's
+  data folder installing a package meanwhile (its record and copy kept),
+  the last-provider line (#155) as the disable question shows it, and, on
+  Unix, one dependent's
   managed copy that cannot be removed, reported against it alone and
   removed at the next start.
 - [`crates/pane-core/tests/npm.rs`](../crates/pane-core/tests/npm.rs)
@@ -437,7 +672,14 @@ check the set again when chosen with one step (`still_shown` in
 - [`crates/pane/tests/install.rs`](../crates/pane/tests/install.rs): the
   question in the native window at Pane's size with long source paths,
   whose first choice stays visible (a confirmation's details scroll within
-  40% of the window), Escape keeping both and Enter uninstalling both.
+  40% of the window), Escape keeping both and Enter uninstalling both;
+  a waiting command's row and Enter, with real key events: the reason
+  under the row, the reason and the "Enable <title>" fix row on the screen
+  Enter opens, and the command back once the fix row is chosen (#152); and
+  the install preview's capability lines with the default provider it
+  names, installed by Enter and called through the capability, and
+  choosing "Disable only <title>" from the extension list, with the
+  dependent's command waiting and coming back (#155).
 - The native smokes' own phase (frames 180 to 183;
   [Linux](platforms/linux.md#uninstalling-required-dependents-44)) asks,
   cancels, uninstalls both with Uninstall all and installs the dependency
@@ -447,13 +689,16 @@ check the set again when chosen with one step (`still_shown` in
 
 - Local folders, npm (#45) and Git (#46), with these semantics.
 - One copy per source, no version ranges and no multi-version solving.
-- No Pane-side view yet of installed packages whose required dependency was
-  disabled (other than through Disable all) or removed (other than through
-  Uninstall all, as by `Launcher::uninstall`); their calls explain it.
+- Waiting covers only what the packages' `pane.json` files already declare:
+  the requirement is a whole package, a capability of it, or (for a
+  capability) a use narrowed to some of its commands — never one operation
+  of it.
 - Only the extension list asks about dependents; `Launcher::set_enabled`
   and `Launcher::uninstall` (used by tests and internal callers) change one
-  package. The extension list offers no way to disable or uninstall a
-  required dependency while keeping its dependents.
+  package. The extension list offers no way to uninstall a required
+  dependency while keeping its dependents: disabling has
+  [Disable only](#disabling-a-required-dependency), and Uninstall all
+  remains the one choice.
 - Uninstall all applies one saved-data choice to the whole set; keeping one
   package's data while deleting another's means uninstalling them one at a
   time, dependents first.

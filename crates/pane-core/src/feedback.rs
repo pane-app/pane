@@ -25,6 +25,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::icons::Icon;
 use crate::keyboard::Binding;
 
 /// How long a success or failure toast stays before it hides by itself
@@ -173,17 +174,41 @@ pub struct ShownToast {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Hud {
     pub title: String,
+    /// More text under the title.
+    pub message: Option<String>,
+    /// An icon before the title, if what shows the HUD gave it one.
+    pub icon: Option<Icon>,
     pub style: ToastStyle,
 }
 
 impl Hud {
+    /// A HUD in `style` titled `title`, with no message and no icon.
+    pub fn new(style: ToastStyle, title: impl Into<String>) -> Hud {
+        Hud {
+            title: title.into(),
+            message: None,
+            icon: None,
+            style,
+        }
+    }
+
     /// How long it stays: [`FAILURE_HUD_DURATION`] for a failure,
-    /// [`HUD_DURATION`] otherwise.
+    /// [`HUD_DURATION`] otherwise. A HUD that does not hide by itself
+    /// ([`Hud::hides_by_itself`]) is never asked: it stays until it is
+    /// updated or the launcher is active again.
     pub fn duration(&self) -> Duration {
         match self.style {
             ToastStyle::Failure => FAILURE_HUD_DURATION,
             ToastStyle::Animated | ToastStyle::Success => HUD_DURATION,
         }
+    }
+
+    /// Whether it hides by itself once its time is up, as
+    /// [`ToastStyle::hides_by_itself`] decides for the toast it may have
+    /// come from: a pending HUD (work in progress) stays until it is
+    /// updated or the launcher is active again.
+    pub fn hides_by_itself(&self) -> bool {
+        self.style.hides_by_itself()
     }
 }
 
@@ -280,8 +305,8 @@ pub enum ConfirmAnswer {
 pub trait WindowControl: Send + Sync {
     /// Hides the launcher window.
     fn hide(&self);
-    /// Shows `hud` in a window of its own, for [`Hud::duration`], replacing
-    /// a HUD still shown.
+    /// Shows `hud` in a window of its own, for [`Hud::duration`] unless it
+    /// is pending ([`Hud::hides_by_itself`]), replacing a HUD still shown.
     fn show_hud(&self, hud: &Hud);
     /// A confirmation was asked for, or went unanswered (its call was
     /// dropped): the window draws [`crate::Launcher::confirmation`] as it
@@ -449,10 +474,7 @@ mod tests {
 
     #[test]
     fn a_hud_stays_longer_for_a_failure() {
-        let hud = |style| Hud {
-            title: "Done".into(),
-            style,
-        };
+        let hud = |style| Hud::new(style, "Done");
         assert_eq!(
             hud(ToastStyle::Success).duration(),
             Duration::from_millis(1200)
@@ -466,6 +488,9 @@ mod tests {
 
     #[test]
     fn only_work_in_progress_stays() {
+        assert!(!Hud::new(ToastStyle::Animated, "Working").hides_by_itself());
+        assert!(Hud::new(ToastStyle::Success, "Done").hides_by_itself());
+        assert!(Hud::new(ToastStyle::Failure, "Failed").hides_by_itself());
         assert!(!ToastStyle::Animated.hides_by_itself());
         assert!(ToastStyle::Success.hides_by_itself());
         assert!(ToastStyle::Failure.hides_by_itself());
@@ -483,10 +508,7 @@ mod tests {
     fn requests_reach_the_window_in_order() {
         let (control, mut requests) = channel();
         control.hide();
-        control.show_hud(&Hud {
-            title: "Copied".into(),
-            style: ToastStyle::Success,
-        });
+        control.show_hud(&Hud::new(ToastStyle::Success, "Copied"));
         control.confirmation();
         drop(control);
         let received = futures::executor::block_on(async {
@@ -500,10 +522,7 @@ mod tests {
             received,
             [
                 WindowRequest::Hide,
-                WindowRequest::Hud(Hud {
-                    title: "Copied".into(),
-                    style: ToastStyle::Success
-                }),
+                WindowRequest::Hud(Hud::new(ToastStyle::Success, "Copied")),
                 WindowRequest::Confirmation,
             ]
         );

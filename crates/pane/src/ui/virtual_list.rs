@@ -105,6 +105,21 @@ impl VirtualList {
         self.reveal(index);
     }
 
+    /// Scrolls the least that shows the child at `index` and the one
+    /// above it — a section's label over the section's first row, which a
+    /// jump landing on the row keeps in view with it (#258). `from_top`,
+    /// as [`VirtualList::reveal_from_top`].
+    pub(crate) fn reveal_section(&self, index: usize, from_top: bool) {
+        if from_top {
+            self.reveal_from_top(index);
+            return;
+        }
+        self.reveal(index);
+        if index > 0 {
+            self.reveal(index - 1);
+        }
+    }
+
     /// An empty element, placed after the list in the same frame, that
     /// reveals the child at `index` again once the list has been laid out
     /// — with the heights this frame measured rather than the row-high
@@ -121,6 +136,31 @@ impl VirtualList {
                 } else {
                     list.reveal(index);
                 }
+                let after = list.state.logical_scroll_top();
+                if (before.item_ix, before.offset_in_item) != (after.item_ix, after.offset_in_item)
+                {
+                    window.request_animation_frame();
+                }
+            },
+            |_, _, _, _| {},
+        )
+        .absolute()
+        .size_0()
+    }
+
+    /// [`VirtualList::reveal_after_layout`], for a section jump: the
+    /// label of the section the jump crossed scrolls into view again, as
+    /// [`VirtualList::reveal_section`] scrolls (#258).
+    pub(crate) fn reveal_section_after_layout(
+        &self,
+        index: usize,
+        from_top: bool,
+    ) -> impl IntoElement {
+        let list = self.clone();
+        canvas(
+            move |_, window, _| {
+                let before = list.state.logical_scroll_top();
+                list.reveal_section(index, from_top);
                 let after = list.state.logical_scroll_top();
                 if (before.item_ix, before.offset_in_item) != (after.item_ix, after.offset_in_item)
                 {

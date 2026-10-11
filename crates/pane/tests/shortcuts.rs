@@ -619,7 +619,7 @@ fn the_page_lists_installed_commands_with_their_alias_and_hotkey(cx: &mut TestAp
     // line and nothing running.
     let view = cx.read_entity(&window, |window, _| window.launcher().view());
     assert!(matches!(view.screen, Screen::Root { .. }));
-    assert!(!matches!(view.status, Status::Running));
+    assert!(!matches!(view.status, Status::Running { .. }));
 }
 
 #[gpui::test]

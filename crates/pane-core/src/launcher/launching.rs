@@ -37,6 +37,7 @@
 //! it answers).
 
 use std::sync::{Condvar, Mutex, MutexGuard};
+use std::time::Instant;
 
 use super::{Launcher, Opening, Screen, State, Status, argument_form, owner, stopped};
 use crate::arguments;
@@ -86,14 +87,18 @@ impl InFlight {
 impl Launcher {
     /// Launches the command `opening` names, as its launch record says,
     /// every way in: root search, an alias, a fallback, a hotkey, a quick
-    /// slot or another command. The setup gate (#143) goes here, before
-    /// the argument form's step.
+    /// slot or another command. The waiting gate (#152, see `waiting`) goes
+    /// here first, before the setup gate (#143) and the argument form's
+    /// step.
     pub(super) async fn launch_opening(
         &self,
         epoch: u64,
         opening: Opening,
         data: Option<PackageData>,
     ) {
+        if !self.waiting_gate(epoch, &opening) {
+            return;
+        }
         // The setup gate (#143, see `setup`): a command whose required
         // preferences are unset shows the Setup screen instead, which
         // launches it again from here once submitted.
@@ -103,19 +108,55 @@ impl Launcher {
         self.launch_with_arguments(epoch, opening, data).await
     }
 
+    /// The waiting gate (see `launch_opening`): a command of a package
+    /// that waits for a required dependency or capability, or a command a
+    /// use is narrowed into waiting, runs nothing — not its view, run
+    /// entry point, actions, arguments or setup screen. A launch by
+    /// the user, on the screen it started from, shows why on the status
+    /// line, as a paused command's launch does; a background launch shows
+    /// nothing. Neither is a failure of the package, and waiting never
+    /// counts towards pausing it.
+    fn waiting_gate(&self, epoch: u64, opening: &Opening) -> bool {
+        let mut state = self.lock();
+        let Some(reason) = owner(&state.packages, &opening.component)
+            .and_then(|package| {
+                state
+                    .waiting
+                    .reason_for(&package.identity, &opening.command)
+            })
+            .cloned()
+        else {
+            return true;
+        };
+        if opening.launch.is_background() || state.screen_epoch != epoch {
+            // Nothing runs, and nothing is shown: no window was shown for
+            // it, or the user left the screen it was launched from. Its
+            // row says why it waits.
+            return false;
+        }
+        state.view.status = Status::Error(reason.row);
+        drop(state);
+        self.changed();
+        false
+    }
+
     /// The argument form's step of a launch, then the launch: when a
     /// required argument is still without a value, the argument form is
     /// shown and the command runs once it is submitted
-    /// ([`Launcher::ask_for_arguments`]); otherwise it launches now with
-    /// its arguments filled in. What a setup gate lets through continues
-    /// here.
+    /// ([`Launcher::ask_for_arguments`]) — in root search, whose selected
+    /// row's fields stand in for the form, nothing runs and the blank one
+    /// is marked (#205); otherwise it launches now with its arguments
+    /// filled in. What a setup gate lets through continues here.
     pub(super) async fn launch_with_arguments(
         &self,
         epoch: u64,
         opening: Opening,
         data: Option<PackageData>,
     ) {
-        if let Some(opening) = self.ask_for_arguments(epoch, opening) {
+        if let Some((opening, remembered)) = self.ask_for_arguments(epoch, opening) {
+            if let Some(command) = remembered {
+                self.record_remembered(&command).await;
+            }
             self.launch_ready(epoch, opening, data).await
         }
     }
@@ -142,7 +183,9 @@ impl Launcher {
     /// was launched from stays typed.
     pub(super) fn begin_run(state: &mut State) {
         state.sent_from = state.view.query().map(str::to_owned);
-        state.view.status = Status::Running;
+        state.view.status = Status::Running {
+            since: Instant::now(),
+        };
     }
 
     /// Runs the no-view command of `opening` (`run`) with its launch
@@ -159,6 +202,7 @@ impl Launcher {
         let Opening {
             component,
             command,
+            search,
             launch,
             ..
         } = opening;
@@ -185,9 +229,36 @@ impl Launcher {
         self.clear_animated_toast(state, &component);
         // The run may have changed what its package supplies ahead of the
         // query (Import Quicklinks adds quicklinks): the next query asks
-        // for it again.
-        state.indexes.stale();
+        // for it again. A command that ran is itself a change nothing
+        // tells of, so every command's results are marked stale (#202).
+        state.indexes.stale(&[]);
         let ended = stopped(state, &component, &data);
+        // A developed package's crash, or error its command answered with,
+        // shows as the error overlay (see `error_overlay`) over whatever
+        // the launcher is showing, in place of the status line and the
+        // failure toast: a no-view command has no view of its own to cover.
+        if let Err(error) = &result
+            && !background
+            && state.screen_epoch == epoch
+            && ended.is_none()
+            && self.show_error_overlay(
+                state,
+                &component,
+                error,
+                super::Opening {
+                    component: component.clone(),
+                    command: command.clone(),
+                    search,
+                    no_view: true,
+                    launch: launch.clone(),
+                    initial_search: None,
+                },
+            )
+        {
+            drop(guard);
+            self.changed();
+            return;
+        }
         // A toast is not about a screen: an error the command answered with
         // is shown wherever the user is now, unless it ran in the
         // background.
@@ -366,7 +437,9 @@ impl Launcher {
                 // As its hotkey opens it: whatever Pane shows makes way,
                 // and the window is shown for it.
                 self.show_root(state, Some(opening.component.clone()));
-                state.view.status = Status::Running;
+                state.view.status = Status::Running {
+                    since: Instant::now(),
+                };
                 state.window_wanted = true;
             }
         }

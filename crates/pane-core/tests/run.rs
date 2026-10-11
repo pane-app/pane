@@ -19,9 +19,13 @@
 //! after the tests, and a marker-writing `.cmd` program the tests write
 //! and run with arguments and unquoted spaced paths. Windows' elevation
 //! prompt itself needs a person: it is a manual smoke, as the programs
-//! module's is. The real default extension is acquired from an artifact
-//! source on 127.0.0.1 and driven with a fake adapter; its package
-//! declares `windows` alone, so those tests run on Windows only.
+//! module's is. The Run default extension is acquired as Windows does —
+//! at first setup, from the repository its pin names: the run sample's
+//! package in a repository of the test's own, served on 127.0.0.1
+//! (`support/repo_server.rs`, `support/defaults.rs`), standing in for
+//! Run's own repository, which lives outside this one (#301) — and driven
+//! with the fake adapter, and in one test the real one; the Windows
+//! defaults are Windows-only, so those tests run on Windows only.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -943,11 +947,11 @@ mod windows {
     use std::ffi::OsString;
     use std::time::{Duration, Instant};
 
+    use pane_core::clipboard::{Clock as _, ManualClock, SystemClock};
     use pane_core::run::WindowsRun;
     use pane_core::{DefaultExtension, PackageIdentity, SearchPath};
 
     use super::defaults;
-    use super::feedback::RecordingWindow;
     use super::repo_server;
     use serde_json::Value;
 
@@ -1485,9 +1489,10 @@ mod windows {
         text.as_ref().encode_wide().chain([0]).collect()
     }
 
-    /// Pane's data location, and the served repository holding Run's
-    /// package as a release revision, for one test of the real default
-    /// extension: a stand-in for the repository a release pins it to.
+    /// Pane's data location, and the served repository holding the run
+    /// sample's package as Run's own, for the tests of the default
+    /// extension: a stand-in for the repository a release pins it to,
+    /// which lives outside this one (#301).
     struct Pane {
         data: TempDir,
         _repos: TempDir,
@@ -1497,13 +1502,13 @@ mod windows {
     }
 
     impl Pane {
-        /// Pane with Run's package served as its repository's release.
+        /// Pane with the sample's package served as Run's repository's
+        /// release, tagged as its manifest's version (v0.2.0, the tag
+        /// Run's own repository's first release took, #301).
         fn new() -> Pane {
             let server = repo_server::Server::start();
             let repos = tempfile::tempdir().unwrap();
-            let files = package_files();
-            let tag = format!("v{}", defaults::version_of(&files));
-            let pin = defaults::pinned(&server, repos.path(), "run", "Run", &tag, &files);
+            let pin = defaults::from_sample(&server, repos.path(), "run", "Run", "sample-run");
             Pane {
                 data: tempfile::tempdir().unwrap(),
                 _repos: repos,
@@ -1538,29 +1543,8 @@ mod windows {
         }
     }
 
-    /// The files of the assembled Run package.
-    fn package_files() -> Vec<(String, Vec<u8>)> {
-        let folder = packages().join("run");
-        assert!(
-            folder.is_dir(),
-            "{} is missing; run `cargo xtask guests`",
-            folder.display()
-        );
-        let mut files: Vec<(String, Vec<u8>)> = fs::read_dir(&folder)
-            .unwrap()
-            .map(|entry| entry.unwrap().path())
-            .filter(|path| path.is_file())
-            .map(|path| {
-                let name = path.file_name().unwrap().to_str().unwrap().to_owned();
-                (name, fs::read(&path).unwrap())
-            })
-            .collect();
-        files.sort();
-        files
-    }
-
     /// The titles of the Run commands in root search, sorted, as the
-    /// package's three commands list for a query that matches them all.
+    /// package's five commands list for a query that matches them all.
     fn command_titles(launcher: &Launcher) -> Vec<String> {
         let mut titles = titles(launcher);
         titles.sort();
@@ -1571,7 +1555,6 @@ mod windows {
     fn the_run_default_extension_runs_records_and_deletes_from_the_history() {
         let pane = Pane::new();
         let launcher = pane.started();
-        let window = RecordingWindow::attach(&launcher);
 
         // Acquired as the default extension, with its identity, and
         // enabled by default.
@@ -1588,42 +1571,32 @@ mod windows {
         assert_eq!(
             command_titles(&launcher),
             [
-                "Run",
-                "Run History",
-                "Run as Administrator",
+                "Run elevated",
+                "Run history",
                 "Run in Terminal",
+                "Run sample",
                 "Run with Completions",
             ]
         );
 
         // A command line typed in root search runs through an alias and is
-        // recorded: the window is asked to show the HUD, closing the
-        // launcher as the Run dialog does.
-        set_alias(&launcher, "Run", "r");
-        run_through_alias(&launcher, "Run", "r", "notepad -a");
+        // recorded.
+        set_alias(&launcher, "Run sample", "r");
         assert_eq!(
-            window
-                .huds()
-                .iter()
-                .map(|hud| hud.title.clone())
-                .collect::<Vec<_>>(),
-            ["Ran notepad -a".to_owned()]
+            run_through_alias(&launcher, "Run sample", "r", "notepad -a"),
+            Status::Result("Ran notepad -a".into())
         );
         assert_eq!(pane.fake.asked(), [("notepad -a".to_owned(), false)]);
 
-        // The run's HUD closed the launcher, as the Run dialog's does;
-        // the user opens it again for the history.
-        launcher.set_window_presence(pane_core::WindowPresence::Shown);
-
-        // The history the fake holds lists through the real extension,
-        // and an entry can be deleted from it.
+        // The history the fake holds lists through the extension, and an
+        // entry can be deleted from it.
         search(&launcher, "Run history");
-        select_title(&launcher, "Run History");
+        select_title(&launcher, "Run history");
         block_on(launcher.activate_selected());
         assert_eq!(titles(&launcher), ["notepad -a"]);
         select_title(&launcher, "notepad -a");
-        // The entry's actions: Run as Administrator, then Delete.
-        block_on(launcher.run_selected_action(2));
+        // The entry's Delete action, after its primary one.
+        block_on(launcher.run_selected_action(1));
         assert_eq!(
             shown(&launcher),
             Status::Result("Deleted from Run's history".into())
@@ -1632,9 +1605,9 @@ mod windows {
 
         // A declined elevation says why and records nothing.
         pane.fake.decline_elevated();
-        set_alias(&launcher, "Run as Administrator", "ra");
+        set_alias(&launcher, "Run elevated", "ra");
         assert_eq!(
-            run_through_alias(&launcher, "Run as Administrator", "ra", "regedit"),
+            run_through_alias(&launcher, "Run elevated", "ra", "regedit"),
             error("the user declined to run regedit as an administrator")
         );
         assert!(pane.fake.history().is_empty());
@@ -1649,10 +1622,10 @@ mod windows {
         assert_eq!(
             command_titles(&launcher),
             [
-                "Run",
-                "Run History",
-                "Run as Administrator",
+                "Run elevated",
+                "Run history",
                 "Run in Terminal",
+                "Run sample",
                 "Run with Completions",
             ]
         );
@@ -1668,10 +1641,10 @@ mod windows {
         assert_eq!(
             command_titles(&launcher),
             [
-                "Run",
-                "Run History",
-                "Run as Administrator",
+                "Run elevated",
+                "Run history",
                 "Run in Terminal",
+                "Run sample",
                 "Run with Completions",
             ]
         );
@@ -1690,7 +1663,6 @@ mod windows {
             variables: vec!["%TEMP%".into()],
         });
         let launcher = pane.started();
-        let window = RecordingWindow::attach(&launcher);
 
         // Opening "Run with Completions" says to type a command line; the
         // field completes from every source, the typed text's own row
@@ -1708,18 +1680,10 @@ mod windows {
         block_on(launcher.set_query("note"));
         assert_eq!(titles(&launcher), ["Run “note”", "notepad -a", "notepad"]);
 
-        // Enter on a completion runs its line, the HUD closing the
-        // launcher as the Run dialog does.
+        // Enter on a completion runs its line.
         select_title(&launcher, "notepad");
         block_on(launcher.activate_selected());
-        assert_eq!(
-            window
-                .huds()
-                .iter()
-                .map(|hud| hud.title.clone())
-                .collect::<Vec<_>>(),
-            ["Ran notepad".to_owned()]
-        );
+        assert_eq!(shown(&launcher), Status::Result("Ran notepad".into()));
         assert_eq!(
             pane.fake.asked(),
             [("notepad".to_owned(), false)],
@@ -1731,7 +1695,6 @@ mod windows {
     fn the_run_default_extension_runs_in_the_terminal() {
         let pane = Pane::new();
         let launcher = pane.started();
-        let window = RecordingWindow::attach(&launcher);
         // The marker program stands for Windows Terminal: what the
         // extension asks the run-program host function to run, it records.
         let bin = tempfile::tempdir().unwrap();
@@ -1739,19 +1702,14 @@ mod windows {
         pane.fake.terminal_at(&terminal);
         set_alias(&launcher, "Run in Terminal", "rt");
 
-        run_through_alias(&launcher, "Run in Terminal", "rt", "ipconfig");
-        // The HUD says what ran, closing the launcher, and Windows
-        // Terminal was asked for a new tab running the command line in
-        // the shell the preference chooses (its default, PowerShell):
-        // nothing was asked of the run host function, and a tab records
-        // nothing in the Run dialog's history.
+        // The toast says what ran, and Windows Terminal was asked for a
+        // new tab running the command line in the shell the preference
+        // chooses (its default, PowerShell): nothing was asked of the run
+        // host function, and a tab records nothing in the Run dialog's
+        // history.
         assert_eq!(
-            window
-                .huds()
-                .iter()
-                .map(|hud| hud.title.clone())
-                .collect::<Vec<_>>(),
-            ["Ran ipconfig in the terminal".to_owned()]
+            run_through_alias(&launcher, "Run in Terminal", "rt", "ipconfig"),
+            Status::Result("Ran ipconfig in the terminal".into())
         );
         let asked = fs::read_to_string(&marker).unwrap_or_default();
         for part in ["new-tab", "powershell", "ipconfig"] {
@@ -1772,7 +1730,7 @@ mod windows {
 
     #[test]
     fn a_marker_program_runs_through_the_run_extension_sharing_the_history() {
-        // The real adapter, over a key of this test's own, behind the real
+        // The real adapter, over a key of this test's own, behind the
         // default extension: a command line typed in root search runs a
         // marker-writing program with an unquoted spaced path, and what
         // the Run dialog's history then holds lists through the
@@ -1787,10 +1745,10 @@ mod windows {
         let pane = Pane::new();
         let launcher = pane.start(Arc::new(adapter(&mru, source)));
 
-        make_fallback(&launcher, "Run");
+        make_fallback(&launcher, "Run sample");
         let line = format!("{} -a through the extension", program.display());
         search(&launcher, &line);
-        assert_eq!(titles(&launcher), ["Run"]);
+        assert_eq!(titles(&launcher), ["Run sample"]);
         launcher.move_selection(1);
         block_on(launcher.activate_selected());
 
@@ -1798,21 +1756,153 @@ mod windows {
             waited(&marker, "-a through the extension").trim(),
             "-a through the extension"
         );
-        // The run's HUD closed the launcher; it opens again for the
-        // history.
-        launcher.set_window_presence(pane_core::WindowPresence::Shown);
         // The Run dialog's history, read through the extension, holds the
         // command line as typed, and deleting it empties the key.
         search(&launcher, "Run history");
-        select_title(&launcher, "Run History");
+        select_title(&launcher, "Run history");
         block_on(launcher.activate_selected());
         assert_eq!(titles(&launcher).len(), 1, "the command line lists");
         launcher.select(0);
-        block_on(launcher.run_selected_action(2));
+        block_on(launcher.run_selected_action(1));
         assert_eq!(
             shown(&launcher),
             Status::Result("Deleted from Run's history".into())
         );
         assert_eq!(values_of(&mru).len(), 1, "only MRUList, empty, remains");
+    }
+
+    /// The installed packages' titles, in installed order.
+    fn installed(launcher: &Launcher) -> Vec<String> {
+        launcher.packages().iter().map(|p| p.title()).collect()
+    }
+
+    /// The sample's package with its manifest's version raised to
+    /// `version`: the files of a newer release of the same package.
+    fn raised(files: Vec<(String, Vec<u8>)>, version: &str) -> Vec<(String, Vec<u8>)> {
+        let from = format!("\"version\": \"{}\"", defaults::version_of(&files));
+        let to = format!("\"version\": \"{version}\"");
+        files
+            .into_iter()
+            .map(|(path, contents)| {
+                if path != "pane.json" {
+                    return (path, contents);
+                }
+                let manifest = String::from_utf8(contents).unwrap();
+                (path, manifest.replace(&from, &to).into_bytes())
+            })
+            .collect()
+    }
+
+    /// Releases `version` of the Run default whose repository is `repo`,
+    /// from `files`: committed and tagged `v<version>`, the release a
+    /// later check finds. Returns the commit the tag points to.
+    fn release(repo: &repo_server::Repo, files: &[(String, Vec<u8>)], version: &str) -> String {
+        let borrowed: Vec<(&str, Vec<u8>)> = files
+            .iter()
+            .map(|(path, contents)| (path.as_str(), contents.clone()))
+            .collect();
+        let tag = format!("v{version}");
+        let commit = repo.commit(&borrowed, &format!("Release {tag}"));
+        repo.tag(&tag);
+        commit
+    }
+
+    /// Asks the launcher for a check: the clock moves past when the next
+    /// one is due — the first check comes a minute after Pane starts —
+    /// and waits until it settled.
+    fn check(clock: &Arc<ManualClock>, launcher: &Launcher) {
+        clock.advance(Duration::from_secs(62));
+        assert!(
+            launcher.wait_for_updates(Duration::from_secs(30)),
+            "the updater did not settle"
+        );
+    }
+
+    /// The record of the default extension `id` in Pane's data at `data`.
+    fn record_of(data: &Path, id: &str) -> Value {
+        let text = fs::read_to_string(data.join("extensions").join("installed.json")).unwrap();
+        let registry: Value = serde_json::from_str(&text).unwrap();
+        registry["packages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|record| record["default"] == id)
+            .cloned()
+            .unwrap_or_else(|| panic!("no record of {id} in {registry:#}"))
+    }
+
+    /// The Run default's updates from its repository's release tags
+    /// (#269): the repository the pin names releasing a newer revision,
+    /// the launcher's clock driving the pass that finds it.
+    #[test]
+    fn a_newer_release_tag_updates_the_run_default_extension_by_itself_keeping_its_data() {
+        let server = repo_server::Server::start();
+        let repos = tempfile::tempdir().unwrap();
+        // The Run default's repository: the sample's package, tagged as
+        // its manifest's version (v0.2.0, the tag Run's own repository's
+        // first release took, #301) and pinned as a Pane release pins it.
+        // The work tree is kept, for this test to release a newer
+        // revision of it.
+        let files = defaults::package_files("sample-run");
+        let tag = format!("v{}", defaults::version_of(&files));
+        let (repo, pin) = defaults::made(&server, repos.path(), "run", "Run", &tag, &files);
+        server.serve("run", &repo);
+        // The address the pin names, which the record keeps as the
+        // update's source too.
+        let repository = pin.repository.clone();
+        let fake = FakeRun::default();
+        let clock = ManualClock::at(SystemClock.now());
+        let data = tempfile::tempdir().unwrap();
+        let launcher =
+            Launcher::with_packages(Runtime::start(), vec![], data.path().join("extensions"))
+                .with_defaults(vec![pin])
+                .with_run(Arc::new(fake.clone()))
+                .with_clock(clock.clone());
+        block_on(launcher.acquire_defaults());
+        assert_eq!(installed(&launcher), ["Run sample"]);
+        // The package's data, saved through its card in Settings: an
+        // update keeps it.
+        let identity = PackageIdentity::default_extension("run");
+        block_on(launcher.set_preference(&identity, "shell", Some("cmd"))).unwrap();
+        to_root(&launcher);
+
+        // The repository releases 0.3.0, tagged; the launcher's clock
+        // drives a pass.
+        let released = release(&repo, &raised(files, "0.3.0"), "0.3.0");
+        check(&clock, &launcher);
+
+        // The update applied by itself: the package keeps the default
+        // identity, its version is the new release's, and its record
+        // keeps the Git source — the repository, the tag and the commit
+        // it points to — still pinned, and the row says the old and the
+        // new version.
+        assert_eq!(installed(&launcher), ["Run sample"]);
+        let record = record_of(data.path(), "run");
+        assert_eq!(record["default"], "run");
+        assert_eq!(record["defaultVersion"], "0.3.0");
+        assert_eq!(record["gitUrl"], repository.as_str());
+        assert_eq!(record["gitRef"], "refs/tags/v0.3.0");
+        assert_eq!(record["gitCommit"], released.as_str());
+        assert_eq!(record["pinned"], serde_json::json!(true));
+        let recorded = launcher.update_results();
+        assert_eq!(recorded.updated.len(), 1, "{recorded:#?}");
+        assert_eq!(recorded.updated[0].title, "Run sample");
+        assert_eq!(recorded.updated[0].detail, "0.2.0 → 0.3.0");
+        assert_eq!(recorded.updated[0].identity, identity);
+
+        // The new code runs, with the data it kept: a command line in the
+        // terminal runs with the shell the saved preference chooses.
+        let bin = tempfile::tempdir().unwrap();
+        let (terminal, marker) = marker_program(bin.path(), "terminal");
+        fake.terminal_at(&terminal);
+        set_alias(&launcher, "Run in Terminal", "rt");
+        assert_eq!(
+            run_through_alias(&launcher, "Run in Terminal", "rt", "ipconfig"),
+            Status::Result("Ran ipconfig in the terminal".into())
+        );
+        let asked = fs::read_to_string(&marker).unwrap_or_default();
+        for part in ["new-tab", "cmd", "ipconfig"] {
+            assert!(asked.contains(part), "Windows Terminal was asked {asked:?}");
+        }
     }
 }

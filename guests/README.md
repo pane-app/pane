@@ -8,13 +8,16 @@ Rust's standard library on `wasm32-wasip2`) is rejected with an explanation.
 This tree holds Pane's **samples** — small extensions that exercise the
 whole contract in Rust, JavaScript and TypeScript, which the tests install
 as fixtures and the smokes drive — and the SDKs and fixtures they build
-against. Pane's five **default extensions** (the Calculator, Applications,
-Quicklinks, Files and Clipboard History) are not here: each lives in its
-own repository under the `pane-app` organization
-(`https://github.com/pane-app/<id>`), and a Pane release installs them
-from the release commits this build pins
+against. Pane's **default extensions** are not here: the five that run on
+every system (the Calculator, Applications, Quicklinks, Files and
+Clipboard History) and the three Windows-only ones (Run, System Commands
+and Switch Windows), each in its own repository under the `pane-app`
+organization (`https://github.com/pane-app/<id>`), and a Pane release
+installs them from the release commits this build pins
 ([`crates/pane/defaults.json`](../crates/pane/defaults.json); see
-[ADR 0045](../docs/adr/0045-official-extensions-live-in-their-own-repositories.md)).
+[ADR 0045](../docs/adr/0045-official-extensions-live-in-their-own-repositories.md)),
+the Windows three's pins naming `"platform": "windows"`, so only a
+Windows first setup acquires them.
 To work on one, clone its repository: its own CI builds the component, and
 `cargo xtask guests` here builds the samples only. Until the Rust SDK is
 published to crates.io (#128), build a default extension's repository
@@ -57,8 +60,11 @@ without building it, install it from its repository:
   (`crates/pane-core/tests/unresponsive.rs`).
 - `sample-files`, `sample-files-js`, `sample-files-ts`: the same host
   import and `open-file` results in Rust, JavaScript and TypeScript — the
-  same contract the Files default extension holds; held by
-  `crates/pane-core/tests/file_actions.rs`.
+  same contract the Files default extension holds, listing a typed
+  folder's entries too
+  ([the entries of a folder the user typed](#the-entries-of-a-folder-the-user-typed));
+  held by `crates/pane-core/tests/file_actions.rs` and
+  `crates/pane-core/tests/typed_folders.rs`.
 - `fixtures/folder-files`: what Files was before #175, over the folder the
   user grants its package ([Files of a granted folder](#files-of-a-granted-folder)),
   keeping that capability covered; held by `crates/pane-core/tests/files.rs`,
@@ -155,6 +161,28 @@ without building it, install it from its repository:
   `packages/sample-query-js` and `packages/sample-query-ts`; held alike by
   `crates/pane-core/tests/aliases.rs`, and the Rust one by
   `crates/pane/tests/aliases.rs`.
+- `sample-keywords`, `sample-keywords-js`, `sample-keywords-ts`: the
+  keywords sample in Rust, JavaScript and TypeScript, one component
+  serving "Empty the Bin" (`"keywords": ["trash", "rubbish"]`), a no-view
+  command found by its keywords rather than its title, and the "Moons"
+  root provider (`"indexedResults": true`), which supplies "The Moon",
+  found by its alternate title ("Luna") and its keywords ("satellite",
+  "rock") as a command's title and subtitle are found
+  ([A command's keywords](#a-commands-keywords)). Their packages are
+  `packages/sample-keywords`, `packages/sample-keywords-js` and
+  `packages/sample-keywords-ts`; held alike by
+  `crates/pane-core/tests/keywords.rs`.
+- `sample-matches`, `sample-matches-js`, `sample-matches-ts`: the
+  `when`/`matches` sample in Rust, JavaScript and TypeScript, four no-view
+  commands: "Hear an Address" (`"matches": "url"`) and "Hear a Path"
+  (`"matches": "file-path"`) are listed only for a typed web address or
+  path and answer what it parsed or resolved, "Blank Only"
+  (`"when": "blank"`) only while nothing is typed and "Searching Only"
+  (`"when": "searching"`) only while something is
+  ([Commands for typed addresses and paths](#commands-for-typed-addresses-and-paths)).
+  Their packages are `packages/sample-matches`,
+  `packages/sample-matches-js` and `packages/sample-matches-ts`; held alike
+  by `crates/pane-core/tests/typed_queries.rs`.
 - `sample-no-view`, `sample-no-view-js`, `sample-no-view-ts`: the no-view
   sample in Rust, JavaScript and TypeScript, one component serving five
   commands ([No-view commands and the launch record](#no-view-commands-and-the-launch-record)):
@@ -499,49 +527,60 @@ Build commands, from the repository root:
 
 ```sh
 cargo xtask js-guests        # rebuild guests/prebuilt/ and target/guests/ from the samples
-python3 tools/componentize-js/pane_js.py build <package dir> <out.wasm>   # any command package
-python3 tools/componentize-js/pane_js.py check   # are the prebuilt samples current and their npm licenses permissive?
+cargo run -p pane-ext -- dev <package dir>   # any command package: build it and develop it in Pane
+cargo xtask js-guests --check # are the prebuilt samples current and their npm licenses permissive?
 ```
 
-A build installs the package's locked dependencies into a staging copy,
-type-checks it with TypeScript when it has a `tsconfig.json` (the JS sample is
-checked through JSDoc), bundles it with esbuild and componentizes it. The TS
-sample's `.ts` source is transpiled by esbuild and runs on the same runtime as
-JS. The first run builds the toolchain (about five minutes), later runs take
-seconds. Everything downloaded or built goes to `PANE_JS_TOOLCHAIN_DIR`,
-default `~/.cache/pane/componentize-js` on Linux,
-`~/Library/Caches/pane/componentize-js` on macOS and
-`%LOCALAPPDATA%\pane\componentize-js` on Windows; the source tree is not
-written except for the output. After editing a sample, run
+A build is pane-build's JavaScript build (`crates/pane-build`, #218): it
+installs the package's locked dependencies into a staging copy, type-checks
+it with the package's TypeScript when it has a `tsconfig.json` (the JS
+sample is checked through JSDoc), bundles it with esbuild — both from the
+package's own `node_modules`, so its lockfile pins their versions — and
+componentizes it with the componentizer the repository links (the committed
+`runtime.wasm` and `libc.so` of `tools/componentize-js/wasm-parts`). The TS
+sample's `.ts` source is transpiled by esbuild and runs on the same runtime
+as JS. A build needs Node.js and npm and the repository's Rust, and nothing
+else; the staging copy is kept in the user's cache
+(`pane/js-build/<package>-<hash>`, under `~/.cache` on Linux,
+`~/Library/Caches` on macOS and `%LOCALAPPDATA%` on Windows), so a save
+whose lockfile did not change installs nothing. After editing a sample, run
 `cargo xtask js-guests` and commit the updated `guests/prebuilt/`.
 
 Prerequisites, in addition to the Rust ones in the [README](../README.md):
 
-- Python 3.12 or later (`python3`; on Windows use `python` in the commands
-  above; set `PYTHON` for `cargo xtask` if yours is named differently), git,
-  and Node.js 22 or later with npm. `cargo xtask ci` also runs the `check`
-  subcommand, so it needs Python too.
-- The build installs Rust `nightly-2026-09-27` with `rust-src` through rustup,
-  and downloads wasi-sdk 34 for the host (x86_64 or arm64, all three OSes).
-- **Windows:** `python` from python.org or the Microsoft Store and Node.js
-  from nodejs.org; run from a normal shell. **macOS:** Xcode Command Line
-  Tools already provide git; install Python and Node.js from their installers
-  or Homebrew. **Linux:** the distribution's `python3`, `git`, `nodejs` and
-  `npm` (Node.js 22+, for example through nvm).
+- Node.js 22 or later with npm. Nothing else: no Python, no nightly Rust,
+  no wasi-sdk — the componentizer is linked into the build
+  (`crates/pane-build`'s `componentizer` feature), with the wasm parts the
+  repository commits; the published CLI (`npm install @pane-app/cli`, whose
+  JavaScript shim picks the platform package for the system) is the same
+  build. Rebuilding the wasm parts themselves is a maintainer's step
+  (`cargo xtask wasm-parts`), never part of building a package — see
+  [tools/componentize-js](../tools/componentize-js/README.md).
+- **Windows:** Node.js from nodejs.org; run from a normal shell. **macOS:**
+  Node.js from its installer or Homebrew. **Linux:** the distribution's
+  `nodejs` and `npm` (Node.js 22+, for example through nvm).
 
-Toolchain used: upstream [componentize-qjs](https://github.com/andreiltd/componentize-qjs)
-0.4.5 at `e563c6d6` with the three patches in
-[`tools/componentize-js/patches`](../tools/componentize-js/patches), its
-QuickJS runtime built with `nightly-2026-09-27` for `wasm32-wasip3` against
-wasi-sdk 34, the componentizer built with Rust 1.98.1, esbuild 0.28.2 and
-TypeScript 7.0.2. Every JS component imports the same 20 WASI 0.3 interfaces
+Toolchain used: the vendored
+[componentize-qjs](https://github.com/andreiltd/componentize-qjs) 0.4.5 at
+`e563c6d6`
+([`tools/componentize-js/componentize-qjs`](../tools/componentize-js/componentize-qjs),
+the patch queue applied in its source), its QuickJS runtime built with
+`nightly-2026-09-27` for `wasm32-wasip3` against wasi-sdk 34 (the committed
+`runtime.wasm`), wasi-sdk 34's `libc.so` (also committed), the componentizer
+built with the repository's Rust 1.98.1, esbuild 0.28.2 and TypeScript
+7.0.2. Every JS component imports the same 20 WASI 0.3 interfaces
 through its libc, whatever the source uses, and `wasi:http`'s `types` and
 `client` too if its bundle imports `wasi:http` (itself or through
 `@pane-app/extension/http`), which Pane then lists as using the network; it is
-about 4.4 MB. The whole toolchain build has been run on Linux and Windows x86_64. The componentizer
-itself is built in CI for Windows, macOS and Linux on x64 and arm64, from a runtime built once on
-Linux, and each build's TypeScript sample passes Pane's checks there (`componentizer.yml`). See
-[tools/componentize-js](../tools/componentize-js/README.md) for the patch queue.
+about 4.4 MB. The componentizer and the `pane-ext` that runs it ship as npm
+packages (`@pane-app/cli`, whose JavaScript shim picks the
+`@pane-app/cli-<target>` platform package for the system), built in CI for
+Windows, macOS and Linux on x64 and arm64 from the committed wasm parts; the
+workflow that packs them also installs them into a scratch project with
+only Node.js and npm and builds this sample with them
+(`cli-packages.yml`). See
+[tools/componentize-js](../tools/componentize-js/README.md) for the patch
+queue and the wasm parts.
 
 ## Forms
 
@@ -770,17 +809,27 @@ query has changed. A query the command has no answer for returns no results
 extension failing, and Pane lists a result explaining it. A disabled package
 is not asked. See [root search](../docs/root-search.md#results-computed-from-the-query).
 
+Pane asks with the query and when it was typed, as `at`
+(`WallTime` in Rust, `WallTime` in TypeScript: milliseconds since the Unix
+epoch and the local time's offset from UTC, by the clock root search's own
+dates are shown by), so a command can answer about the current date or time
+without reading a clock of its own. A result that is an answer's card can
+say more than its title and action in `answer` (`AnswerDetail`): the section
+it sits under in place of the command's title ("Color", "Date & Time"), a
+swatch, and further ways to copy it the Actions panel offers. The
+calculator's colours and dates use all of it.
+
 Rust (`pane_extension::root`; the component then exports both interfaces):
 
 ```rust
 use pane_extension::alloc::{string::String, vec, vec::Vec};
-use pane_extension::root::{RootAction, RootResult};
+use pane_extension::root::{RootAction, RootResult, WallTime};
 
 pane_extension::export!(Sample);
 pane_extension::root::export!(Sample);
 
 impl pane_extension::root::Guest for Sample {
-    async fn results_for(query: String) -> Result<Vec<RootResult>, String> {
+    async fn results_for(query: String, at: WallTime) -> Result<Vec<RootResult>, String> {
         let Some(text) = query.strip_prefix("reverse ") else {
             return Ok(Vec::new());
         };
@@ -790,6 +839,7 @@ impl pane_extension::root::Guest for Sample {
             title: reversed.clone(),
             subtitle: None,
             action: RootAction::Copy(reversed),
+            answer: None,
         }])
     }
 }
@@ -854,9 +904,9 @@ opens a document or a folder, and shows a program in the file manager
 
 ```rust
 use pane_extension::file_index::{self, SearchOptions};
-use pane_extension::root::{RootAction, RootResult};
+use pane_extension::root::{RootAction, RootResult, WallTime};
 
-async fn results_for(query: String) -> Result<Vec<RootResult>, String> {
+async fn results_for(query: String, at: WallTime) -> Result<Vec<RootResult>, String> {
     Ok(file_index::search(&query, SearchOptions::first(5))?
         .into_iter()
         .map(|entry| RootResult {
@@ -864,6 +914,7 @@ async fn results_for(query: String) -> Result<Vec<RootResult>, String> {
             title: entry.name,
             subtitle: None,
             action: RootAction::OpenFile(entry.id),
+            answer: None,
         })
         .collect())
 }
@@ -938,9 +989,9 @@ Rust (`pane_extension::files`):
 
 ```rust
 use pane_extension::files::{self, FolderState};
-use pane_extension::root::{RootAction, RootResult};
+use pane_extension::root::{RootAction, RootResult, WallTime};
 
-async fn results_for(query: String) -> Result<Vec<RootResult>, String> {
+async fn results_for(query: String, at: WallTime) -> Result<Vec<RootResult>, String> {
     let FolderState::Ready(listing) = files::list_folder()? else {
         return Ok(Vec::new());
     };
@@ -953,6 +1004,7 @@ async fn results_for(query: String) -> Result<Vec<RootResult>, String> {
             title: file.relative,
             subtitle: None,
             action: RootAction::OpenFile(file.id),
+            answer: None,
         })
         .collect())
 }
@@ -972,6 +1024,87 @@ return state.val.files
   .filter((file) => file.relative.includes(query))
   .map((file) => ({ id: file.relative, title: file.relative, action: { tag: "open-file", val: file.id } }));
 ```
+
+### The entries of a folder the user typed
+
+A command can list the entries of a folder the user typed into root
+search, a path-like query ending in a separator, which a WASI guest cannot
+read itself, through `pane:extension/typed-folder`
+([`wit/typed-folder.wit`](../wit/typed-folder.wit)), and answer results
+that open one (`open-file`). No folder is granted and the `pane.json`
+declares nothing: the user named the folder, so `list-entries(folder)`
+takes what
+they typed (Pane resolves it: `~` to the home folder, `file://` taken off)
+and answers the direct entries — folders first and each in name order, at
+most 500, `truncated` set when the folder holds more — each with the `id`
+Pane gave it, its `name`, whether it is a `folder` and whether opening it
+would run a `program`. An error explains a folder that cannot be listed
+(not a path, a network location, a file, or one Pane cannot read): answer
+no results for it, as a missing folder does. An `open-file` result gives
+the id; Pane shows the entry's own name and folder in the row, whatever the
+result's title says, and gives the entry its own
+[file actions](../docs/files.md#the-file-actions), checking it again first.
+The bounds are Pane's, not the command's; root search lists the entries
+under "Files", below the rows declared for the path, and adds a row saying
+so when the listing is partial (see
+[docs](../docs/files.md#the-typed-folder)).
+
+Rust (`pane_extension::typed_folder`):
+
+```rust
+use pane_extension::root::{RootAction, RootResult, WallTime};
+use pane_extension::typed_folder::{self, FolderEntry};
+
+async fn results_for(query: String, at: WallTime) -> Result<Vec<RootResult>, String> {
+    let Some(entries) = typed(&query) else {
+        return Ok(Vec::new());
+    };
+    Ok(entries
+        .into_iter()
+        .map(|entry| RootResult {
+            id: entry.id.clone(),
+            title: entry.name,
+            subtitle: None,
+            action: RootAction::OpenFile(entry.id),
+            answer: None,
+        })
+        .collect())
+}
+
+/// The entries of the folder the query names, when it ends in a separator.
+fn typed(query: &str) -> Option<Vec<FolderEntry>> {
+    let query = query.trim();
+    query
+        .ends_with(['/', '\\'])
+        .then(|| typed_folder::list_entries(query).ok())
+        .flatten()
+        .map(|listing| listing.entries)
+}
+```
+
+JavaScript or TypeScript: add `"typedFolder": true` to the `"pane"` options
+of `package.json`, so the build imports the interface (a command without it
+does not), and import it (`listEntries` throws an object whose `payload` is the
+reason; declarations in [`js/typed-folder.d.ts`](js/typed-folder.d.ts)):
+
+```ts
+import { listEntries } from "pane:extension/typed-folder@0.1.0";
+
+if (!query.endsWith("/") && !query.endsWith("\\")) return [];
+try {
+  return listEntries(query.trim()).entries.map((entry) => ({
+    id: entry.id,
+    title: entry.name,
+    action: { tag: "open-file", val: entry.id },
+  }));
+} catch {
+  return [];
+}
+```
+
+The [Files](files) default extension lists a typed folder this way, and so
+do [`sample-files`](sample-files), [`sample-files-js`](sample-files-js) and
+[`sample-files-ts`](sample-files-ts) in Rust, JavaScript and TypeScript.
 
 ## Root results supplied ahead of the query
 
@@ -1715,21 +1848,36 @@ refused at install with the reason.
 The values reach the command in its launch record's `arguments`, by name,
 in the order it declares them; an optional argument left empty is absent
 (`launch.argument("name")` in Rust, `launch.arguments.find(...)` in
-JavaScript and TypeScript). When a launch the user started leaves a
-required argument without a value, Pane first shows its argument form:
-the command's title and one field per argument, focus on the first empty
-required one; Enter with a required field still empty takes focus to it,
-and Escape launches nothing. This is how a global hotkey, a quick slot or
-another command's launch without values asks; root search's own inline
-fields come later. A background launch with a required argument missing
-is refused.
+JavaScript and TypeScript).
 
-Text sent through the command's alias or to it as a fallback fills its
-first text or password argument unless that has a value, and stays the
-launch record's fallback text. A command may be a fallback when it takes
-a query, or when its first argument is text and every other is optional.
-Pane remembers the last value of each dropdown per command and chooses it
-next time; it never records a password's value anywhere. The
+When the command's row is selected, [root search](../docs/root-search.md#inline-argument-fields)
+shows the fields **inline after the query** (#205): one field per
+argument, a password masked, a dropdown's choices on a trigger that opens
+them, an optional field marked so. Tab, Shift+Tab and the arrows move
+between the fields and the query; Enter with every required argument
+filled runs the command with the values, and with one blank moves focus
+to it instead, marking it once it has been left blank. Typing the
+command's alias and a space enters the fields, carrying what is typed
+next into the first text or password one — a command without arguments
+opens at once instead, and one that takes a query keeps the row that
+sends the text after its alias. The values are the search's own state,
+never recorded: they survive the list being re-ranked and go when the
+query does, and a password's value is recorded nowhere.
+
+Every launch that does not come from root search — a global hotkey, a
+quick slot, another command's — asks through Pane's argument form when a
+required argument has no value: the command's title and one field per
+argument, focus on the first empty required one; Enter with a required
+field still empty takes focus to it, and Escape launches nothing. A
+background launch with a required argument missing is refused.
+
+Text sent to the command as a fallback fills its first text or password
+argument unless that has a value, and stays the launch record's fallback
+text. A command may be a fallback when it takes a query, or when its
+first argument is text and every other is optional.
+Pane remembers the last value of each dropdown per command and offers it
+again in the fields and the form; it never records a password's value
+anywhere. The
 [arguments sample](sample-arguments) does all of this in Rust, and its
 [JavaScript](sample-arguments-js) and [TypeScript](sample-arguments-ts)
 copies answer the same.
@@ -1775,6 +1923,101 @@ export const command: Command = {
   },
 };
 ```
+
+## A command's keywords
+
+A command may declare `keywords` in `pane.json` — words that find its row
+in root search exactly as its subtitle finds it, ranked below a title
+match and above a scattered one: an author's search terms, distinct from
+the [aliases](../docs/aliases.md) a user gives a command. Keywords change
+nothing else: the row keeps its title and subtitle, and no text is ever
+sent for one.
+
+```json
+{ "id": "bin", "title": "Empty the Bin", "component": "sample_keywords.wasm",
+  "mode": "no-view", "keywords": ["trash", "rubbish"] }
+```
+
+Rust, JavaScript and TypeScript, as
+[`sample-keywords`](sample-keywords) and its `-js`/`-ts` copies do; the
+same sample's "Moons" command is a root provider whose indexed result
+carries `alternateTitles` and `keywords` of its own
+([indexed results](#indexed-results)):
+
+```ts
+export const indexedResults: IndexedResults = {
+  async results() {
+    return [
+      {
+        id: "moon",
+        title: "The Moon",
+        subtitle: "What the keywords sample supplies",
+        alternateTitles: ["Luna"],
+        keywords: ["satellite", "rock"],
+        action: { tag: "open", val: { target: "https://example.com/moon" } },
+      },
+    ];
+  },
+};
+```
+
+## Commands for typed addresses and paths
+
+Root search understands a query that is a **web address** (an absolute URL
+with a scheme, or a bare domain such as `github.com`, with `https://`
+inferred) or a **path** (a drive letter and a separator, `\\`, `~`
+resolved to the home folder, `/`, or `file://`), and a command can be
+listed only for such a query: `"matches"` says what it is matched by —
+`"title"` (the default), `"url"` or `"file-path"` — and `"when"` when it is
+listed at all: `"always"` (the default), `"blank"` (only while nothing is
+typed) or `"searching"` (only while something is). A command declared for
+URL-like or path-like queries is never matched by its title; it is listed,
+in install order below the results found by title, only for a query that
+is one, and Pane sends it the parsed address or resolved path as its launch
+record's [fallback text](#a-command-that-takes-a-query) when the user
+invokes its row. See
+[docs/root-search.md](../docs/root-search.md#understanding-the-typed-query)
+for the grammar and where the rows sit.
+
+Rust, as [`sample-matches`](sample-matches) does, "Hear an Address" being a
+no-view command listed only for a typed web address:
+
+```rust
+async fn run(command: String, launch: LaunchRecord) -> Result<(), String> {
+    match command.as_str() {
+        "url" => {}
+        other => return Err(format!("unknown command: {other}")),
+    }
+    let heard = match launch.fallback_text {
+        Some(address) => format!("Heard “{address}”"),
+        None => "Heard nothing".into(),
+    };
+    show_toast(Toast::success(heard));
+    Ok(())
+}
+```
+
+```json
+{ "id": "url", "title": "Hear an Address", "component": "sample_matches.wasm",
+  "mode": "no-view", "when": "searching", "matches": "url" }
+```
+
+JavaScript or TypeScript, as the [JavaScript](sample-matches-js) and
+[TypeScript](sample-matches-ts) matches samples do:
+
+```ts
+export const command: Command = {
+  async run(id, launch) {
+    showToast({ title: launch.fallbackText ?? "Heard nothing" });
+  },
+};
+```
+
+The default extensions use it: Quicklinks' **Open in Browser** and
+**Create Quicklink** are declared `"matches": "url"` (the form's link
+prefilled with the address, which is what the fallback text carries), and
+Files' **Open** and **Reveal in File Explorer** `"matches": "file-path"`.
+An unknown `when` or `matches` is refused at install, with the reason.
 
 ## Searching inside a command
 
@@ -2001,6 +2244,268 @@ dependency your `pane.json` declares ([below](#dependencies-on-other-extensions)
 which is how a package names the extensions it is written for. Pane starts the target only when it is called, never enables a disabled one,
 keeps each package's settings apart, and refuses a call back into a package
 already waiting in the same chain instead of deadlocking.
+
+### Capabilities
+
+A capability is a second way to address the same calls: a named, versioned
+set of operations, such as `acme:translate@1`, that any installed package
+may provide and yours calls by that name, without naming the package that
+serves it (ADR 0041). The full contract, routing and errors are in
+[docs/operations.md](../docs/operations.md#capabilities). A provider of
+`pane-samples:greet@1` and a consumer of it, in
+[Rust](sample-greet/src/lib.rs), [JavaScript](sample-greet-js/src/index.js)
+and [TypeScript](sample-greet-ts/src/index.ts) beside their consumers
+([sample-capabilities](sample-capabilities/src/lib.rs)), are the samples.
+
+Provide a capability in `pane.json`; the component named there serves its
+operations through the same export that serves published operations, and
+Pane passes each operation qualified by its capability
+(`pane-samples:greet@1/greet`), so one component can tell the two apart:
+
+```json
+"provides": [
+  { "capability": "pane-samples:greet@1", "component": "sample_greet.wasm",
+    "operations": ["greet"] }
+]
+```
+
+Call a capability by its name, with the operations your `pane.json` declares
+under `uses`. A use may be `optional` (it is called only when some package
+provides the capability), narrowed with `commands` to the commands that
+need it, and may say `"use": "all"` to call every provider at once:
+
+```rust
+use pane_extension::capabilities::{available, call};
+
+let answer = call("pane-samples:greet@1", "greet", input) // routed by Pane
+    .await
+    .map_err(|error| error.explain())?; // "not-found: …", "failed: …"
+if available("pane-samples:farewell@1").is_none() {
+    // No provider can serve it now; an optional use degrades gracefully.
+}
+```
+
+```ts
+import { available, call } from "@pane-app/extension/capabilities";
+
+const answer = await call("pane-samples:greet@1", "greet", input);
+if (available("pane-samples:farewell@1") === undefined) {
+  // No provider can serve it now.
+}
+```
+
+A use declared `"use": "all"` can also call every provider at once, each
+answer labelled with its provider's title:
+
+```rust
+use pane_extension::capabilities::call_every;
+
+let answers = call_every("pane-samples:greet@1", "greet", input)
+    .await
+    .map_err(|error| error.explain())?; // one entry per provider that served
+for answer in answers {
+    // answer.provider, answer.title, answer.answer: Result<String, CallError>
+}
+```
+
+Pane routes each call to the provider that can serve it — the first one
+installed — never your own package, and refuses a call to a capability or
+operation your `pane.json` does not declare, so its view of what you need
+stays complete. A required use of one provider makes your commands wait
+while no provider can serve it
+([dependencies](../docs/dependencies.md#waiting-for-a-required-dependency));
+optional uses and uses of every provider never do.
+
+#### Providing a capability at run time
+
+Mark a `provides` entry `"atRunTime": true` and your package provides the
+capability only while its code holds a run-time provision for it — an
+[owned registration](#owned-registrations) the component makes, typically
+once the user has signed in. The manifest still names the capability, so
+install plans and Settings work from it alone; a provision the manifest
+does not declare and mark is refused. Dropping it, its instance going or
+the package's code being replaced withdraws the provider at once, and the
+capability's consumers fall back to another provider or wait for one. The
+registrations sample provides `pane-samples:greet@1` this way after its
+"Sign in" action.
+
+```rust
+use pane_extension::registrations;
+
+let provision = registrations::provide("acme:translate@1")?; // held until dropped
+```
+
+```ts
+import { provide } from "@pane-app/extension/registrations";
+
+const provision = provide("acme:translate@1"); // `dispose()` withdraws it
+```
+
+### Owned registrations
+
+Anything a command registers at run time, it owns: a **dynamic root
+item** (a row of root search under one of the package's commands), a
+**timer**, a **folder watcher**, or a **run-time provision** of a
+capability marked `atRunTime` above. Each is a handle the guest holds
+(`pane_extension::registrations` in Rust, `@pane-app/extension/
+registrations` in JavaScript and TypeScript); dropping it undoes the
+registration, and so does the instance that made it going away or the
+package's code being replaced — a disable, a reload, an update, an
+uninstall or a pause. Nothing an extension registers outlives its code:
+an author never writes cleanup code, and using a handle of ended code is
+refused. The full contract is in
+[docs/generations.md](../docs/generations.md#owned-registrations). The
+registrations sample, in [Rust](sample-registrations/src/lib.rs),
+[JavaScript](sample-registrations-js/src/index.js) and
+[TypeScript](sample-registrations-ts/src/index.ts), registers one of
+each.
+
+```rust
+use pane_extension::registrations::{self, Item};
+
+let item = registrations::root_item("focus", Item::new("focus", "Focus: counting")
+    .subtitle("registered at run time")
+    .action(registrations::Action::new("Add one", || async {
+        // repeatable: as often as the user chooses the row
+        Ok(())
+    })))?;
+// A timer updates it; a `watcher` does the same for a folder's changes.
+registrations::every(1, || async { item.update(...).ok(); Ok(()) })?;
+```
+
+```ts
+import * as registrations from "@pane-app/extension/registrations";
+
+const item = registrations.rootItem("focus", {
+  id: "focus",
+  title: "Focus: counting",
+  actions: [{ title: "Add one", onAction: async () => {} }], // repeatable
+});
+registrations.every(1, async () => item.update({ ... }));
+```
+
+A dynamic item is in the [item shape](list-tree.md) a list's items are
+(id, title, subtitle, icon, accessories, actions), matched and ranked
+like an indexed result. One that declares a `mode` (`"view"` or
+`"no-view"`) is a **dynamic command**: invoking it launches its command
+with a launch record naming the item's id, so one component can offer a
+row per workspace, or whatever it registered; without a mode, invoking
+the row runs its first action. A quick slot, an alias or a global hotkey
+holds a dynamic command by its command and item id, and while it is not
+registered says so.
+
+Timers are `after` (one firing) or `every` (one every interval), from 1
+second to 30 days, each firing a call into the component's `events`
+export with the timer's tag — a guest call like any other, stopped with
+the generation and its traps counted towards pausing. Firings that fall
+due while one is pending, or while the package
+[waits](../docs/dependencies.md#waiting-for-a-required-dependency) for
+what it needs, are coalesced into one. A component that registers timers
+or watchers exports the events entry point (`pane_extension::
+registrations::export_events!(Events)` in Rust (importing
+`pane_extension::registrations::Events` beside it), `"pane": { "events": true }` and
+`export const events = { handleEvent: registrations.handleEvent }` in
+JavaScript and TypeScript) — the SDK keeps the callback table, as for
+actions.
+
+A watcher reports a folder's changes, coalesced for half a second, as the
+paths that changed relative to the watched folder; an overflow is one
+"rescan" event. For each package Pane allows 1000 dynamic root items, 64
+timers, 16 watchers and 16 provisions; one beyond is refused with the
+limit named.
+
+### The activation entry point
+
+A package whose `pane.json` declares `"activate"` has that component's
+`activate` export called when its code may run and it is not waiting —
+at install, enable, start, reload, update, Retry and on coming back from
+waiting — and again when the instance that ran it is dropped while the
+generation continues, so its registrations exist without waiting for the
+user. A trap in it is a crash, counted towards pausing. Without it, a
+package's code first runs when the user asks for one of its commands.
+
+```json
+"activate": "sample_registrations.wasm"
+```
+
+```rust
+pane_extension::export!(Registrations);
+pane_extension::lifecycle::export!(Registrations);
+
+impl pane_extension::lifecycle::Guest for Registrations {
+    async fn activate() {
+        // register what the package registers
+    }
+}
+```
+
+```ts
+// package.json: "pane": { "activate": true }
+export const lifecycle = {
+  async activate() {
+    // register what the package registers
+  },
+};
+```
+
+### The state handoff
+
+A component whose code is replaced — by Reload, by an update or by a
+development-mode reload — can hand what it kept in memory to its new
+code: it opts in by exporting `snapshot` and `restore` in the lifecycle
+interface above (`pane_extension::lifecycle` in Rust,
+`"pane": { "snapshot": true }` and `export const lifecycle = { … }` in
+JavaScript and TypeScript), whatever its `pane.json` says. Pane asks each
+idle instance for a snapshot before the old generation ends — within one
+second and one megabyte, kept in memory only — and the new code's first
+instance restores it before anything else is asked of it, so a user's
+counter, draft or running task carries on where it was. It never happens
+after a crash, a pause, a failure to start, Retry, a disable followed by
+an enable, or a restart of Pane. The screen that was open opens again for
+every package, opted in or not, with its original launch record (only the
+command's root view).
+
+The bytes are opaque and yours to version; the SDK's helpers serialise a
+value (`pane_extension::state` in Rust, `@pane-app/extension/state` in
+JavaScript and TypeScript — serde and JSON). A `restore` that cannot read
+what an older release wrote should answer an error: the state is
+discarded and the extension starts fresh, which is not a failure. In
+development mode, a snapshot that was dropped, late, oversized or rejected
+is reported in the package's log. The full contract is in
+[docs/generations.md](../docs/generations.md#the-state-handoff). The
+handoff sample, in [Rust](sample-handoff/src/lib.rs), [JavaScript](sample-handoff-js/src/index.js)
+and [TypeScript](sample-handoff-ts/src/index.ts), keeps a counter and a
+draft:
+
+```rust
+impl pane_extension::lifecycle::Guest for Handoff {
+    async fn activate() {} // this package declares no activation entry point
+
+    async fn snapshot() -> Option<Vec<u8>> {
+        pane_extension::state::save(&KEPT)
+    }
+
+    async fn restore(bytes: Vec<u8>) -> Result<(), String> {
+        KEPT = pane_extension::state::load(&bytes)?;
+        Ok(())
+    }
+}
+```
+
+```ts
+// package.json: "pane": { "snapshot": true }
+import { load, save } from "@pane-app/extension/state";
+
+export const lifecycle = {
+  async activate() {},
+  async snapshot() {
+    return save(kept);
+  },
+  async restore(bytes) {
+    kept = load(bytes);
+  },
+};
+```
 
 ### Dependencies on other extensions
 
@@ -2233,9 +2738,9 @@ let history = run::history()?; // newest first, as typed
 
 A command that takes a query is the natural shape for it: the text typed
 in root search is the command line, sent when the user invokes it through
-its alias or as a fallback. The [Run](run) default extension does exactly
-that (ADR 0040), with "Run as Administrator" and a "Run History" list
-beside it. The run samples are a
+its alias or as a fallback. The [Run](https://github.com/pane-app/run)
+default extension does exactly that (ADR 0040), with "Run as Administrator"
+and a "Run History" list beside it. The run samples are a
 [Rust](sample-run/src/lib.rs), a
 [JavaScript](sample-run-js/src/index.js) and a
 [TypeScript](sample-run-ts/src/index.ts) command answering the same; a
@@ -2327,7 +2832,8 @@ for (const window of listWindows()) {
 
 A JavaScript or TypeScript command's package.json sets
 `"pane": { "windows": true }` to import the interface. The [Switch
-Windows](switch-windows) default extension is the one that lists them
+Windows](https://github.com/pane-app/switch-windows) default extension is
+the one that lists them
 (ADR 0040); the windows samples are a
 [Rust](sample-switch-windows/src/lib.rs), a
 [JavaScript](sample-switch-windows-js/src/index.js) and a
@@ -2385,7 +2891,8 @@ and TypeScript: Pane sees only components.
   available on Linux: this package supports only Windows") instead of
   installing it. See
   [platform availability](../docs/platform-availability.md).
-- `commands` (required, at least one): `id` unique in the package (without
+- `commands` (required, at least one, unless the package publishes
+  `operations` or provides `provides`): `id` unique in the package (without
   `#`, which Pane's records use to join it to the package identity), `title`,
   optional `subtitle`, optional `platforms` (the same list, for this command
   alone: elsewhere its root row is listed with the reason and does not
@@ -2395,6 +2902,10 @@ and TypeScript: Pane sees only components.
   has none), so put the words people will type there; Pane searches this
   metadata without running the command
   ([root search](../docs/root-search.md#matching-and-ranking)). Optional
+  `keywords` are search terms that find the command as its subtitle does
+  ([below](#a-commands-keywords)); optional `when` and `matches` say when
+  the command's row is listed and what it is matched by
+  ([below](#commands-for-typed-addresses-and-paths)). Optional
   `rootResults: true` says the command also computes
   [root results from the query](#root-results-computed-from-the-query).
   Optional `schedule` declares [scheduled work](#scheduled-work): an
@@ -2402,6 +2913,13 @@ and TypeScript: Pane sees only components.
   enabled.
 - `operations` (optional): the [operations](#operations) the package
   publishes; `commands` may then be empty.
+- `provides` (optional): the [capabilities](#capabilities) the package
+  provides, each a `capability` name, the `component` serving it and its
+  `operations`, with an optional `platforms`; `commands` may then be empty
+  too.
+- `uses` (optional): the [capabilities](#capabilities) the package calls,
+  each a `capability` name and the `operations` it calls, with an optional
+  `optional`, `use`, `default` and `commands`.
 - `dependencies` (optional): the other packages whose operations it calls,
   required or optional ([dependencies](#dependencies-on-other-extensions)).
 - `helpers` (optional): the [native helpers](#native-helpers) the package
@@ -2424,9 +2942,10 @@ rebuild it against the current [`wit/extension.wit`](../wit/extension.wit).
 Where the component comes from is up to your build. A standalone Rust crate
 can point `component` at `target/wasm32-wasip2/release/<name>.wasm` inside
 the crate folder after `cargo build --release --target wasm32-wasip2`. A
-JavaScript or TypeScript package can build into its own folder with
-`python3 tools/componentize-js/pane_js.py build <package dir> <package dir>/dist/<name>.wasm`
-and point at `dist/<name>.wasm`. The repository's samples live in one Cargo
+JavaScript or TypeScript package builds its component wherever its build
+puts it (development mode copies each built component into the folder, so
+`pane.json` can point at `dist/<name>.wasm`); `pane-ext dev <package dir>`
+builds it and hands it to Pane. The repository's samples live in one Cargo
 workspace and a prebuilt folder, so their manifests are in
 [`packages/`](packages) and `cargo xtask guests` assembles each with its
 component into `target/guests/packages/<name>/`.
@@ -2467,6 +2986,14 @@ What installing does:
 - **Required dependencies.** Installing or updating also installs the
   missing [required dependencies](#dependencies-on-other-extensions) the
   manifest declares, first, or explains why it cannot and installs nothing.
+- **Capability providers.** The [capabilities](#capabilities) the package
+  uses are listed in the preview, each with who provides it, and the
+  `default` provider a use names is installed with the package when no
+  installed package provides the capability — planned, installed and
+  rolled back as a required dependency is, and stopped with the reason when
+  it cannot be installed or does not provide the capability. A capability
+  nobody provides stops nothing: the package waits for a provider
+  ([details](../docs/dependencies.md#installing)).
 - **Listing.** Installed commands are listed from the manifests alone; no
   guest runs until you open a command or another extension calls one of the
   package's [operations](#operations). A damaged installed copy stays listed
@@ -2560,11 +3087,15 @@ succeeds:
   component), so `pane.json` names its component under
   `target/wasm32-wasip2/release/`; Pane takes the file of that name cargo
   built this time, even with another target folder.
-- A folder with `package.json` is built with
-  `python3 tools/componentize-js/pane_js.py build <folder> <out>` for each
-  component `pane.json` names, such as `dist/<name>.wasm` (a Pane run from a
-  checkout knows where `pane_js.py` is; otherwise set
-  `PANE_COMPONENTIZE_JS`; `PANE_PYTHON` names the interpreter).
+- A folder with `package.json` is built with Pane's own JavaScript build
+  (`npm ci --ignore-scripts && tsc -p tsconfig.json && esbuild --bundle &&
+  componentize`) for each component `pane.json` names, such as
+  `dist/<name>.wasm`, needing Node.js and npm alone: a `pane-ext` or Pane
+  from a checkout componentizes with its own linked componentizer; an
+  installed Pane with the componentizer of the package's own installed
+  `@pane-app/cli` platform package (`node_modules/@pane-app/cli-<target>`,
+  which `npm install` provides — a package without one is explained), or
+  the folder `PANE_COMPONENTIZER` names.
 
 Each build puts the components in a staging folder under Pane's data
 folder, and runs with Pane's environment (less what `cargo run` set for

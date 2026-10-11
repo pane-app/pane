@@ -75,10 +75,12 @@ and one index serves every package that uses it:
   [Files repository](https://github.com/pane-app/files) (Rust; a Pane
   release pinning its release commits,
   [`crates/pane/defaults.json`](../crates/pane/defaults.json)), its
-  package declaring `"fileIndex": true`: its one command, Search Files
-  (id `files`, `"search": true` and `"rootResults": true`), answers root
-  search from the
-  index with the entries' ids. Installed as Pane's default extension, its
+  package declaring `"fileIndex": true`: its command Search Files (id
+  `files`, `"search": true` and `"rootResults": true`) answers root
+  search from the index with the entries' ids, and its two commands
+  declared `"matches": "file-path"` (#195), Open and Reveal in File
+  Explorer, act on a path typed into root search (below). Installed as
+  Pane's default extension, its
   screen is Pane's own Search Files view; a copy installed from a folder
   lists what is searched and answers its own field (the best 50). It is not a
   [root provider](root-search.md#root-providers): it has a row and a
@@ -105,7 +107,8 @@ A package declares in `pane.json` that it uses the index:
 `"fileIndex": true`. The index is opened, caught up and watched only while
 at least one such package is enabled, not paused, and has a command the user
 left on in Settings (`Launcher::sync_file_index`, after every change of the
-packages): turning off Files' one command, Search Files, stops the index as
+packages): turning off every one of Files' commands — Search Files and,
+since #195, its Open and Reveal in File Explorer — stops the index as
 disabling Files does. When the last such package is disabled, paused or has
 its commands turned off, watching stops at once and the index stays on
 disk; turning one on again catches it up from where it stopped.
@@ -475,6 +478,23 @@ churn windows start again after a sleep.
 
 ## In root search
 
+A query that is a typed path is one Files answers (#195): its two commands
+declared `matches: "file-path"` are listed under "Addresses", below the
+results found by title and above the files, and the first is selected when
+nothing else matches, so Enter acts on the path. Each receives the resolved
+path (as typed, `~` resolved to the home folder, `file://` taken off) as
+its launch record's fallback text. **Open** (id `open`) opens the path with
+the system's handler, and **Reveal in File Explorer** (id `reveal`) shows
+it selected in the file manager; each closes the window after it acts.
+Open never runs a program: a path whose name says one is shown in the file
+manager instead, as file search's own Enter does
+([opening](#opening)); the name is all the extension can see, a pure WASI
+guest reading no file system, and it is what the index knows a program by.
+A command declared `"when": "blank"` or `"searching"` appears only then
+(see [root search](root-search.md#understanding-the-typed-query)); the
+`sample-matches` package shows the declarations in Rust, JavaScript and
+TypeScript.
+
 Files answers root search through `root-results`, now from the index: its
 call returns at once from the host and never waits for a walk, so a busy
 disk holds up no other result. A query of one character or more lists:
@@ -496,6 +516,19 @@ the path (#142, a document's or folder's outline until it is loaded), and
 its kind **File**, or **Folder** for a folder. A blank query lists no
 files. A result naming an id the index did not give the package is not
 listed. No use of a file row is recorded for learning (ADR 0030).
+
+**A path ending in a separator lists the folder it names** (#204): a query
+that is a path and ends in `/` or `\` makes Files ask Pane to list that
+folder's entries (the host's `typed-folder` interface, below) and answer
+them as it answers the index's, by the ids Pane gave them. The entries are
+listed the same way the index's are — the host's own rows, with the file
+actions, Enter opening an entry and showing a program rather than running
+it — after the rows declared for the path and beside nothing else. A
+folder that cannot be listed, a missing one among them, lists nothing: the
+rows for the path stay. Browsing is in the query itself: Tab on a selected
+folder row completes the query to that folder's path with a trailing
+separator, and Shift+Tab removes the last path component
+([root search](root-search.md#understanding-the-typed-query)).
 
 ## Search Files
 
@@ -804,6 +837,51 @@ are unaffected, and the package lists nothing until the listing returns. With
 UNC paths refused this should be rare; mapped network drives on Windows and
 network mounts on macOS and Linux are not detected.
 
+## The typed folder
+
+A folder the user **typed** into root search, ending in a separator, is
+listed for the Files extension (and any other command that answers root
+results for a path) through `pane:extension/typed-folder`
+([`wit/typed-folder.wit`](../wit/typed-folder.wit)), what
+[ADR 0034](adr/0034-file-search-indexes-the-users-home-folder.md) decided
+about the file access: no folder is granted, since the user named it, and
+the host, not the extension, reads the file system. It is separate from
+the granted folder's `list-folder` above, which stays as it is for the
+packages that ask for a folder the user chooses.
+
+- **The listing**: the command passes what the user typed and Pane
+  resolves it as root search resolves a typed path (`~` to the home
+  folder of the file index, `file://` taken off), then lists the folder's
+  **direct entries only, folders first and each in name order**, at most
+  **500** of them, with `truncated` set when the folder holds more. Hidden
+  entries (a name starting with `.`, and on Windows the hidden and system
+  attributes), links and names that are not Unicode are neither listed nor
+  counted, as the granted folder's walk skips them. An error explains a
+  folder that cannot be listed: not a path, a network location, a file, or
+  one Pane cannot read — the command then lists nothing for it.
+- **The entries** are named by the ids Pane gives them, in the package's
+  latest typed listing (each new listing replaces the one before it, so an
+  id of an earlier one is not found): an `open-file` result names one, and
+  Pane checks it again before acting on it — still in the latest listing,
+  still the kind it was listed as, not a link, still inside the folder the
+  user typed — exactly as it checks the index's entries and a granted
+  folder's files.
+- **The listing runs on a thread of its own**, since a folder may block:
+  the runtime thread awaits it, serving other packages' calls meanwhile,
+  and the wait is Pane's time, never the extension's computing, as the
+  system host functions are. A listing whose call was cancelled (the query
+  changed) still finishes, but cannot replace a newer one's listing.
+- **A partial listing says so** in the answer, and root search adds a row
+  at the end of the entries ("…and more entries", the bound named), which
+  cannot be activated: it says something, it does not do anything.
+
+Rust commands use it through pane-extension
+(`pane_extension::typed_folder`), JavaScript and TypeScript ones as the
+module "pane:extension/typed-folder@0.1.0"
+([`guests/js/typed-folder.d.ts`](../guests/js/typed-folder.d.ts)), which
+only a command whose package.json sets `"pane": { "typedFolder": true }`
+imports.
+
 ## The engine and the walker
 
 The measured first slice of #126 ([#174](https://github.com/pane-app/pane/issues/174)),
@@ -1111,6 +1189,14 @@ see [Catching up and watching](#catching-up-and-watching).
 Written with #175; none has run yet (tests run once every ticket of the
 milestone is merged).
 
+The rows for a path typed into root search (#195) are checked in
+[`crates/pane-core/tests/typed_queries.rs`](../crates/pane-core/tests/typed_queries.rs),
+with the real Files package, a recording link opener and system and a home
+folder of the test's own: Open and Reveal in File Explorer listed under
+"Addresses" only for a path-like query; Open opening the file, and
+revealing a program instead of running it; Reveal in File Explorer
+revealing it.
+
 - **The index through the launcher**
   ([`crates/pane-core/tests/file_index.rs`](../crates/pane-core/tests/file_index.rs)),
   with the real Files guest, the real index and the system's own change
@@ -1262,6 +1348,22 @@ milestone is merged).
   ([`crates/pane/tests/file_actions.rs`](../crates/pane/tests/file_actions.rs)),
   with real keys over the index: Enter and Ctrl+Enter on a document and on
   a program.
+- **The typed folder's entries**
+  ([`crates/pane-core/tests/typed_folders.rs`](../crates/pane-core/tests/typed_folders.rs)),
+  for Files and the Rust, JavaScript and TypeScript samples alike, over a
+  fixture folder and a real index of the home: the entries listed as file
+  results, folders first and each in name order, under "Files" below the
+  rows for the path; `~` resolved to the home folder; a missing folder
+  listing nothing; Enter opening a document and showing a program in the
+  file manager, never running it; the 500-entry bound with the row that
+  says so; Tab's completion and Shift+Tab's query. The listing's own bounds
+  and checks are unit-tested in
+  [`crates/pane-core/src/typed_folder.rs`](../crates/pane-core/src/typed_folder.rs).
+  In the window
+  ([`crates/pane/tests/file_actions.rs`](../crates/pane/tests/file_actions.rs)),
+  with real keys: Tab completing to a folder and Enter opening its entry,
+  Shift+Tab removing the last path component, and Enter on a program
+  showing it and running nothing.
 - **Search Files like Raycast's** (#177;
   [`crates/pane-core/tests/search_files.rs`](../crates/pane-core/tests/search_files.rs)),
   with Files acquired as Pane's default extension from its pinned commit

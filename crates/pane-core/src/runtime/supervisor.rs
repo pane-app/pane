@@ -220,6 +220,13 @@ pub(super) struct Shared {
     /// Guests' web requests: their limits, and what each package did this
     /// session, which a restarted thread carries on.
     pub(super) network: Arc<crate::http::Network>,
+    /// What the packages' guests register at run time, shared with every
+    /// runtime thread and read by the launcher (see `registrations`).
+    pub(super) registrations: Arc<crate::registrations::Registrations>,
+    /// Snapshots staged for the new code of a replaced package to restore
+    /// (the state handoff, ADR 0041): shared by every runtime thread, so a
+    /// restarted one restores them too.
+    pub(super) snapshots: super::SharedSnapshots,
     /// What a search waits on before it starts, if a test replaced the
     /// clock's [`super::SEARCH_DEBOUNCE`]; a restarted thread keeps it.
     /// A release build has none.
@@ -244,6 +251,10 @@ pub(super) struct Shared {
     /// The threads made to hang, for releasing them.
     #[cfg(any(test, debug_assertions))]
     hung: Mutex<Vec<Arc<Faults>>>,
+    /// How many times each component was instantiated: a diagnostic for
+    /// tests of when a component starts again (#202). The runtime thread
+    /// counts; the handles read.
+    pub(super) starts: Arc<Mutex<HashMap<PathBuf, u64>>>,
     /// Where compiled code, and the installed applications' icons, are
     /// kept; `None` for a runtime keeping no disposable data.
     pub(super) cache_dir: Option<PathBuf>,
@@ -349,6 +360,8 @@ impl Shared {
             logs: Default::default(),
             next_view: Arc::default(),
             network: Arc::default(),
+            registrations: Arc::default(),
+            snapshots: Arc::default(),
             #[cfg(any(test, debug_assertions))]
             search_timer: Arc::default(),
             crashes: Mutex::new(None),
@@ -359,6 +372,7 @@ impl Shared {
             busy: Mutex::default(),
             #[cfg(any(test, debug_assertions))]
             hung: Mutex::default(),
+            starts: Arc::default(),
             cache_dir,
             current: Mutex::new(Current {
                 thread: None,

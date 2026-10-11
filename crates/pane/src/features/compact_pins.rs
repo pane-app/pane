@@ -29,11 +29,11 @@
 use gpui::{App, ClickEvent, Context, Div, Role, Stateful, Window, div, prelude::*, px};
 use pane_core::{QuickSlot, Screen};
 
-use crate::app::LauncherWindow;
+use crate::app::{LauncherWindow, Spot};
 use crate::ui::extension_icon::row_icon_at;
 use crate::ui::icon::TileSize;
 use crate::ui::keycap::{CapStyle, Key, KeySequence, key_sequence};
-use crate::ui::theme::{Theme, pressed};
+use crate::ui::theme::{Theme, faded, pressed};
 
 /// The row's height under the search field, in px: the pins and the space
 /// above and below them. The collapsed window grows by this much while
@@ -154,7 +154,13 @@ impl LauncherWindow {
         // An installed command's own icon (#139), else Pane's tile.
         let icon = crate::features::icons::row_icon_of(&self.launcher, &pin.target.key(), theme);
         let ready = pin.ready();
-        let hover = theme.row_hover;
+        // Hovering a pin moves no selection: the fainter wash, fading out
+        // once the pointer leaves (#245). The hints' `look` below stays
+        // the number hint's own.
+        let hover = self
+            .motion
+            .hover
+            .look(Spot::Pin(index), cx.background_executor().now());
         div()
             .id(("compact-pin", index))
             .debug_selector(move || format!("compact-pin-{place}"))
@@ -166,8 +172,11 @@ impl LauncherWindow {
             .size(px(PIN_SIZE))
             .rounded(px(PIN_RADIUS))
             .cursor_pointer()
-            .hover(move |style| style.bg(hover))
-            .active(move |style| style.bg(pressed(hover)))
+            .when(hover > 0., |style| style.bg(faded(theme.hover_wash, hover)))
+            .active(|style| style.bg(pressed(theme.hover_wash)))
+            .on_hover(cx.listener(move |this, over: &bool, _, cx| {
+                this.motion.hover.set(Spot::Pin(index), *over, cx);
+            }))
             .role(Role::Button)
             .aria_label(format!("Pinned {place}: {}", pin.title))
             .when_some(

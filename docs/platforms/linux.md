@@ -541,7 +541,8 @@ the old answer stays, pixel for pixel; saves twice in a row (the second
 while the first builds) and checks the newer greeting; and after **Stop
 developing** saves again and checks that nothing was built. The Rust sample
 builds with `cargo build --release --target wasm32-wasip2` (with cargo's
-JSON messages), the TypeScript and JavaScript samples with `pane_js.py`, each
+JSON messages), the TypeScript and JavaScript samples with pane-build's
+JavaScript build, each
 into a staging folder under the phase's data folder, and the latter only
 where the JS toolchain is built (not in CI's smoke, which skips them). Run
 locally on 2026-09-28, after the review fixes (Ubuntu 26.04.1 LTS, kernel
@@ -1142,6 +1143,11 @@ until the first record is collected and the user confirms ceilings.
 ## Remaining limits
 
 - Wayland, a real desktop session and hardware GPU drivers are untested.
+- The HUD's window is placed where the specification has it (centred, its
+  bottom edge 150 logical pixels above the monitor's bottom) on Windows,
+  macOS and X11; Wayland lets a client place no such window, so there the
+  HUD reads as a toast-like message the compositor places (the
+  specification's fallback, `crates/pane/src/features/hud.rs`).
 - Clipboard history works through X11 only: on Wayland (with or without
   XWayland) it says why it cannot watch, and only the X11 combination
   (Xvfb in CI) is claimed; a real desktop's programs, password managers and

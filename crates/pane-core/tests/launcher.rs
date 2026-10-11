@@ -2,6 +2,7 @@
 //! components built by `cargo xtask guests`.
 
 use std::path::PathBuf;
+use std::time::{Duration, Instant};
 
 use futures::executor::block_on;
 use pane_core::{
@@ -31,6 +32,9 @@ fn command(id: &str, component: PathBuf) -> CommandRegistration {
         component,
         takes_query: false,
         search: false,
+        keywords: Vec::new(),
+        when: pane_core::CommandWhen::Always,
+        matches: pane_core::CommandMatches::Title,
     }
 }
 
@@ -268,7 +272,7 @@ fn going_back_while_a_form_is_submitted_discards_its_answer() {
     launcher.set_field_value("name", "Ada");
 
     let pending = launcher.submit_form();
-    assert_eq!(launcher.view().status, Status::Running);
+    assert!(matches!(launcher.view().status, Status::Running { .. }));
     launcher.back();
     block_on(pending);
 
@@ -284,7 +288,7 @@ fn submitting_again_while_a_submission_is_pending_is_ignored() {
 
     let second = launcher.submit_form();
     block_on(second);
-    assert_eq!(launcher.view().status, Status::Running);
+    assert!(matches!(launcher.view().status, Status::Running { .. }));
     block_on(first);
 
     // Only the empty submission ran. Its rejection reports the name, but
@@ -418,7 +422,7 @@ fn a_view_that_opens_after_the_user_left_is_closed_again() {
     launcher.select(5);
 
     let opening = launcher.activate_selected();
-    assert_eq!(launcher.view().status, Status::Running);
+    assert!(matches!(launcher.view().status, Status::Running { .. }));
     launcher.back();
     block_on(opening);
 
@@ -654,6 +658,15 @@ fn a_view_the_guest_refuses_to_open_is_an_error() {
     block_on(launcher.activate_selected());
 
     assert_eq!(launcher.view().screen, Screen::Command);
+    // The guest's refusal is shown once its answer reaches the launcher.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !matches!(launcher.view().status, Status::Error(_)) {
+        assert!(
+            Instant::now() < deadline,
+            "no error was shown for the refusal"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
     assert_eq!(
         error(&launcher),
         "The extension reported an error: the guest refused the view"
