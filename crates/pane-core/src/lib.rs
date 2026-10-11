@@ -102,10 +102,10 @@ pub use launcher::{
 pub use links::LinkOpener;
 pub use operations::{MAX_CALL_DEPTH, MAX_OPERATION_JSON};
 pub use packages::{
-    CommandMatches, CommandMode, CommandWhen, EXTENSION_API, InstalledPackage, ListedCommand,
-    MANIFEST_FILE, MANIFEST_VERSION, MAX_KEYWORDS, MAX_SCHEDULE_SECONDS, MIN_SCHEDULE_SECONDS,
-    Manifest, ManifestCommand, ManifestHelper, ManifestOperation, ManifestSchedule, PackageError,
-    PackageIdentity, RetainedData, SavedData,
+    CommandMatches, CommandMode, CommandWhen, EXTENSION_API, EXTENSION_API_PREVIOUS,
+    InstalledPackage, ListedCommand, MANIFEST_FILE, MANIFEST_VERSION, MAX_KEYWORDS,
+    MAX_SCHEDULE_SECONDS, MIN_SCHEDULE_SECONDS, Manifest, ManifestCommand, ManifestHelper,
+    ManifestOperation, ManifestSchedule, PackageError, PackageIdentity, RetainedData, SavedData,
 };
 #[doc(hidden)]
 pub use pane_build::process_tree;

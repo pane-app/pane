@@ -35,10 +35,13 @@
 //!   on a push and uploads it as an artifact, as it does the JS/TS samples.
 //! - `ci`: the lints of `ci-lints`, then the tests of `ci-tests`.
 //! - `ci-lints`: check formatting, the committed `pane.json` schema, the
-//!   prebuilt JS/TS samples, the SDKs' packages (`sdks`) and clippy: the
-//!   half of `ci` that runs no tests and builds no guest but the Rust SDK.
-//!   The prebuilt-samples check needs no toolchain at all (#218): it
-//!   verifies digests and staleness in `js_guests`.
+//!   one extension API number (`api_versions`: every place that names the
+//!   extension API says the version the `pane:extension` WIT package
+//!   declares, #317), the prebuilt JS/TS samples, the SDKs' packages
+//!   (`sdks`) and clippy: the half of `ci` that runs no tests and builds
+//!   no guest but the Rust SDK. The prebuilt-samples check needs no
+//!   toolchain at all (#218): it verifies digests and staleness in
+//!   `js_guests`.
 //! - `sdks`: check that the SDKs and the CLI packages as they would be
 //!   published, publishing nothing: the Rust SDK's copy of the WIT is
 //!   `wit/`, `cargo publish --dry-run` packages `pane-extension` and builds
@@ -76,6 +79,7 @@
 //!   fails when a measure is over its generous ceiling. `ci-branch.yml`'s
 //!   Linux tests run it in one shard, after the tests.
 
+mod api_versions;
 mod cli_packages;
 mod js_guests;
 mod package;
@@ -652,11 +656,12 @@ fn schema(write: bool) -> Result<(), String> {
 /// inside the `@pane-app/extension` package (`npm pack` carries the folder).
 const SCHEMA: &str = "guests/js/schema/pane.schema.json";
 
-/// The lints half of `ci`: the formatting checks, the prebuilt-samples
-/// check, the SDKs' packages and clippy — everything that runs no tests
-/// and builds no guest but the Rust SDK, which `sdks` builds from its
-/// package. `ci-branch.yml` runs this as a job beside `ci-tests`, so the
-/// lints and the tests of a push finish in the time of the slower one.
+/// The lints half of `ci`: the formatting checks, the one extension API
+/// number, the prebuilt-samples check, the SDKs' packages and clippy —
+/// everything that runs no tests and builds no guest but the Rust SDK,
+/// which `sdks` builds from its package. `ci-branch.yml` runs this as a
+/// job beside `ci-tests`, so the lints and the tests of a push finish
+/// in the time of the slower one.
 fn ci_lints() -> Result<(), String> {
     // Formatting first: it is free, so a formatting error is seen at once
     // instead of after the guests and the checks have been built.
@@ -699,6 +704,9 @@ fn ci_lints() -> Result<(), String> {
     // The committed pane.json schema is the one Pane's manifest types
     // generate, before anything slower runs.
     schema(false)?;
+    // The extension API number is the WIT package's version, and every
+    // other place that names it agrees with it.
+    api_versions::check()?;
     // The prebuilt JS/TS samples must match their sources and pins.
     js_guests::check()?;
     sdks()?;

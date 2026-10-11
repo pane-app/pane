@@ -41,6 +41,13 @@ pub const MANIFEST_VERSION: u64 = 1;
 /// `pane:extension` WIT package version.
 pub const EXTENSION_API: (u64, u64) = (0, 1);
 
+/// The extension API this Pane still runs besides [`EXTENSION_API`]: the
+/// previous version, whose world lives under `wit/previous/` (ADR 0046),
+/// held there by `cargo xtask ci-lints` at the version those files
+/// declare. None while no such world exists — today, 0.1 being the first
+/// version — and then only the current version runs.
+pub const EXTENSION_API_PREVIOUS: Option<(u64, u64)> = None;
+
 const REGISTRY_FILE: &str = "installed.json";
 const REGISTRY_VERSION: u64 = 1;
 const PACKAGES_DIR: &str = "packages";
@@ -2005,8 +2012,11 @@ fn parse_platforms(
 }
 
 /// Whether a package needing extension API `required` (`MAJOR.MINOR`, with
-/// an optional `.PATCH`) runs on this Pane. Before 1.0 each minor version is
-/// its own API; from 1.0 an older minor version of the same major is served.
+/// an optional `.PATCH`) runs on this Pane: an extension built for the
+/// current version, and for the previous one while its window lasts
+/// (ADR 0046). Before 1.0 each minor version is its own API and the
+/// previous one is the previous minor; from 1.0 an older minor version of
+/// the same major is served, and the previous major during its window.
 fn api_compatible(required: &str) -> Result<bool, PackageError> {
     let parts: Vec<Option<u64>> = required.split('.').map(|part| part.parse().ok()).collect();
     let (major, minor) = match parts.as_slice() {
@@ -2017,12 +2027,35 @@ fn api_compatible(required: &str) -> Result<bool, PackageError> {
             )));
         }
     };
-    let (host_major, host_minor) = EXTENSION_API;
-    Ok(if major == 0 {
-        host_major == 0 && minor == host_minor
-    } else {
-        major == host_major && minor <= host_minor
-    })
+    Ok(runs_extension_api(
+        EXTENSION_API,
+        EXTENSION_API_PREVIOUS,
+        (major, minor),
+    ))
+}
+
+/// Whether a Pane whose extension API is `host`, still running the previous
+/// version `previous` while its window lasts, runs an extension built for
+/// `required` (ADR 0046): the current version; an older minor of the same
+/// major from 1.0, where an addition needs no new version; and the
+/// previous version, the previous minor before 1.0. A version older than
+/// that or newer than the host is refused and explained, never run.
+fn runs_extension_api(
+    host: (u64, u64),
+    previous: Option<(u64, u64)>,
+    required: (u64, u64),
+) -> bool {
+    if required == host {
+        return true;
+    }
+    // From 1.0 an older minor of the same major runs: only a breaking
+    // change gets a new major, so the host serves every minor before it.
+    if host.0 >= 1 && required.0 == host.0 && required.1 <= host.1 {
+        return true;
+    }
+    // The previous version, while its world lives under `wit/previous/`:
+    // before 1.0 that is the previous minor, from 1.0 the previous major.
+    previous == Some(required)
 }
 
 /// Why a package cannot be previewed, installed or updated.
@@ -4091,5 +4124,62 @@ mod tests {
                 Target::current().unwrap()
             )
         );
+    }
+
+    #[test]
+    fn an_api_version_is_parsed_with_or_without_a_patch() {
+        // The manifest may say `0.1` or `0.1.0`: the patch is not part of
+        // the API version. Anything else is a malformed manifest.
+        assert_eq!(api_compatible("0.1"), Ok(true));
+        assert_eq!(api_compatible("0.1.0"), Ok(true));
+        assert_eq!(api_compatible("0.2"), Ok(false));
+        assert_eq!(
+            api_compatible("one"),
+            Err(PackageError::InvalidManifest(
+                "apiVersion `one` is not a version such as `0.1`".into()
+            ))
+        );
+    }
+
+    #[test]
+    fn with_no_previous_world_only_the_current_api_version_runs() {
+        // Today: 0.1 is the first version, `wit/previous/` holds no world,
+        // and every other version is refused, as it always has been.
+        let (host, previous) = (EXTENSION_API, EXTENSION_API_PREVIOUS);
+        assert_eq!(previous, None);
+        assert!(runs_extension_api(host, previous, host));
+        for required in [(0, 0), (0, 2), (1, 0), (1, 1), (2, 0)] {
+            assert!(!runs_extension_api(host, previous, required));
+        }
+    }
+
+    #[test]
+    fn before_1_0_the_previous_minor_alone_is_still_run() {
+        // ADR 0046 before 1.0: every minor is its own API, so a host at
+        // 0.3 runs 0.3 and the previous minor, 0.2, while its window
+        // lasts — nothing older and nothing newer.
+        let (host, previous) = ((0, 3), Some((0, 2)));
+        assert!(runs_extension_api(host, previous, (0, 3)));
+        assert!(runs_extension_api(host, previous, (0, 2)));
+        assert!(!runs_extension_api(host, previous, (0, 1)));
+        assert!(!runs_extension_api(host, previous, (0, 4)));
+        assert!(!runs_extension_api(host, previous, (1, 0)));
+    }
+
+    #[test]
+    fn from_1_0_every_minor_of_the_major_is_run() {
+        // ADR 0046 from 1.0: an addition needs no new version, so a host
+        // at 1.3 runs every minor from 1.0, and the previous major, 0.9,
+        // while its window lasts — nothing older and nothing newer.
+        let (host, previous) = ((1, 3), Some((0, 9)));
+        for minor in 0..=3 {
+            assert!(runs_extension_api(host, previous, (1, minor)));
+        }
+        assert!(runs_extension_api(host, previous, (0, 9)));
+        assert!(!runs_extension_api(host, previous, (0, 8)));
+        assert!(!runs_extension_api(host, previous, (1, 4)));
+        assert!(!runs_extension_api(host, previous, (2, 0)));
+        // The previous major runs only while the window lasts.
+        assert!(!runs_extension_api(host, None, (0, 9)));
     }
 }
