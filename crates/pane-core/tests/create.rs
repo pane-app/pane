@@ -118,11 +118,11 @@ fn the_authoring_rows_are_listed_and_ask_the_window_for_folders() {
     assert_eq!(
         titles(&launcher),
         [
-            INSTALL_ROW,
-            NPM_ROW,
-            GIT_ROW,
             CREATE_ROW,
             IMPORT_ROW,
+            INSTALL_ROW,
+            GIT_ROW,
+            NPM_ROW,
             SETTINGS_ROW
         ]
     );

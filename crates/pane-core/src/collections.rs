@@ -211,14 +211,16 @@ pub(crate) fn parse(text: &str) -> Result<Collection, String> {
     }
     // A chain of renames must end: an id the map names that leads back
     // to one the walk has followed is a cycle — a broken index, whose
-    // ids resolve to no extension (#310).
+    // ids resolve to no extension (#310). The cycle is spelled from
+    // where it repeats: the ids before it only lead into it.
     for old in renamed.keys() {
         let mut chain = vec![old.clone()];
         let mut current = old.clone();
         while let Some(next) = renamed.get(&current).and_then(Option::as_deref) {
-            if chain.iter().any(|id| id == next) {
-                chain.push(next.to_owned());
-                let cycle = chain.join(" → ");
+            if let Some(repeat) = chain.iter().position(|id| id == next) {
+                let mut cycle = chain[repeat..].to_vec();
+                cycle.push(next.to_owned());
+                let cycle = cycle.join(" → ");
                 return Err(format!("its `renamed` map holds a cycle: {cycle}"));
             }
             chain.push(next.to_owned());

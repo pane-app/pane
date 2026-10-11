@@ -4616,7 +4616,7 @@ impl Launcher {
                     launcher.registered();
                 });
             if let Err(error) = started {
-                eprintln!("Pane could not activate an extension: {error}");
+                crate::diagnostic!("Pane could not activate an extension: {error}");
                 state.activating.remove(&key);
             }
         }

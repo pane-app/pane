@@ -26,7 +26,7 @@ mod rows;
 
 use feedback::shown;
 use guests::guest;
-use rows::titles;
+use rows::{select_title, titles};
 
 /// A package manifest for one command backed by `component`.
 fn manifest(title: &str, version: &str, component: &str) -> String {
@@ -110,10 +110,17 @@ fn a_previewed_local_package_installs_and_its_command_runs() {
             SETTINGS_ROW
         ]
     );
-    assert!(launcher.selected_asks_for_folder());
+    // The first row is selected, and its activation asks the window for a
+    // folder: an authoring row's or the install row's, whichever the
+    // blank query's order places first (#222).
+    assert!(
+        launcher.selected_asks_for_folder() || launcher.selected_folder_ask().is_some(),
+        "the selected row asks for a folder"
+    );
 
     block_on(launcher.preview_package(&folder));
     assert!(!launcher.selected_asks_for_folder());
+    assert!(!launcher.selected_folder_ask().is_some());
 
     let view = launcher.view();
     assert!(
@@ -794,7 +801,10 @@ fn an_install_finishing_in_the_background_keeps_the_selected_row() {
     block_on(launcher.preview_package(&folder));
     let installing = launcher.activate_selected();
     launcher.back();
-    launcher.select(0);
+    // The install row is selected wherever the blank query's order
+    // places it; the selection is kept when the install finishes and the
+    // list gains the new command's row and the check row (#267).
+    select_title(&launcher, INSTALL_ROW);
     assert_eq!(selected_title(&launcher).as_deref(), Some(INSTALL_ROW));
 
     block_on(installing);

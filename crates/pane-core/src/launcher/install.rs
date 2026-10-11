@@ -110,14 +110,14 @@ impl Request {
 
 /// What reading a request for the choice (#308) found: one package, read
 /// as the ordinary preview reads it, or a collection's extensions listed.
-/// The package is boxed: it is by far the larger of the two, and the
-/// choice's reads hand it around by the enum.
+/// Each variant is boxed, so the choice's reads hand the enum around
+/// without carrying the larger one's size.
 pub(in crate::launcher) enum ChoiceRead {
     /// One package, read and checked.
     Package(Box<SourcePackage>),
     /// A collection, its extensions listed for the choice: where it is,
     /// how each of them is read and installed, and what each row shows.
-    Choice(choice::Listed),
+    Choice(Box<choice::Listed>),
 }
 
 /// Reads packages from their sources: local folders, npm packages, which it
@@ -198,9 +198,8 @@ impl Sources {
                                 root.display()
                             )));
                         }
-                        Ok(ChoiceRead::Choice(choice::Listed::folder(
-                            &root,
-                            &collection,
+                        Ok(ChoiceRead::Choice(Box::new(
+                            choice::Listed::folder(&root, &collection),
                         )))
                     }
                     None => SourcePackage::read(folder)
@@ -241,11 +240,8 @@ impl Sources {
                                  repository is one extension or a collection, never both"
                             )));
                         }
-                        Ok(ChoiceRead::Choice(choice::Listed::git(
-                            download,
-                            &origin,
-                            partial,
-                            &collection,
+                        Ok(ChoiceRead::Choice(Box::new(
+                            choice::Listed::git(download, &origin, partial, &collection),
                         )))
                     }
                     // A repository that is no collection is one extension
@@ -619,7 +615,7 @@ impl Launcher {
             Ok(ChoiceRead::Choice(listed)) => {
                 let mut state = self.lock();
                 if state.screen_epoch == epoch {
-                    self.show_choice(&mut state, listed);
+                    self.show_choice(&mut state, *listed);
                 }
                 return;
             }

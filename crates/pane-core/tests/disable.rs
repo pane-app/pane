@@ -264,9 +264,9 @@ fn re_enabling_after_a_restart_restores_the_saved_settings(fixture: &Fixture) {
     assert_eq!(
         titles(&restarted),
         [
+            "Greeting",
             CHECK_ROW,
             CREATE_ROW,
-            "Greeting",
             IMPORT_ROW,
             INSTALL_ROW,
             GIT_ROW,
@@ -294,13 +294,28 @@ fn copies_with_the_same_title_are_enabled_and_keep_settings_by_identity(fixture:
     block_on(launcher.install_package(&published));
     block_on(launcher.install_package(&development));
     launcher.back();
-    // Each copy saves its own choice.
-    launcher.select(0);
+    // Each copy saves its own choice. The two copies' commands share
+    // their title, so each is opened by its row's place in the list: the
+    // first copy's before any use, the second's after the first use
+    // raised the other to the top by frecency.
+    let first = titles(&launcher)
+        .into_iter()
+        .enumerate()
+        .filter_map(|(at, title)| (title == "Greeting").then_some(at))
+        .next()
+        .expect("the first copy's command");
+    launcher.select(first);
     block_on(launcher.activate_selected());
     select_title(&launcher, "Use a formal greeting");
     block_on(launcher.activate_selected());
     launcher.back();
-    launcher.select(1);
+    let second = titles(&launcher)
+        .into_iter()
+        .enumerate()
+        .filter_map(|(at, title)| (title == "Greeting").then_some(at))
+        .nth(1)
+        .expect("the second copy's command");
+    launcher.select(second);
     block_on(launcher.activate_selected());
     select_title(&launcher, "Use a casual greeting");
     block_on(launcher.activate_selected());
@@ -486,7 +501,9 @@ fn unreadable_settings_are_explained_to_the_command_and_never_overwritten(fixtur
     fs::write(&file, "not settings").unwrap();
 
     let restarted = dirs.launcher();
-    // The command's view reads the saved style.
+    // The command's view reads the saved style, wherever the blank
+    // query's order places its row.
+    select_title(&restarted, "Greeting");
     block_on(restarted.activate_selected());
 
     match restarted.view().status {

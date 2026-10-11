@@ -1197,6 +1197,13 @@ mod tests {
         use crate::host_settings::NavigationBindings;
 
         let keys = PaneKeys::default();
+        // The section jumps' default is Command on macOS, Control
+        // elsewhere (#258).
+        let (jump_up, jump_down) = if cfg!(target_os = "macos") {
+            ("cmd-up", "cmd-down")
+        } else {
+            ("ctrl-up", "ctrl-down")
+        };
         for fixed in [
             "escape",
             "ctrl-k",
@@ -1212,8 +1219,8 @@ mod tests {
             "backspace",
             "alt-up",
             "alt-down",
-            "ctrl-up",
-            "ctrl-down",
+            jump_up,
+            jump_down,
         ] {
             assert!(keys.taken(&binding(fixed)).is_some(), "{fixed}");
         }
