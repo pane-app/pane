@@ -17,7 +17,7 @@
 
 use pane_extension::alloc::{format, string::String, string::ToString};
 use pane_extension::feedback::{Toast, show_toast};
-use pane_extension::{Command, CustomView, Item, List, NoCustomView, publish};
+use pane_extension::{Command, Item, List, publish};
 use serde_json::{Value, json};
 
 /// The capability this package provides, with the operation Pane qualifies
@@ -45,14 +45,10 @@ fn about_item() -> Item {
 }
 
 impl Command for Greeter {
-    type CustomView = NoCustomView;
+    type DesignedView = pane_extension::view::NoDesignedView;
 
     async fn render() -> Result<List, String> {
         Ok(List::new("Rust greet provider").items([about_item()]))
-    }
-
-    async fn open_view(item_id: String) -> Result<CustomView, String> {
-        Err(format!("unknown view: {item_id}"))
     }
 }
 

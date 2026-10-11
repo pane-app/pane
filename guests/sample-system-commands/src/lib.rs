@@ -25,7 +25,7 @@
 use pane_extension::alloc::{format, string::String};
 use pane_extension::feedback::{Toast, show_toast};
 use pane_extension::system_commands::{self, Outcome};
-use pane_extension::{Action, Command, Item, List, NoCustomView};
+use pane_extension::{Action, Command, Item, List};
 
 struct SystemCommandsSample;
 pane_extension::export!(SystemCommandsSample);
@@ -203,7 +203,7 @@ fn answer(title: &str, outcome: Outcome) {
 }
 
 impl Command for SystemCommandsSample {
-    type CustomView = NoCustomView;
+    type DesignedView = pane_extension::view::NoDesignedView;
 
     async fn render() -> Result<List, String> {
         Ok(List::new("System commands").items(STEPS.iter().map(item)))

@@ -8,18 +8,18 @@
 //! exactly as `docs/generations.md` says.
 //!
 //! The state is a value this module versions itself, which the SDK's
-//! `pane_extension::state` serialises. Items, titles and answers match the
-//! JavaScript and TypeScript handoff samples.
+//! `pane_extension::state` serialises. The draft's form is a designed view
+//! the item's action opens (#241), as the typed form it was is retired;
+//! items, titles and answers match the JavaScript and TypeScript handoff
+//! samples.
 #![no_std]
 
 use core::cell::RefCell;
 
 use pane_extension::alloc::{format, string::String, vec, vec::Vec};
 use pane_extension::feedback::{Toast, show_toast};
-use pane_extension::{
-    Command, CustomView, Field, FieldKind, FieldValue, Form, FormError, Item, List, NoCustomView,
-    TextField, lifecycle, state,
-};
+use pane_extension::view::{Cx, IntoAnswer, View, button, column, item, list, text_input};
+use pane_extension::{Command, Item, LaunchRecord, List, lifecycle, state};
 
 /// The state this instance keeps in memory: the counter and the draft,
 /// handed to the new code on a replacement.
@@ -71,7 +71,22 @@ impl lifecycle::Guest for Handoff {
 }
 
 impl Command for Handoff {
-    type CustomView = NoCustomView;
+    /// The draft's form, which the "Edit the draft" item opens: a
+    /// designed view (the package's pane.json gives it its own command,
+    /// `"mode": "designed"`).
+    type DesignedView = DraftView;
+
+    async fn open_designed_view(
+        command: String,
+        _launch: LaunchRecord,
+    ) -> Result<DraftView, String> {
+        if command != "draft" {
+            return Err(format!("unknown command: {command}"));
+        }
+        Ok(DraftView {
+            text: RefCell::new(KEPT.0.borrow().draft.clone()),
+        })
+    }
 
     /// The command's list: the counter and the draft as they stand, with
     /// the actions that change them. Stable item ids, so a reopened screen
@@ -99,41 +114,50 @@ impl Command for Handoff {
                 ),
             )
             .subtitle(format!("The draft is {}", quoted(&kept.draft)))
-            .form(draft_form()),
+            .on_action(|| async {
+                pane_extension::commands::launch(
+                    &pane_extension::commands::CommandRef {
+                        source: None,
+                        command: "draft".into(),
+                    },
+                    pane_extension::LaunchType::UserInitiated,
+                    &[],
+                    None,
+                )
+                .map_err(|problem| format!("could not open the draft: {problem}"))
+            }),
         ))
-    }
-
-    /// The draft form's answer: the draft becomes the text typed, and the
-    /// screen says so.
-    async fn submit_form(item: String, values: Vec<FieldValue>) -> Result<String, FormError> {
-        if item != "draft" {
-            return Err(FormError {
-                field: None,
-                message: format!("unknown form: {item}"),
-            });
-        }
-        let text = values
-            .iter()
-            .find(|field| field.id == "draft")
-            .map(|field| field.value.clone())
-            .unwrap_or_default();
-        KEPT.0.borrow_mut().draft = text.clone();
-        Ok(format!("Saved the draft {}", quoted(&text)))
     }
 }
 
-/// The draft's form: one text field.
-fn draft_form() -> Form {
-    Form {
-        title: "Edit the draft".into(),
-        fields: vec![Field {
-            id: "draft".into(),
-            label: "Draft".into(),
-            kind: FieldKind::Text(TextField {
-                placeholder: Some("What a replacement must keep".into()),
-            }),
-        }],
-        submit_label: "Save".into(),
+/// The draft's form as a designed view (#241): a text field and a Save
+/// button. Saving pops the view back to the list, which re-renders with
+/// the draft it kept.
+struct DraftView {
+    /// The field's value, as the user typed it.
+    text: RefCell<String>,
+}
+
+impl View for DraftView {
+    fn render(&mut self, cx: &mut Cx<Self>) -> impl IntoAnswer {
+        let text = self.text.borrow().clone();
+        column()
+            .navigation_title("Edit the draft")
+            .gap(pane_extension::view::Space::M)
+            .child(
+                text_input(text.clone())
+                    .label("Draft")
+                    .placeholder("What a replacement must keep")
+                    .on_input(cx.value_listener(|this: &mut Self, value: &str| {
+                        *this.text.borrow_mut() = value.to_owned();
+                    })),
+            )
+            .child(button("Save").on_click(cx.pop_with(|this| {
+                let text = this.text.borrow().clone();
+                KEPT.0.borrow_mut().draft = text.clone();
+                format!("Saved the draft {}", quoted(&text))
+            })))
+            .into_answer()
     }
 }
 
