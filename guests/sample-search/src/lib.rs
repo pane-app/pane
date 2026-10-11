@@ -261,9 +261,10 @@ impl View for Search {
                                     // The details fetch in the render that
                                     // answers this press.
                                     let opened = id.clone();
-                                    *opening = Some(Pending::loading(async move {
-                                        outcome(&opened).await
-                                    }));
+                                    *opening =
+                                        Some(Pending::loading(
+                                            async move { outcome(&opened).await },
+                                        ));
                                 }
                             })),
                     );

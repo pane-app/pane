@@ -159,7 +159,9 @@ impl Counter {
         match key {
             "left" => self.refuse.set(true),
             "right" => panic!("view trap"),
-            "down" | "home" | "end" => self.oversize.set(Some(key)),
+            "down" => self.oversize.set(Some("down")),
+            "home" => self.oversize.set(Some("home")),
+            "end" => self.oversize.set(Some("end")),
             _ => {
                 self.oversize.set(None);
                 self.events.set(self.events.get() + 1);
