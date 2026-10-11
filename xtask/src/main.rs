@@ -248,6 +248,7 @@ fn guests() -> Result<(), String> {
                 "sample_files",
                 "faulty",
                 "folder_files",
+                "quick",
                 "operations_fixture",
                 "capabilities_fixture",
                 "registrations_fixture",

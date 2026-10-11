@@ -1,18 +1,20 @@
 //! The entries of a folder the user typed into root search (#204), through
-//! the launcher's public interface, with the real Files default extension
-//! and the Rust, JavaScript and TypeScript files samples, which give the
-//! same answers: a query that is a path ending in a separator lists that
-//! folder's direct entries as file results, folders first and each in name
-//! order, `~` resolved to the home folder of the file index, a missing
-//! folder listing nothing, and Enter on an entry opening a document and
-//! showing a program in the file manager, never running it, through the
-//! recording fakes. The Files extension's own copy of the checks adds the
-//! rows declared for the path beside the entries, the 500-entry bound with
-//! a row saying so when the folder holds more, and Tab's completion of the
-//! query and Shift+Tab's removal of a path component as the launcher reads
-//! them; the keys themselves are the window's
-//! (`crates/pane/tests/file_actions.rs`). The packages are the ones
-//! `cargo xtask guests` assembles in `target/guests/packages`.
+//! the launcher's public interface, with the Rust, JavaScript and
+//! TypeScript files samples, which give the same answers the Files
+//! default extension did: a query that is a path ending in a separator
+//! lists that folder's direct entries as file results, folders first and
+//! each in name order, `~` resolved to the home folder of the file index,
+//! a missing folder listing nothing, and Enter on an entry opening a
+//! document and showing a program in the file manager, never running it,
+//! through the recording fakes. The 500-entry bound with a row saying so
+//! when the folder holds more, and Tab's completion of the query and
+//! Shift+Tab's removal of a path component as the launcher reads them,
+//! are checked through the Rust sample; the keys themselves are the
+//! window's (`crates/pane/tests/file_actions.rs`). The rows the Files
+//! extension declared for the path beside the entries are that
+//! extension's own repository's to test now that its sources left this
+//! one (#285). The packages are the ones `cargo xtask guests` assembles
+//! in `target/guests/packages`.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -65,7 +67,6 @@ struct Package {
     package: &'static str,
 }
 
-const FILES: Package = Package { package: "files" };
 const RUST: Package = Package {
     package: "sample-files",
 };
@@ -265,9 +266,6 @@ impl Pane {
 /// which answers a typed folder's entries with its own bindings.
 macro_rules! contract {
     ($($check:ident),* $(,)?) => {
-        mod files {
-            $(#[test] fn $check() { super::$check(&super::FILES) })*
-        }
         mod rust {
             $(#[test] fn $check() { super::$check(&super::RUST) })*
         }
@@ -352,31 +350,11 @@ contract!(
     enter_shows_a_program_and_runs_nothing,
 );
 
-/// The Files extension declares commands for the typed path beside the
-/// entries: they are listed under "Addresses", above the entries.
-#[test]
-fn the_rows_declared_for_the_path_are_listed_above_the_entries() {
-    let pane = Pane::new(&FILES);
-    pane.search(&typed(&pane.folder.browse));
-    let sections: Vec<(String, usize)> = pane
-        .launcher
-        .presentation()
-        .sections
-        .into_iter()
-        .map(|section| (section.label, section.first))
-        .collect();
-    assert!(
-        sections.contains(&("Addresses".to_owned(), 0)),
-        "{sections:?}"
-    );
-    assert!(sections.contains(&("Files".to_owned(), 2)), "{sections:?}");
-}
-
 /// A folder with more entries than Pane lists is listed partially: the
 /// first 500, and a row saying so at the end of them.
 #[test]
 fn a_folder_with_more_than_500_entries_is_listed_partially() {
-    let pane = Pane::new(&FILES);
+    let pane = Pane::new(&RUST);
     let many = pane.folder.home.join("many");
     fs::create_dir(&many).unwrap();
     for number in 0..=500 {
@@ -400,8 +378,8 @@ fn a_folder_with_more_than_500_entries_is_listed_partially() {
     );
     assert_eq!(
         pane.launcher.view().rows.len(),
-        500 + 3,
-        "the two rows for the path, 500 entries and the notice"
+        500 + 1,
+        "500 entries and the notice"
     );
 }
 
@@ -410,17 +388,17 @@ fn a_folder_with_more_than_500_entries_is_listed_partially() {
 /// window's, this reads what the launcher tells it to type.
 #[test]
 fn tab_completes_the_query_to_a_folder_and_shift_tab_removes_a_component() {
-    let pane = Pane::new(&FILES);
+    let pane = Pane::new(&RUST);
     pane.search(&typed(&pane.folder.browse));
     // The folder row completes the query to its path, with a separator
     // after it, which lists the folder's own entries; a row that is not
-    // one of them does not.
+    // a folder of them does not.
     select_title(&pane.launcher, "sub");
     assert_eq!(
         pane.launcher.typed_folder_completion(),
         Some(typed(&pane.folder.file("sub")))
     );
-    pane.launcher.select(0);
+    select_title(&pane.launcher, "alpha.txt");
     assert_eq!(pane.launcher.typed_folder_completion(), None);
     // Removing the last component of the folder's query lists the folder
     // above it, the one first typed.

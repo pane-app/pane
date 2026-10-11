@@ -129,11 +129,11 @@ fn installed(
     (window, cx, sources, data, folder)
 }
 
-/// A window over a launcher with the Rust arguments sample and the
-/// calculator installed, "gr" given as "Greet"'s alias: a query asks the
-/// calculator for its results, so its list is held while it answers and
-/// the keys typed under it wait for it (#203).
-fn with_calculator(
+/// A window over a launcher with the arguments sample and the Rust
+/// sample installed, "gr" given as "Greet"'s alias: a query asks the Rust
+/// sample's root provider for its results, so its list is held while it
+/// answers and the keys typed under it wait for it (#203).
+fn with_rust_samples(
     cx: &mut TestAppContext,
 ) -> (
     Entity<LauncherWindow>,
@@ -142,19 +142,19 @@ fn with_calculator(
     PathBuf,
 ) {
     let (sources, data) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
-    let calculator =
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/guests/packages/calculator");
+    let rust_sample =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/guests/packages/sample-rust");
     assert!(
-        calculator.exists(),
+        rust_sample.exists(),
         "{} is missing; run `cargo xtask guests`",
-        calculator.display()
+        rust_sample.display()
     );
     let folder = assembled_package("sample-arguments", &sources.path().join("arguments"));
     cx.executor().allow_parking();
     cx.update(pane::bind_keys);
     let launcher =
         Launcher::with_packages(Runtime::start(), vec![], data.path().join("extensions"));
-    for package in [&calculator, &folder] {
+    for package in [&rust_sample, &folder] {
         let pending = launcher.install_package(package);
         cx.foreground_executor().block_on(pending);
     }
@@ -406,7 +406,7 @@ fn tab_shift_tab_and_the_arrows_move_between_the_fields_and_the_query(cx: &mut T
 
 #[gpui::test]
 fn an_alias_and_a_space_fill_the_first_argument_through_the_held_keys(cx: &mut TestAppContext) {
-    let (window, cx, _data, _folder) = with_calculator(cx);
+    let (window, cx, _data, _folder) = with_rust_samples(cx);
 
     // "gr" is Greet's alias: the space typed after it waits for the
     // query's list, and the characters typed behind it land behind the

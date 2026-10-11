@@ -35,6 +35,7 @@ members = [
     "sample-files",
     "fixtures/faulty",
     "fixtures/folder-files",
+    "fixtures/quick",
     "fixtures/operations",
     "fixtures/capabilities",
     "fixtures/registrations",

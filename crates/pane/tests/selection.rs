@@ -135,11 +135,12 @@ fn three_rows(cx: &mut TestAppContext) -> (Entity<LauncherWindow>, &'_ mut Visua
     (window, cx)
 }
 
-/// The launcher with the calculator package from `cargo xtask guests`
-/// installed in `data`.
-fn with_calculator(cx: &mut TestAppContext, data: &std::path::Path) -> Launcher {
+/// The launcher with the Rust sample package from `cargo xtask guests`
+/// installed in `data`: its root provider answers "reverse <text>" with
+/// the text reversed, an answer card that copies it.
+fn with_rust_sample(cx: &mut TestAppContext, data: &std::path::Path) -> Launcher {
     let folder =
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/guests/packages/calculator");
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/guests/packages/sample-rust");
     let launcher = Launcher::with_packages(Runtime::start(), vec![], data.join("extensions"));
     // The install's guest check answers from the runtime thread.
     cx.executor().allow_parking();
@@ -456,13 +457,13 @@ fn root_rows_under_an_open_actions_panel_take_the_hover_wash(cx: &mut TestAppCon
 #[gpui::test]
 fn the_selected_answer_card_shows_the_selection_wash_without_its_ring(cx: &mut TestAppContext) {
     let data = tempfile::tempdir().unwrap();
-    let launcher = with_calculator(cx, data.path());
+    let launcher = with_rust_sample(cx, data.path());
     let (window, cx) = open_launcher(cx, launcher);
-    cx.simulate_input("6*7");
+    cx.simulate_input("reverse 42");
     until(&window, cx, |view| {
-        view.rows.iter().map(|row| row.title.as_str()).eq(["42"])
+        view.rows.iter().map(|row| row.title.as_str()).eq(["24"])
     });
-    let card = bounds_of(cx, "row-42");
+    let card = bounds_of(cx, "row-24");
     assert!(
         cx.debug_bounds("answer-value").is_some(),
         "the answer is drawn as the card"

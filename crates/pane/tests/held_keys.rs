@@ -1,11 +1,12 @@
 //! Keys the window holds while the current query's list is not yet
 //! published (#203), on GPUI's test platform, with real key events: the
-//! calculator answers within the budget, so typing holds the list for the
-//! moment its answer takes, and the faulty fixture (a root provider slow
-//! on "0 + 0", with the launcher's clock frozen) holds it for about a
-//! second of the test's own time. Keys pressed under a hold are applied
-//! once the list is published — to the row it selects, never the previous
-//! list's — or after the hold's 300 ms, in the order they were pressed.
+//! Rust sample's root provider answers "reverse <text>" within the
+//! budget, so typing holds the list for the moment its answer takes, and
+//! the faulty fixture (a root provider slow on "0 + 0", with the
+//! launcher's clock frozen) holds it for about a second of the test's
+//! own time. Keys pressed under a hold are applied once the list is
+//! published — to the row it selects, never the previous list's — or
+//! after the hold's 300 ms, in the order they were pressed.
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -38,10 +39,13 @@ const OPEN_ACTIONS: &str = if cfg!(target_os = "macos") {
     "ctrl-k"
 };
 
-/// The calculator package's folder, from `cargo xtask guests`.
-fn calculator_folder() -> PathBuf {
+/// The Rust sample package's folder, from `cargo xtask guests`: its root
+/// provider answers "reverse <text>" with the text reversed, copying it,
+/// taking the place the calculator's arithmetic left when its sources
+/// left the repository (#285).
+fn sample_rust_folder() -> PathBuf {
     let folder =
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/guests/packages/calculator");
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/guests/packages/sample-rust");
     assert!(
         folder.exists(),
         "{} is missing; run `cargo xtask guests`",
@@ -100,19 +104,19 @@ fn open_launcher(
     cx.add_window_view(|window, cx| LauncherWindow::new(launcher, window, cx))
 }
 
-/// A launcher with the calculator installed in `data` (as `window.rs`'s
-/// `with_calculator` builds it), and the window over it.
-fn calculator_window<'a>(
+/// A launcher with the Rust sample installed in `data` (as `window.rs`'s
+/// `with_rust_sample` builds it), and the window over it.
+fn sample_window<'a>(
     cx: &'a mut TestAppContext,
     data: &Path,
 ) -> (Entity<LauncherWindow>, &'a mut VisualTestContext) {
     cx.executor().allow_parking();
     let launcher = Launcher::with_packages(Runtime::start(), vec![], data.join("extensions"));
-    install(cx, &launcher, &calculator_folder());
+    install(cx, &launcher, &sample_rust_folder());
     open_launcher(cx, launcher)
 }
 
-/// The window over the calculator and the slow command, with the
+/// The window over the Rust sample and the slow command, with the
 /// launcher's clock frozen: the list for "0 + 0" stays unpublished until
 /// the slow command answers (about a second), so keys pressed under it
 /// are held for the test's own time, not the real one.
@@ -124,7 +128,7 @@ fn slow_window<'a>(
     cx.executor().allow_parking();
     let launcher = Launcher::with_packages(Runtime::start(), vec![], data.join("extensions"))
         .with_clock(ManualClock::at(0));
-    install(cx, &launcher, &calculator_folder());
+    install(cx, &launcher, &sample_rust_folder());
     install(cx, &launcher, &slow_package(sources));
     open_launcher(cx, launcher)
 }
@@ -170,13 +174,13 @@ fn held(window: &Entity<LauncherWindow>, cx: &mut VisualTestContext) -> Vec<Stri
 #[gpui::test]
 fn enter_pressed_at_once_with_typing_runs_the_published_first_row(cx: &mut TestAppContext) {
     let data = tempfile::tempdir().unwrap();
-    let (window, cx) = calculator_window(cx, data.path());
+    let (window, cx) = sample_window(cx, data.path());
 
     // A first query's list, published with its answer.
-    cx.simulate_input("6*7");
-    wait_for_rows(&window, cx, &["42"]);
+    cx.simulate_input("reverse 42");
+    wait_for_rows(&window, cx, &["24"]);
 
-    // Typing on and pressing Enter at once: the previous list's row ("42")
+    // Typing on and pressing Enter at once: the previous list's row ("24")
     // is not what the user means — Enter waits for the query's list.
     cx.simulate_input("+1");
     cx.simulate_keystrokes("enter");
@@ -186,27 +190,27 @@ fn enter_pressed_at_once_with_typing_runs_the_published_first_row(cx: &mut TestA
         "nothing ran while the list is held"
     );
 
-    // The calculator answers within the budget: the published list takes
-    // "43", and the held Enter runs it — not the previous list's "42".
+    // The sample answers within the budget: the published list takes
+    // "1+24", and the held Enter runs it — not the previous list's "24".
     let view = until(&window, cx, |view| matches!(view.status, Status::Result(_)));
     assert_eq!(
         view.status,
-        Status::Result("Copied 43 to the clipboard".into())
+        Status::Result("Copied 1+24 to the clipboard".into())
     );
     assert_eq!(
         cx.read_from_clipboard().and_then(|item| item.text()),
-        Some("43".into())
+        Some("1+24".into())
     );
-    assert_eq!(view.query(), Some("6*7+1"), "root search stays as it was");
+    assert_eq!(view.query(), Some("reverse 42+1"), "root search stays as it was");
 }
 
 #[gpui::test]
 fn the_open_actions_chord_waits_for_the_querys_list(cx: &mut TestAppContext) {
     let data = tempfile::tempdir().unwrap();
-    let (window, cx) = calculator_window(cx, data.path());
+    let (window, cx) = sample_window(cx, data.path());
 
-    cx.simulate_input("6*7");
-    wait_for_rows(&window, cx, &["42"]);
+    cx.simulate_input("reverse 42");
+    wait_for_rows(&window, cx, &["24"]);
 
     // The chord pressed under the new query's hold opens no panel yet —
     // not over the previous list's row.
@@ -215,26 +219,26 @@ fn the_open_actions_chord_waits_for_the_querys_list(cx: &mut TestAppContext) {
     assert!(!cx.read_entity(&window, |window, _| window.actions_open()));
 
     // Published, the held chord opens the panel over the answer's row.
-    wait_for_rows(&window, cx, &["43"]);
+    wait_for_rows(&window, cx, &["1+24"]);
     wait::until(cx, |cx| {
         cx.read_entity(&window, |window, _| window.actions_open())
             .then_some(())
     });
     let view = settle(&window, cx);
-    assert_eq!(view.query(), Some("6*7+1"), "root search stays as it was");
+    assert_eq!(view.query(), Some("reverse 42+1"), "root search stays as it was");
 }
 
 #[gpui::test]
 fn a_digit_chord_waits_for_the_querys_list(cx: &mut TestAppContext) {
     let data = tempfile::tempdir().unwrap();
-    let (window, cx) = calculator_window(cx, data.path());
+    let (window, cx) = sample_window(cx, data.path());
 
-    cx.simulate_input("6*7");
-    wait_for_rows(&window, cx, &["42"]);
+    cx.simulate_input("reverse 42");
+    wait_for_rows(&window, cx, &["24"]);
 
     // Ctrl+1 picks the first row: pressed under the hold, it waits, so it
-    // picks the published list's first row — the answer "43", not the
-    // previous list's "42".
+    // picks the published list's first row — the answer "1+24", not the
+    // previous list's "24".
     cx.simulate_input("+1");
     cx.simulate_keystrokes("ctrl-1");
     assert_eq!(
@@ -246,21 +250,21 @@ fn a_digit_chord_waits_for_the_querys_list(cx: &mut TestAppContext) {
     let view = until(&window, cx, |view| matches!(view.status, Status::Result(_)));
     assert_eq!(
         view.status,
-        Status::Result("Copied 43 to the clipboard".into())
+        Status::Result("Copied 1+24 to the clipboard".into())
     );
     assert_eq!(
         cx.read_from_clipboard().and_then(|item| item.text()),
-        Some("43".into())
+        Some("1+24".into())
     );
 }
 
 #[gpui::test]
 fn tab_waits_for_the_querys_list(cx: &mut TestAppContext) {
     let data = tempfile::tempdir().unwrap();
-    let (window, cx) = calculator_window(cx, data.path());
+    let (window, cx) = sample_window(cx, data.path());
 
-    cx.simulate_input("6*7");
-    wait_for_rows(&window, cx, &["42"]);
+    cx.simulate_input("reverse 42");
+    wait_for_rows(&window, cx, &["24"]);
 
     // Tab pressed under the new query's hold moves no focus yet.
     cx.simulate_input("+1");
@@ -271,7 +275,7 @@ fn tab_waits_for_the_querys_list(cx: &mut TestAppContext) {
     );
 
     // Published, the held Tab takes its focus move.
-    wait_for_rows(&window, cx, &["43"]);
+    wait_for_rows(&window, cx, &["1+24"]);
     wait::until(cx, |cx| (!query_has_focus(&window, cx)).then_some(()));
 }
 
@@ -281,9 +285,9 @@ fn a_space_typed_while_the_query_could_still_be_an_alias_waits(cx: &mut TestAppC
     cx.executor().allow_parking();
     let launcher =
         Launcher::with_packages(Runtime::start(), vec![], data.path().join("extensions"));
-    // The calculator, and the query sample with "ec" as Echo's alias:
+    // The Rust sample, and the query sample with "ec" as Echo's alias:
     // "ec" plus a space is the command's invocation.
-    install(cx, &launcher, &calculator_folder());
+    install(cx, &launcher, &sample_rust_folder());
     let folder = assembled_package("sample-query", &sources.path().join("query"));
     install(cx, &launcher, &folder);
     let echo = format!(
@@ -320,8 +324,8 @@ fn a_held_key_is_applied_after_its_time_when_a_provider_never_answers(cx: &mut T
     let (window, cx) = slow_window(cx, sources.path(), data.path());
 
     // A first query's list, published with its answer.
-    cx.simulate_input("6*7");
-    wait_for_rows(&window, cx, &["42"]);
+    cx.simulate_input("reverse 42");
+    wait_for_rows(&window, cx, &["24"]);
 
     // "0 + 0" asks the slow command too: the list is held for its answer
     // (about a second), longer than the hold's own time. Enter pressed
@@ -336,17 +340,17 @@ fn a_held_key_is_applied_after_its_time_when_a_provider_never_answers(cx: &mut T
 
     // The hold's time is up on the window's own clock, provider or no
     // provider: the key is applied to the selection as it is then — the
-    // previous query's answer, "42".
+    // previous query's answer, "24".
     cx.executor().advance_clock(HOLD);
     cx.run_until_parked();
     let view = until(&window, cx, |view| matches!(view.status, Status::Result(_)));
     assert_eq!(
         view.status,
-        Status::Result("Copied 42 to the clipboard".into())
+        Status::Result("Copied 24 to the clipboard".into())
     );
     assert_eq!(
         cx.read_from_clipboard().and_then(|item| item.text()),
-        Some("42".into())
+        Some("24".into())
     );
 }
 
@@ -355,8 +359,8 @@ fn an_enter_repeated_during_the_hold_runs_once(cx: &mut TestAppContext) {
     let (sources, data) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
     let (window, cx) = slow_window(cx, sources.path(), data.path());
 
-    cx.simulate_input("6*7");
-    wait_for_rows(&window, cx, &["42"]);
+    cx.simulate_input("reverse 42");
+    wait_for_rows(&window, cx, &["24"]);
 
     // A new query, typed into a field cleared first: the slow command
     // holds its list, and two Enters pressed under the hold — an
@@ -367,15 +371,16 @@ fn an_enter_repeated_during_the_hold_runs_once(cx: &mut TestAppContext) {
     assert_eq!(held(&window, cx), ["enter"], "the repeat is dropped");
 
     // The slow command answers and the list is published: the held Enter
-    // runs once, on the published list's first row.
+    // runs once, on the published list's first row, whose action copies
+    // what the slow answer says.
     let view = until(&window, cx, |view| matches!(view.status, Status::Result(_)));
     assert_eq!(
         view.status,
-        Status::Result("Copied 0 to the clipboard".into())
+        Status::Result("Copied slow to the clipboard".into())
     );
     assert_eq!(
         cx.read_from_clipboard().and_then(|item| item.text()),
-        Some("0".into())
+        Some("slow".into())
     );
 }
 
@@ -384,8 +389,8 @@ fn a_repeated_chord_toggles_the_panel_once(cx: &mut TestAppContext) {
     let (sources, data) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
     let (window, cx) = slow_window(cx, sources.path(), data.path());
 
-    cx.simulate_input("6*7");
-    wait_for_rows(&window, cx, &["42"]);
+    cx.simulate_input("reverse 42");
+    wait_for_rows(&window, cx, &["24"]);
 
     // The chord pressed twice under the hold: one is held, the repeat is
     // dropped — a second toggle would close the panel the first opens.

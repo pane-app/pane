@@ -8,30 +8,25 @@
 //! parsed address or resolved path as their launch record's fallback text.
 //! Through the launcher's public interface with the real sample packages
 //! `cargo xtask guests` assembles (`sample-matches` in Rust, JavaScript
-//! and TypeScript), and the default extensions Quicklinks and Files, whose
-//! own commands are declared for them, with the recording system
-//! (`support/system.rs`) for what opening and revealing asks of it.
+//! and TypeScript): the default extensions Quicklinks and Files, whose
+//! own commands were declared for the typed query, left this repository
+//! with their sources (#285), so what they did with the address or path
+//! they were sent is their own repositories' to test.
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 
 use futures::executor::block_on;
-use pane_core::feedback::WindowRequest;
 use pane_core::file_index::IndexerConfig;
-use pane_core::system::System;
 use pane_core::{CommandMatches, CommandWhen, Launcher, Manifest, Runtime, Screen, Status};
 use tempfile::TempDir;
 
 #[path = "support/feedback.rs"]
 mod feedback;
-#[path = "support/system.rs"]
-mod recording;
 #[path = "support/rows.rs"]
 mod rows;
 
-use feedback::{RecordingWindow, shown};
-use recording::{Done, RecordingSystem};
+use feedback::shown;
 use rows::{select_title, titles};
 
 /// Pane's data location, its sources, and the home folder `~` resolves to:
@@ -44,12 +39,6 @@ struct Pane {
     /// The home folder's own directory, kept for as long as the Pane.
     _home: TempDir,
     home: PathBuf,
-}
-
-/// The fakes a test hands Pane: what its commands ask of the system.
-/// `None` for the real one (which these tests never reach).
-struct Fakes {
-    system: Option<Arc<RecordingSystem>>,
 }
 
 impl Pane {
@@ -65,31 +54,21 @@ impl Pane {
     }
 
     /// Starts Pane on this data location, with its home folder.
-    fn start(&self, fakes: Fakes) -> Launcher {
+    fn start(&self) -> Launcher {
         let runtime = Runtime::start().unwrap();
-        let system = fakes.system.map(|system| {
-            runtime.set_applications(system.clone());
-            let recording: Arc<dyn System> = system;
-            recording
-        });
         let config = IndexerConfig::native(
             &self.data.path().join("cache"),
             self.home.clone(),
             Vec::new(),
         );
-        let mut launcher =
-            Launcher::with_packages(Ok(runtime), vec![], self.data.path().join("extensions"))
-                .with_file_index(config);
-        if let Some(system) = system {
-            launcher = launcher.with_system(system);
-        }
-        launcher
+        Launcher::with_packages(Ok(runtime), vec![], self.data.path().join("extensions"))
+            .with_file_index(config)
     }
 
     /// Starts Pane and installs the assembled package `name` under
     /// `target/guests/packages`, leaving root search showing.
-    fn with(&self, name: &str, fakes: Fakes) -> Launcher {
-        let launcher = self.start(fakes);
+    fn with(&self, name: &str) -> Launcher {
+        let launcher = self.start();
         let folder = package(name, &self.sources.path().join(name));
         block_on(launcher.install_package(&folder));
         assert!(
@@ -163,7 +142,7 @@ fn sections(launcher: &Launcher) -> Vec<(String, usize)> {
 impl Fixture {
     fn pane(&self) -> (Pane, Launcher) {
         let pane = Pane::new();
-        let launcher = pane.with(self.package, Fakes { system: None });
+        let launcher = pane.with(self.package);
         (pane, launcher)
     }
 }
@@ -286,7 +265,7 @@ impl Fixture {
         let mut manifest: serde_json::Value = serde_json::from_str(&manifest).unwrap();
         change(&mut manifest);
         fs::write(folder.join("pane.json"), manifest.to_string()).unwrap();
-        let launcher = pane.start(Fakes { system: None });
+        let launcher = pane.start();
         block_on(launcher.install_package(&folder));
         let status = launcher.view().status;
         (pane, launcher, status)
@@ -372,169 +351,3 @@ contract!(
     an_unknown_when_is_refused_at_install_with_the_reason,
     an_unknown_matches_is_refused_at_install_with_the_reason,
 );
-
-/// Pane with the Files default extension installed over a home folder
-/// holding `notes/plan.md` and `notes/run plan.bat`, and the recording
-/// system its rows act through.
-struct FilesPane {
-    pane: Pane,
-    system: Arc<RecordingSystem>,
-}
-
-impl FilesPane {
-    /// The path of the file `below` its home folder, as it is typed.
-    fn file(&self, below: &str) -> String {
-        self.pane.home.join(below).to_string_lossy().into_owned()
-    }
-
-    /// What opening and revealing did so far, taking the records.
-    fn acted(&self) -> Vec<Done> {
-        self.system.take()
-    }
-}
-
-fn files_pane() -> (FilesPane, Launcher) {
-    let pane = Pane::new();
-    let notes = pane.home.join("notes");
-    fs::create_dir_all(&notes).unwrap();
-    fs::write(notes.join("plan.md"), "plan").unwrap();
-    fs::write(notes.join("run plan.bat"), "@echo off").unwrap();
-    let system = Arc::new(RecordingSystem::default());
-    let launcher = pane.with(
-        "files",
-        Fakes {
-            system: Some(system.clone()),
-        },
-    );
-    (FilesPane { pane, system }, launcher)
-}
-
-#[test]
-fn a_typed_path_offers_files_opening_and_revealing_it() {
-    let (files, launcher) = files_pane();
-
-    search(&launcher, &files.file("notes/plan.md"));
-    assert_eq!(titles(&launcher), ["Open", "Reveal in File Explorer"]);
-    assert_eq!(
-        sections(&launcher),
-        [("Addresses".into(), 0)],
-        "below the results, above the files"
-    );
-    select_title(&launcher, "Open");
-    block_on(launcher.activate_selected());
-    assert_eq!(
-        files.acted(),
-        [Done::Opened {
-            target: files.file("notes/plan.md"),
-            application: None,
-        }]
-    );
-
-    select_title(&launcher, "Reveal in File Explorer");
-    block_on(launcher.activate_selected());
-    assert_eq!(
-        files.acted(),
-        [Done::Revealed(PathBuf::from(files.file("notes/plan.md")))]
-    );
-}
-
-#[test]
-fn opening_a_typed_program_reveals_it_and_never_runs_it() {
-    let (files, launcher) = files_pane();
-
-    search(&launcher, &files.file("notes/run plan.bat"));
-    assert_eq!(titles(&launcher), ["Open", "Reveal in File Explorer"]);
-    select_title(&launcher, "Open");
-    block_on(launcher.activate_selected());
-    assert_eq!(
-        files.acted(),
-        [Done::Revealed(PathBuf::from(
-            files.file("notes/run plan.bat")
-        ))],
-        "a program is shown in the file manager and never run"
-    );
-}
-
-#[test]
-fn a_typed_address_offers_quicklinks_opening_and_saving_it() {
-    let pane = Pane::new();
-    let system = Arc::new(RecordingSystem::default());
-    let launcher = pane.with(
-        "quicklinks",
-        Fakes {
-            system: Some(system.clone()),
-        },
-    );
-    let window = RecordingWindow::attach(&launcher);
-
-    // A typed address lists the two commands declared for it, and only
-    // them; a query that is not one lists none of them.
-    search(&launcher, "https://example.com/pane");
-    assert_eq!(titles(&launcher), ["Open in Browser", "Create Quicklink"]);
-    assert_eq!(
-        launcher
-            .selected()
-            .and_then(|index| launcher.view().rows.get(index).cloned())
-            .map(|row| row.title),
-        Some("Open in Browser".to_owned()),
-        "the first address row is selected"
-    );
-    assert_eq!(
-        sections(&launcher),
-        [("Addresses".into(), 0)],
-        "below the results, above the files"
-    );
-    search(&launcher, "quicklink");
-    assert!(!titles(&launcher).contains(&"Open in Browser".to_owned()));
-    assert_eq!(
-        titles(&launcher)
-            .iter()
-            .filter(|title| title.as_str() == "Create Quicklink")
-            .count(),
-        1,
-        "only the command matched by its title: {:?}",
-        titles(&launcher)
-    );
-
-    // Enter opens the address with the system's handler, `https://`
-    // inferred before a bare domain, and closes the window.
-    window.take();
-    system.take();
-    search(&launcher, "example.com/pane");
-    select_title(&launcher, "Open in Browser");
-    block_on(launcher.activate_selected());
-    assert_eq!(
-        system.take(),
-        [Done::Opened {
-            target: "https://example.com/pane".into(),
-            application: None,
-        }]
-    );
-    assert_eq!(window.take(), [WindowRequest::Hide]);
-    // The window shows again, as the user would summon it, so the toast
-    // the saved quicklink leaves is in the footer.
-    launcher.set_window_presence(pane_core::WindowPresence::Shown);
-
-    // Create Quicklink opens its form with the address filled in, and
-    // saving makes a quicklink of it.
-    search(&launcher, "https://example.com/pane");
-    select_title(&launcher, "Create Quicklink");
-    block_on(launcher.activate_selected());
-    let view = launcher.view();
-    let form = view.form().expect("the form is open");
-    assert_eq!(
-        form.fields
-            .iter()
-            .find(|field| field.id == "link")
-            .map(|field| field.value.clone()),
-        Some("https://example.com/pane".into()),
-        "the address is prefilled: {:?}",
-        form.fields
-    );
-    launcher.set_field_value("name", "Example");
-    block_on(launcher.submit_form());
-    assert_eq!(shown(&launcher), Status::Result("Created “Example”".into()));
-    assert!(matches!(launcher.view().screen, Screen::Root { .. }));
-    search(&launcher, "example");
-    assert!(titles(&launcher).contains(&"Example".to_owned()));
-}

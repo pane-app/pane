@@ -1,14 +1,15 @@
 //! Root search's publishing of a query's list (#201), through the
 //! launcher's public interface, with the `faulty` fixture's slow provider
 //! — the query "0 + 0", answered after about a second of busy work — and
-//! the real calculator. A query's list is published once every provider
-//! asked has answered, or 200 ms after the query changed, whichever comes
-//! first: until then the rows shown stay the previous query's while the
-//! field shows what was typed. An answer arriving after the list was
-//! published is merged into it, coalesced within 16 ms, moving the
-//! selection to the new first row when the first row was selected — a
-//! preselected fallback (ADR 0031) gives way to a late result — and never
-//! taking it from a row the user moved to.
+//! the quick fixture's provider, which answers any query the moment the
+//! runtime thread is free. A query's list is published once every
+//! provider asked has answered, or 200 ms after the query changed,
+//! whichever comes first: until then the rows shown stay the previous
+//! query's while the field shows what was typed. An answer arriving
+//! after the list was published is merged into it, coalesced within
+//! 16 ms, moving the selection to the new first row when the first row
+//! was selected — a preselected fallback (ADR 0031) gives way to a late
+//! result — and never taking it from a row the user moved to.
 //!
 //! The clock is a manual one (`Launcher::with_clock`): the budget and the
 //! coalescing are timed by it, so advancing the clock is what publishes
@@ -41,9 +42,13 @@ fn built(path: &str) -> PathBuf {
     path
 }
 
-/// The assembled calculator package's folder.
-fn calculator() -> PathBuf {
-    built("packages/calculator")
+/// The quick fixture's package folder: a root provider answering any
+/// query at once — asked behind the slow fixture, its call waits for the
+/// runtime thread to be free of the slow one, so its answer arrives
+/// right behind the slow answer. What the calculator's quick answers
+/// were before its sources left the repository (#285).
+fn quick(dirs: &Dirs) -> PathBuf {
+    dirs.package("quick", &manifest_provider("Quick"), &built("quick.wasm"))
 }
 
 /// The assembled sample package holding Echo, which takes a query.
@@ -67,6 +72,16 @@ fn manifest_computing(title: &str) -> String {
         r#"{{ "manifestVersion": 1, "title": "{title}", "apiVersion": "0.1",
   "commands": [{{ "id": "command", "title": "{title}", "component": "command.wasm",
     "rootResults": true }}] }}"#
+    )
+}
+
+/// A manifest for a package titled `title` whose one command is a root
+/// provider: it has no row of its own, and Pane never opens or runs it.
+fn manifest_provider(title: &str) -> String {
+    format!(
+        r#"{{ "manifestVersion": 1, "title": "{title}", "apiVersion": "0.1",
+  "commands": [{{ "id": "command", "title": "{title}", "component": "command.wasm",
+    "mode": "provider", "rootResults": true }}] }}"#
     )
 }
 
@@ -309,10 +324,10 @@ fn a_preselected_fallback_gives_way_to_a_late_answer() {
 #[test]
 fn late_answers_arriving_close_together_merge_into_one_update() {
     let dirs = Dirs::new();
-    // The calculator, asked after the slow fixture, answers "0 + 0" as
+    // The quick fixture, asked after the slow fixture, answers "0 + 0" as
     // soon as the runtime is free of the slow call — right behind its
     // answer, close enough to coalesce with it.
-    let (launcher, clock) = slow_launcher(&dirs, &[calculator(), sums(&dirs)]);
+    let (launcher, clock) = slow_launcher(&dirs, &[quick(&dirs), sums(&dirs)]);
 
     let answered = search_in_background(&launcher, "0 + 0");
     clock.advance(Duration::from_millis(200));
@@ -328,7 +343,7 @@ fn late_answers_arriving_close_together_merge_into_one_update() {
         "the late answers are coalescing"
     );
     clock.advance(Duration::from_millis(16));
-    assert_eq!(titles(&launcher), ["Slow answer", "0", "Sum 0 + 0"]);
+    assert_eq!(titles(&launcher), ["Slow answer", "Quick answer", "Sum 0 + 0"]);
     assert_eq!(selected_title(&launcher).as_deref(), Some("Slow answer"));
     assert!(launcher.list_published());
 }
