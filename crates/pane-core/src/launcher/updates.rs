@@ -914,7 +914,7 @@ impl Updates {
                         pass.refused(
                             installed.identity.clone(),
                             title,
-                            &format!("{reason}{}", application_update_note(launcher)),
+                            &refusal_message(&reason, launcher),
                         );
                     }
                     PackageError::UnsupportedPlatform(_) => {
@@ -1449,17 +1449,34 @@ fn default_says(version: Option<String>, of: &GitRevision) -> String {
         .unwrap_or_else(|| revision(&of.commit))
 }
 
-/// What the refusal of a newer version that needs a newer Pane appends
-/// when Pane's own application update exists: pointing the user at it,
-/// the reason's own help. Nothing when no offer exists or no release
-/// source is configured.
+/// What the refusal of a package says, as an install, a preview and an
+/// update check's skip show it (#318, ADR 0046): the reason, with the
+/// note about Pane's own update appended when one exists and the reason
+/// is one a newer Pane satisfies — a version of the extension API newer
+/// than any this Pane runs, or a manifest format newer than it reads. A
+/// version older than every one this Pane runs gets no note: updating
+/// Pane would not run it.
+pub(super) fn refusal_message(reason: &PackageError, launcher: &Launcher) -> String {
+    let note = match reason {
+        PackageError::NewerManifest(_) => application_update_note(launcher),
+        PackageError::IncompatibleApi(refusal) if refusal.newer => {
+            application_update_note(launcher)
+        }
+        _ => String::new(),
+    };
+    format!("{reason}{note}")
+}
+
+/// What a refusal that a newer Pane would satisfy appends when Pane's own
+/// application update exists: pointing the user at it, the reason's own
+/// help. Nothing when no offer exists or no release source is configured.
 fn application_update_note(launcher: &Launcher) -> String {
     match launcher.application_update() {
         ApplicationUpdate::Offered { version, .. } | ApplicationUpdate::Installing { version } => {
-            format!(" Pane {version} is available: update Pane itself.")
+            format!(". Pane {version} is available: update Pane itself.")
         }
         ApplicationUpdate::Installed { version } => {
-            format!(" Pane {version} runs from the next start.")
+            format!(". Pane {version} runs from the next start.")
         }
         _ => String::new(),
     }

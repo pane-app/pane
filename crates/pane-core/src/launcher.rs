@@ -4763,28 +4763,43 @@ impl Launcher {
             }
         }
         for package in enabled() {
-            if let Err(error) = &package.manifest {
-                let row = Row {
-                    id: package.identity.key(),
-                    title: package.title(),
-                    subtitle: Some("Cannot load this installed extension".into()),
-                    unavailable: None,
-                };
-                let problem = format!(
-                    "{} cannot load from {}: {error}",
-                    package.title(),
-                    package.location.display()
-                );
-                add(
-                    row,
-                    Entry::Broken(problem),
-                    None,
-                    None,
-                    &[],
-                    CommandWhen::Always,
-                    CommandMatches::Title,
-                );
-            }
+            // An installed extension whose manifest cannot be read, or that
+            // is built for a version of the extension API this Pane cannot
+            // run (#318, ADR 0046), never leaves the list without a reason:
+            // one row says what is wrong, and activating it shows the
+            // explanation. Nothing of either runs.
+            let (subtitle, problem) = if let Some(unsupported) = &package.unsupported {
+                (
+                    unsupported.refusal.needs().to_owned(),
+                    unsupported.package_error().to_string(),
+                )
+            } else if let Err(error) = &package.manifest {
+                (
+                    "Cannot load this installed extension".into(),
+                    format!(
+                        "{} cannot load from {}: {error}",
+                        package.title(),
+                        package.location.display()
+                    ),
+                )
+            } else {
+                continue;
+            };
+            let row = Row {
+                id: package.identity.key(),
+                title: package.title(),
+                subtitle: Some(subtitle),
+                unavailable: None,
+            };
+            add(
+                row,
+                Entry::Broken(problem),
+                None,
+                None,
+                &[],
+                CommandWhen::Always,
+                CommandMatches::Title,
+            );
         }
         if self.installation.is_some() {
             let row = Row {

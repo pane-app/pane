@@ -50,8 +50,8 @@ use futures::executor::block_on;
 use pane_core::clipboard::{Clock as _, ManualClock, SystemClock};
 use pane_core::npm::Registry as NpmRegistry;
 use pane_core::{
-    Launcher, OperationKind, PackageIdentity, Runtime, Screen, SettingsTarget, Status, ToastStyle,
-    UpdateResultsAction, WindowPresence,
+    ExtensionMark, Launcher, OperationKind, PackageIdentity, Runtime, Screen, SettingsTarget,
+    Status, ToastStyle, UpdateResultsAction, WindowPresence,
 };
 use tempfile::TempDir;
 
@@ -907,6 +907,45 @@ fn an_incompatible_new_version_is_refused_with_its_explanation() {
         run(&launcher, "Use a casual greeting"),
         Status::Result("Saved the casual greeting".into())
     );
+}
+
+#[test]
+fn an_installed_copy_too_new_for_this_pane_resolves_when_a_runnable_version_arrives() {
+    let dirs = Dirs::new();
+    let launcher = dirs.launcher();
+    dirs.install(&launcher, "0.1.0");
+    // The code that arrived is built for an API newer than this Pane runs
+    // (#318, ADR 0046): the extension stays listed and explained, its
+    // commands offered nowhere, never paused — and an update to a version
+    // this Pane runs resolves it by itself.
+    let location = launcher.packages()[0].location.clone();
+    let manifest = fs::read_to_string(location.join("pane.json"))
+        .unwrap()
+        .replace(r#""apiVersion": "0.1""#, r#""apiVersion": "0.2""#);
+    assert!(manifest.contains("0.2"), "the manifest was seeded");
+    fs::write(location.join("pane.json"), manifest).unwrap();
+    drop(launcher);
+
+    let restarted = dirs.launcher();
+    let identity = restarted.packages()[0].identity.clone();
+    assert!(matches!(
+        restarted.extension_mark(&identity),
+        Some(ExtensionMark::UnsupportedApi(_))
+    ));
+    assert!(!titles(&restarted).contains(&"Greeting".to_owned()));
+
+    // A newer version built for the API this Pane runs: the update path
+    // replaces the copy, and the state goes by itself.
+    dirs.publish("0.2.0", "0.1");
+    dirs.check(&restarted);
+    assert_eq!(dirs.installed_version(), "0.2.0");
+    assert_eq!(restarted.extension_mark(&identity), None);
+    assert!(titles(&restarted).contains(&"Greeting".to_owned()));
+    assert_eq!(
+        run(&restarted, "Use a casual greeting"),
+        Status::Result("Saved the casual greeting".into())
+    );
+    dirs.wait_for_no_downloads();
 }
 
 #[test]

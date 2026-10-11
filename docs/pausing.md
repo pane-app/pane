@@ -63,6 +63,11 @@ What is **not** a failure of the package:
   extension) is not computing and is never stopped for it; a native helper
   that runs past its 30-second limit is ended, and the command gets an
   error it handles ([helpers](helpers.md#running-and-stopping)).
+- A **version refusal** (ADR 0046): an extension built for a version of
+  the extension API this Pane cannot run is refused before any of its code
+  runs and never paused — nothing of it ran to fail — and it stays listed
+  in Settings, its page saying which version it needs and what to update,
+  until a version this Pane can run arrives.
 
 ## What a paused package does
 

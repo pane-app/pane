@@ -171,7 +171,7 @@ fn the_same_invalid_package_is_refused_alike_by_pane_and_pane_ext_check() {
     { "id": "hello", "title": "Say hello", "component": "dist/hello.wasm" }
   ]
 }"#;
-    let cases: [(&str, String, &str); 4] = [
+    let cases: [(&str, String, &str); 5] = [
         (
             "unknown mode",
             manifest(r#", "mode": "sometimes""#),
@@ -180,6 +180,13 @@ fn the_same_invalid_package_is_refused_alike_by_pane_and_pane_ext_check() {
         ("source-only package", source_only.to_owned(), "sample_rust"),
         ("older api shape", manifest(""), "old_api"),
         ("wasi 0.2 component", manifest(""), "mixed_p2"),
+        (
+            // The same explanation as an install's refusal: the versions
+            // and the remedy, as Pane says it (#318, ADR 0046).
+            "unsupported extension API",
+            manifest("").replace(r#""apiVersion": "0.1""#, r#""apiVersion": "0.2""#),
+            "sample_rust",
+        ),
     ];
     for (name, manifest, component) in cases {
         let folder = package(&sources.path().join(name), &manifest, component);

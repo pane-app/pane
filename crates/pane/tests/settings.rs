@@ -2075,6 +2075,78 @@ fn a_paused_extension_is_marked_in_the_sidebar_and_on_its_page(cx: &mut TestAppC
 }
 
 #[gpui::test]
+fn an_extension_built_for_a_version_this_pane_cannot_run_keeps_its_page_and_says_why(
+    cx: &mut TestAppContext,
+) {
+    let (sources, data) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let folder = described_package(&sources.path().join("described"));
+    // Install, then let the copy's code be replaced by a build for an
+    // extension API newer than this Pane runs (#318, ADR 0046): a restart
+    // — the next window over the same data — reads it.
+    let installing =
+        Launcher::with_packages(Runtime::start(), vec![], data.path().join("extensions"));
+    install(&installing, &folder);
+    let location = installing.packages()[0].location.clone();
+    drop(installing);
+    let manifest = fs::read_to_string(location.join("pane.json"))
+        .unwrap()
+        .replace(r#""apiVersion": "0.1""#, r#""apiVersion": "0.2""#);
+    assert!(manifest.contains("0.2"), "the manifest was seeded");
+    fs::write(location.join("pane.json"), manifest).unwrap();
+
+    let launcher =
+        Launcher::with_packages(Runtime::start(), vec![], data.path().join("extensions"));
+    cx.executor().allow_parking();
+    cx.update(pane::bind_keys);
+    let (_window, cx) = cx.add_window_view(|window, cx| LauncherWindow::new(launcher, window, cx));
+    let (_settings, mut settings_cx) = open_extensions(cx);
+
+    // It stays listed with its page: the sidebar marks it in a word, the
+    // group lists it, and the page keeps its title, what it does, where it
+    // comes from and the refusal in full — never a generic broken load.
+    assert!(has_node(
+        &mut settings_cx,
+        "ListBoxOption",
+        "Described sample, Unsupported"
+    ));
+    assert!(
+        settings_cx
+            .debug_bounds("extension-item-Described sample")
+            .is_some(),
+        "the extension is listed"
+    );
+    open_page(&mut settings_cx, "Described sample");
+    assert!(has_node(&mut settings_cx, "Heading", "Described sample"));
+    assert!(
+        settings_cx
+            .debug_bounds("extension-page-description")
+            .is_some(),
+        "what it does stays"
+    );
+    assert!(
+        settings_cx.debug_bounds("extension-page-source").is_some(),
+        "where it comes from stays"
+    );
+    assert!(
+        has_node(
+            &mut settings_cx,
+            "Status",
+            "Incompatible package: it needs Pane extension API 0.2, but this Pane provides 0.1. \
+             Update Pane to run it"
+        ),
+        "the page says the refusal in full"
+    );
+    // Its commands are offered nowhere: the page says that rather than
+    // "It has no commands."
+    assert!(
+        settings_cx
+            .debug_bounds("extension-commands-refused")
+            .is_some(),
+        "the Commands section says they are not offered"
+    );
+}
+
+#[gpui::test]
 fn an_official_extension_is_marked_as_panes_own_wherever_settings_lists_it(
     cx: &mut TestAppContext,
 ) {

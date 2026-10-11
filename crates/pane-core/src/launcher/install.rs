@@ -27,6 +27,7 @@ use std::time::Instant;
 use super::{
     Changing, Entry, FormField, FormPurpose, FormView, GIT_REPOSITORY_FIELD, Launcher,
     LauncherView, Mode, NPM_PACKAGE_FIELD, OpenForm, Row, Screen, State, Status, off_thread,
+    updates,
 };
 use crate::defaults::DefaultExtension;
 use crate::dependencies::{self, Assumptions, Plan, RequiredState};
@@ -460,6 +461,9 @@ impl Launcher {
             .as_ref()
             .ok()
             .and_then(|(package, _)| state.package(&package.identity).cloned());
+        // A refusal a newer Pane would satisfy points at Pane's own update
+        // when one exists, as an update check's skip does (#318, ADR 0046).
+        let checked = checked.map_err(|reason| updates::refusal_message(&reason, self));
         let (view, entries) = preview_view(request, checked, installed);
         self.leave_command(state);
         state.view = view;
@@ -771,7 +775,15 @@ impl Launcher {
                 "this launcher does not install packages".into(),
             )));
         };
-        let package = self.read_and_check(request).await.map_err(failed)?;
+        let package = match self.read_and_check(request).await {
+            Ok(package) => package,
+            Err(reason) => {
+                // A refusal a newer Pane would satisfy points at Pane's own
+                // update when one exists, as a preview's and an update
+                // check's do (#318, ADR 0046); anything else says itself.
+                return Err(failed(updates::refusal_message(&reason, self)));
+            }
+        };
         let (package, plan) = self.plan_dependencies(package).await;
         self.install_plan(store, package, plan, mode, shown, claimed)
             .await
@@ -973,15 +985,15 @@ impl Launcher {
 /// can be installed, or why it cannot.
 fn preview_view(
     request: &Request,
-    checked: Result<(SourcePackage, dependencies::Plan), PackageError>,
+    checked: Result<(SourcePackage, dependencies::Plan), String>,
     installed: Option<InstalledPackage>,
 ) -> (LauncherView, Vec<Entry>) {
     let (package, plan) = match checked {
         Ok(checked) => checked,
-        Err(error) => {
+        Err(message) => {
             let (asked, name) = request.describe();
             let view = LauncherView {
-                status: Status::Error(error.to_string()),
+                status: Status::Error(message),
                 ..LauncherView::new(
                     Screen::Package {
                         details: vec![asked],

@@ -106,6 +106,7 @@ pub use packages::{
     InstalledPackage, ListedCommand, MANIFEST_FILE, MANIFEST_VERSION, MAX_KEYWORDS,
     MAX_SCHEDULE_SECONDS, MIN_SCHEDULE_SECONDS, Manifest, ManifestCommand, ManifestHelper,
     ManifestOperation, ManifestSchedule, PackageError, PackageIdentity, RetainedData, SavedData,
+    UnsupportedApi,
 };
 #[doc(hidden)]
 pub use pane_build::process_tree;

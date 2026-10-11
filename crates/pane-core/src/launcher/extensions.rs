@@ -531,12 +531,19 @@ fn extension_rows(
         let wait = waiting
             .reason(&package.identity)
             .map(|reason| ExtensionWait::Whole(reason.what()));
-        let state = match (package.enabled, failure(package).map(|pause| pause.after)) {
+        // A version refusal says itself first, before a pause would (#318,
+        // ADR 0046): no code of the extension runs, so it is not the
+        // pause's business, and a pause recorded before this Pane could no
+        // longer run the extension is not what it is now.
+        let unsupported = package.unsupported_api().map(|refusal| refusal.needs());
+        let paused = failure(package).map(|pause| pause.after);
+        let state = match (package.enabled, unsupported, paused) {
             // A disabled or paused package does not wait: it says its own
             // state, as before.
-            (false, _) => "Disabled".to_owned(),
-            (true, Some(cause)) => cause.state().to_owned(),
-            (true, None) => match wait {
+            (false, ..) => "Disabled".to_owned(),
+            (true, Some(needs), _) => format!("Enabled · {needs}"),
+            (true, None, Some(cause)) => cause.state().to_owned(),
+            (true, None, None) => match wait {
                 Some(wait) => format!("Enabled · {}", wait.status()),
                 None => "Enabled".to_owned(),
             },
@@ -584,27 +591,34 @@ fn extension_rows(
                 )),
                 unavailable: None,
             };
-            let paused = failure(package).into_iter().flat_map(move |pause| {
-                let retry = Row {
-                    id: format!("retry:{}", package.identity.key()),
-                    title: pause.after.retry_title(&title),
-                    subtitle: Some(format!(
-                        "Paused: {}; start it again",
-                        pause.after.failure("it")
-                    )),
-                    unavailable: None,
-                };
-                let details = Row {
-                    id: format!("paused:{}", package.identity.key()),
-                    title: pausing::details_title(&title),
-                    subtitle: Some("The error and its diagnostics".into()),
-                    unavailable: None,
-                };
-                [
-                    (retry, Entry::Retry(package.identity.clone())),
-                    (details, Entry::PauseDetails(package.identity.clone())),
-                ]
-            });
+            // A version refusal is not a pause and offers no Retry
+            // (#318, ADR 0046): a pause recorded before this Pane could
+            // no longer run the extension is not what it is now.
+            let refuse_retry = package.unsupported.is_some();
+            let paused = failure(package)
+                .into_iter()
+                .filter(move |_| !refuse_retry)
+                .flat_map(move |pause| {
+                    let retry = Row {
+                        id: format!("retry:{}", package.identity.key()),
+                        title: pause.after.retry_title(&title),
+                        subtitle: Some(format!(
+                            "Paused: {}; start it again",
+                            pause.after.failure("it")
+                        )),
+                        unavailable: None,
+                    };
+                    let details = Row {
+                        id: format!("paused:{}", package.identity.key()),
+                        title: pausing::details_title(&title),
+                        subtitle: Some("The error and its diagnostics".into()),
+                        unavailable: None,
+                    };
+                    [
+                        (retry, Entry::Retry(package.identity.clone())),
+                        (details, Entry::PauseDetails(package.identity.clone())),
+                    ]
+                });
             // A package from npm or Git has no source folder to reload from;
             // to replace its code, install it again (Update).
             let local = package.identity.local_folder().is_some();
@@ -849,6 +863,12 @@ impl Launcher {
 pub enum ExtensionMark {
     /// Pane paused it after an error, until the user retries it: why.
     Paused(String),
+    /// It is built for a version of Pane's extension API this Pane cannot
+    /// run (ADR 0046, #318): why, in full — which version it needs, which
+    /// versions this Pane runs, and what to update. Not a broken load (its
+    /// page stays) and never a pause (no code of it runs to fail): it
+    /// resolves by itself when a runnable version arrives.
+    UnsupportedApi(String),
     /// Its installed copy cannot be read: why.
     Broken(String),
     /// It is being updated, reloaded or installed: what is happening.
@@ -860,6 +880,7 @@ impl ExtensionMark {
     pub fn word(&self) -> &'static str {
         match self {
             ExtensionMark::Paused(_) => "Paused",
+            ExtensionMark::UnsupportedApi(_) => "Unsupported",
             ExtensionMark::Broken(_) => "Broken",
             ExtensionMark::Updating(_) => "Updating",
         }
@@ -869,6 +890,7 @@ impl ExtensionMark {
     pub fn reason(&self) -> &str {
         match self {
             ExtensionMark::Paused(why)
+            | ExtensionMark::UnsupportedApi(why)
             | ExtensionMark::Broken(why)
             | ExtensionMark::Updating(why) => why,
         }
@@ -877,8 +899,9 @@ impl ExtensionMark {
 
 impl Launcher {
     /// What needs saying about the installed extension with `identity`, if
-    /// anything (#168): it is being updated or reloaded, its copy cannot be
-    /// read, or Pane paused it after an error, in that order.
+    /// anything (#168): it is being updated or reloaded, it is built for a
+    /// version of the extension API this Pane cannot run, its copy cannot
+    /// be read, or Pane paused it after an error, in that order.
     pub fn extension_mark(&self, identity: &PackageIdentity) -> Option<ExtensionMark> {
         let state = self.lock();
         let package = state.package(identity)?;
@@ -896,6 +919,16 @@ impl Launcher {
                 "{title} {}",
                 changing.doing()
             )));
+        }
+        // A version refusal is its own state, said before any the copy's
+        // other problems would be (#318, ADR 0046): the manifest parsed —
+        // the extension keeps its page — while nothing of it runs, so it
+        // is neither a broken load nor a pause, and it resolves by itself
+        // when a runnable version arrives.
+        if let Some(unsupported) = &package.unsupported {
+            return Some(ExtensionMark::UnsupportedApi(
+                unsupported.package_error().to_string(),
+            ));
         }
         if let Err(error) = &package.manifest {
             return Some(ExtensionMark::Broken(format!(
