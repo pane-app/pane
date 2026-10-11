@@ -12,6 +12,7 @@
 //! page's diagnostics copy holds the state of Pane's keyboard hook (#259),
 //! read through a fake hotkeys system the tests script.
 
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -53,7 +54,7 @@ mod defaults;
 mod repo_server;
 
 use paint::paints_fill_at;
-use settle::settle;
+use settle::{settle, settle_shown};
 
 #[path = "support/a11y.rs"]
 mod a11y;
@@ -2785,6 +2786,400 @@ fn manage_extensions_and_the_install_rows_open_settings(cx: &mut TestAppContext)
     );
 }
 
+/// A launcher window with the capability samples installed, at root
+/// search: the JavaScript capabilities sample (the consumer of
+/// `pane-samples:greet@1`) and the greet provider samples `providers`, in
+/// that order — install order decides who serves until the user chooses.
+struct WithCapabilities<'a> {
+    window: gpui::Entity<LauncherWindow>,
+    cx: &'a mut VisualTestContext,
+    launcher: Launcher,
+    /// Each sample's source folder, by its name.
+    folders: HashMap<&'static str, PathBuf>,
+    _sources: TempDir,
+    data: TempDir,
+}
+
+fn with_capabilities<'a>(
+    cx: &'a mut TestAppContext,
+    providers: &[&'static str],
+) -> WithCapabilities<'a> {
+    let (sources, data) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let launcher =
+        Launcher::with_packages(Runtime::start(), vec![], data.path().join("extensions"));
+    let mut folders = HashMap::new();
+    for name in providers.iter().copied().chain(["sample-capabilities-js"]) {
+        let folder = assembled(name, &sources.path().join(name));
+        install(&launcher, &folder);
+        folders.insert(name, folder);
+    }
+    cx.executor().allow_parking();
+    cx.update(pane::bind_keys);
+    let shared = launcher.clone();
+    let (window, cx) =
+        cx.add_window_view(move |window, cx| LauncherWindow::new(shared, window, cx));
+    settle(&window, cx);
+    WithCapabilities {
+        window,
+        cx,
+        launcher,
+        folders,
+        _sources: sources,
+        data,
+    }
+}
+
+impl WithCapabilities<'_> {
+    /// The identity of the sample `name`'s installed package.
+    fn identity(&self, name: &str) -> PackageIdentity {
+        PackageIdentity::local(&self.folders[name]).unwrap()
+    }
+
+    /// The identity key of the sample `name`'s installed package.
+    fn key(&self, name: &str) -> String {
+        self.identity(name).key()
+    }
+
+    /// The extensions folder the launcher keeps its packages and records
+    /// in: what a restart of Pane reopens.
+    fn extensions(&self) -> PathBuf {
+        self.data.path().join("extensions")
+    }
+
+    /// From root search, opens the consumer's command and presses Enter on
+    /// its item `item`, with real keys, returning what the item showed. The
+    /// launcher is left on the command's screen, so each run returns to
+    /// root search first, as a user's Escape does.
+    fn run(&mut self, item: &str) -> Status {
+        while !matches!(self.launcher.view().screen, Screen::Root { .. }) {
+            self.cx.simulate_keystrokes("escape");
+            settle(&self.window, self.cx);
+        }
+        press_enter_on(&self.window, self.cx, "Greet from JavaScript");
+        press_enter_on(&self.window, self.cx, item);
+        settle_shown(&self.window, self.cx)
+    }
+
+    /// Closes the Settings window `settings`, returning the keyboard to
+    /// the launcher window.
+    fn close(&mut self, settings: &WindowHandle<SettingsWindow>) {
+        let mut settings_cx = settings_context(settings, self.cx);
+        settings_cx.update(|window, _| window.remove_window());
+        self.cx.run_until_parked();
+    }
+}
+
+/// Presses Enter on the row titled `title` of the screen the launcher
+/// window shows, with real keys, and settles; the launcher's view then.
+fn press_enter_on(
+    window: &gpui::Entity<LauncherWindow>,
+    cx: &mut VisualTestContext,
+    title: &str,
+) -> pane_core::LauncherView {
+    let launcher = cx.read_entity(window, |window, _| window.launcher().clone());
+    let view = launcher.view();
+    let index = view
+        .rows
+        .iter()
+        .position(|row| row.title == title)
+        .unwrap_or_else(|| panic!("no row {title:?} in {:?}", view.rows));
+    launcher.select(index);
+    cx.simulate_keystrokes("enter");
+    settle(window, cx)
+}
+
+/// The ComboBox node labelled `label` in the Settings window `cx` drives,
+/// as assistive technology reads it.
+fn combo_box(cx: &mut VisualTestContext, label: &str) -> serde_json::Value {
+    let (_, json) = accessibility(cx);
+    let tree: serde_json::Value = serde_json::from_str(&json).unwrap();
+    let nodes: Vec<serde_json::Value> = tree["nodes"]
+        .as_object()
+        .unwrap()
+        .values()
+        .map(|node| node["aria"].clone())
+        .collect();
+    nodes
+        .iter()
+        .find(|node| node["role"] == "ComboBox" && node["label"] == label)
+        .cloned()
+        .unwrap_or_else(|| panic!("no ComboBox labelled {label:?} in {nodes:#?}"))
+}
+
+/// The Extensions page lists a capability only when two or more installed
+/// extensions provide it: with one provider there is no choice to make.
+#[gpui::test]
+fn a_capability_with_one_provider_needs_no_choice(cx: &mut TestAppContext) {
+    let mut opened = with_capabilities(cx, &["sample-greet-js"]);
+    assert_eq!(
+        opened.run("Greet through a capability"),
+        Status::Result("Hello, Pane, from JavaScript".into())
+    );
+
+    let (settings, mut settings_cx) = open_extensions(opened.cx);
+    assert!(
+        settings_cx
+            .debug_bounds("extension-section-Capabilities")
+            .is_none(),
+        "no capability is listed with one provider"
+    );
+    assert!(opened.launcher.capabilities().is_empty());
+    opened.close(&settings);
+}
+
+/// The Capabilities dropdown changes the provider, and the consumer's
+/// next call answers from the new one — with nothing reloaded or
+/// restarted: the choice applies to the next call, and the record is
+/// kept across a restart of the launcher on the same data folder.
+#[gpui::test]
+fn the_capabilities_dropdown_changes_the_provider_and_the_next_call_answers_from_the_new_one(
+    cx: &mut TestAppContext,
+) {
+    let mut opened = with_capabilities(cx, &["sample-greet-js", "sample-greet-ts"]);
+    // The default, until the user chooses: the first provider installed.
+    assert_eq!(
+        opened.run("Greet through a capability"),
+        Status::Result("Hello, Pane, from JavaScript".into())
+    );
+
+    let (settings, mut settings_cx) = open_extensions(opened.cx);
+    let trigger = combo_box(&mut settings_cx, "Provider for pane-samples:greet@1");
+    assert_eq!(
+        trigger["value"].as_str(),
+        Some("JavaScript greet provider sample"),
+        "{trigger:#?}"
+    );
+    // The consumers that use it are listed under the capability.
+    assert!(
+        settings_cx
+            .debug_bounds("capability-pane-samples:greet@1")
+            .is_some(),
+        "the capability is listed"
+    );
+    assert!(
+        settings_cx
+            .debug_bounds("capability-used-pane-samples:greet@1")
+            .is_some(),
+        "its consumers are listed"
+    );
+
+    // Choosing another provider applies to the next call: the
+    // dropdown's options are the providers, and committing one
+    // records the choice.
+    click_row(
+        &mut settings_cx,
+        selector("capability-select-pane-samples:greet@1".into()),
+    );
+    assert!(
+        settings_cx
+            .debug_bounds("capability-select-pane-samples:greet@1-query")
+            .is_some(),
+        "the dropdown's options opened"
+    );
+    let ts = opened.key("sample-greet-ts");
+    click_row(
+        &mut settings_cx,
+        selector(format!("capability-select-pane-samples:greet@1-{ts}")),
+    );
+    // The popup's exit runs to its end, so nothing of it covers what is
+    // read next.
+    settle_frames(&mut settings_cx);
+    assert!(
+        settings_cx
+            .debug_bounds("capability-select-pane-samples:greet@1-popup")
+            .is_none(),
+        "the popup closed"
+    );
+    let trigger = combo_box(&mut settings_cx, "Provider for pane-samples:greet@1");
+    assert_eq!(
+        trigger["value"].as_str(),
+        Some("TypeScript greet provider sample"),
+        "{trigger:#?}"
+    );
+    opened.close(&settings);
+
+    // No reload or restart happened: the consumer's next call answers
+    // from the new provider.
+    assert_eq!(
+        opened.run("Greet through a capability"),
+        Status::Result("Hello, Pane, from TypeScript".into())
+    );
+
+    // The choice is kept across a restart of the launcher on the same
+    // data folder: the record says the chosen provider, and a new
+    // launcher on that folder routes to it.
+    let extensions = opened.extensions();
+    let recorded = until(opened.cx, |_| {
+        std::fs::read_to_string(extensions.join("capability-choices.json"))
+            .ok()
+            .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+            .and_then(|record| {
+                record["chosen"]["pane-samples:greet@1"]
+                    .as_str()
+                    .map(str::to_owned)
+            })
+            .filter(|chosen| chosen == &ts)
+    });
+    assert_eq!(recorded, ts);
+    let restarted = Launcher::with_packages(Runtime::start(), vec![], extensions);
+    let capability = &restarted.capabilities()[0];
+    assert_eq!(capability.selected, ts);
+    assert_eq!(capability.name, "pane-samples:greet@1");
+}
+
+/// The Capabilities section shows "<chosen> is disabled; using <other>"
+/// while the chosen provider cannot serve — and the consumer's call falls
+/// back to that other provider — with none of it once the chosen provider
+/// serves again.
+#[gpui::test]
+fn the_capabilities_section_shows_the_fallback_while_the_chosen_provider_cannot_serve(
+    cx: &mut TestAppContext,
+) {
+    let mut opened = with_capabilities(cx, &["sample-greet-js", "sample-greet-ts"]);
+    let ts = opened.identity("sample-greet-ts");
+    let chosen = opened
+        .launcher
+        .choose_provider("pane-samples:greet@1", &ts.key())
+        .unwrap();
+    futures::executor::block_on(chosen).unwrap();
+    assert_eq!(
+        opened.run("Greet through a capability"),
+        Status::Result("Hello, Pane, from TypeScript".into())
+    );
+
+    let (settings, mut settings_cx) = open_extensions(opened.cx);
+    assert!(
+        settings_cx
+            .debug_bounds("capability-note-pane-samples:greet@1")
+            .is_none(),
+        "no fallback note while the chosen provider serves"
+    );
+    assert_eq!(opened.launcher.capabilities()[0].fallback, None);
+
+    // The chosen provider disabled: the note says who serves instead, and
+    // the call falls back to that provider. The page is refreshed as the
+    // test waits, since a change made outside the window (here, on the
+    // launcher itself) draws when the window next paints.
+    futures::executor::block_on(opened.launcher.set_enabled(&ts, false));
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while settings_cx
+        .debug_bounds("capability-note-pane-samples:greet@1")
+        .is_none()
+    {
+        assert!(Instant::now() < deadline, "the fallback note never showed");
+        settings_cx
+            .cx
+            .executor()
+            .advance_clock(Duration::from_millis(600));
+        settings_cx.update(|window, _| window.refresh());
+        settings_cx.run_until_parked();
+    }
+    assert_eq!(
+        opened.launcher.capabilities()[0].fallback,
+        Some(
+            "TypeScript greet provider sample is disabled; using JavaScript greet provider sample"
+                .into()
+        )
+    );
+    assert_eq!(
+        opened.run("Greet through a capability"),
+        Status::Result("Hello, Pane, from JavaScript".into())
+    );
+
+    // Enabled again: the choice returns to the chosen provider, and the
+    // note goes.
+    futures::executor::block_on(opened.launcher.set_enabled(&ts, true));
+    assert_eq!(opened.launcher.capabilities()[0].fallback, None);
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while settings_cx
+        .debug_bounds("capability-note-pane-samples:greet@1")
+        .is_some()
+    {
+        assert!(Instant::now() < deadline, "the fallback note never left");
+        settings_cx
+            .cx
+            .executor()
+            .advance_clock(Duration::from_millis(600));
+        settings_cx.update(|window, _| window.refresh());
+        settings_cx.run_until_parked();
+    }
+    assert_eq!(
+        opened.run("Greet through a capability"),
+        Status::Result("Hello, Pane, from TypeScript".into())
+    );
+    opened.close(&settings);
+}
+
+#[gpui::test]
+fn a_row_waiting_on_a_capability_offers_the_install_row_that_opens_the_install_form(
+    cx: &mut TestAppContext,
+) {
+    let (sources, data) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    // The consumer sample, its use of the greet capability made one
+    // provider again (its pane.json ships "use": "all" for the fan-out
+    // item): with no provider installed, its command waits (#156).
+    let consumer = assembled("sample-capabilities", &sources.path().join("consumer"));
+    one_provider_use(&consumer);
+    let (launcher, cx) = open_installed(cx, &data, &consumer);
+    cx.simulate_resize(gpui::size(gpui::px(640.), gpui::px(420.)));
+
+    // The waiting command stays listed, with what it needs under its row.
+    let view = settle(&launcher, cx);
+    assert_eq!(view.rows[0].title, "Greet from Rust");
+    assert_eq!(view.selected, Some(0));
+    assert_eq!(
+        view.rows[0]
+            .unavailable
+            .as_ref()
+            .map(|reason| reason.reason().to_owned()),
+        Some("Needs pane-samples:greet@1: no extension provides it".to_owned())
+    );
+
+    // Enter shows the reason, with the row that installs a provider.
+    cx.simulate_keystrokes("enter");
+    let view = settle(&launcher, cx);
+    assert_eq!(view.title, "Why Greet from Rust cannot run");
+    assert_eq!(
+        view.details().first().map(String::as_str),
+        Some("Needs pane-samples:greet@1: no extension provides it.")
+    );
+    let rows: Vec<&str> = view.rows.iter().map(|row| row.title.as_str()).collect();
+    assert_eq!(
+        rows,
+        ["Install an extension that provides pane-samples:greet@1"]
+    );
+    let install = "row-Install an extension that provides pane-samples:greet@1";
+    assert!(cx.debug_bounds(install).is_some());
+
+    // Enter on that row opens Settings' install flow: npm's field, focused.
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    let settings = settings_windows(cx).pop().expect("Settings opened");
+    let mut settings_cx = settings_context(&settings, cx);
+    settings_cx.run_until_parked();
+    assert!(
+        settings_cx
+            .debug_bounds("extension-install-field")
+            .is_some(),
+        "the npm field is asked for"
+    );
+    let view = cx.read_entity(&launcher, |window, _| window.launcher().view());
+    assert!(
+        matches!(view.screen, Screen::WaitingDetails { .. }),
+        "the launcher keeps showing why the command waits: {view:?}"
+    );
+}
+
+/// Makes the consumer sample's use of the greet capability one provider
+/// again (its pane.json ships "use": "all" for the fan-out item): with no
+/// provider installed, its command waits (#156).
+fn one_provider_use(folder: &Path) {
+    let manifest = fs::read_to_string(folder.join("pane.json")).unwrap();
+    let mut manifest: serde_json::Value = serde_json::from_str(&manifest).unwrap();
+    manifest["uses"][0].as_object_mut().unwrap().remove("use");
+    fs::write(folder.join("pane.json"), manifest.to_string()).unwrap();
+}
+
 #[gpui::test]
 fn the_search_finds_an_extension_and_its_preferences(cx: &mut TestAppContext) {
     let (sources, data) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
@@ -4837,6 +5232,302 @@ fn an_unreadable_record_refuses_the_login_choice(cx: &mut TestAppContext) {
     assert!(!login_chosen(&mut settings_cx), "the choice was refused");
     assert_eq!(login.registration(), Registration::Disabled);
     assert_eq!(record_of(data.path()), garbage);
+}
+
+/// Writes a package titled `title` in `folder` whose command and `echo`
+/// operation the operations fixture serves, declaring `dependencies`
+/// (JSON array contents): the greeter and the caller of the requirement
+/// rows on an extension's page (#157).
+fn waiting_package(folder: &Path, title: &str, dependencies: &str) -> PathBuf {
+    let guest = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../target/guests/operations_fixture.wasm");
+    assert!(
+        guest.exists(),
+        "{} is missing; run `cargo xtask guests`",
+        guest.display()
+    );
+    fs::create_dir_all(folder).unwrap();
+    fs::copy(guest, folder.join("fixture.wasm")).unwrap();
+    let manifest = format!(
+        r#"{{
+            "manifestVersion": 1,
+            "title": "{title}",
+            "version": "0.1.0",
+            "apiVersion": "0.1",
+            "commands": [{{ "id": "call", "title": "Call", "component": "fixture.wasm" }}],
+            "operations": [{{ "id": "echo", "version": 1, "component": "fixture.wasm" }}],
+            "dependencies": [{dependencies}]
+        }}"#
+    );
+    fs::write(folder.join("pane.json"), manifest).unwrap();
+    folder.to_path_buf()
+}
+
+/// A required dependency on the package in sibling folder `folder`,
+/// calling `echo` at version 1, as the requirement rows' packages declare.
+fn needs(folder: &str) -> String {
+    format!(
+        r#"{{ "id": "{folder}", "source": "local:../{folder}",
+             "operations": [{{ "id": "echo", "version": 1 }}] }}"#
+    )
+}
+
+/// The Greeter the Caller requires, and the Caller, in `sources`.
+fn greeter_and_caller(sources: &Path) -> (PathBuf, PathBuf) {
+    let greeter = waiting_package(&sources.join("greeter"), "Greeter", "");
+    let caller = waiting_package(
+        &sources.join("caller"),
+        "Caller",
+        r#"{ "id": "greeter", "source": "local:../greeter",
+             "operations": [{ "id": "echo", "version": 1 }] }"#,
+    );
+    (greeter, caller)
+}
+
+/// The Greeter's settings, so its uninstall keeps data under its title:
+/// written before the launcher opens the extensions folder.
+fn kept_settings(data: &TempDir, key: &str) {
+    let extensions = data.path().join("extensions");
+    fs::create_dir_all(&extensions).unwrap();
+    let saved = serde_json::json!({ "version": 1, "packages": { key: { "style": "formal" } } });
+    fs::write(extensions.join("settings.json"), saved.to_string()).unwrap();
+}
+
+#[gpui::test]
+fn an_extension_s_page_shows_what_it_waits_for_and_the_fix_row_fixes_it(cx: &mut TestAppContext) {
+    let (sources, data) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let (greeter, caller) = greeter_and_caller(sources.path());
+    let (launcher, cx) = open_installed(cx, &data, &caller);
+
+    // The greeter is disabled, so Caller waits for it (#152); the
+    // extension list and its page say so (#157).
+    let greeter = PackageIdentity::local(&greeter).unwrap();
+    let core = cx.read_entity(&launcher, |window, _| window.launcher().clone());
+    futures::executor::block_on(core.set_enabled(&greeter, false));
+    let (_settings, mut settings_cx) = open_extensions(cx);
+
+    // The group page's status line says what it waits for, so the broken
+    // extensions are found without opening each.
+    assert!(
+        settings_cx.debug_bounds("extension-wait-Caller").is_some(),
+        "the status line says what Caller waits for"
+    );
+
+    // Its page lists the requirement — the chain down to what is actually
+    // missing — with the fix row beside it.
+    open_page(&mut settings_cx, "Caller");
+    assert!(settings_cx.debug_bounds("extension-requirements").is_some());
+    assert!(
+        settings_cx
+            .debug_bounds("extension-requirement-Needs Greeter, which is disabled")
+            .is_some(),
+        "the requirement row names the root cause"
+    );
+
+    // The fix row does what it says: the greeter is enabled, and the
+    // requirement row disappears when the package comes back.
+    click_row(&mut settings_cx, "extension-fix-Enable Greeter");
+    until_text(&mut settings_cx, "Enabled Greeter");
+    assert!(
+        settings_cx.debug_bounds("extension-requirements").is_none(),
+        "the requirement row disappeared"
+    );
+    assert!(cx.read_entity(&launcher, |window, _| {
+        window
+            .launcher()
+            .packages()
+            .iter()
+            .any(|package| package.identity == greeter && package.enabled)
+    }));
+}
+
+#[gpui::test]
+fn the_fix_row_installs_a_not_installed_dependency_again(cx: &mut TestAppContext) {
+    let (sources, data) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let (greeter, caller) = greeter_and_caller(sources.path());
+    // The greeter's settings, so its uninstall keeps data under its
+    // title.
+    kept_settings(&data, &PackageIdentity::local(&greeter).unwrap().key());
+    let (launcher, cx) = open_installed(cx, &data, &caller);
+    let greeter = PackageIdentity::local(&greeter).unwrap();
+
+    // The greeter is uninstalled, so Caller waits for it, naming it by
+    // the title its data was kept under.
+    let core = cx.read_entity(&launcher, |window, _| window.launcher().clone());
+    futures::executor::block_on(core.uninstall(&greeter, pane_core::SavedData::Keep));
+    let (_settings, mut settings_cx) = open_extensions(cx);
+    assert!(
+        settings_cx.debug_bounds("extension-wait-Caller").is_some(),
+        "the status line says what Caller waits for"
+    );
+
+    // The fix row beside the requirement installs it again, from where it
+    // came, and the dependent comes back by itself.
+    open_page(&mut settings_cx, "Caller");
+    let of_caller = PackageIdentity::local(&caller).unwrap();
+    let details = cx.read_entity(&launcher, |window, _| {
+        window.launcher().extension_details(&of_caller)
+    });
+    assert!(
+        settings_cx
+            .debug_bounds("extension-requirement-Needs Greeter, which is not installed")
+            .is_some(),
+        "the requirement row names what is not installed: {details:?}"
+    );
+    click_row(&mut settings_cx, "extension-fix-Install Greeter again");
+    until_text(&mut settings_cx, "Installed Greeter");
+    assert!(
+        settings_cx.debug_bounds("extension-requirements").is_none(),
+        "the requirement row disappeared"
+    );
+    assert!(cx.read_entity(&launcher, |window, _| {
+        window
+            .launcher()
+            .packages()
+            .iter()
+            .any(|package| package.identity == greeter)
+    }));
+}
+
+#[gpui::test]
+fn the_fix_row_retries_a_paused_dependency_and_the_dependent_comes_back(cx: &mut TestAppContext) {
+    let (sources, data) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let (_greeter, caller) = greeter_and_caller(sources.path());
+    // Install them with a launcher that is dropped before the window
+    // opens: Pane paused the greeter after it crashed, as recorded before
+    // a restart.
+    cx.executor().allow_parking();
+    let installing =
+        Launcher::with_packages(Runtime::start(), vec![], data.path().join("extensions"));
+    cx.foreground_executor()
+        .block_on(installing.install_package(&caller));
+    drop(installing);
+    let registry = data.path().join("extensions/installed.json");
+    let mut record: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&registry).unwrap()).unwrap();
+    let dir = record["packages"][0]["dir"].clone();
+    record["packages"][0]["paused"] = serde_json::json!({
+        "after": "crashes", "why": "it crashed", "version": "0.1.0", "code": dir
+    });
+    fs::write(&registry, record.to_string()).unwrap();
+
+    cx.executor().allow_parking();
+    cx.update(pane::bind_keys);
+    let launcher =
+        Launcher::with_packages(Runtime::start(), vec![], data.path().join("extensions"));
+    let (_window, cx) = cx.add_window_view(|window, cx| LauncherWindow::new(launcher, window, cx));
+    let (_settings, mut settings_cx) = open_extensions(cx);
+
+    // The fix row retries the paused dependency, and the dependent comes
+    // back by itself.
+    open_page(&mut settings_cx, "Caller");
+    assert!(
+        settings_cx
+            .debug_bounds("extension-requirement-Needs Greeter, which is paused")
+            .is_some(),
+        "the requirement row names the paused dependency"
+    );
+    click_row(&mut settings_cx, "extension-fix-Retry Greeter");
+    until_text(&mut settings_cx, "Started Greeter");
+    assert!(
+        settings_cx.debug_bounds("extension-requirements").is_none(),
+        "the requirement row disappeared"
+    );
+}
+
+#[gpui::test]
+fn an_extension_s_page_shows_what_it_provides_and_who_uses_it(cx: &mut TestAppContext) {
+    let (sources, data) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    // Two providers of one capability and a consumer of it: the pages say
+    // which provider Pane routes calls to, and who uses the capability.
+    let greeter = assembled("sample-greet", &sources.path().join("greet"));
+    let javascript = assembled("sample-greet-js", &sources.path().join("greet-js"));
+    let consumer = assembled("sample-capabilities", &sources.path().join("capabilities"));
+    cx.executor().allow_parking();
+    cx.update(pane::bind_keys);
+    let launcher =
+        Launcher::with_packages(Runtime::start(), vec![], data.path().join("extensions"));
+    for folder in [&greeter, &javascript, &consumer] {
+        cx.foreground_executor()
+            .block_on(launcher.install_package(folder));
+    }
+    let (_window, cx) = cx.add_window_view(|window, cx| LauncherWindow::new(launcher, window, cx));
+    let (_settings, mut settings_cx) = open_extensions(cx);
+
+    // The first provider installed is the provider Pane routes the
+    // capability's calls to; its page says who uses it.
+    open_page(&mut settings_cx, "Rust greet provider sample");
+    assert!(settings_cx.debug_bounds("extension-provides").is_some());
+    assert!(
+        settings_cx
+            .debug_bounds("extension-provides-pane-samples:greet@1")
+            .is_some(),
+        "the capability is listed"
+    );
+    until_drawn(&mut settings_cx, "extension-Chosen-pane-samples:greet@1");
+    until_drawn(&mut settings_cx, "extension-consumers-pane-samples:greet@1");
+
+    // The second provider's page says another provider serves it.
+    open_page(&mut settings_cx, "JavaScript greet provider sample");
+    until_drawn(
+        &mut settings_cx,
+        "extension-Not chosen-pane-samples:greet@1",
+    );
+
+    // The consumer provides nothing: its page says so by listing nothing.
+    open_page(&mut settings_cx, "Rust capabilities sample");
+    assert!(
+        settings_cx.debug_bounds("extension-provides").is_none(),
+        "the consumer provides nothing"
+    );
+}
+
+#[gpui::test]
+fn a_cycle_of_extensions_is_shown_on_the_page_of_every_member(cx: &mut TestAppContext) {
+    let (sources, data) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    // X and Y require each other: installed together, they run — and each
+    // page says they require one another, healthy or not, as ADR 0041
+    // decides.
+    waiting_package(&sources.path().join("x"), "X", &needs("y"));
+    let y = waiting_package(&sources.path().join("y"), "Y", &needs("x"));
+    let (launcher, cx) = open_installed(cx, &data, &y);
+    let (_settings, mut settings_cx) = open_extensions(cx);
+
+    open_page(&mut settings_cx, "X");
+    assert!(settings_cx.debug_bounds("extension-cycles").is_some());
+    assert!(
+        settings_cx
+            .debug_bounds("extension-cycle-Requires itself through Y")
+            .is_some(),
+        "X's page names the other member"
+    );
+    open_page(&mut settings_cx, "Y");
+    assert!(
+        settings_cx
+            .debug_bounds("extension-cycle-Requires itself through X")
+            .is_some(),
+        "Y's page names the other member"
+    );
+
+    // One member cannot run: the group waits as a whole, still shown on
+    // every member's page, with the requirement naming the member that
+    // cannot run.
+    let y = PackageIdentity::local(&y).unwrap();
+    let core = cx.read_entity(&launcher, |window, _| window.launcher().clone());
+    futures::executor::block_on(core.set_enabled(&y, false));
+    open_page(&mut settings_cx, "X");
+    assert!(
+        settings_cx
+            .debug_bounds("extension-requirement-Needs Y, which is disabled")
+            .is_some(),
+        "the requirement row names the member that cannot run"
+    );
+    assert!(
+        settings_cx
+            .debug_bounds("extension-cycle-Requires itself through Y")
+            .is_some(),
+        "the cycle row stays"
+    );
 }
 
 /// The taskbar the tests attach, as the binary attaches Windows' own

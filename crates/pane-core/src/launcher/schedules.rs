@@ -278,7 +278,14 @@ impl Schedules {
             for (command, schedule) in package.scheduled_commands() {
                 // Its required preferences are unset: it does not run, and
                 // says "Needs setup" instead (see `setup`); not a failure.
-                if launcher.needs_setup(package, command.manifest_id()) {
+                // Nor does a command a use is narrowed into waiting run
+                // (see `waiting`): its ticks are skipped.
+                if launcher.needs_setup(package, command.manifest_id())
+                    || state
+                        .waiting
+                        .reason_for(&package.identity, command.manifest_id())
+                        .is_some()
+                {
                     continue;
                 }
                 let manifest_id = command.manifest_id().to_owned();

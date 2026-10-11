@@ -2637,6 +2637,7 @@ impl Render for LauncherWindow {
             Screen::Confirm { .. }
             | Screen::Hotkey { .. }
             | Screen::PauseDetails { .. }
+            | Screen::WaitingDetails { .. }
             | Screen::RuntimeDetails { .. }
             | Screen::BuildDetails { .. }
             | Screen::ExtensionLog { .. } => "",

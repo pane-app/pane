@@ -78,9 +78,9 @@ interface credentials {
 
 /// A command that may also keep extension data (settings, content, cache
 /// and local credentials), read the preferences its package declares
-/// (preferences.wit) and call other packages' operations
-/// (operations.wit). Pane hosts this world; a component built for
-/// `extension` alone runs unchanged.
+/// (preferences.wit), call other packages' operations and register what
+/// it owns at run time (operations.wit, registrations.wit). Pane hosts
+/// this world; a component built for `extension` alone runs unchanged.
 world extension-with-data {
   include extension;
   import settings;
@@ -89,4 +89,5 @@ world extension-with-data {
   import credentials;
   import preferences;
   import operations;
+  import registrations;
 }

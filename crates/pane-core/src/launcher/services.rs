@@ -280,8 +280,15 @@ impl Services {
             for command in package.service_commands() {
                 // Its required preferences are unset: its service does not
                 // run, and it says "Needs setup" instead (see `setup`); not
-                // a failure.
-                if launcher.needs_setup(package, command.manifest_id()) {
+                // a failure. Nor does a command a use is narrowed into
+                // waiting run its service (see `waiting`): it does not
+                // cycle.
+                if launcher.needs_setup(package, command.manifest_id())
+                    || state
+                        .waiting
+                        .reason_for(&package.identity, command.manifest_id())
+                        .is_some()
+                {
                     continue;
                 }
                 let manifest_id = command.manifest_id().to_owned();

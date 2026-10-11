@@ -1,7 +1,7 @@
 {
   "name": "@pane-app/extension",
   "version": "0.1.0",
-  "description": "Write Pane extensions in JavaScript or TypeScript: the types of Pane's extension contract (wit/extension.wit), web requests (@pane-app/extension/http), toasts, HUDs and the window (@pane-app/extension/feedback), the clipboard, opening, revealing and recycling with the standard actions (@pane-app/extension/system), the session and power commands (@pane-app/extension/system-commands), preferences (@pane-app/extension/preferences), icon helpers (@pane-app/extension/icons) and system programs (@pane-app/extension/programs)",
+  "description": "Write Pane extensions in JavaScript or TypeScript: the types of Pane's extension contract (wit/extension.wit), web requests (@pane-app/extension/http), toasts, HUDs and the window (@pane-app/extension/feedback), the clipboard, opening, revealing and recycling with the standard actions (@pane-app/extension/system), the session and power commands (@pane-app/extension/system-commands), preferences (@pane-app/extension/preferences), capabilities (@pane-app/extension/capabilities), what a command registers at run time and owns (@pane-app/extension/registrations), the state handoff's serialization helpers (@pane-app/extension/state), icon helpers (@pane-app/extension/icons) and system programs (@pane-app/extension/programs)",
   "keywords": [
     "pane",
     "launcher",
@@ -51,6 +51,10 @@
       "types": "./preferences.d.ts",
       "default": "./preferences.js"
     },
+    "./capabilities": {
+      "types": "./capabilities.d.ts",
+      "default": "./capabilities.js"
+    },
     "./icons": {
       "types": "./icons.d.ts",
       "default": "./icons.js"
@@ -58,6 +62,14 @@
     "./programs": {
       "types": "./programs.d.ts",
       "default": "./programs.js"
+    },
+    "./registrations": {
+      "types": "./registrations.d.ts",
+      "default": "./registrations.js"
+    },
+    "./state": {
+      "types": "./state.d.ts",
+      "default": "./state.js"
     }
   }
 }

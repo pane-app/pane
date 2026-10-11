@@ -120,6 +120,12 @@ fn sample_component() -> Vec<u8> {
     fs::read(guest("packages/sample-settings-js/sample_settings_js.wasm")).unwrap()
 }
 
+/// The JavaScript handoff sample's built component: it keeps a counter in
+/// memory and opts in to handing it to its new code (ADR 0041, #159).
+fn handoff_component() -> Vec<u8> {
+    fs::read(guest("packages/sample-handoff-js/sample_handoff_js.wasm")).unwrap()
+}
+
 struct Dirs {
     data: TempDir,
     runtime: Runtime,
@@ -700,6 +706,39 @@ fn a_newer_version_updates_the_package_by_itself_keeping_its_data() {
         Status::Result("Saved the casual greeting".into())
     );
     assert!(dirs.settings().contains("casual"));
+}
+
+#[test]
+fn an_automatic_update_hands_the_state_over_to_the_new_code() {
+    let dirs = Dirs::new();
+    let launcher = dirs.launcher();
+    // The JavaScript handoff sample as the package (ADR 0041, #159): its
+    // component keeps a count in memory and opts in to handing it over.
+    dirs.publish_component("0.1.0", handoff_component());
+    block_on(launcher.install_npm(NAME));
+    assert_eq!(
+        launcher.view().status,
+        Status::Result("Installed Settings from npm".into())
+    );
+    open_greeting(&launcher);
+    activate(&launcher, "Add one (0 so far)");
+    activate(&launcher, "Add one (1 so far)");
+    assert_eq!(launcher.view().title, "Handoff: 2 counted, draft nothing");
+    // Leave the command: its instance stays alive for its generation, and
+    // the update ends that.
+    to_root(&launcher);
+
+    dirs.publish_component("0.2.0", handoff_component());
+    dirs.check(&launcher);
+    assert_eq!(
+        launcher.view().status,
+        Status::Result("Updated Settings from npm to 0.2.0".into())
+    );
+
+    // The new code's first start restored the count the old instance
+    // handed over: the update replaced the code as a reload does.
+    open_greeting(&launcher);
+    assert_eq!(launcher.view().title, "Handoff: 2 counted, draft nothing");
 }
 
 #[test]

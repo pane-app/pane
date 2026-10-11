@@ -1,0 +1,14 @@
+{
+  "manifestVersion": 1,
+  "title": "JavaScript handoff sample",
+  "version": "0.1.0",
+  "apiVersion": "0.1",
+  "commands": [
+    {
+      "id": "handoff",
+      "title": "Handoff (JavaScript)",
+      "subtitle": "Keeps a counter and a draft in memory across a reload or update",
+      "component": "sample_handoff_js.wasm"
+    }
+  ]
+}

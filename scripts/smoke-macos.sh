@@ -949,6 +949,58 @@ stop_pane
 grep -q '"id": "greeter"' "$PANE_DATA_DIR/extensions/installed.json" || { echo "dependency not recorded"; exit 1; }
 [ "$(grep -c '"dir"' "$PANE_DATA_DIR/extensions/installed.json")" = 2 ] || { echo "not exactly two packages installed"; exit 1; }
 
+# Capabilities, waiting for one (#153, #156): the JavaScript greet provider
+# provides pane-samples:greet@1, which a copy of the TypeScript consumer
+# uses — its pane.json edited to a use of one provider, as it was before
+# the fan-out item made it "all", so its command waits while no provider
+# can serve. With the provider enabled, its item greets through the
+# capability; disabling the provider (its switch in Settings) leaves the
+# command waiting, Enter explains why and offers to enable it again, and
+# enabling it brings the command back with nothing done to the consumer.
+# A data folder of its own, and a second start for the consumer's install.
+export PANE_DATA_DIR=$out/capabilities-data
+rm -rf "$PANE_DATA_DIR"
+consumer=$out/capabilities-consumer
+rm -rf "$consumer"
+cp -r target/guests/packages/sample-capabilities-ts "$consumer"
+python3 - "$consumer/pane.json" <<'PY'
+import json, sys
+path = sys.argv[1]
+with open(path, encoding="utf-8") as file:
+    manifest = json.load(file)
+del manifest["uses"][0]["use"]
+with open(path, "w", encoding="utf-8") as file:
+    json.dump(manifest, file, indent=2)
+PY
+start_pane --install target/guests/packages/sample-greet-js
+key 36; sleep 3   # Install; JavaScript greet provider is selected
+stop_pane
+start_pane --install "$consumer"
+key 36; sleep 3   # Install; Greet from TypeScript is selected
+key 36; sleep 2   # open Greet from TypeScript
+key 36; sleep 1   # Greet through a capability
+capture_until 78-capability-answer.png success 20   # the JavaScript guest's answer, in a toast
+provider="JavaScript greet provider sample"
+open_extension "$provider"
+a11y toggle "$provider"   # disable it: the consumer waits for the capability
+a11y shown "Disabled $provider"
+capture 79-capability-provider-disabled.png
+close_settings
+capture 80-capability-waiting.png
+check 80-capability-waiting.png warning   # Greet from TypeScript: "Needs pane-samples:greet@1: …"
+key 36; sleep 1   # Enter: why Greet from TypeScript cannot run
+capture 81-capability-why.png
+check 81-capability-why.png details   # the reason, and the row that fixes it
+key 36; sleep 2   # Enable JavaScript greet provider sample
+capture 82-capability-back.png
+check 82-capability-back.png hint   # the command is back, listed as any other
+key 36; sleep 2   # open Greet from TypeScript again
+key 36; sleep 1   # Greet through a capability
+capture_until 83-capability-answer-again.png success 20   # the same answer, back by itself
+python3 "$(dirname "$0")/check_screenshot.py" --same "$out"/{78-capability-answer,83-capability-answer-again}.png
+python3 "$(dirname "$0")/check_screenshot.py" --distinct "$out"/{80-capability-waiting,82-capability-back}.png
+stop_pane
+
 # Native helpers: the helper sample's command runs pane-echo, the file its
 # package ships for this system (built by `cargo xtask guests`). Its first
 # item shows the helper's answer, naming the system; its third races the
@@ -1210,6 +1262,53 @@ capture 143-disable-dependents-enabled-alone.png
 python3 "$(dirname "$0")/check_screenshot.py" --distinct "$out"/{140-disable-dependents-asked,141-disable-dependents-cancelled,142-disable-dependents-disabled,143-disable-dependents-enabled-alone}.png
 stop_pane
 [ "$(grep -c '"disabled": true' "$PANE_DATA_DIR/extensions/installed.json")" = 1 ] || { echo "not exactly the dependent left disabled"; exit 1; }
+
+# Choosing which extension provides a capability (#154): the JavaScript
+# and TypeScript greet providers of pane-samples:greet@1 are installed,
+# in that order, with the TypeScript capabilities sample, whose command
+# calls the capability by its name: the first provider installed serves
+# until the user chooses, so its answer names JavaScript. Settings'
+# Extensions page lists the capability with a dropdown of its providers;
+# choosing the TypeScript one there applies to the next call, with nothing
+# reloaded, and the answer names TypeScript. The dropdown is opened by
+# its trigger (named "Provider for <capability>"); its options are found
+# through the search field the popup holds, whose typing narrows them,
+# since the option's name is the provider's title, the same as its entry
+# in the installed list. The choice is Pane's own record, in the data
+# folder. A data folder of its own.
+export PANE_DATA_DIR=$out/capabilities-data
+rm -rf "$PANE_DATA_DIR"
+start_pane --install target/guests/packages/sample-greet-js
+focus_pane
+key 36; sleep 3   # Install
+stop_pane
+start_pane --install target/guests/packages/sample-greet-ts
+focus_pane
+key 36; sleep 3   # Install
+stop_pane
+start_pane --install target/guests/packages/sample-capabilities-ts
+focus_pane
+key 36; sleep 3   # Install; Greet from TypeScript is selected
+key 36; sleep 2   # open Greet from TypeScript
+key 36; sleep 0.5   # Greet through a capability
+capture_until 150-capabilities-default.png success 15   # the JavaScript provider's answer
+stop_pane
+start_pane
+manage_extensions
+a11y press "Provider for pane-samples:greet@1"   # the dropdown; its search field takes the keyboard
+focus_settings
+type_text "TypeScript"; sleep 0.5   # narrows the options to the TypeScript provider
+key 36; sleep 1   # commit it; the trigger shows it
+capture 151-capabilities-chosen.png
+close_settings
+type_text "greet"; sleep 1
+key 36; sleep 2   # open Greet from TypeScript
+key 36; sleep 0.5
+capture_until 152-capabilities-chosen-answer.png success 15   # the TypeScript provider's answer
+python3 "$(dirname "$0")/check_screenshot.py" --distinct "$out"/{150-capabilities-default,152-capabilities-chosen-answer}.png
+stop_pane
+grep -q "sample-greet-ts" "$PANE_DATA_DIR/extensions/capability-choices.json" \
+  || { echo "the chosen provider is not recorded"; exit 1; }
 
 # Recovering from a crash of Pane's extension runtime (#17): the runtime is
 # a thread of Pane, so the smoke has it panic on purpose through a fault

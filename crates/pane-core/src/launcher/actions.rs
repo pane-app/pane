@@ -273,7 +273,7 @@ fn result_actions(launcher: &Launcher, state: &State) -> Option<ResultActions> {
     // an alias, and not this build's samples, which take no configuration.
     let command = matches!(
         state.entries.get(index),
-        Some(Entry::Open(_) | Entry::Unavailable(_))
+        Some(Entry::Open(_) | Entry::Unavailable(_) | Entry::Waiting { .. })
     )
     .then(|| {
         shortcuts::catalog(launcher, state)
@@ -312,6 +312,21 @@ fn result_actions(launcher: &Launcher, state: &State) -> Option<ResultActions> {
                 items.push(configuration(ResultAction::ConfigureExtension, false));
             }
         }
+    } else if matches!(
+        quick_slots::pin_of_selected(state),
+        Some(super::quick_slots::PinTarget::Dynamic { .. })
+    ) {
+        // A dynamic command's row, one a package registered at run time
+        // (#158): its hotkey and its alias are held by its row id, and it
+        // is configured as a command is.
+        items.push(configuration(
+            ResultAction::Hotkey,
+            state.bindings.hotkey_of(&row.id).is_some(),
+        ));
+        items.push(configuration(
+            ResultAction::Alias,
+            state.aliases.chosen.active_alias(&row.id).is_some(),
+        ));
     }
     Some(ResultActions {
         target: row.id.clone(),
@@ -397,7 +412,9 @@ pub(in crate::launcher) fn selected_action(state: &State) -> SelectedAction {
         (_, Some(Entry::File(file))) => acting(&super::own_actions::primary_title(file)),
         (_, Some(Entry::OpenApplication { .. })) => acting("Open application"),
         (_, Some(Entry::OpenTarget { .. })) => acting("Open link"),
-        (_, Some(Entry::Broken(_) | Entry::Unavailable(_))) => unusable("Unavailable"),
+        (_, Some(Entry::Broken(_) | Entry::Unavailable(_) | Entry::Waiting { .. })) => {
+            unusable("Unavailable")
+        }
         (_, Some(Entry::InstallFromFolder)) => acting("Install from folder"),
         (_, Some(Entry::AskNpm)) => acting("Install from npm"),
         (_, Some(Entry::AskGit)) => acting("Install from Git"),
@@ -414,6 +431,8 @@ pub(in crate::launcher) fn selected_action(state: &State) -> SelectedAction {
         // the launcher, acts; see [`Launcher::selected_opens_settings`]).
         (_, Some(Entry::Settings)) => acting("Open settings"),
         (_, Some(Entry::Run(_))) => acting("Run item"),
+        // A dynamic root item's row runs its first action (#158).
+        (_, Some(Entry::DynamicAction(_))) => acting("Run item"),
         // An item of a command's list: its primary action, by the title the
         // extension gave it (#137).
         (_, Some(Entry::Actions(listed))) => acting(&listed.primary()),
@@ -490,6 +509,7 @@ pub(in crate::launcher) fn selected_action(state: &State) -> SelectedAction {
             acting("Clear history")
         }
         (_, Some(Entry::DisableAll(..))) => acting("Disable all"),
+        (_, Some(Entry::DisableOnly(..))) => acting("Disable only"),
         (_, Some(Entry::Cancel)) => acting("Cancel"),
         // Nothing is selected: the screen's own action, which cannot run
         // without a row to run it on.
@@ -504,6 +524,7 @@ pub(in crate::launcher) fn selected_action(state: &State) -> SelectedAction {
         // Enter does nothing there; the keys it records are the point.
         (Screen::Hotkey { .. }, None) => unusable(""),
         (Screen::PauseDetails { .. }, None) => unusable("Retry"),
+        (Screen::WaitingDetails { .. }, None) => unusable("Fix"),
         (Screen::RuntimeDetails { .. }, None) => unusable("Restart"),
         (Screen::BuildDetails { .. }, None) => unusable("Build again"),
         // The Logs screen's lines are the window's: Enter copies the one

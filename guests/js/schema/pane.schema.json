@@ -147,6 +147,28 @@
       },
       "default": []
     },
+    "provides": {
+      "description": "The capabilities the package provides (`\"provides\"`): each a\nnamed, versioned set of operations that other packages call\nthrough Pane by the capability's name, such as `acme:translate@1`,\ninstead of by this package's identity (ADR 0041).",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/ProvidesJson"
+      }
+    },
+    "uses": {
+      "description": "The capabilities the package uses (`\"uses\"`): the operations its\ncode calls through Pane by the capability's name, never naming the\npackage that serves them.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/UsesJson"
+      }
+    },
+    "activate": {
+      "description": "The package's activation entry point (`\"activate\"`): the component,\nrelative to the package folder, that exports `activate` (ADR 0041),\ncalled when its code may run so its registrations exist without\nwaiting for the user.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null
+    },
     "manifestVersion": {
       "description": "The pane.json format version: 1. A newer Pane is needed for a newer one.",
       "const": 1
@@ -834,6 +856,101 @@
       "required": [
         "id",
         "version"
+      ]
+    },
+    "ProvidesJson": {
+      "type": "object",
+      "properties": {
+        "capability": {
+          "description": "The capability's name, `<namespace>:<name>@<major>`.",
+          "type": "string"
+        },
+        "component": {
+          "description": "The component serving it, relative to the package folder.",
+          "type": "string"
+        },
+        "operations": {
+          "description": "The operations the capability is made of.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "platforms": {
+          "description": "The operating systems it works on; without the field, every system\nthe package supports. Elsewhere the package does not provide the\ncapability.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          },
+          "default": null
+        },
+        "atRunTime": {
+          "description": "Whether the package provides it only at run time (`\"atRunTime\"`):\nonly while its code holds a provision for it, as an owned\nregistration (#158). The capability is still known from the\nmanifest, so install plans, cycles and Settings work from the\nmanifest alone; a provision the manifest does not declare and\nmark is refused.",
+          "type": "boolean",
+          "default": false
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "capability",
+        "component",
+        "operations"
+      ]
+    },
+    "UsesJson": {
+      "type": "object",
+      "properties": {
+        "capability": {
+          "description": "The capability's name, `<namespace>:<name>@<major>`.",
+          "type": "string"
+        },
+        "operations": {
+          "description": "The operations the package calls, each reached only through the\ncapability.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "optional": {
+          "description": "Whether the package needs it (the default) or only uses it when some\ninstalled package provides it (`\"optional\": true`).",
+          "type": "boolean",
+          "default": false
+        },
+        "use": {
+          "description": "Whether the package calls one provider (`\"use\": \"one\"`, the\ndefault) or every provider (`\"all\"`).",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "default": {
+          "description": "A provider Pane installs when no installed package provides the\ncapability, written as a dependency's source is.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "commands": {
+          "description": "The manifest ids of the commands that need the capability; without\nthe field, the whole package needs it.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          },
+          "default": null
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "capability",
+        "operations"
       ]
     }
   }

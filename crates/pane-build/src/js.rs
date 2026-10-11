@@ -50,12 +50,15 @@ const WORLD: &str = "js-extension";
 pub(crate) const COMPONENTIZER: &str = "componentize-qjs-p3";
 
 /// `"pane"` option -> the interface a command setting it also exports.
-const EXPORT_OPTIONS: [(&str, &str); 5] = [
+const EXPORT_OPTIONS: [(&str, &str); 8] = [
     ("rootResults", "pane:extension/root-results@0.1.0"),
     ("indexedResults", "pane:extension/indexed-results@0.1.0"),
     ("operations", "pane:extension/published-operations@0.1.0"),
     ("search", "pane:extension/command-search@0.1.0"),
     ("service", "pane:extension/service@0.1.0"),
+    ("events", "pane:extension/events@0.1.0"),
+    ("activate", "pane:extension/lifecycle@0.1.0"),
+    ("snapshot", "pane:extension/lifecycle@0.1.0"),
 ];
 /// `"pane"` option -> the interface a command setting it also imports,
 /// beyond what every command may import (`js-extension`). `run` and
@@ -69,14 +72,24 @@ const IMPORT_OPTIONS: [(&str, &str); 6] = [
     ("run", "pane:extension/run@0.1.0"),
     ("windows", "pane:extension/windows@0.1.0"),
 ];
-/// The exports the adapter wraps, by `pane` option, each with the handler
-/// that answers errors as text (see `guests/js/adapt.js`).
-const ADAPTED_PROVIDERS: [(&str, &str, &str); 5] = [
-    ("rootResults", "rootResults", "resultsFor"),
-    ("indexedResults", "indexedResults", "results"),
-    ("operations", "publishedOperations", "runOperation"),
-    ("search", "commandSearch", "search"),
-    ("service", "service", "runCycle"),
+/// The exports the adapter wraps, by `pane` option, each with the
+/// handlers that answer errors as text (see `guests/js/adapt.js`). The
+/// lifecycle interface is one object of three handlers: `activate` names
+/// it with its activation entry point alone, `snapshot` with the state
+/// handoff's two beside it (ADR 0041).
+const ADAPTED_PROVIDERS: [(&str, &str, &[&str]); 8] = [
+    ("rootResults", "rootResults", &["resultsFor"]),
+    ("indexedResults", "indexedResults", &["results"]),
+    ("operations", "publishedOperations", &["runOperation"]),
+    ("search", "commandSearch", &["search"]),
+    ("service", "service", &["runCycle"]),
+    ("events", "events", &["handleEvent"]),
+    ("activate", "lifecycle", &["activate"]),
+    (
+        "snapshot",
+        "lifecycle",
+        &["activate", "snapshot", "restore"],
+    ),
 ];
 /// `wasi:http`'s client, which a command imports only if its bundle uses it
 /// (itself, or through `@pane-app/extension/http`), as a Rust command's
@@ -493,13 +506,13 @@ fn adapted_entry(entry: &Path, types: &Path, options: &Map<String, Value>) -> St
         format!("export * from {entry};"),
         "export const command = adaptCommand(extension.command);".into(),
     ];
-    for (option, name, handler) in ADAPTED_PROVIDERS {
+    for (option, name, handlers) in ADAPTED_PROVIDERS {
         if options
             .get(option)
             .is_some_and(|value| value.as_bool() == Some(true))
         {
             lines.push(format!(
-                "export const {name} = adaptProvider(extension.{name}, {handler:?});"
+                "export const {name} = adaptProvider(extension.{name}, {handlers:?});"
             ));
         }
     }
@@ -539,7 +552,9 @@ fn posix(path: &Path) -> String {
 /// The world `js-command`: `js-extension` exporting and importing what
 /// `options` name, importing `wasi:http`'s client if `http` and Pane's
 /// system programs if `programs`, or why the options name nothing Pane
-/// knows.
+/// knows. Two options may name one interface (`activate` and `snapshot`
+/// both link the lifecycle interface), so the exported interfaces are
+/// deduplicated.
 fn command_world(
     options: &Map<String, Value>,
     http: bool,
@@ -582,13 +597,19 @@ fn command_world(
     if system_commands {
         imports.push_str(&format!("  import {SYSTEM_COMMANDS_IMPORT};\n"));
     }
-    for (option, interface) in EXPORT_OPTIONS {
-        if options
-            .get(option)
-            .is_some_and(|value| value.as_bool() == Some(true))
-        {
-            exports.push_str(&format!("  export {interface};\n"));
-        }
+    let mut exported: Vec<&str> = EXPORT_OPTIONS
+        .iter()
+        .filter(|(option, _)| {
+            options
+                .get(*option)
+                .is_some_and(|value| value.as_bool() == Some(true))
+        })
+        .map(|(_, interface)| *interface)
+        .collect();
+    exported.sort_unstable();
+    exported.dedup();
+    for interface in exported {
+        exports.push_str(&format!("  export {interface};\n"));
     }
     Ok(format!(
         "package pane:js-guest@0.1.0;\n\nworld {COMMAND_WORLD} {{\n  include {WORLD};\n{imports}{exports}}}\n"
@@ -841,13 +862,14 @@ mod tests {
         let entry = adapted_entry(Path::new("/work/js"), Path::new("/work/js"), &options);
         assert!(
             entry.contains(
-                "export const rootResults = adaptProvider(extension.rootResults, \"resultsFor\");"
+                "export const rootResults = adaptProvider(extension.rootResults, [\"resultsFor\"]);"
             ),
             "{entry}"
         );
         assert!(
-            entry
-                .contains("export const service = adaptProvider(extension.service, \"runCycle\");"),
+            entry.contains(
+                "export const service = adaptProvider(extension.service, [\"runCycle\"]);"
+            ),
             "{entry}"
         );
         assert!(!entry.contains("indexedResults"), "{entry}");

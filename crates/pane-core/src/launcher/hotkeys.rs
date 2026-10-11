@@ -58,7 +58,7 @@ use std::time::Instant;
 
 use serde_json::{Map, Value};
 
-use super::choices::{Choices, Record};
+use super::choices::{Choices, Record, split};
 use super::{
     Entry, Launcher, LauncherView, Opening, Row, Screen, State, Status, Unavailable, off_thread,
 };
@@ -317,6 +317,77 @@ fn offered(packages: &[InstalledPackage]) -> Vec<(CommandRegistration, Option<St
         .collect()
 }
 
+/// The dynamic root items offered as commands (#158), by their rows' ids
+/// (`<command id>:<item id>`): those that declare a mode, listed by a
+/// package whose code may run. A hotkey is registered with the system
+/// exactly while the item is registered, as while a command is offered;
+/// a pause, a reload or an unregistration releases it with the next sync,
+/// which the registry's hooks call.
+fn offered_dynamic(state: &State) -> Vec<String> {
+    super::dynamic::rows(state)
+        .0
+        .into_iter()
+        // An item that runs an action is offered too: a hotkey for it
+        // runs the action, as activating its row does.
+        .filter(|result| matches!(result.entry, Entry::Open(_) | Entry::DynamicAction(_)))
+        .map(|result| result.row.id)
+        .collect()
+}
+
+/// Why the hotkey `shortcut` names a dynamic root item that is not
+/// registered now, if it does: its package is disabled or paused, or its
+/// title and that the item is gone. `None` when the hotkey names nothing
+/// of the kind. The surfaces that hold a dynamic item say so while it is
+/// not registered (#158), as one of a missing target does.
+
+/// The action a `shortcut` runs, if it is recorded for a dynamic root
+/// item that runs an action rather than launching a command: the hotkey
+/// runs the action, as activating its row does.
+fn dynamic_action_of(state: &State, shortcut: &Shortcut) -> Option<super::dynamic::DynamicAction> {
+    let command = command_of(state, shortcut)?;
+    let row = super::dynamic::pinned_by_id(state, &command)?;
+    match row.entry {
+        Entry::DynamicAction(action) => Some(action),
+        _ => None,
+    }
+}
+
+/// The row id a `shortcut` is recorded for, if any.
+fn command_of(state: &State, shortcut: &Shortcut) -> Option<String> {
+    state
+        .bindings
+        .registered
+        .iter()
+        .find(|(_, registered)| registered.shortcut == *shortcut)
+        .map(|(command, _)| command.as_str().to_owned())
+}
+
+fn gone_dynamic(state: &State, shortcut: &Shortcut) -> Option<String> {
+    let command = state
+        .bindings
+        .registered
+        .iter()
+        .find(|(_, registered)| registered.shortcut == *shortcut)
+        .map(|(command, _)| command.as_str())?;
+    // A dynamic item's hotkey is recorded by its row id, `<command
+    // id>:<item id>`; a manifest command's has no `:`.
+    if !command.contains(':') {
+        return None;
+    }
+    let (key, manifest) = split(command);
+    let package = state
+        .packages
+        .iter()
+        .find(|package| package.identity.key() == key)?;
+    let offered = package
+        .commands()
+        .into_iter()
+        .find(|offered| offered.manifest_id() == manifest)?;
+    // A disabled or paused package does not list the item either: the
+    // hotkey says the item is gone, as the slot does.
+    Some(format!("{} no longer lists it", offered.title))
+}
+
 impl Launcher {
     /// Registers with the system exactly the chosen hotkeys whose commands
     /// are offered and available here, releasing the others; each that the
@@ -340,6 +411,12 @@ impl Launcher {
                     let shortcut = state.bindings.chosen().get(&command.id)?.clone();
                     Some((command.id, shortcut))
                 })
+                // A dynamic command's hotkey is offered while its item is
+                // registered (#158).
+                .chain(offered_dynamic(state).into_iter().filter_map(|id| {
+                    let shortcut = state.bindings.chosen().get(&id)?.clone();
+                    Some((id, shortcut))
+                }))
                 .collect()
         };
         // Each wanted command's mark on its package's current generation.
@@ -356,6 +433,11 @@ impl Launcher {
                 !wanted
                     .iter()
                     .any(|(id, wanted)| id == *command && *wanted == registered.shortcut)
+                    // A dynamic root item's hotkey stays registered while
+                    // its item is not (#158): pressing it then says the
+                    // item is gone, as a slot's does, instead of the
+                    // shortcut going missing with it.
+                    && !split(command).1.contains(':')
             })
             .map(|(command, _)| command.clone())
             .collect();
@@ -466,7 +548,8 @@ impl Launcher {
     }
 
     /// What the hotkey `shortcut` launches now, if anything: the offered,
-    /// available command it is registered for.
+    /// available command it is registered for — a manifest command, or a
+    /// dynamic command a package registered (#158).
     pub(super) fn hotkey_opening(&self, state: &State, shortcut: &Shortcut) -> Option<Opening> {
         let command = state
             .bindings
@@ -474,21 +557,36 @@ impl Launcher {
             .iter()
             .find(|(_, registered)| registered.shortcut == *shortcut)
             .map(|(command, _)| command.as_str())?;
-        state
-            .packages
-            .iter()
-            .filter(|package| package.enabled)
-            .find_map(|package| {
-                let (offered, _) =
-                    package
-                        .launchable_commands()
-                        .into_iter()
-                        .find(|(offered, unavailable)| {
-                            offered.id == command && unavailable.is_none()
-                        })?;
-                let no_view = package.mode_of(offered.manifest_id()) == CommandMode::NoView;
-                Some(Opening::of(&offered, no_view, LaunchSource::Hotkey))
-            })
+        if let Some(opening) =
+            state
+                .packages
+                .iter()
+                .filter(|package| package.enabled)
+                .find_map(|package| {
+                    let (offered, _) = package.launchable_commands().into_iter().find(
+                        |(offered, unavailable)| offered.id == command && unavailable.is_none(),
+                    )?;
+                    let no_view = package.mode_of(offered.manifest_id()) == CommandMode::NoView;
+                    Some(Opening::of(&offered, no_view, LaunchSource::Hotkey))
+                })
+        {
+            return Some(opening);
+        }
+        // A dynamic command's row, held by its command and item id: its
+        // launch record names the item. An item that runs an action has
+        // no command to open; its hotkey runs the action, as activating
+        // its row does.
+        match super::dynamic::pinned_by_id(state, command) {
+            Some(found) => match found.entry {
+                Entry::Open(opening) => Some(opening),
+                _ => None,
+            },
+            None => None,
+        }
+        .map(|mut opening| {
+            opening.launch.source = LaunchSource::Hotkey;
+            opening
+        })
     }
 
     /// Launches the command whose hotkey `shortcut` is, as the system
@@ -504,22 +602,60 @@ impl Launcher {
         shortcut: &Shortcut,
     ) -> Option<impl Future<Output = ()> + Send + 'static> {
         let mut state = self.lock();
-        let opening = self.hotkey_opening(&state, shortcut)?;
-        if opening.no_view {
-            Launcher::begin_run(&mut state);
+        let opening = self.hotkey_opening(&state, shortcut);
+        // A hotkey recorded for a dynamic root item that is not
+        // registered (#158) says so, rather than launching nothing
+        // silently; any other shortcut that launches nothing now
+        // launches nothing at all, as before.
+        let gone = match &opening {
+            Some(_) => None,
+            None => gone_dynamic(&state, shortcut),
+        };
+        // One recorded for a dynamic root item that runs an action runs
+        // the action, as activating its row does.
+        let action = if opening.is_none() && gone.is_none() {
+            dynamic_action_of(&state, shortcut)
         } else {
-            self.show_root(&mut state, Some(opening.component.clone()));
-            state.view.status = Status::Running {
-                since: Instant::now(),
-            };
+            None
+        };
+        if opening.is_none() && gone.is_none() && action.is_none() {
+            return None;
         }
         // Its data as the package is now, so a disable or reload meanwhile
         // stops the opening.
-        let data = self.data_in(&state, &opening.component);
+        let data = opening
+            .as_ref()
+            .and_then(|opening| self.data_in(&state, &opening.component))
+            .or_else(|| {
+                action
+                    .as_ref()
+                    .and_then(|action| self.data_in(&state, &action.component))
+            });
+        match (&opening, &action) {
+            (Some(opening), _) if !opening.no_view => {
+                self.show_root(&mut state, Some(opening.component.clone()));
+                state.view.status = Status::Running {
+                    since: Instant::now(),
+                };
+            }
+            // Root search stays while a no-view command or an action runs.
+            (Some(_), _) | (None, Some(_)) => Launcher::begin_run(&mut state),
+            (None, None) => {
+                let reason = gone.clone().expect("checked above");
+                self.show_root(&mut state, None);
+                state.view.status = Status::Error(reason);
+            }
+        }
         let epoch = state.screen_epoch;
         drop(state);
         let launcher = self.clone();
-        Some(async move { launcher.launch_opening(epoch, opening, data).await })
+        Some(async move {
+            if let Some(opening) = opening {
+                launcher.launch_opening(epoch, opening, data).await;
+            } else if let Some(action) = action {
+                launcher.run_dynamic_action(epoch, action, data).await;
+            }
+        })
     }
 
     /// The hotkey rows of the extension list: one per command of each
@@ -593,13 +729,17 @@ impl Launcher {
     /// keys, and offers to remove its hotkey if it has one.
     pub(super) fn show_hotkey(&self, state: &mut State, command: &str) {
         state.actions_return = None;
-        let Some((registration, _)) = offered(&state.packages)
+        // A manifest command, or a dynamic command a package registered
+        // (#158), which the hotkey opens as its own row does.
+        let dynamic = super::dynamic::pinned_by_id(state, command);
+        let Some(title) = offered(&state.packages)
             .into_iter()
             .find(|(offered, _)| offered.id == command)
+            .map(|(registration, _)| registration.title)
+            .or_else(|| dynamic.as_ref().map(|found| found.row.title.clone()))
         else {
             return;
         };
-        let title = registration.title;
         let example = Shortcut::parse("ctrl+alt+g").expect("a valid shortcut");
         let mut details = vec![format!(
             "Press the keys that should open {title} from any application, such as {example}."
@@ -754,14 +894,18 @@ impl Launcher {
         // as the hotkey screen's rows and the Shortcuts catalog's decide. A
         // catalog the page has not redrawn can still ask after the packages
         // changed, so the rule is here too.
-        match offered(&state.packages)
+        let offered = offered(&state.packages)
             .into_iter()
-            .find(|(offered, _)| offered.id == command)
-        {
+            .find(|(offered, _)| offered.id == command);
+        // A dynamic command a package registered at run time (#158) is
+        // offered while its item is registered.
+        let dynamic = offered.is_none() && offered_dynamic(state).contains(&command.to_owned());
+        match offered {
             Some((_, None)) => {}
             Some((_, Some(why))) => {
                 return Err(format!("A hotkey cannot be recorded for {title}: {why}"));
             }
+            None if dynamic => {}
             None => {
                 return Err(format!(
                     "A hotkey cannot be recorded for {title}: its extension is not enabled here"

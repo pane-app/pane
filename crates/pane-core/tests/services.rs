@@ -592,6 +592,30 @@ fn reloading_stops_a_pending_cycle_and_the_replacement_serves_again(fixture: &Fi
     );
 }
 
+fn a_reload_hands_the_services_task_over_to_the_new_code(fixture: &Fixture) {
+    let pane = Pane::new();
+    let (started, identity, folder) = pane.installed(fixture);
+    pane.settled(&started);
+
+    // Two cycles of the task, then a replacement of the code while the
+    // service is idle, no cycle pending: the state the task handed over
+    // (its count of cycles this run) is restored on the new instance's
+    // first start, so its first cycle carries the task on.
+    open(&started.launcher, fixture.command);
+    pane.clock.advance(SECOND);
+    pane.settled(&started);
+    block_on(started.launcher.reload(&identity));
+    pane.until("the replacement's cycle to begin", Some(3), || {
+        pane.cycles(&folder)
+    });
+    pane.clock.advance(SECOND);
+    pane.settled(&started);
+    assert_eq!(
+        started.launcher.view().status,
+        Status::Result("Watching: 0 events (cycle 4, 4 this run)".into())
+    );
+}
+
 fn uninstalling_stops_the_service(fixture: &Fixture) {
     let pane = Pane::new();
     let (started, identity, folder) = pane.installed(fixture);
@@ -867,6 +891,11 @@ fn a_restart_starts_the_service_again_where_the_package_is_enabled_in_rust() {
 }
 
 #[test]
+fn a_reload_hands_the_services_task_over_in_rust() {
+    a_reload_hands_the_services_task_over_to_the_new_code(&RUST);
+}
+
+#[test]
 fn reloading_stops_a_pending_cycle_and_the_replacement_serves_again_in_rust() {
     reloading_stops_a_pending_cycle_and_the_replacement_serves_again(&RUST);
 }
@@ -972,8 +1001,18 @@ fn a_restart_starts_the_service_again_where_the_package_is_enabled_in_typescript
 }
 
 #[test]
+fn a_reload_hands_the_services_task_over_in_javascript() {
+    a_reload_hands_the_services_task_over_to_the_new_code(&JAVASCRIPT);
+}
+
+#[test]
 fn reloading_stops_a_pending_cycle_and_the_replacement_serves_again_in_javascript() {
     reloading_stops_a_pending_cycle_and_the_replacement_serves_again(&JAVASCRIPT);
+}
+
+#[test]
+fn a_reload_hands_the_services_task_over_in_typescript() {
+    a_reload_hands_the_services_task_over_to_the_new_code(&TYPESCRIPT);
 }
 
 #[test]

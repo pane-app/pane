@@ -46,6 +46,7 @@ mod platform;
 mod preferences;
 mod programs;
 mod protection;
+mod registrations;
 pub mod run;
 mod runtime;
 pub mod schema;
@@ -60,6 +61,7 @@ mod threads;
 pub mod tray;
 mod typed_folder;
 mod util;
+mod waiting;
 #[cfg(windows)]
 mod windows_shell;
 mod zip;
@@ -84,16 +86,18 @@ pub use launch::{LaunchRecord, LaunchSource, LaunchType};
 pub use launcher::clipboard_view;
 pub use launcher::search_files;
 pub use launcher::{
-    AliasFlow, AliasOutcome, ApplicationUpdate, ArgumentFields, BuildFailure, CommandPreferences,
-    CommandRegistration, ComputedAnswer, CustomViewSnapshot, DISMISS_NOTICE, Development,
-    ExtensionMark, ExtensionOperation, FolderAsk, FormField, FormView, HotkeyOutcome, ItemAction,
-    ItemActions, Launcher, LauncherView, ListPresentation, LogNotice, MANAGE_EXTENSIONS,
-    OpenSubmenu, OperationKind, PackagePreferences, PinTarget, PreferenceField, PreferencesTarget,
-    Presentation, Question, QuickSlot, ResultAction, ResultActionItem, ResultActions, Row, RowKind,
-    RowPresentation, Screen, Section, SelectedAction, SettingsTarget, SetupHeader, ShortcutCatalog,
-    ShortcutCommand, ShortcutGroup, SlotChange, Status, SubmenuState, UNEXPECTED_QUIT, Unavailable,
-    UnboundShortcut, UpdateHold, UpdateResult, UpdateResults, UpdateResultsAction, answer_sections,
-    root_sections,
+    AliasFlow, AliasOutcome, ApplicationUpdate, ArgumentFields, BuildFailure, Capability,
+    CapabilityProvider, CommandPreferences, CommandRegistration, ComputedAnswer,
+    CustomViewSnapshot, DISMISS_NOTICE, Development, ExtensionDetails, ExtensionMark,
+    ExtensionOperation, ExtensionWait, FixAction, FolderAsk, FormField, FormView, HotkeyOutcome,
+    ItemAction, ItemActions, Launcher, LauncherView, ListPresentation, LogNotice,
+    MANAGE_EXTENSIONS, OpenSubmenu, OperationKind, PackagePreferences, PinTarget, PreferenceField,
+    PreferencesTarget, Presentation, ProvidedCapability, Question, QuickSlot, RequirementCycle,
+    RequirementFix, ResultAction, ResultActionItem, ResultActions, Row, RowKind, RowPresentation,
+    Screen, Section, SelectedAction, SettingsTarget, SetupHeader, ShortcutCatalog, ShortcutCommand,
+    ShortcutGroup, SlotChange, Status, SubmenuState, UNEXPECTED_QUIT, Unavailable, UnboundShortcut,
+    UnmetRequirement, UpdateHold, UpdateResult, UpdateResults, UpdateResultsAction,
+    answer_sections, root_sections,
 };
 pub use links::LinkOpener;
 pub use operations::{MAX_CALL_DEPTH, MAX_OPERATION_JSON};
