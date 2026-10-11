@@ -263,7 +263,7 @@ function Completions() {
   return jsxs(List, {
     navigationTitle: "Run with Completions",
     searchPlaceholder: "Type a command line…",
-    onSearchText: (typed) => setText(typed),
+    onSearchText: (/** @type {string} */ typed) => setText(typed),
     children: items,
   });
 }
