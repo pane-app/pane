@@ -163,13 +163,13 @@ fn a_disabled_package_leaves_root_search_and_stays_disabled_after_a_restart(fixt
     assert_eq!(
         titles(&launcher),
         [
-            "Greeting",
-            INSTALL_ROW,
-            NPM_ROW,
-            GIT_ROW,
-            CREATE_ROW,
-            IMPORT_ROW,
             CHECK_ROW,
+            CREATE_ROW,
+            "Greeting",
+            IMPORT_ROW,
+            INSTALL_ROW,
+            GIT_ROW,
+            NPM_ROW,
             MANAGE_ROW,
             SETTINGS_ROW
         ]
@@ -204,12 +204,12 @@ fn a_disabled_package_leaves_root_search_and_stays_disabled_after_a_restart(fixt
     assert_eq!(
         titles(&launcher),
         [
-            INSTALL_ROW,
-            NPM_ROW,
-            GIT_ROW,
+            CHECK_ROW,
             CREATE_ROW,
             IMPORT_ROW,
-            CHECK_ROW,
+            INSTALL_ROW,
+            GIT_ROW,
+            NPM_ROW,
             MANAGE_ROW,
             SETTINGS_ROW
         ]
@@ -221,12 +221,12 @@ fn a_disabled_package_leaves_root_search_and_stays_disabled_after_a_restart(fixt
     assert_eq!(
         titles(&restarted),
         [
-            INSTALL_ROW,
-            NPM_ROW,
-            GIT_ROW,
+            CHECK_ROW,
             CREATE_ROW,
             IMPORT_ROW,
-            CHECK_ROW,
+            INSTALL_ROW,
+            GIT_ROW,
+            NPM_ROW,
             MANAGE_ROW,
             SETTINGS_ROW
         ]
@@ -264,13 +264,13 @@ fn re_enabling_after_a_restart_restores_the_saved_settings(fixture: &Fixture) {
     assert_eq!(
         titles(&restarted),
         [
-            "Greeting",
-            INSTALL_ROW,
-            NPM_ROW,
-            GIT_ROW,
-            CREATE_ROW,
-            IMPORT_ROW,
             CHECK_ROW,
+            CREATE_ROW,
+            "Greeting",
+            IMPORT_ROW,
+            INSTALL_ROW,
+            GIT_ROW,
+            NPM_ROW,
             MANAGE_ROW,
             SETTINGS_ROW
         ]
@@ -352,12 +352,12 @@ fn copies_with_the_same_title_are_enabled_and_keep_settings_by_identity(fixture:
     assert_eq!(
         titles(&restarted),
         [
-            INSTALL_ROW,
-            NPM_ROW,
-            GIT_ROW,
+            CHECK_ROW,
             CREATE_ROW,
             IMPORT_ROW,
-            CHECK_ROW,
+            INSTALL_ROW,
+            GIT_ROW,
+            NPM_ROW,
             MANAGE_ROW,
             SETTINGS_ROW
         ]
@@ -400,12 +400,12 @@ fn disabling_through_the_api_closes_the_package_command_and_updating_keeps_it_di
     assert_eq!(
         titles(&launcher),
         [
-            INSTALL_ROW,
-            NPM_ROW,
-            GIT_ROW,
+            CHECK_ROW,
             CREATE_ROW,
             IMPORT_ROW,
-            CHECK_ROW,
+            INSTALL_ROW,
+            GIT_ROW,
+            NPM_ROW,
             MANAGE_ROW,
             SETTINGS_ROW
         ]
@@ -426,12 +426,12 @@ fn disabling_through_the_api_closes_the_package_command_and_updating_keeps_it_di
     assert_eq!(
         titles(&launcher),
         [
-            INSTALL_ROW,
-            NPM_ROW,
-            GIT_ROW,
+            CHECK_ROW,
             CREATE_ROW,
             IMPORT_ROW,
-            CHECK_ROW,
+            INSTALL_ROW,
+            GIT_ROW,
+            NPM_ROW,
             MANAGE_ROW,
             SETTINGS_ROW
         ]
@@ -462,6 +462,9 @@ fn commands_built_into_pane_have_no_settings(fixture: &Fixture) {
         component: folder.join(fixture.component),
         takes_query: false,
         search: false,
+        keywords: Vec::new(),
+        when: pane_core::CommandWhen::Always,
+        matches: pane_core::CommandMatches::Title,
     };
     let launcher = Launcher::new(Runtime::start(), vec![command]);
 

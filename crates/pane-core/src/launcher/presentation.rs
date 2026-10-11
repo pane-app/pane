@@ -98,7 +98,8 @@ pub struct RowPresentation {
 /// A computed answer: a root result a command computed from the query
 /// whose action copies its text, such as the calculator's answer to
 /// "6*7". Only what the launcher holds: the query it answers, the text
-/// activating it copies and the command that computed it — no units,
+/// activating it copies, the command that computed it and, when the
+/// answer is a colour, the colour of its swatch (#196) — no units,
 /// conversions or history, which no command supplies. The row keeps its
 /// id and its copy action.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -109,6 +110,10 @@ pub struct ComputedAnswer {
     pub answer: String,
     /// The title of the command that computed it ("Calculator").
     pub command: String,
+    /// The colour of the answer's swatch, as `#RRGGBB` or `#RRGGBBAA`,
+    /// when the command answered one (the calculator's colours, #196);
+    /// `None` for an answer without a swatch.
+    pub swatch: Option<String>,
 }
 
 /// A section label over a run of rows: the rows from `first` up to the
@@ -229,9 +234,9 @@ pub(super) fn row_presentation(state: &State, index: usize) -> RowPresentation {
             None => RowPresentation::default(),
         };
     }
-    let Screen::Root { query } = &state.view.screen else {
+    if !matches!(state.view.screen, Screen::Root { .. }) {
         return RowPresentation::default();
-    };
+    }
     let Some(entry) = state.entries.get(index) else {
         return RowPresentation::default();
     };
@@ -245,8 +250,16 @@ pub(super) fn row_presentation(state: &State, index: usize) -> RowPresentation {
         hotkey: command
             .then(|| state.bindings.registered_of(&row.id))
             .flatten(),
-        matched: title_matches(&row.title, query),
-        answer: answer(state, row, entry, query),
+        // The query whose list the rows shown are (#201): the field's own
+        // query runs ahead while the list is held, and the previous list
+        // keeps its matches.
+        matched: title_matches(
+            &row.title,
+            row.subtitle.as_deref(),
+            state.published.as_str(),
+            state.sensitivity,
+        ),
+        answer: answer(state, row, entry),
         needs_setup: matches!(entry, Entry::Open(_)) && state.setup_needed.contains(&row.id),
         icon: icon(state, row, entry),
         ..RowPresentation::default()
@@ -283,7 +296,7 @@ pub(super) fn want_row_icons(state: &State, index: usize) {
 /// Root search's section labels over `state`'s rows; none on another
 /// screen.
 fn sections(state: &State) -> Vec<Section> {
-    let Screen::Root { query } = &state.view.screen else {
+    let Screen::Root { .. } = &state.view.screen else {
         // The update results view's groups, over its rows: the groups in
         // the view's order, a group hidden when it lists nothing.
         if matches!(state.view.screen, Screen::UpdateResults { .. }) {
@@ -291,6 +304,9 @@ fn sections(state: &State) -> Vec<Section> {
         }
         return Vec::new();
     };
+    // The query whose list the rows shown are (#201): the field's own
+    // query runs ahead while the list is held.
+    let query = state.published.as_str();
     let shown = state.view.rows.len().min(state.entries.len());
     let first_fallback = state.entries[..shown]
         .iter()
@@ -306,7 +322,16 @@ fn sections(state: &State) -> Vec<Section> {
         .unwrap_or(shown);
     // Only the computed answers name a command: a row is one only when
     // activating it copies what a command computed. The files found for
-    // the query (with the row searching them all) are labelled "Files".
+    // the query (with the row searching them all) are labelled "Files";
+    // the rows declared for the address or path the query is,
+    // "Addresses". An answer whose command answered a section of its own
+    // sits under that ("Color", "Date & Time", #196) instead of the
+    // command's title.
+    //
+    // The typed folder's partial notice (#204) is a row of Pane's own
+    // among the files; a row with no actions on root search is only that
+    // one, the items of an opened command's list having none never being
+    // listed here.
     let answers: Vec<Option<&str>> = state.view.rows[..shown]
         .iter()
         .zip(&state.entries)
@@ -315,9 +340,17 @@ fn sections(state: &State) -> Vec<Section> {
                 .computed
                 .iter()
                 .find(|computed| computed.row.id == row.id)
-                .map(|computed| computed.command_title.as_str()),
-            Entry::File(_) => Some("Files"),
+                .map(|computed| match computed.answer.as_ref() {
+                    Some(answer) => answer.section.as_str(),
+                    None => computed.command_title.as_str(),
+                }),
+            Entry::File(_) | Entry::NoActions => Some("Files"),
             Entry::Open(opening) if opening.initial_search.is_some() => Some("Files"),
+            // The rows declared for the address or path the query is
+            // (#195), below the results and above the files.
+            Entry::Send(Sending {
+                via: Via::Typed, ..
+            }) => Some("Addresses"),
             _ => None,
         })
         .collect();
@@ -353,8 +386,9 @@ fn update_sections(state: &State) -> Vec<Section> {
 }
 
 /// The computed answer `row` is, when `entry` copies text a command
-/// computed from `query`.
-fn answer(state: &State, row: &Row, entry: &Entry, query: &str) -> Option<ComputedAnswer> {
+/// computed from the query it was asked: the card pairs the query with
+/// its answer (#201), whatever the field shows while the list is held.
+fn answer(state: &State, row: &Row, entry: &Entry) -> Option<ComputedAnswer> {
     let Entry::Copy(text) = entry else {
         return None;
     };
@@ -363,9 +397,13 @@ fn answer(state: &State, row: &Row, entry: &Entry, query: &str) -> Option<Comput
         .iter()
         .find(|computed| computed.row.id == row.id)?;
     Some(ComputedAnswer {
-        query: query.trim().to_owned(),
+        query: computed.query.trim().to_owned(),
         answer: text.clone(),
         command: computed.command_title.clone(),
+        swatch: computed
+            .answer
+            .as_ref()
+            .and_then(|answer| answer.swatch.clone()),
     })
 }
 
@@ -386,6 +424,11 @@ fn icon(state: &State, row: &Row, entry: &Entry) -> Option<Icon> {
     }
     let id = match entry {
         Entry::Open(_) | Entry::Unavailable(_) => row.id.as_str(),
+        // A typed query's row is the command's own row, sent what was
+        // typed (#195).
+        Entry::Send(Sending {
+            via: Via::Typed, ..
+        }) => row.id.as_str(),
         Entry::Send(_) => row
             .id
             .strip_prefix("alias:")
@@ -415,7 +458,8 @@ pub(super) fn kind(entry: &Entry) -> Option<RowKind> {
             via: Via::Fallback, ..
         }) => Some(RowKind::Fallback),
         Entry::Send(Sending {
-            via: Via::Alias, ..
+            via: Via::Alias | Via::Typed,
+            ..
         }) => Some(RowKind::Command),
         Entry::OpenApplication { .. } => Some(RowKind::Application),
         Entry::OpenTarget { .. } => Some(RowKind::Link),
@@ -440,11 +484,12 @@ pub(super) fn kind(entry: &Entry) -> Option<RowKind> {
 }
 
 /// Root search's sections for `query`: every row under "Commands" for a
-/// blank query — what root search lists then is its commands, in their
-/// own order, not a suggestion of recent use — and for a query, the rows
-/// it found under "Results" with their count, then the fallbacks the user
-/// chose, under "Fallbacks" (after the window's own notice when nothing
-/// else matched, as the reference's empty board composes them).
+/// blank query — what root search lists then is its commands and its
+/// applications, ordered by what it learned (frecency, then the no-query
+/// order, #199), never a section of suggestions — and for a query, the
+/// rows it found under "Results" with their count, then the fallbacks
+/// the user chose, under "Fallbacks" (after the window's own notice when
+/// nothing else matched, as the reference's empty board composes them).
 ///
 /// `rows` is how many rows are listed and `fallbacks` the index of the
 /// first fallback (`rows` when none is listed).
@@ -480,11 +525,13 @@ pub fn root_sections(query: &str, rows: usize, fallbacks: usize) -> Vec<Section>
 /// Root search's sections for `query` (see [`root_sections`]), with each
 /// run of computed answers among the results under a label of its own —
 /// the title of the command that computed them, as the reference's
-/// calculator board labels its card "Calculator" — and the results
-/// before or after such a run under "Results" with their own count.
+/// calculator board labels its card "Calculator", or the section the
+/// answer's own detail names in its place ("Color", "Date & Time",
+/// #196) — and the results before or after such a run under "Results"
+/// with their own count.
 ///
-/// `answers` holds, for each listed row, the title of the command that
-/// computed it when it is a computed answer; `fallbacks` is the index of
+/// `answers` holds, for each listed row, the section label it sits under
+/// when it is a computed answer; `fallbacks` is the index of
 /// the first fallback (the number of rows when none is listed).
 pub fn answer_sections(query: &str, answers: &[Option<&str>], fallbacks: usize) -> Vec<Section> {
     let rows = answers.len();

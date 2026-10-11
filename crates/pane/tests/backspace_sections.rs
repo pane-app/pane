@@ -21,7 +21,10 @@ use std::path::{Path, PathBuf};
 use futures::executor::block_on;
 use gpui::{Entity, TestAppContext, VisualTestContext, prelude::*};
 use pane::LauncherWindow;
-use pane_core::{CommandRegistration, Launcher, LauncherView, Runtime, Screen, Status};
+use pane_core::{
+    CommandMatches, CommandRegistration, CommandWhen, Launcher, LauncherView, Runtime, Screen,
+    Status,
+};
 
 #[path = "support/a11y.rs"]
 mod a11y;
@@ -116,6 +119,9 @@ fn actions_command() -> CommandRegistration {
         component,
         takes_query: false,
         search: false,
+        keywords: Vec::new(),
+        when: CommandWhen::Always,
+        matches: CommandMatches::Title,
     }
 }
 
@@ -136,6 +142,9 @@ fn command(id: &str, title: &str) -> CommandRegistration {
         component,
         takes_query: false,
         search: false,
+        keywords: Vec::new(),
+        when: CommandWhen::Always,
+        matches: CommandMatches::Title,
     }
 }
 

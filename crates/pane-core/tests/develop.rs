@@ -823,11 +823,35 @@ fn a_published_copy_keeps_its_own_identity_and_code() {
     save(&folder, "sample_js");
     dev.finished(&identity, 1);
     // Both are titled Dev: the first command is the published copy's.
-    to_root(&dev.launcher);
+    // The blank query lists the two "Open Dev" rows wherever the
+    // no-query order (#199) ranks them, so each is chosen as the copyth
+    // row of that title — the list ranks again after each run, the used
+    // copy first.
+    let open_dev = |copy: usize| {
+        dev.launcher
+            .view()
+            .rows
+            .iter()
+            .enumerate()
+            .filter(|(_, row)| row.title == "Open Dev")
+            .map(|(index, _)| index)
+            .nth(copy)
+            .unwrap_or_else(|| panic!("fewer than {} Open Dev rows", copy + 1))
+    };
+    assert_eq!(
+        dev.launcher
+            .view()
+            .rows
+            .iter()
+            .filter(|row| row.title == "Open Dev")
+            .count(),
+        2,
+        "both copies' commands are listed"
+    );
     let answers: Vec<Status> = (0..2)
-        .map(|index| {
+        .map(|copy| {
             to_root(&dev.launcher);
-            dev.launcher.select(index);
+            dev.launcher.select(open_dev(copy));
             block_on(dev.launcher.activate_selected());
             select_title(&dev.launcher, "Say hello");
             block_on(dev.launcher.activate_selected());

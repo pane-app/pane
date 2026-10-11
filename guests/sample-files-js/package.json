@@ -9,7 +9,8 @@
   "pane": {
     "rootResults": true,
     "search": true,
-    "fileIndex": true
+    "fileIndex": true,
+    "typedFolder": true
   },
   "devDependencies": {
     "@pane-app/extension": "file:../js",

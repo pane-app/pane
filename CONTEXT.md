@@ -101,20 +101,32 @@ The launcher's main search and result view before a specific command is opened.
 _Avoid_: Every integration's internal search
 
 **Root result**:
-One entry root search lists for a query and can invoke, such as an extension command; it is matched by its title, subtitle and, for an installed command, its package's title, and ranked by the core.
+One entry root search lists for a query and can invoke, such as an extension command; it is matched — fuzzily, without accents, by the strictness the user chose — by its title, alternate titles, subtitle, keywords and, for an installed command, its package's title, and ranked by the core's comparator, of which its kind (command, link, application, file) and the provider that supplied it are steps. Rows that share a folded title each show what tells them apart.
 _Avoid_: Item (an item belongs to a command's own list), search hit
+
+**Search sensitivity**:
+How strict root search's matching is, as the Launcher page records it: Low, Medium or High (the default). The choice applies on the next keystroke, the list the current query has already made staying as it is.
+_Avoid_: Filter, search mode
 
 **Result kind**:
 What invoking a root result reaches, shown on its row: Command, Application, File, Folder, Link or Fallback. The core derives it from the result's action, never from its title; Folder is a folder the file index found.
 _Avoid_: Type, category
 
 **Result section**:
-A labelled run of root results: "Commands" over a blank query's commands and applications, below the pinned home; "Results" with their count over a query's, then "Fallbacks"; a run of computed answers sits under the title of the command that computed them ("Calculator"), and the files found for the query, with the row searching them all, under "Files". Sections only label the list; they never reorder or filter it, and none claims recent use: learning orders the list (frecency orders the blank query's), never a section.
+A labelled run of root results: "Commands" over a blank query's commands and applications, below the pinned home; "Results" with their count over a query's, then "Fallbacks"; a run of computed answers sits under the title of the command that computed them ("Calculator"), the rows declared for the address or path the query is under "Addresses" (#195), and the files found for the query, with the row searching them all, under "Files". Sections only label the list; they never reorder or filter it, and none claims recent use: learning orders the list (frecency orders the blank query's), never a section.
 _Avoid_: Group (a shortcut group is a Settings term), suggestions
+
+**Learned ranking**:
+How root search orders its results by what it learned from the user's choices (see Frecency and Learned query): a query the result was chosen with ranks it above how well titles match, frecency breaks ties between equally good matches and orders the blank query. The list itself shows no section of it.
+_Avoid_: Suggestions, history, personalization, favorites
 
 **Learned query**:
 A query the user had typed when they chose a root result from root search, which Pane remembers by the result's identity (the last few distinct ones), never by its title or row. Typing it again ranks that result above how well titles match, after only an alias and an exact title, while the result was used recently (ADR 0030).
 _Avoid_: Search history (the queries Up recalls), alias (the user's own word for a command), suggestion
+
+**Search history**:
+The recent queries root search was cleared of, kept in Pane's own record on this computer: Up on an empty query restores the newest one with the argument values typed with it (a password's empty), and Up again the one before, until any other key ends the walk. The "Learn from what I choose" switch also stops it recording; the Launcher page's "Reset search history" clears it.
+_Avoid_: Learned query (a per-result ranking input), suggestions, recent files
 
 **Frecency**:
 A root result's score of uses from root search that decays with time (halving every ten days, never below an unused result's), kept by identity in Pane's own record. It breaks ties between equally good matches and orders the blank query's commands and applications. A global hotkey's use, a computed answer and a file earn none.
@@ -173,7 +185,7 @@ A computed result whose action copies text, such as the calculator's answer: roo
 _Avoid_: Calculation, conversion, answer card (the card is how it is drawn)
 
 **No-results notice**:
-What root search shows above its fallbacks when nothing else is listed for a query that is not blank: the query, and what the user can do — pick a fallback, install an extension, or offer a command as one on its extension's page in Settings. The notice selects nothing itself; root search preselects the first fallback below it, so Enter sends it the query (ADR 0031).
+What root search shows above its fallbacks when nothing else is listed for a query that is not blank: the query, and what the user can do — send the text to the first fallback with Enter, install an extension, or offer a command as one on its extension's page in Settings. The notice selects nothing itself; root search preselects the first fallback below it, so Enter sends it the query (ADR 0031).
 _Avoid_: Empty state (a screen's own line when it has no rows), zero state
 
 **Announcer**:
@@ -201,7 +213,7 @@ Pane's fixed bounds on listing a granted folder, the same on every system: regul
 _Avoid_: Index scope (the file index's rules), crawl, whole-disk search
 
 **Indexed result**:
-A root result an extension command supplies ahead of the query, such as an installed application; Pane asks for them once root search is used, keeps them, and matches and ranks them by title like commands, for a query that is not blank. It may also carry alternate titles, matched as its title is, and keywords, matched as its subtitle is; its row still shows its title.
+A root result an extension command supplies ahead of the query, such as an installed application; Pane asks for them once root search is used, keeps them, and matches and ranks them by title like commands. The blank query lists the applications among them in its own order, never a link (#122). It may also carry alternate titles, matched as its title is, and keywords, matched as its subtitle is; its row still shows its title.
 _Avoid_: Index entry, cached result
 
 **Root provider**:
@@ -249,7 +261,7 @@ An optional setting, Windows only and off by default, that pauses Pane's hotkeys
 _Avoid_: Do-not-disturb, focus mode (a different feature), fullscreen detection (one signal the decision uses)
 
 **Alias**:
-A word the user gives an installed command in Pane; typing it in root search lists that command first, and, for a query-taking command, typing it before some text lists a row that sends the text to the command when invoked. Pane keeps it as its own record by command id; a disabled package's commands offer none.
+A word the user gives an installed command in Pane; typing it in root search lists that command first, and typing a space after it (or Tab) invokes it at once — through its argument fields, which the text typed next fills, when it declares any. A query-taking command is not invoked that way: its row that sends the text after the alias when the user presses Enter stays. Pane keeps it as its own record by command id; a disabled package's commands offer none.
 _Avoid_: Keyword (an author's search term), shortcut, nickname
 
 **Fallback**:
@@ -257,12 +269,16 @@ A query-taking command the user chose to have offered below root search's result
 _Avoid_: Default action, catch-all
 
 **Query-taking command**:
-An extension command that declares it takes a query: text typed in root search, which Pane sends it only when the user invokes it through its alias or as a fallback, as the fallback text of its launch record (and its first text argument, when it declares arguments).
+An extension command that declares it takes a query: text typed in root search, which Pane sends it only when the user invokes it — through its alias or as a fallback — as the fallback text of its launch record (and its first text argument, when it declares arguments). Its alias never enters it with a space: the text after the alias is its input, sent when the user presses Enter.
 _Avoid_: Argument (one declared field, which the text may fill), search provider (a provider is asked while the user types)
 
 **Argument**:
-One of up to three typed fields (text, password or dropdown) a command declares for input before each run. Root search shows them after the query, and a launch without them asks for the required ones that are empty. Their values reach the command in its launch record; a password's is never recorded.
+One of up to three typed fields (text, password or dropdown) a command declares for input before each run. Its value reaches the command in its launch record; a password's is never recorded.
 _Avoid_: Query (root search's text), parameter, preference (set once, not for each run)
+
+**Argument field**:
+An argument as root search shows it, after the query while its command's row is selected: the place the user types it before invoking the command, which a launch from anywhere else asks for through the argument form. The values survive the list being re-ranked but not a new query.
+_Avoid_: Argument (the declared field itself), form field (the argument form's), input
 
 **Launch record**:
 The one record a command receives on every way in: how it was launched (by the user or in the background, and from where), its arguments' values, any fallback text sent through its alias or as a fallback, and any context another command passed when launching it.

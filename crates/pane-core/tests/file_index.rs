@@ -637,18 +637,22 @@ fn rebuilding_the_index_builds_it_again_from_every_folder() {
 fn turning_off_search_files_stops_the_index_as_disabling_files_does() {
     let home = Home::new();
     let (launcher, _runtime) = home.with_files();
-    let command = launcher
+    let commands: Vec<String> = launcher
         .packages()
         .into_iter()
         .find(|package| package.title() == "Rust files sample")
         .unwrap()
         .listed_commands()
         .into_iter()
-        .next()
-        .expect("Find files (Rust)")
-        .registration
-        .id;
-    block_on(launcher.set_command_enabled(&command, false)).unwrap();
+        .map(|command| command.registration.id)
+        .collect();
+    // The index stops once every command is turned off, as the package's
+    // own switch does; one left on keeps it running. The Files extension's
+    // typed-path commands (#195) that made this more than one left with
+    // its sources (#285); the sample keeps one command.
+    for command in &commands {
+        block_on(launcher.set_command_enabled(command, false)).unwrap();
+    }
     let status = launcher.file_index_status();
     assert_eq!(status.state, IndexState::Off);
     assert_eq!(
@@ -664,7 +668,9 @@ fn turning_off_search_files_stops_the_index_as_disabling_files_does() {
     );
     assert!(home.index_dir().exists(), "kept on disk while off");
 
-    block_on(launcher.set_command_enabled(&command, true)).unwrap();
+    for command in &commands {
+        block_on(launcher.set_command_enabled(command, true)).unwrap();
+    }
     settle(&launcher);
     assert_eq!(launcher.file_index_status().state, IndexState::Current);
     eventually(&launcher, "plan", lists("plan.txt"));

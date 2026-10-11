@@ -28,22 +28,28 @@ struct Fixture {
     package: &'static str,
     component: &'static str,
     title: &'static str,
+    /// The subtitle its Echo command's manifest gives, which each
+    /// language's sample words its own way.
+    echo_subtitle: &'static str,
 }
 
 const RUST: Fixture = Fixture {
     package: "sample-query",
     component: "sample_query.wasm",
     title: "Query sample",
+    echo_subtitle: "Answers the text you send it from root search",
 };
 const JAVASCRIPT: Fixture = Fixture {
     package: "sample-query-js",
     component: "sample_query_js.wasm",
     title: "JavaScript query sample",
+    echo_subtitle: "A JavaScript command that answers the text you send it from root search",
 };
 const TYPESCRIPT: Fixture = Fixture {
     package: "sample-query-ts",
     component: "sample_query_ts.wasm",
     title: "TypeScript query sample",
+    echo_subtitle: "A TypeScript command that answers the text you send it from root search",
 };
 
 /// Copies the assembled package `name` under `target/guests/packages` to
@@ -322,7 +328,9 @@ fn an_alias_finds_the_command_first_and_sends_the_text_after_it_only_when_invoke
     assert_eq!(titles(&launcher)[..2], ["Echo", "12"]);
 }
 
-fn a_fallback_is_listed_last_for_any_text_and_is_never_chosen_by_itself(fixture: &Fixture) {
+fn a_fallback_is_listed_last_for_any_text_and_the_first_is_selected_when_nothing_else_matches(
+    fixture: &Fixture,
+) {
     let dirs = Dirs::new();
     let (launcher, runtime) = dirs.launcher();
     dirs.install(&launcher, fixture.package, "query");
@@ -340,18 +348,13 @@ fn a_fallback_is_listed_last_for_any_text_and_is_never_chosen_by_itself(fixture:
         "{recorded}"
     );
 
-    // Nothing else matches: the fallback is listed, not selected, so Enter
-    // sends nothing.
+    // Nothing else matches: the fallback is listed and the first is
+    // selected, so Enter sends it the whole query (ADR 0031).
     search(&launcher, "zqx words");
     assert_eq!(titles(&launcher), ["Echo"]);
     assert_eq!(subtitle(&launcher, 0), "Send “zqx words” · fallback");
-    assert_eq!(launcher.view().selected, None);
-    block_on(launcher.activate_selected());
-    assert_eq!(shown(&launcher), Status::Idle);
+    assert_eq!(launcher.view().selected, Some(0));
     assert_eq!(running(&runtime), Vec::<PathBuf>::new());
-
-    // Choosing it sends the whole query.
-    launcher.move_selection(1);
     block_on(launcher.activate_selected());
     assert_eq!(
         shown(&launcher),
@@ -432,7 +435,12 @@ fn disabling_the_target_removes_its_alias_and_fallback_without_enabling_it_again
     // The alias's letters still find Pane's own Check for Extension
     // Updates — a disabled package's update is the user's to ask (#267).
     search(&launcher, "ec");
-    assert_eq!(titles(&launcher), ["Check for Extension Updates"]);
+    // The alias's letters still find Pane's own Check for Extension
+    // Updates — a disabled package's update is the user's to ask (#267) —
+    // and Pane's other own rows match the two letters fuzzily (#193); the
+    // disabled command's alias and fallback rows are gone.
+    assert!(!titles(&launcher).contains(&"Echo".to_owned()));
+    assert!(titles(&launcher).contains(&"Check for Extension Updates".to_owned()));
     assert_eq!(running(&runtime), Vec::<PathBuf>::new());
 
     // Changing them does not enable it either.
@@ -484,22 +492,55 @@ fn copies_from_other_sources_with_the_same_title_stay_distinct(fixture: &Fixture
     }
 
     search(&launcher, "ec");
-    assert_eq!(titles(&launcher)[..2], ["Echo", "Echo"]);
+    // The command's alias row first and its fallbacks last; between them,
+    // Pane's own rows match the two letters fuzzily (#193).
+    let listed = titles(&launcher);
+    assert_eq!(&listed[..1], ["Echo"]);
+    assert_eq!(&listed[listed.len() - 2..], ["Echo", "Echo"]);
     assert!(launcher.view().rows[0].id.ends_with("second#echo"));
 
-    // The rows name their sources, since the titles are the same.
+    // The rows name their sources, since the titles are the same. The
+    // Echo commands match the query's letters themselves now, and Pane's
+    // install row matches them below (#193), so the fallbacks sit last.
     search(&launcher, "ec hi");
-    assert_eq!(titles(&launcher), ["Echo", "Echo", "Echo"]);
+    let listed = titles(&launcher);
+    assert_eq!(
+        listed,
+        [
+            "Echo",
+            "Echo",
+            "Echo",
+            "Install extension from folder…",
+            "Echo",
+            "Echo"
+        ]
+    );
+    // The commands' own rows share that title too (#197): each names its
+    // package's source after its subtitle. The copy the user gave an
+    // alias ranks first of the two (#199's no-query order).
+    assert!(
+        subtitle(&launcher, 1).starts_with(&format!("{} · ", fixture.echo_subtitle)),
+        "{}",
+        subtitle(&launcher, 1)
+    );
+    assert_eq!(
+        subtitle(&launcher, 1),
+        format!("{} · {second_source}", fixture.echo_subtitle)
+    );
+    assert_eq!(
+        subtitle(&launcher, 2),
+        format!("{} · {first_source}", fixture.echo_subtitle)
+    );
     assert_eq!(
         subtitle(&launcher, 0),
         format!("Send “hi” · alias ec · {second_source}")
     );
     assert_eq!(
-        subtitle(&launcher, 1),
+        subtitle(&launcher, listed.len() - 2),
         format!("Send “ec hi” · fallback · {first_source}")
     );
     assert_eq!(
-        subtitle(&launcher, 2),
+        subtitle(&launcher, listed.len() - 1),
         format!("Send “ec hi” · fallback · {second_source}")
     );
     block_on(launcher.activate_selected());
@@ -566,7 +607,7 @@ macro_rules! contract {
 
 contract!(
     an_alias_finds_the_command_first_and_sends_the_text_after_it_only_when_invoked,
-    a_fallback_is_listed_last_for_any_text_and_is_never_chosen_by_itself,
+    a_fallback_is_listed_last_for_any_text_and_the_first_is_selected_when_nothing_else_matches,
     an_answer_is_cleared_once_the_query_changes,
     disabling_the_target_removes_its_alias_and_fallback_without_enabling_it_again,
     copies_from_other_sources_with_the_same_title_stay_distinct,
@@ -791,7 +832,12 @@ fn uninstalling_forgets_exactly_its_own_commands_not_those_of_a_longer_source() 
     let recorded = fs::read_to_string(dirs.aliases_file()).unwrap();
     assert!(recorded.contains("x#y#echo\": \"ec\""), "{recorded}");
     search(&launcher, "ec hi");
-    assert_eq!(titles(&launcher), ["Echo"]);
+    // The Echo command matches the query's letters too, and Pane's
+    // install row matches them below (#193).
+    assert_eq!(
+        titles(&launcher),
+        ["Echo", "Echo", "Install extension from folder…"]
+    );
 }
 
 #[test]
@@ -823,7 +869,12 @@ fn a_change_that_cannot_be_kept_never_brings_back_an_uninstalled_packages_choice
         row_subtitle(&launcher, "Alias for Echo")
     );
     search(&launcher, "ec hi");
-    assert_eq!(titles(&launcher), Vec::<String>::new());
+    // The command's row is gone; Pane's install row matches the letters
+    // fuzzily (#193).
+    assert_eq!(
+        titles(&launcher),
+        ["Echo", "Install extension from folder…"]
+    );
 }
 
 /// Echo opened from its row, with no text sent: it runs without a screen

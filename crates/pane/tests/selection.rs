@@ -27,7 +27,10 @@ use gpui::{
     px,
 };
 use pane::LauncherWindow;
-use pane_core::{CommandRegistration, Launcher, LauncherView, Runtime, Screen, Status};
+use pane_core::{
+    CommandMatches, CommandRegistration, CommandWhen, Launcher, LauncherView, Runtime, Screen,
+    Status,
+};
 
 #[path = "support/packages.rs"]
 mod packages;
@@ -92,6 +95,9 @@ fn command(title: &str, guest: &str) -> CommandRegistration {
         component,
         takes_query: false,
         search: false,
+        keywords: Vec::new(),
+        when: CommandWhen::Always,
+        matches: CommandMatches::Title,
     }
 }
 

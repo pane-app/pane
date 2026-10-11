@@ -18,7 +18,9 @@ use std::time::Duration;
 
 use gpui::{Entity, TestAppContext, VisualTestContext, prelude::*};
 use pane::LauncherWindow;
-use pane_core::{CommandRegistration, Launcher, LauncherView, Runtime, Screen};
+use pane_core::{
+    CommandMatches, CommandRegistration, CommandWhen, Launcher, LauncherView, Runtime, Screen,
+};
 
 #[path = "support/a11y.rs"]
 mod a11y;
@@ -211,12 +213,12 @@ fn typing_says_the_selected_row_once_settled_if_it_changed(cx: &mut TestAppConte
     let blank = view(&window, cx);
     assert_eq!(
         blank.selected.map(|index| blank.rows[index].title.as_str()),
-        Some("Rust sample"),
-        "root search's first row"
+        Some("JavaScript sample"),
+        "root search's first row, by the blank query's no-query order (#199)"
     );
 
     // Typing that keeps the same first row: nothing, then or later.
-    cx.simulate_input("rust");
+    cx.simulate_input("java");
     view(&window, cx);
     assert_eq!(announcement(cx), "");
     typing_settles(cx);
@@ -226,9 +228,9 @@ fn typing_says_the_selected_row_once_settled_if_it_changed(cx: &mut TestAppConte
     // Typing that changes it: nothing for each keystroke, then the row,
     // once, after the results settle.
     cx.simulate_keystrokes("backspace backspace backspace backspace");
-    cx.simulate_input("java");
+    cx.simulate_input("ru");
     let shown = view(&window, cx);
-    assert_eq!(shown.query(), Some("java"));
+    assert_eq!(shown.query(), Some("ru"));
     // What the announcer holds after each frame the test draws: it
     // changes once, from nothing to the row.
     let mut heard = vec![announcement(cx)];
@@ -243,9 +245,9 @@ fn typing_says_the_selected_row_once_settled_if_it_changed(cx: &mut TestAppConte
     let changes = heard.windows(2).filter(|pair| pair[0] != pair[1]).count();
     assert_eq!(changes, 1, "said once: {heard:?}");
 
-    // A move while typing settles is said at once (JavaScript sample,
-    // second for "sample", was said last: Down twice reaches another).
-    cx.simulate_keystrokes("backspace backspace backspace backspace");
+    // A move while typing settles is said at once (the first row was
+    // said for "ru"; Down twice reaches another row of "sample").
+    cx.simulate_keystrokes("backspace backspace");
     cx.simulate_input("sample");
     cx.simulate_keystrokes("down down");
     let shown = view(&window, cx);
@@ -254,7 +256,7 @@ fn typing_says_the_selected_row_once_settled_if_it_changed(cx: &mut TestAppConte
 }
 
 #[gpui::test]
-fn a_query_with_no_results_says_so_and_a_move_into_the_fallbacks_names_them(
+fn a_query_with_no_results_says_its_first_fallback_and_a_move_into_the_fallbacks_names_them(
     cx: &mut TestAppContext,
 ) {
     // Echo, the query sample, offered as a fallback through the extension
@@ -282,26 +284,40 @@ fn a_query_with_no_results_says_so_and_a_move_into_the_fallbacks_names_them(
     let shown = settle(&window, cx);
     assert!(matches!(shown.screen, Screen::Root { .. }), "{shown:?}");
 
-    // Nothing matches: "No results", once typing settles.
+    // Nothing matches: the notice heads the fallbacks, and root search
+    // itself selects the first (ADR 0031). Once typing settles the
+    // announcer says it, a selection Pane changed to another row.
     cx.simulate_input("zqx");
     let shown = view(&window, cx);
-    assert_eq!(shown.selected, None);
+    assert_eq!(shown.selected, Some(0));
     assert!(cx.debug_bounds("no-results").is_some());
     typing_settles(cx);
-    until_announced(cx, "No results");
+    until_announced(cx, "Echo, 1 of 1");
     assert_focus_stays(cx, "Search");
 
-    // Down moves into the fallbacks, whose section is named first.
+    // A match above the fallback keeps it selected, and a move into the
+    // fallbacks names their section first.
+    cx.simulate_keystrokes("escape");
+    settle(&window, cx);
+    cx.simulate_input("manage");
+    typing_settles(cx);
+    let shown = view(&window, cx);
+    assert_eq!(shown.rows[0].title, "Manage Extensions");
+    assert_eq!(shown.selected, Some(0));
+    until_announced(cx, "Manage Extensions, 1 of 2");
     cx.simulate_keystrokes("down");
     let shown = view(&window, cx);
-    assert_eq!(shown.selected, Some(0));
-    assert_eq!(announcement(cx), "Fallbacks: Echo, 1 of 1");
+    assert_eq!(shown.selected, Some(1));
+    assert_eq!(announcement(cx), "Fallbacks: Echo, 2 of 2");
     assert_focus_stays(cx, "Search");
 }
 
 #[gpui::test]
 fn opening_a_command_says_its_name_and_count_then_its_row(cx: &mut TestAppContext) {
     let (window, cx) = open_samples(cx);
+    // Typed first: the blank query's first row is not the Rust sample's
+    // (#199's no-query order).
+    cx.simulate_input("rust");
     cx.simulate_keystrokes("enter");
     let shown = view(&window, cx);
     assert_eq!(shown.screen, Screen::Command);
@@ -344,6 +360,9 @@ fn open_actions_sample(
         component,
         takes_query: false,
         search: false,
+        keywords: Vec::new(),
+        when: CommandWhen::Always,
+        matches: CommandMatches::Title,
     };
     let (window, cx) = open_launcher(cx, Launcher::new(Runtime::start(), vec![command]));
     cx.simulate_input("actions sample");
@@ -410,6 +429,17 @@ fn the_actions_panel_keeps_its_field_focused_and_says_its_entries(cx: &mut TestA
 #[gpui::test]
 fn the_actions_panel_over_root_search_says_its_entries(cx: &mut TestAppContext) {
     let (window, cx) = open_samples(cx);
+    // The panel tells of the row it is opened over: the blank query's
+    // order (#199) collates Pane's own rows among the commands, so the
+    // Rust sample is reached by its title, not its place.
+    let rows = view(&window, cx).rows;
+    let rust = rows
+        .iter()
+        .position(|row| row.title == "Rust sample")
+        .expect("the Rust sample is listed");
+    for _ in 0..rust {
+        cx.simulate_keystrokes("down");
+    }
     cx.simulate_keystrokes(OPEN_ACTIONS);
     cx.run_until_parked();
     assert!(cx.read_entity(&window, |window, _| window.actions_open()));

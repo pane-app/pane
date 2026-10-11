@@ -74,6 +74,12 @@ schemars = "1.2"
 # (`CF_DIB`) beside its PNG on Windows (#167), and cropping an
 # application's icon to its visible content on every system (#172).
 png = "0.18"
+# Transliterating root search's texts to ASCII before the query and the
+# results' titles, subtitles and keywords are compared, so accents and
+# scripts never stand between the user and a result (#193): `any_ascii`
+# (Hunter WB, ISC, on the license allow list, no dependencies), whose
+# table romanises every script (é to e, đ to d, ß to ss, ligatures split).
+any_ascii = "0.3"
 
 # Listing the Apps folder, reading what a shortcut opens (its target,
 # arguments and AppUserModelID property, through the shortcut interface and

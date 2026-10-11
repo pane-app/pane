@@ -132,6 +132,18 @@ impl<C: Choices> Record<C> {
         record
     }
 
+    /// Why the record could not be read, if it could not: it is then
+    /// never overwritten.
+    pub(super) fn unreadable(&self) -> Option<&str> {
+        self.unreadable.as_deref()
+    }
+
+    /// Whether the choices are kept anywhere at all; a launcher that
+    /// installs no packages keeps none.
+    pub(super) fn kept(&self) -> bool {
+        self.file.is_some()
+    }
+
     /// The record's text as the choices are now, and where it goes; `Err`
     /// if there is nowhere to write it.
     fn text(&self) -> Result<(PathBuf, String), String> {
@@ -157,6 +169,19 @@ impl<C: Choices> Record<C> {
         let key = identity.key();
         self.forgotten.insert(key.clone());
         self.chosen.retain(&|command| split(command).0 != key)
+    }
+
+    /// Puts the choices back to what the record last held: a change whose
+    /// write failed, with no one entry to undo it by (resetting all that
+    /// root search learned does), never loses what was recorded — the
+    /// next write holds what the record holds, not what failed to.
+    pub(super) fn revert(&mut self) {
+        let recorded = self
+            .recorded
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone();
+        self.chosen = recorded;
     }
 }
 

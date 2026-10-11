@@ -849,6 +849,7 @@ fn bind_action(action: GivenAction, keys: &PaneKeys, taken: Option<&Binding>) ->
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::packages::{CommandMatches, CommandWhen};
 
     fn given(shortcut: Option<&str>) -> GivenAction {
         GivenAction {
@@ -949,6 +950,9 @@ mod tests {
                 component: PathBuf::from(COMPONENT),
                 takes_query: false,
                 search: false,
+                keywords: Vec::new(),
+                when: CommandWhen::default(),
+                matches: CommandMatches::default(),
             }],
         );
         let window = Arc::new(Recording::default());

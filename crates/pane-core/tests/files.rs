@@ -35,7 +35,13 @@ mod rows;
 mod system;
 
 use feedback::RecordingWindow;
+#[cfg(unix)]
+use rows::select_title;
 use rows::titles;
+#[path = "support/settle.rs"]
+mod settle;
+
+use settle::wait_for_merges;
 use system::{Done, RecordingSystem};
 
 /// Activates the selected row and answers what the HUD then said, if one
@@ -175,6 +181,11 @@ fn install(launcher: &Launcher, folder: &Path) {
 
 fn search(launcher: &Launcher, query: &str) {
     block_on(launcher.set_query(query));
+    // The files of a folder that was still being listed arrive as a late
+    // answer, which merges into the published list within 16 ms of the
+    // search's end (#201): what the searches below read is the list once
+    // the merge lands.
+    wait_for_merges(launcher);
 }
 
 fn identity(launcher: &Launcher, title: &str) -> PackageIdentity {
@@ -716,6 +727,9 @@ fn a_file_is_checked_again_when_it_is_opened() {
         search(&launcher, "index");
         fs::remove_file(fixture.file("files index.txt")).unwrap();
         std::os::unix::fs::symlink(&outside, fixture.file("files index.txt")).unwrap();
+        // Pane's install row matches "index" fuzzily above the file rows
+        // (#193); the file row is what is opened.
+        select_title(&launcher, "files index.txt");
         block_on(launcher.activate_selected());
         assert_eq!(
             launcher.view().status,
@@ -966,6 +980,7 @@ fn a_slow_listing_holds_up_neither_the_root_answers_nor_the_applications() {
     assert_eq!(folders.started(), 1, "one listing for the visit");
     folders.release();
     finishes(&second);
+    wait_for_merges(&launcher);
     assert!(
         titles(&launcher)
             .iter()
@@ -995,6 +1010,7 @@ fn a_new_query_waits_for_the_same_listing_and_older_answers_never_show() {
     finishes(&first);
     folders.release();
     finishes(&second);
+    wait_for_merges(&launcher);
     assert_eq!(titles(&launcher), ["report current.txt"]);
     assert_eq!(folders.started(), 1);
 }

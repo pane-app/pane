@@ -360,8 +360,29 @@
           ],
           "default": null
         },
-        "rootResults": {
+        "keywords": {
           "description": "The command computes root results from root search's query, such as\na calculator's answer: its component then also exports\n`pane:extension/root-results`.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": []
+        },
+        "when": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "matches": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "rootResults": {
           "type": "boolean",
           "default": false
         },

@@ -20,7 +20,10 @@ use gpui::{
     Entity, KeyDownEvent, Keystroke, Modifiers, TestAppContext, VisualTestContext, prelude::*,
 };
 use pane::LauncherWindow;
-use pane_core::{CommandRegistration, Launcher, LauncherView, Runtime, Screen, Status};
+use pane_core::{
+    CommandMatches, CommandRegistration, CommandWhen, Launcher, LauncherView, Runtime, Screen,
+    Status,
+};
 
 #[path = "support/a11y.rs"]
 mod a11y;
@@ -86,6 +89,9 @@ fn opened_actions(cx: &mut TestAppContext) -> (Entity<LauncherWindow>, &mut Visu
         component,
         takes_query: false,
         search: false,
+        keywords: Vec::new(),
+        when: CommandWhen::Always,
+        matches: CommandMatches::Title,
     };
     open_launcher(cx, Launcher::new(Runtime::start(), vec![command]))
 }

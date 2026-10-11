@@ -602,13 +602,14 @@ fn an_unreachable_source_is_explained_and_the_row_tries_again() {
     assert_eq!(
         titles(&launcher),
         [
-            "Install extension from folder…",
-            "Install extension from npm…",
-            "Install extension from Git…",
+            "Check for a Pane update",
+            // The authoring rows (ADR 0047, #222) ranked with the rest.
             "Create Extension…",
             "Import Extension…",
-            "Check for a Pane update",
-            // Pane's own row, listed after every command.
+            "Install extension from folder…",
+            "Install extension from Git…",
+            "Install extension from npm…",
+            // Pane's own row, ranked with the update rows by title (#199).
             "Settings…"
         ]
     );

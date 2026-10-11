@@ -58,6 +58,7 @@ pub mod system_icons;
 pub mod templates;
 mod threads;
 pub mod tray;
+mod typed_folder;
 mod util;
 #[cfg(windows)]
 mod windows_shell;
@@ -74,7 +75,7 @@ pub use game_mode::GameMode;
 pub use helpers::runner::{MAX_HELPER_INPUT, MAX_HELPER_OUTPUT};
 pub use host_settings::{
     BackgroundEffect, EscapeBehavior, HostSettings, MaterialPreference, NavigationBindings,
-    OpeningMonitor, PinnedLayout, Reopening, ThemePreference, WindowMode,
+    OpeningMonitor, PinnedLayout, Reopening, SearchSensitivity, ThemePreference, WindowMode,
 };
 #[doc(hidden)]
 pub use http::HttpLimits;
@@ -83,12 +84,12 @@ pub use launch::{LaunchRecord, LaunchSource, LaunchType};
 pub use launcher::clipboard_view;
 pub use launcher::search_files;
 pub use launcher::{
-    AliasOutcome, ApplicationUpdate, BuildFailure, CommandPreferences, CommandRegistration,
-    ComputedAnswer, CustomViewSnapshot, DISMISS_NOTICE, Development, ExtensionMark,
-    ExtensionOperation, FolderAsk, FormField, FormView, HotkeyOutcome, ItemAction, ItemActions,
-    Launcher, LauncherView, ListPresentation, LogNotice, MANAGE_EXTENSIONS, OpenSubmenu,
-    OperationKind, PackagePreferences, PinTarget, PreferenceField, PreferencesTarget, Presentation,
-    Question, QuickSlot, ResultAction, ResultActionItem, ResultActions, Row, RowKind,
+    AliasFlow, AliasOutcome, ApplicationUpdate, ArgumentFields, BuildFailure, CommandPreferences,
+    CommandRegistration, ComputedAnswer, CustomViewSnapshot, DISMISS_NOTICE, Development,
+    ExtensionMark, ExtensionOperation, FolderAsk, FormField, FormView, HotkeyOutcome, ItemAction,
+    ItemActions, Launcher, LauncherView, ListPresentation, LogNotice, MANAGE_EXTENSIONS,
+    OpenSubmenu, OperationKind, PackagePreferences, PinTarget, PreferenceField, PreferencesTarget,
+    Presentation, Question, QuickSlot, ResultAction, ResultActionItem, ResultActions, Row, RowKind,
     RowPresentation, Screen, Section, SelectedAction, SettingsTarget, SetupHeader, ShortcutCatalog,
     ShortcutCommand, ShortcutGroup, SlotChange, Status, SubmenuState, UNEXPECTED_QUIT, Unavailable,
     UnboundShortcut, UpdateHold, UpdateResult, UpdateResults, UpdateResultsAction, answer_sections,
@@ -97,10 +98,10 @@ pub use launcher::{
 pub use links::LinkOpener;
 pub use operations::{MAX_CALL_DEPTH, MAX_OPERATION_JSON};
 pub use packages::{
-    CommandMode, EXTENSION_API, InstalledPackage, ListedCommand, MANIFEST_FILE, MANIFEST_VERSION,
-    MAX_KEYWORDS, MAX_SCHEDULE_SECONDS, MIN_SCHEDULE_SECONDS, Manifest, ManifestCommand,
-    ManifestHelper, ManifestOperation, ManifestSchedule, PackageError, PackageIdentity,
-    RetainedData, SavedData,
+    CommandMatches, CommandMode, CommandWhen, EXTENSION_API, InstalledPackage, ListedCommand,
+    MANIFEST_FILE, MANIFEST_VERSION, MAX_KEYWORDS, MAX_SCHEDULE_SECONDS, MIN_SCHEDULE_SECONDS,
+    Manifest, ManifestCommand, ManifestHelper, ManifestOperation, ManifestSchedule, PackageError,
+    PackageIdentity, RetainedData, SavedData,
 };
 #[doc(hidden)]
 pub use pane_build::process_tree;

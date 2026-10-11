@@ -9,7 +9,9 @@ use std::time::Duration;
 
 use gpui::{Entity, Modifiers, Pixels, TestAppContext, VisualTestContext, px};
 use pane::LauncherWindow;
-use pane_core::{CommandRegistration, Launcher, PackageIdentity, Runtime, Screen};
+use pane_core::{
+    CommandMatches, CommandRegistration, CommandWhen, Launcher, PackageIdentity, Runtime, Screen,
+};
 
 #[path = "support/packages.rs"]
 mod packages;
@@ -42,6 +44,9 @@ fn command(title: &str, guest: &str) -> CommandRegistration {
         component,
         takes_query: false,
         search: false,
+        keywords: Vec::new(),
+        when: CommandWhen::Always,
+        matches: CommandMatches::Title,
     }
 }
 
