@@ -441,7 +441,10 @@ impl Launcher {
             } else {
                 // As its hotkey opens it: whatever Pane shows makes way,
                 // and the window is shown for it.
-                self.show_root(state, Some(opening.component.clone()));
+                self.show_root(
+                    state,
+                    Some((opening.component.clone(), opening.command.clone())),
+                );
                 state.view.status = Status::Running {
                     since: Instant::now(),
                 };

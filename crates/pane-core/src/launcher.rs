@@ -4330,8 +4330,10 @@ impl Launcher {
 
     /// Shows root search with an empty query: this build's commands, then
     /// the installed packages' commands, then the install row. Selects the
-    /// command with component `select` if given, else the first row.
-    /// Leaves the open command, and any form or designed view of it, for
+    /// command whose component and manifest command id `select` names, if
+    /// given — a component can serve several commands, so the component
+    /// alone does not name one — else the first row. Leaves the open
+    /// command, and any form or designed view of it, for
     /// another screen, which the caller then shows: the view is closed in
     /// the runtime, and replies for the old screen are discarded.
     fn leave_command(&self, state: &mut State) {
@@ -4343,7 +4345,7 @@ impl Launcher {
         state.next_screen();
     }
 
-    fn show_root(&self, state: &mut State, select: Option<PathBuf>) {
+    fn show_root(&self, state: &mut State, select: Option<(PathBuf, String)>) {
         // The choice of a collection's extensions goes with the screen it
         // was shown on (#308), and the revision it holds with it.
         state.choice = None;
@@ -4371,10 +4373,11 @@ impl Launcher {
         state.published = String::new();
         let (rows, entries) = root_rows(state, "");
         let selected = select
-            .and_then(|component| {
-                entries.iter().position(
-                    |entry| matches!(entry, Entry::Open(opening) if opening.component == component),
-                )
+            .and_then(|(component, command)| {
+                entries.iter().position(|entry| {
+                    matches!(entry, Entry::Open(opening)
+                        if opening.component == component && opening.command == command)
+                })
             })
             .or_else(|| aliases::first_choice(&entries));
         // Root search shown fresh over a query it had: the query is

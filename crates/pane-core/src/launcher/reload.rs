@@ -361,7 +361,10 @@ impl Launcher {
         // of it: the old generation ended with the replacement above.
         self.stage_handoff(identity, &installed, handoff);
         let mut state = self.lock();
-        let first = installed.commands().first().map(|c| c.component.clone());
+        let first = installed
+            .commands()
+            .first()
+            .map(|c| (c.component.clone(), c.manifest_id().to_owned()));
         // The command screen that was on display is reopened on the new
         // code (ADR 0041); the screen leaves, its search stopping and its
         // form and view closing, until the reopen opens the command again
