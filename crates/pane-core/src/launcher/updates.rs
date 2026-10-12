@@ -1303,7 +1303,10 @@ impl Updates {
                     launcher.put_installed(&mut state, dependency);
                 }
                 let package = outcome.package;
-                let first = package.commands().first().map(|c| c.component.clone());
+                let first = package
+                    .commands()
+                    .first()
+                    .map(|c| (c.component.clone(), c.manifest_id().to_owned()));
                 let replaced_is_open = launcher.put_installed(&mut state, package);
                 if replaced_is_open {
                     // A command of the replaced copy opened in the moment

@@ -933,7 +933,10 @@ impl Launcher {
                     let develop_after = state
                         .develop_after
                         .take_if(|identity| *identity == package.identity);
-                    let first = package.commands().first().map(|c| c.component.clone());
+                    let first = package
+                        .commands()
+                        .first()
+                        .map(|c| (c.component.clone(), c.manifest_id().to_owned()));
                     let was_open = self.put_installed(&mut state, package);
                     // A command screen of the replaced copy that was on
                     // display is reopened on the new code, as a reload

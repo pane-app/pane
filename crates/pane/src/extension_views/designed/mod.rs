@@ -209,6 +209,7 @@ impl LauncherWindow {
         let heading = (!title.is_empty()).then(|| {
             div()
                 .id("designed-title")
+                .debug_selector(|| "designed-title".into())
                 .flex_none()
                 .h(px(28.))
                 .flex()
