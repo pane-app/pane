@@ -721,7 +721,6 @@ fn ci_lints() -> Result<(), String> {
         .args([
             "crates/pane-core/templates/rust/command/list.rs",
             "crates/pane-core/templates/rust/command/detail.rs",
-            "crates/pane-core/templates/rust/command/form.rs",
             "crates/pane-core/templates/rust/command/no-view.rs",
         ]))?;
     // The committed pane.json schema is the one Pane's manifest types

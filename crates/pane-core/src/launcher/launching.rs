@@ -99,15 +99,26 @@ impl Launcher {
         opening: Opening,
         data: Option<PackageData>,
     ) {
+        // [diag-ff6] Diagnostic scaffolding for the smoke's launch stall;
+        // fix-forward-7 removes it with the root fix.
+        crate::diagnostic!(
+            "[diag-ff6] launch_opening: command={} designed={} no_view={}",
+            opening.command,
+            opening.designed,
+            opening.no_view
+        );
         if !self.waiting_gate(epoch, &opening) {
+            crate::diagnostic!("[diag-ff6] launch_opening: refused by the waiting gate");
             return;
         }
         // The setup gate (#143, see `setup`): a command whose required
         // preferences are unset shows the Setup screen instead, which
         // launches it again from here once submitted.
         let Some(opening) = self.setup_gate(epoch, opening) else {
+            crate::diagnostic!("[diag-ff6] launch_opening: taken by the setup gate");
             return;
         };
+        crate::diagnostic!("[diag-ff6] launch_opening: past the gates");
         self.launch_with_arguments(epoch, opening, data).await
     }
 
