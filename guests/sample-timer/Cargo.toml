@@ -1,0 +1,17 @@
+# Pane's timer sample in Rust: a clock whose screen changes by itself, its
+# caption arriving as pending data (`refresh-after-ms`, #236).
+[package]
+name = "sample-timer"
+version = "0.1.0"
+edition.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+pane-extension.workspace = true
+# The caption's arrival waits on the guest's own clock, as work from a
+# service would.
+wasip3 = { version = "=0.9.0", default-features = false }

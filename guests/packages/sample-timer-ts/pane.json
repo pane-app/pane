@@ -1,0 +1,15 @@
+{
+  "manifestVersion": 1,
+  "title": "TypeScript timer sample",
+  "version": "0.1.0",
+  "apiVersion": "0.1",
+  "commands": [
+    {
+      "id": "sample",
+      "title": "TypeScript timer sample",
+      "subtitle": "A clock whose screen refreshes itself",
+      "component": "sample_timer_ts.wasm",
+      "mode": "designed"
+    }
+  ]
+}

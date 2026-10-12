@@ -5,10 +5,9 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use futures::executor::block_on;
-use pane_core::{
-    CallError, CommandRegistration, Key, Launcher, Point, Runtime, Screen, Status, Unavailable,
-    ViewEvent,
-};
+use std::future::Future;
+
+use pane_core::{CallError, CommandRegistration, Launcher, Runtime, Screen, Status};
 
 #[path = "support/platforms.rs"]
 mod platforms;
@@ -31,7 +30,6 @@ fn command(id: &str, component: PathBuf) -> CommandRegistration {
         subtitle: None,
         component,
         takes_query: false,
-        search: false,
         keywords: Vec::new(),
         when: pane_core::CommandWhen::Always,
         matches: pane_core::CommandMatches::Title,
@@ -183,243 +181,195 @@ fn going_back_while_an_action_runs_discards_its_answer() {
     assert_eq!((view.query(), &view.status), (Some(""), &Status::Idle));
 }
 
-/// A launcher with the Rust sample's form ("Greet someone") opened.
-fn sample_form() -> Launcher {
-    let launcher = launcher(vec![command("sample", guest("sample_rust"))]);
-    block_on(launcher.activate_selected());
-    launcher.select(4);
-    block_on(launcher.activate_selected());
+/// A launcher with an assembled package installed from
+/// `target/guests/packages`, and the data folder it was installed into,
+/// which must outlive it. Only an installed command can be launched, so
+/// the designed views these tests open come from packages.
+struct Installed {
+    _data: tempfile::TempDir,
+    launcher: Launcher,
+}
+
+/// A launcher with the Rust sample's package installed, at root search.
+fn sample_installed(runtime: &Runtime) -> Installed {
+    let data = tempfile::tempdir().unwrap();
+    let launcher =
+        Launcher::with_packages(Ok(runtime.clone()), vec![], data.path().join("extensions"));
+    let folder =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/guests/packages/sample-rust");
     assert!(
-        matches!(launcher.view().screen, Screen::Form(_)),
+        folder.exists(),
+        "{} is missing; run `cargo xtask guests`",
+        folder.display()
+    );
+    block_on(launcher.install_package(&folder));
+    assert!(matches!(launcher.view().status, Status::Result(_)));
+    Installed {
+        _data: data,
+        launcher,
+    }
+}
+
+/// A launcher over `runtime` with the Rust sample's color command (a
+/// designed view) opened.
+fn sample_color_view(runtime: &Runtime) -> Installed {
+    let installed = sample_installed(runtime);
+    let launcher = &installed.launcher;
+    open_color_command(launcher);
+    assert!(
+        matches!(launcher.view().screen, Screen::DesignedView(_)),
         "{:?}",
         launcher.view().screen
     );
-    launcher
+    installed
 }
 
-fn field_errors(launcher: &Launcher) -> Vec<Option<String>> {
-    let view = launcher.view();
-    let form = view.form().expect("a form");
-    form.fields
+/// Opens the sample's color command from root search.
+fn open_color_command(launcher: &Launcher) {
+    block_on(launcher.set_query("color picker"));
+    let index = launcher
+        .view()
+        .rows
         .iter()
-        .map(|field| field.error.clone())
-        .collect()
+        .position(|row| row.id.ends_with("#color"))
+        .expect("the color command is listed");
+    launcher.select(index);
+    block_on(launcher.activate_selected());
 }
 
-#[test]
-fn back_from_a_form_returns_to_the_command_with_its_item_selected() {
-    let launcher = sample_form();
-
-    launcher.back();
-
-    let view = launcher.view();
-    assert_eq!(
-        (view.screen, view.title.as_str(), view.selected),
-        (Screen::Command, "Rust sample", Some(4))
-    );
-    launcher.back();
-    assert!(
-        matches!(launcher.view().screen, Screen::Root { .. }),
-        "{:?}",
-        launcher.view().screen
-    );
-}
-
-#[test]
-fn editing_an_invalid_field_clears_its_error() {
-    let launcher = sample_form();
-    block_on(launcher.submit_form());
-    assert_eq!(field_errors(&launcher), [Some("Enter a name".into()), None]);
-
-    launcher.set_field_value("name", "A");
-
-    assert_eq!(field_errors(&launcher), [None, None]);
-}
-
-#[test]
-fn a_choice_the_form_does_not_offer_is_ignored() {
-    let launcher = sample_form();
-
-    launcher.set_field_value("greeting", "howdy");
-    launcher.set_field_value("missing", "value");
-
-    let view = launcher.view();
-    let values: Vec<&str> = view
-        .form()
-        .unwrap()
-        .fields
+/// A launcher over `runtime` with the faulty fixture's counting view
+/// opened: its component installed as a package whose "counter" command
+/// is the counting designed view.
+fn faulty_view(runtime: &Runtime) -> Installed {
+    let data = tempfile::tempdir().unwrap();
+    let launcher =
+        Launcher::with_packages(Ok(runtime.clone()), vec![], data.path().join("extensions"));
+    let component = guest("faulty");
+    let source = data.path().join("faulty");
+    std::fs::create_dir_all(&source).unwrap();
+    std::fs::write(
+        source.join("pane.json"),
+        r#"{"manifestVersion":1,"title":"Faulty","version":"0.1.0","apiVersion":"0.1",
+            "commands":[{"id":"counter","title":"Faulty counter",
+            "subtitle":"A canvas counting the events it handled",
+            "component":"faulty.wasm","mode":"designed"}]}"#,
+    )
+    .unwrap();
+    std::fs::copy(&component, source.join("faulty.wasm")).unwrap();
+    block_on(launcher.install_package(&source));
+    assert!(matches!(launcher.view().status, Status::Result(_)));
+    block_on(launcher.set_query("counter"));
+    let index = launcher
+        .view()
+        .rows
         .iter()
-        .map(|field| field.value.as_str())
-        .collect();
-    assert_eq!(values, ["", "hello"]);
-}
-
-#[test]
-fn a_form_level_error_is_shown_without_marking_a_field() {
-    let launcher = launcher(vec![command("faulty", guest("faulty"))]);
-    open_faulty_item(&launcher, "form");
-    block_on(launcher.activate_selected());
-
-    block_on(launcher.submit_form());
-
-    assert_eq!(error(&launcher), "the guest refused the form");
-    assert_eq!(field_errors(&launcher), [None]);
-}
-
-#[test]
-fn going_back_while_a_form_is_submitted_discards_its_answer() {
-    let launcher = sample_form();
-    launcher.set_field_value("name", "Ada");
-
-    let pending = launcher.submit_form();
-    assert!(matches!(launcher.view().status, Status::Running { .. }));
-    launcher.back();
-    block_on(pending);
-
-    let view = launcher.view();
-    assert_eq!((view.screen, view.status), (Screen::Command, Status::Idle));
-}
-
-#[test]
-fn submitting_again_while_a_submission_is_pending_is_ignored() {
-    let launcher = sample_form();
-    let first = launcher.submit_form();
-    launcher.set_field_value("name", "Ada");
-
-    let second = launcher.submit_form();
-    block_on(second);
-    assert!(matches!(launcher.view().status, Status::Running { .. }));
-    block_on(first);
-
-    // Only the empty submission ran. Its rejection reports the name, but
-    // does not mark the field, which the user has edited since.
-    assert_eq!(error(&launcher), "Name: Enter a name");
-    assert_eq!(field_errors(&launcher), [None, None]);
-    block_on(launcher.submit_form());
-    assert_eq!(
-        launcher.view().status,
-        Status::Result("Hello, Ada, from the Rust guest".into())
-    );
-}
-
-#[test]
-fn submitting_outside_a_form_does_nothing() {
-    let launcher = launcher(vec![command("sample", guest("sample_rust"))]);
-    block_on(launcher.activate_selected());
-
-    block_on(launcher.submit_form());
-
-    assert_eq!(launcher.view().status, Status::Idle);
-}
-
-#[test]
-fn selecting_a_row_directly_ignores_indexes_past_the_list() {
-    let launcher = launcher(vec![command("sample", guest("sample_rust"))]);
-    block_on(launcher.activate_selected());
-
-    launcher.select(1);
-    assert_eq!(launcher.view().selected, Some(1));
-    launcher.select(8);
-    assert_eq!(launcher.view().selected, Some(1));
-}
-
-#[test]
-fn an_unavailable_form_explains_itself_instead_of_opening() {
-    let launcher = launcher(vec![command("faulty", guest("faulty"))]);
-    // The fixture's "nowhere" item has a form and declares no operating
-    // system at all, so it is unavailable wherever the test runs.
-    open_faulty_item(&launcher, "nowhere");
-    let view = launcher.view();
-    let reason = view.rows[view.selected.unwrap()].unavailable.clone();
-    let reason = reason.expect("the row says why it is unavailable");
-    assert_eq!(
-        reason,
-        Unavailable::OnThisSystem(platforms::nowhere("this action"))
-    );
-    let reason = reason.reason().to_owned();
-
-    block_on(launcher.activate_selected());
-
-    let view = launcher.view();
-    assert_eq!(
-        (view.screen, view.status),
-        (Screen::Command, Status::Error(reason))
-    );
-    launcher.select(0);
-    block_on(launcher.activate_selected());
-    assert_eq!(shown(&launcher), Status::Result("fine".into()));
-}
-
-/// A launcher over `runtime` with the Rust sample's color picker opened.
-fn sample_color_view(runtime: &Runtime) -> Launcher {
-    let launcher = Launcher::new(
-        Ok(runtime.clone()),
-        vec![command("sample", guest("sample_rust"))],
-    );
-    block_on(launcher.activate_selected());
-    launcher.select(5);
+        .position(|row| row.id.ends_with("#counter"))
+        .expect("the counter command is listed");
+    launcher.select(index);
     block_on(launcher.activate_selected());
     assert!(
-        matches!(launcher.view().screen, Screen::CustomView(_)),
+        matches!(launcher.view().screen, Screen::DesignedView(_)),
         "{:?}",
         launcher.view().screen
     );
-    launcher
+    assert_eq!(view_value(&launcher), "0 events");
+    Installed {
+        _data: data,
+        launcher,
+    }
 }
 
-/// A launcher over `runtime` with the faulty fixture's counting view opened.
-fn faulty_view(runtime: &Runtime) -> Launcher {
-    let launcher = Launcher::new(
-        Ok(runtime.clone()),
-        vec![command("faulty", guest("faulty"))],
-    );
-    open_faulty_item(&launcher, "view");
-    block_on(launcher.activate_selected());
-    assert!(
-        matches!(launcher.view().screen, Screen::CustomView(_)),
-        "{:?}",
-        launcher.view().screen
-    );
-    launcher
-}
-
+/// The open designed view's value: what its canvas says for assistive
+/// technology.
 fn view_value(launcher: &Launcher) -> String {
     let view = launcher.view();
-    view.custom_view()
-        .expect("a view is open")
-        .frame
-        .value
-        .clone()
+    let Screen::DesignedView(view) = &view.screen else {
+        panic!("a designed view is open, not {:?}", view.screen)
+    };
+    fn value(node: &pane_core::Node) -> Option<String> {
+        match &node.kind {
+            pane_core::NodeKind::Canvas(canvas) => canvas.a11y.value.clone(),
+            _ => node.children.iter().find_map(value),
+        }
+    }
+    value(&view.tree.root).expect("the view draws a canvas")
 }
 
-const RIGHT: ViewEvent = ViewEvent::Key(Key::Right);
-const ORIGIN: Point = Point { x: 0, y: 0 };
+/// The open designed view's canvas node: its key, its key handler, and the
+/// render whose tree is drawn.
+fn canvas_of(launcher: &Launcher) -> (String, Option<u32>, u64) {
+    let view = launcher.view();
+    let Screen::DesignedView(view) = &view.screen else {
+        panic!("a designed view is open, not {:?}", view.screen)
+    };
+    fn of(node: &pane_core::Node) -> Option<(String, Option<u32>)> {
+        match &node.kind {
+            pane_core::NodeKind::Canvas(_) => {
+                Some((node.key.clone().unwrap_or_default(), node.on_key))
+            }
+            _ => node.children.iter().find_map(of),
+        }
+    }
+    let (key, on_key) = of(&view.tree.root).expect("the view draws a canvas");
+    (key, on_key, view.render)
+}
+
+/// Sends a key event to the open designed view's canvas, pressed as `key`
+/// spells it.
+fn send_key(launcher: &Launcher, key: &str) {
+    block_on(send_right_like(launcher, key));
+}
+
+/// Sends a key event to the open designed view's canvas, unawaited.
+fn send_right_like(
+    launcher: &Launcher,
+    key: &str,
+) -> std::pin::Pin<Box<dyn Future<Output = ()> + Send>> {
+    let (canvas, on_key, render) = canvas_of(launcher);
+    let callback = on_key.expect("the canvas takes keys");
+    let payload = format!("{{\"key\":\"{key}\"}}");
+    let pending = launcher.send_designed_seen(
+        pane_core::DesignedHandler::Key,
+        callback,
+        (!canvas.is_empty()).then_some(canvas.as_str()),
+        Some(render),
+        payload,
+    );
+    Box::pin(pending)
+}
 
 #[test]
-fn back_from_a_custom_view_closes_it_and_returns_to_the_command() {
+fn back_from_a_designed_view_closes_it_and_leaves_the_command() {
     let runtime = Runtime::start().unwrap();
-    let launcher = sample_color_view(&runtime);
-    assert_eq!(block_on(runtime.view_count()), 1);
+    let installed = sample_color_view(&runtime);
+    let launcher = &installed.launcher;
+    assert_eq!(block_on(runtime.designed_view_count()), 1);
 
     launcher.back();
 
     let view = launcher.view();
-    assert_eq!(
-        (view.screen, view.selected, view.status),
-        (Screen::Command, Some(5), Status::Idle)
+    assert!(
+        matches!(view.screen, Screen::Root { .. }),
+        "{:?}",
+        view.screen
     );
-    assert_eq!(block_on(runtime.view_count()), 0);
+    assert_eq!(view.status, Status::Idle);
+    assert_eq!(block_on(runtime.designed_view_count()), 0);
 }
 
 #[test]
 fn a_view_that_opens_after_the_user_left_is_closed_again() {
     let runtime = Runtime::start().unwrap();
-    let launcher = Launcher::new(
-        Ok(runtime.clone()),
-        vec![command("sample", guest("sample_rust"))],
-    );
-    block_on(launcher.activate_selected());
-    launcher.select(5);
+    let installed = sample_installed(&runtime);
+    let launcher = &installed.launcher;
+    block_on(launcher.set_query("color picker"));
+    let index = launcher
+        .view()
+        .rows
+        .iter()
+        .position(|row| row.id.ends_with("#color"))
+        .unwrap();
+    launcher.select(index);
 
     let opening = launcher.activate_selected();
     assert!(matches!(launcher.view().status, Status::Running { .. }));
@@ -431,194 +381,132 @@ fn a_view_that_opens_after_the_user_left_is_closed_again() {
         "{:?}",
         launcher.view().screen
     );
-    assert_eq!(block_on(runtime.view_count()), 0);
+    assert_eq!(block_on(runtime.designed_view_count()), 0);
 }
 
 #[test]
 fn an_event_answer_arriving_after_back_is_discarded() {
     let runtime = Runtime::start().unwrap();
-    let launcher = sample_color_view(&runtime);
+    let installed = sample_color_view(&runtime);
+    let launcher = &installed.launcher;
 
-    let pending = launcher.send_view_event(RIGHT);
+    let pending = send_right_like(launcher, "right");
     launcher.back();
     block_on(pending);
 
     let view = launcher.view();
-    assert_eq!((view.screen, view.status), (Screen::Command, Status::Idle));
-    assert_eq!(block_on(runtime.view_count()), 0);
+    assert!(
+        matches!(view.screen, Screen::Root { .. }),
+        "{:?}",
+        view.screen
+    );
+    assert_eq!(view.status, Status::Idle);
+    assert_eq!(block_on(runtime.designed_view_count()), 0);
     // Events sent with no view open go nowhere.
-    block_on(launcher.send_view_event(RIGHT));
+    send_key(launcher, "right");
     assert_eq!(launcher.view().status, Status::Idle);
 }
 
 #[test]
 fn a_reopened_view_does_not_show_the_closed_views_answers() {
     let runtime = Runtime::start().unwrap();
-    let launcher = sample_color_view(&runtime);
+    let installed = sample_color_view(&runtime);
+    let launcher = &installed.launcher;
 
-    let pending = launcher.send_view_event(RIGHT);
+    let pending = send_right_like(launcher, "right");
     launcher.back();
-    block_on(launcher.activate_selected());
+    open_color_command(launcher);
     block_on(pending);
 
-    assert_eq!(view_value(&launcher), "Blue, #1E88E5");
-    assert_eq!(block_on(runtime.view_count()), 1);
+    assert_eq!(view_value(launcher), "Blue, #1E88E5");
+    assert_eq!(block_on(runtime.designed_view_count()), 1);
 }
 
 #[test]
 fn an_older_answer_arriving_late_does_not_replace_a_newer_one() {
     let runtime = Runtime::start().unwrap();
-    let launcher = sample_color_view(&runtime);
+    let installed = sample_color_view(&runtime);
+    let launcher = &installed.launcher;
 
-    let first = launcher.send_view_event(RIGHT);
-    let second = launcher.send_view_event(RIGHT);
+    let first = send_right_like(launcher, "right");
+    let second = send_right_like(launcher, "right");
     block_on(second);
     block_on(first);
 
-    assert_eq!(view_value(&launcher), "Pink, #D81B60");
+    assert_eq!(view_value(launcher), "Pink, #D81B60");
 }
 
 #[test]
-fn pointer_moves_and_releases_are_sent_only_while_pressed() {
+fn a_canvas_over_the_limits_is_an_error_and_the_view_stays_usable() {
     let runtime = Runtime::start().unwrap();
-    let launcher = faulty_view(&runtime);
-    let send = |event| block_on(launcher.send_view_event(event));
-
-    send(ViewEvent::PointerMove(ORIGIN));
-    send(ViewEvent::PointerUp(ORIGIN));
-    assert_eq!(view_value(&launcher), "0 events");
-    send(ViewEvent::PointerDown(ORIGIN));
-    send(ViewEvent::PointerMove(ORIGIN));
-    send(ViewEvent::PointerUp(ORIGIN));
-    assert_eq!(view_value(&launcher), "3 events");
-    send(ViewEvent::PointerMove(ORIGIN));
-    assert_eq!(view_value(&launcher), "3 events");
-}
-
-#[test]
-fn a_frame_over_the_limits_is_an_error_and_the_view_stays_usable() {
-    let runtime = Runtime::start().unwrap();
-    let launcher = faulty_view(&runtime);
-    // Down, Home and End make the fixture draw too many shapes, too long a
-    // text and too wide a frame.
+    let installed = faulty_view(&runtime);
+    let launcher = &installed.launcher;
+    // Down, Home and End make the fixture draw too many operations, too
+    // long a text and too much inline image data.
     let cases = [
         (
-            Key::Down,
-            "the frame has 4097 shapes; at most 4096 are drawn",
+            "down",
+            "a canvas of the view has 20001 operations; at most 20000 are drawn",
         ),
         (
-            Key::Home,
-            "a text of the frame has 257 characters; at most 256 are drawn",
+            "home",
+            "a text of the canvas has 65537 characters; at most 65536 are drawn",
         ),
         (
-            Key::End,
-            "the frame is 4097 x 20 pixels; at most 4096 x 4096 are drawn",
+            "end",
+            "an image of the view holds 1048577 bytes of inline data; at most 1048576 are read",
         ),
     ];
     for (key, problem) in cases {
-        block_on(launcher.send_view_event(ViewEvent::Key(key)));
+        send_key(launcher, key);
 
         let view = launcher.view();
-        assert!(matches!(view.screen, Screen::CustomView(_)), "{key:?}");
+        assert!(
+            matches!(view.screen, Screen::DesignedView(_)),
+            "{key:?}: {:?}",
+            view.screen
+        );
         assert_eq!(
-            error(&launcher),
+            error(launcher),
             format!("The extension reported an error: {problem}")
         );
         // The last good drawing stays.
-        assert_eq!(view_value(&launcher), "0 events");
+        assert_eq!(view_value(launcher), "0 events");
     }
 
-    block_on(launcher.send_view_event(ViewEvent::Key(Key::Up)));
+    send_key(launcher, "up");
     assert_eq!(launcher.view().status, Status::Idle);
-    assert_eq!(view_value(&launcher), "4 events");
-}
-
-#[test]
-fn the_launcher_says_whether_the_pointer_is_held_over_the_view() {
-    let runtime = Runtime::start().unwrap();
-    let launcher = faulty_view(&runtime);
-    assert!(!launcher.pointer_held());
-
-    block_on(launcher.send_view_event(ViewEvent::PointerDown(ORIGIN)));
-    assert!(launcher.pointer_held());
-    block_on(launcher.send_view_event(ViewEvent::PointerUp(ORIGIN)));
-    assert!(!launcher.pointer_held());
-}
-
-#[test]
-fn a_drag_sends_only_the_latest_move_while_one_is_being_handled() {
-    let runtime = Runtime::start().unwrap();
-    let launcher = faulty_view(&runtime);
-    block_on(launcher.send_view_event(ViewEvent::PointerDown(ORIGIN)));
-
-    // The first move is on its way; the next two wait, and only the later
-    // one is sent once the first is answered.
-    let moves: Vec<_> = (1..=3)
-        .map(|x| launcher.send_view_event(ViewEvent::PointerMove(Point { x, y: 0 })))
-        .collect();
-    for pending in moves.into_iter().rev() {
-        block_on(pending);
-    }
-
-    assert_eq!(view_value(&launcher), "3 events");
-}
-
-#[test]
-fn a_coalesced_move_is_sent_before_the_release_that_follows_it() {
-    let runtime = Runtime::start().unwrap();
-    let launcher = sample_color_view(&runtime);
-    let send = |event| launcher.send_view_event(event);
-    block_on(send(ViewEvent::PointerDown(Point { x: 10, y: 10 })));
-
-    let first = send(ViewEvent::PointerMove(Point { x: 80, y: 80 }));
-    let second = send(ViewEvent::PointerMove(Point { x: 45, y: 10 }));
-    let released = send(ViewEvent::PointerUp(Point { x: 45, y: 10 }));
-    block_on(released);
-    block_on(second);
-    block_on(first);
-
-    // The waiting move reached the guest before the release: its swatch,
-    // not the first move's, is chosen.
-    assert_eq!(view_value(&launcher), "Light orange, #FFCC80");
-    assert!(!launcher.pointer_held());
-}
-
-#[test]
-fn an_error_from_a_view_is_shown_and_the_view_stays_open() {
-    let runtime = Runtime::start().unwrap();
-    let launcher = faulty_view(&runtime);
-
-    block_on(launcher.send_view_event(ViewEvent::Key(Key::Left)));
-
-    assert!(
-        matches!(launcher.view().screen, Screen::CustomView(_)),
-        "{:?}",
-        launcher.view().screen
-    );
-    assert_eq!(
-        error(&launcher),
-        "The extension reported an error: the view refused"
-    );
-    // The next handled event clears the error.
-    block_on(launcher.send_view_event(ViewEvent::Key(Key::Up)));
-    assert_eq!(launcher.view().status, Status::Idle);
-    assert_eq!(view_value(&launcher), "1 events");
+    assert_eq!(view_value(launcher), "4 events");
 }
 
 #[test]
 fn a_crash_in_a_view_closes_it_and_the_command_keeps_working() {
     let runtime = Runtime::start().unwrap();
-    let launcher = faulty_view(&runtime);
+    let installed = faulty_view(&runtime);
+    let launcher = &installed.launcher;
 
-    block_on(launcher.send_view_event(RIGHT));
+    // "right" makes the fixture trap.
+    send_key(launcher, "right");
 
     let view = launcher.view();
-    assert_eq!(view.screen, Screen::Command);
-    assert!(error(&launcher).contains("crashed"), "{:?}", view.status);
-    assert_eq!(block_on(runtime.view_count()), 0);
-    launcher.select(0);
+    assert!(
+        matches!(view.screen, Screen::Root { .. }),
+        "{:?}",
+        view.screen
+    );
+    assert!(error(launcher).contains("crashed"), "{:?}", view.status);
+    assert_eq!(block_on(runtime.designed_view_count()), 0);
+    // The package still runs: the counter command opens again.
+    block_on(launcher.set_query("counter"));
+    let index = launcher
+        .view()
+        .rows
+        .iter()
+        .position(|row| row.id.ends_with("#counter"))
+        .unwrap();
+    launcher.select(index);
     block_on(launcher.activate_selected());
-    assert_eq!(shown(&launcher), Status::Result("fine".into()));
+    assert_eq!(view_value(launcher), "0 events");
 }
 
 /// The pre-release extension API 0.1 changes shape between slices without a
@@ -676,7 +564,8 @@ fn a_view_the_guest_refuses_to_open_is_an_error() {
 #[test]
 fn a_package_preview_closes_an_open_view() {
     let runtime = Runtime::start().unwrap();
-    let launcher = sample_color_view(&runtime);
+    let installed = sample_color_view(&runtime);
+    let launcher = &installed.launcher;
 
     block_on(launcher.preview_package(std::path::Path::new("no-such-folder")));
 
@@ -686,21 +575,39 @@ fn a_package_preview_closes_an_open_view() {
         "{:?}",
         view.screen
     );
-    assert_eq!(block_on(runtime.view_count()), 0);
+    assert_eq!(block_on(runtime.designed_view_count()), 0);
 }
 
 #[test]
 fn replacing_a_components_code_closes_its_views() {
     let runtime = Runtime::start().unwrap();
-    let launcher = sample_color_view(&runtime);
+    let installed = sample_color_view(&runtime);
+    let launcher = &installed.launcher;
 
-    runtime.forget([guest("sample_rust")]);
-    block_on(launcher.send_view_event(RIGHT));
+    // The installed copy's component, which is the path the runtime
+    // holds: forgetting the built one forgets nothing.
+    let component = installed
+        .launcher
+        .packages()
+        .iter()
+        .find(|package| package.title() == "Rust sample")
+        .expect("the sample is installed")
+        .commands()
+        .first()
+        .expect("the sample has a command")
+        .component
+        .clone();
+    runtime.forget([component]);
+    send_key(launcher, "right");
 
     let view = launcher.view();
-    assert_eq!(view.screen, Screen::Command);
-    assert_eq!(error(&launcher), "The extension's view is no longer open");
-    assert_eq!(block_on(runtime.view_count()), 0);
+    assert!(
+        matches!(view.screen, Screen::Root { .. }),
+        "{:?}",
+        view.screen
+    );
+    assert_eq!(error(launcher), "The extension's view is no longer open");
+    assert_eq!(block_on(runtime.designed_view_count()), 0);
 }
 
 #[test]

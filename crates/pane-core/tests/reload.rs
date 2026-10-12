@@ -10,7 +10,7 @@ use std::future::Future;
 use std::path::{Path, PathBuf};
 
 use futures::executor::block_on;
-use pane_core::{Key, Launcher, PackageIdentity, Runtime, Screen, Status, ViewEvent};
+use pane_core::{Launcher, PackageIdentity, Runtime, Screen, Status};
 use tempfile::TempDir;
 
 #[path = "support/feedback.rs"]
@@ -37,7 +37,10 @@ fn package(folder: &Path, title: &str, name: &str) -> PathBuf {
   "manifestVersion": 1,
   "title": "{title}",
   "apiVersion": "0.1",
-  "commands": [{{ "id": "open", "title": "Open {title}", "component": "command.wasm" }}]
+  "commands": [
+    {{ "id": "open", "title": "Open {title}", "component": "command.wasm" }},
+    {{ "id": "color", "title": "{title} color picker", "component": "command.wasm", "mode": "designed" }}
+  ]
 }}"#
         ),
     )
@@ -437,24 +440,54 @@ fn a_disabled_package_is_not_reloaded() {
     );
 }
 
-/// Opens the color picker of the sample command titled `command` and
-/// presses Right, which chooses the next color.
+/// Opens the color command of the package titled `command` and presses
+/// Right, which chooses the next color.
 fn open_color(launcher: &Launcher, command: &str) {
     open(launcher, command);
-    select_title(launcher, "Choose a color");
+    select_title(launcher, "color picker");
     block_on(launcher.activate_selected());
-    assert!(matches!(launcher.view().screen, Screen::CustomView(_)));
-    block_on(launcher.send_view_event(ViewEvent::Key(Key::Right)));
+    assert!(matches!(launcher.view().screen, Screen::DesignedView(_)));
+    send_right(launcher);
 }
 
+/// The open color view's value: what its canvas says for assistive
+/// technology.
 fn color(launcher: &Launcher) -> String {
-    launcher
-        .view()
-        .custom_view()
-        .expect("a view is open")
-        .frame
-        .value
-        .clone()
+    let view = launcher.view();
+    let Screen::DesignedView(view) = &view.screen else {
+        panic!("a designed view is open, not {:?}", view.screen)
+    };
+    fn value(node: &pane_core::Node) -> Option<String> {
+        match &node.kind {
+            pane_core::NodeKind::Canvas(canvas) => canvas.a11y.value.clone(),
+            _ => node.children.iter().find_map(value),
+        }
+    }
+    value(&view.tree.root).expect("the view draws a canvas")
+}
+
+/// Sends a right-arrow key event to the open color view's canvas.
+fn send_right(launcher: &Launcher) {
+    let view = launcher.view();
+    let Screen::DesignedView(view) = &view.screen else {
+        panic!("a designed view is open, not {:?}", view.screen)
+    };
+    fn of(node: &pane_core::Node) -> Option<(String, Option<u32>)> {
+        match &node.kind {
+            pane_core::NodeKind::Canvas(_) => {
+                Some((node.key.clone().unwrap_or_default(), node.on_key))
+            }
+            _ => node.children.iter().find_map(of),
+        }
+    }
+    let (key, on_key) = of(&view.tree.root).expect("the view draws a canvas");
+    block_on(launcher.send_designed_seen(
+        pane_core::DesignedHandler::Key,
+        on_key.expect("the canvas takes keys"),
+        (!key.is_empty()).then_some(key.as_str()),
+        Some(view.render),
+        r#"{"key":"right"}"#.into(),
+    ));
 }
 
 #[test]
@@ -474,12 +507,12 @@ fn reloading_one_package_leaves_another_running_with_its_state() {
 
     // Still open, with the color chosen before, and still answering.
     let view = launcher.view();
-    assert!(matches!(view.screen, Screen::CustomView(_)));
+    assert!(matches!(view.screen, Screen::DesignedView(_)));
     assert_eq!(view.status, Status::Result("Reloaded Dev".into()));
     assert_eq!(color(&launcher), chosen);
-    block_on(launcher.send_view_event(ViewEvent::Key(Key::Right)));
+    send_right(&launcher);
     assert_ne!(color(&launcher), chosen);
-    assert_eq!(block_on(runtime.view_count()), 1);
+    assert_eq!(block_on(runtime.designed_view_count()), 1);
     assert_eq!(
         run(&launcher, "Open Dev", "Say hello"),
         Status::Result("Hello from the TypeScript guest".into())
@@ -494,7 +527,7 @@ fn reloading_reopens_the_commands_root_view_not_the_one_it_pushed() {
     let folder = package(&dirs.source("dev"), "Dev", "sample_rust");
     block_on(launcher.install_package(&folder));
     open_color(&launcher, "Open Dev");
-    assert_eq!(block_on(runtime.view_count()), 1);
+    assert_eq!(block_on(runtime.designed_view_count()), 1);
 
     rebuild(&folder, "sample_js");
     block_on(launcher.reload(&PackageIdentity::local(&folder).unwrap()));
@@ -506,19 +539,9 @@ fn reloading_reopens_the_commands_root_view_not_the_one_it_pushed() {
     let view = launcher.view();
     assert_eq!(view.screen, Screen::Command);
     assert_eq!(view.status, Status::Result("Reloaded Dev".into()));
-    assert_eq!(view.title, "JavaScript sample");
-    assert_eq!(block_on(runtime.view_count()), 0);
-    // The reopened command is the new code's: its items are listed.
-    assert!(
-        titles(&launcher)
-            .iter()
-            .any(|title| title.starts_with("Say hello"))
-    );
-    // The pushed view can be opened again: the command answers.
-    open_color(&launcher, "Open Dev");
-    let chosen = color(&launcher);
-    block_on(launcher.send_view_event(ViewEvent::Key(Key::Right)));
-    assert_ne!(color(&launcher), chosen);
+    assert_eq!(view.rows[view.selected.unwrap()].title, "Open Dev");
+    assert_eq!(block_on(runtime.designed_view_count()), 0);
+    assert_eq!(open(&launcher, "Open Dev"), "JavaScript sample");
 }
 
 #[test]

@@ -127,8 +127,8 @@ fn row(
         (None, Some(mode), _) => Entry::Open(Opening {
             component: registered.component.clone(),
             command: command.clone(),
-            search: registration.search,
             no_view: mode == registrations::DynamicMode::NoView,
+            designed: false,
             launch: launch_of(&item.item.id, LaunchSource::RootSearch),
             initial_search: None,
         }),

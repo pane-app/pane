@@ -537,9 +537,10 @@ replaces #126's slice 4 as #161 amends it). Pane draws it itself for its
 registered Files default extension (the default extension `files` and its
 command `files`, by their verified identity, never by a title), in the
 split view Clipboard History uses (#102), and lists the index for it
-(`launcher/search_files.rs`); the command's own list and `search` are not
+(`launcher/search_files.rs`); the command's own list is not
 shown. A copy of Files installed from a folder, and any other command that
-searches, keep the launcher's [command search](command-search.md).
+searches, answers a designed List whose search field it owns
+([designed tree](designed-tree.md)).
 
 - **No folder to choose**, nothing explained first: Enter on its row in
   root search opens it on **"Recently Used"**, the most recently modified

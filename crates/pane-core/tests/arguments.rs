@@ -26,8 +26,8 @@ use futures::executor::block_on;
 use pane_core::clipboard::ManualClock;
 use pane_core::hotkeys::{HotkeyError, Hotkeys, Shortcut};
 use pane_core::{
-    AliasFlow, Choice, FieldKind, FormField, FormView, Launcher, Limits, PackageIdentity,
-    ResultAction, Runtime, Screen, Status,
+    AliasFlow, Choice, FieldKind, FormField, Launcher, Limits, PackageIdentity, ResultAction,
+    Runtime, Screen, Status,
 };
 use tempfile::TempDir;
 
@@ -194,20 +194,26 @@ impl Pane {
     }
 
     /// The argument form on screen, titled `title`.
-    fn form(&self, title: &str) -> FormView {
+    fn form(&self, title: &str) -> pane_core::PaneForm {
         let view = self.launcher.view();
         assert_eq!(view.title, title, "{:?}", view.screen);
+        assert!(
+            matches!(view.screen, Screen::PaneForm(_)),
+            "{:?}",
+            view.screen
+        );
         view.form().expect("the argument form is shown").clone()
     }
 
-    /// Sets the form's fields as `values` says, then submits it and waits
-    /// for what it runs; what was shown: the command's toast, or the status
-    /// line (the form's refusal).
+    /// Submits the form's fields with `values`, and waits for what it
+    /// runs; what was shown: the command's toast, or the status line (the
+    /// form's refusal).
     fn submit(&self, values: &[(&str, &str)]) -> Status {
-        for (field, value) in values {
-            self.launcher.set_field_value(field, value);
-        }
-        block_on(self.launcher.submit_form());
+        let values = values
+            .iter()
+            .map(|(field, value)| ((*field).to_owned(), (*value).to_owned()))
+            .collect();
+        block_on(self.launcher.submit_pane_form(values));
         shown(&self.launcher)
     }
 
@@ -233,7 +239,7 @@ fn id(folder: &Path, command: &str) -> String {
     )
 }
 
-/// The argument form's field for an argument, empty.
+/// The argument fields' field for an argument, empty.
 fn field(id: &str, label: &str, kind: FieldKind, required: bool) -> FormField {
     FormField {
         id: id.into(),
@@ -246,7 +252,7 @@ fn field(id: &str, label: &str, kind: FieldKind, required: bool) -> FormField {
     }
 }
 
-/// "Greet"'s fields as the form first shows them.
+/// "Greet"'s fields as they first show.
 fn greet_fields(tone: &str) -> Vec<FormField> {
     let choice = |id: &str, label: &str| Choice {
         id: id.into(),
@@ -283,6 +289,77 @@ fn greet_fields(tone: &str) -> Vec<FormField> {
             )
         },
     ]
+}
+
+/// One field of the argument form's tree, by its key: the tree node.
+fn field_node<'a>(form: &'a pane_core::PaneForm, key: &str) -> &'a pane_core::Node {
+    fn at<'a>(node: &'a pane_core::Node, key: &str) -> Option<&'a pane_core::Node> {
+        if node.key.as_deref() == Some(key) {
+            return Some(node);
+        }
+        node.children.iter().find_map(|child| at(child, key))
+    }
+    at(&form.tree.root, key).unwrap_or_else(|| panic!("the form has no {key} field"))
+}
+
+/// Whether the field `key` of the argument form's tree is a text field.
+fn is_text(form: &pane_core::PaneForm, key: &str) -> bool {
+    matches!(
+        field_node(form, key).kind,
+        pane_core::NodeKind::TextInput(_)
+    )
+}
+
+/// Whether the field `key` of the argument form's tree is a password
+/// field.
+fn is_password(form: &pane_core::PaneForm, key: &str) -> bool {
+    matches!(
+        field_node(form, key).kind,
+        pane_core::NodeKind::PasswordInput(_)
+    )
+}
+
+/// The labels of the options the dropdown `key` of the argument form's
+/// tree offers.
+fn choices_of(form: &pane_core::PaneForm, key: &str) -> Vec<String> {
+    match &field_node(form, key).kind {
+        pane_core::NodeKind::Select(select) => select
+            .options
+            .iter()
+            .map(|option| option.label.clone().unwrap_or_else(|| option.value.clone()))
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// The title a field of the argument form's tree carries.
+fn title_of<'a>(form: &'a pane_core::PaneForm, key: &str) -> &'a str {
+    match &field_node(form, key).kind {
+        pane_core::NodeKind::TextInput(input) | pane_core::NodeKind::PasswordInput(input) => {
+            input.field.title.as_deref().unwrap_or_default()
+        }
+        pane_core::NodeKind::Select(select) => select.field.title.as_deref().unwrap_or_default(),
+        other => panic!("the field carries no title: {other:?}"),
+    }
+}
+
+/// The error a field of the argument form's tree carries, if one was set.
+fn error_of(form: &pane_core::PaneForm, key: &str) -> Option<String> {
+    match &field_node(form, key).kind {
+        pane_core::NodeKind::TextInput(input) | pane_core::NodeKind::PasswordInput(input) => {
+            input.field.error.clone()
+        }
+        pane_core::NodeKind::Select(select) => select.field.error.clone(),
+        _ => None,
+    }
+}
+
+/// The value a dropdown of the argument form's tree has chosen.
+fn chosen(form: &pane_core::PaneForm, key: &str) -> String {
+    match &field_node(form, key).kind {
+        pane_core::NodeKind::Select(select) => select.value.clone().unwrap_or_default(),
+        _ => String::new(),
+    }
 }
 
 fn root_searchs_fields_refuse_a_blank_required_argument_and_run_with_the_values(fixture: &Fixture) {
@@ -375,17 +452,9 @@ fn hotkey_and_quick_slot_launches_ask_for_the_arguments(fixture: &Fixture) {
             .expect("the hotkey is registered"),
     );
     let form = pane.form("Stamp");
-    assert_eq!(
-        form.fields,
-        [field(
-            "label",
-            "Label",
-            FieldKind::Text {
-                placeholder: Some("Label".into())
-            },
-            true
-        )]
-    );
+    assert!(is_text(&form, "label"));
+    assert_eq!(title_of(&form, "label"), "Label");
+    assert!(field_node(&form, "label").focus);
     assert_eq!(
         pane.submit(&[("label", "first")]),
         Status::Result("Stamped first from hotkey".into())
@@ -476,7 +545,7 @@ fn another_command_launch_asks_for_missing_arguments_and_a_background_one_is_ref
     // A dropdown value another command passes is chosen in the form.
     pane.send("rl greet tone=formal");
     pane.launched();
-    assert_eq!(pane.form("Greet").fields, greet_fields("formal"));
+    assert_eq!(chosen(&pane.form("Greet"), "tone"), "formal");
 }
 
 fn an_alias_and_a_space_fill_the_first_argument_and_a_fallback_the_query(fixture: &Fixture) {

@@ -1,6 +1,10 @@
 # cargo-nextest's settings for the workspace's tests (`cargo xtask
 # ci-tests`). Only what differs from nextest's defaults is here.
 
+# A hung test is terminated as a failure instead of holding its shard
+# open until the runner's job limit kills the run: see the slow-timeout
+# below.
+
 # Test priorities (below) need 0.9.91; CI pins 0.9.146.
 nextest-version = "0.9.91"
 
@@ -9,11 +13,21 @@ nextest-version = "0.9.91"
 [profile.default]
 fail-fast = false
 
+# A test that never answers fails as a timeout rather than holding its
+# shard: past the period it is reported SLOW, and at twice that it is
+# terminated (SIGTERM, a 10 s grace, then SIGKILL) and fails with its
+# identity in the summary. The longest tests hold about 3 minutes on a
+# loaded runner (memory_peaks and the JS/TS legs' first compiles), which
+# the period leaves headroom; the run this stands against — the
+# command_search service-error tests, which block on an answer that
+# never comes — held all twelve test jobs for six hours.
+slow-timeout = { period = "300s", terminate-after = 2 }
+
 # The tests that print how much memory the samples and default extensions
 # take at most, under the 128 MiB cap on a guest's memory (#120), show
 # their output when they pass too, so a verify run's log carries it.
 [[profile.default.overrides]]
-filter = "test(/memory_peaks|stays_under_the_memory_cap/)"
+filter = "test(/memory_peaks|stays_under_the_memory_cap|designed_cost/)"
 success-output = "immediate"
 
 # The longest tests start first, so a run (or a CI shard) does not end

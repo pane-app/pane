@@ -32,10 +32,7 @@ export const command = {
       ],
     };
   },
-  async submitForm() {
-    throw { message: "this command has no forms" };
-  },
   async openView() {
-    throw new Error("this command has no custom views");
+    throw new Error("this command opens no designed view");
   },
 };

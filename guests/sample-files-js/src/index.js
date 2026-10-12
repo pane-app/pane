@@ -82,25 +82,15 @@ export const command = {
     };
   },
 
-  async submitForm(itemId) {
-    throw { message: `unknown form: ${itemId}` };
-  },
-
-  async openView(itemId) {
-    throw new Error(`unknown view: ${itemId}`);
+  async openView(/** @type {string} */ commandId) {
+    throw new Error(`unknown designed view: ${commandId}`);
   },
 };
 
-/** @type {import("@pane-app/extension").CommandSearch} */
-export const commandSearch = {
-  async search(_command, query) {
-    return found(query).map((entry) => ({
-      id: entry.path,
-      title: entry.name,
-      file: entry.id,
-    }));
-  },
-};
+// A command's own search is the designed List's search-text event now
+// (#240, `command-search` retired): root search still asks this sample for
+// its results (`rootResults`), which keep Pane's own file actions. See the
+// search sample (sample-search) for the designed List that searches itself.
 
 /** @type {import("@pane-app/extension").RootResults} */
 export const rootResults = {

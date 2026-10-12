@@ -13,6 +13,15 @@ pub(crate) const GRAPHIC: f32 = 3.0;
 /// The contrast text needs (WCAG 1.4.3).
 pub(crate) const TEXT: f32 = 4.5;
 
+/// The contrast a designed view's raw text and icon colours are corrected
+/// to (#237, ADR 0036): the ratio the spec chose after Raycast's, kept
+/// deliberately apart from Pane's own `GRAPHIC` and `TEXT` so that an
+/// extension's colour stays the author's — moved only far enough to stay
+/// legible, never remade into one of Pane's — and so that a later tuning
+/// of Pane's own icon contrast cannot change what an extension's screen
+/// looks like.
+pub(crate) const DESIGNED: f32 = 2.5;
+
 /// The relative luminance of `color`, opaque (WCAG's).
 pub(crate) fn luminance(color: Hsla) -> f32 {
     let rgba = hsla_to_rgba(color);

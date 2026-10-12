@@ -67,7 +67,7 @@ use crate::generation::EndMark;
 use crate::hotkeys::{FreshOpenPane, HookHealth, Route, Shortcut};
 use crate::launch::LaunchSource;
 use crate::launcher::CommandRegistration;
-use crate::packages::{CommandId, CommandMode, InstalledPackage, PackageIdentity};
+use crate::packages::{CommandId, InstalledPackage, PackageIdentity};
 use crate::platform::Platform;
 
 /// Each command's hotkey by command id, recorded in `hotkeys.json` as
@@ -334,12 +334,6 @@ fn offered_dynamic(state: &State) -> Vec<String> {
         .collect()
 }
 
-/// Why the hotkey `shortcut` names a dynamic root item that is not
-/// registered now, if it does: its package is disabled or paused, or its
-/// title and that the item is gone. `None` when the hotkey names nothing
-/// of the kind. The surfaces that hold a dynamic item say so while it is
-/// not registered (#158), as one of a missing target does.
-
 /// The action a `shortcut` runs, if it is recorded for a dynamic root
 /// item that runs an action rather than launching a command: the hotkey
 /// runs the action, as activating its row does.
@@ -362,6 +356,12 @@ fn command_of(state: &State, shortcut: &Shortcut) -> Option<String> {
         .map(|(command, _)| command.as_str().to_owned())
 }
 
+/// Why the hotkey `shortcut` names a dynamic root item that is not
+/// registered now, if it does: its package no longer lists the item, a
+/// disabled or paused package not listing it either. `None` when the
+/// hotkey names nothing of the kind. The surfaces that hold a dynamic
+/// item say so while it is not registered (#158), as one of a missing
+/// target does.
 fn gone_dynamic(state: &State, shortcut: &Shortcut) -> Option<String> {
     let command = state
         .bindings
@@ -566,8 +566,8 @@ impl Launcher {
                     let (offered, _) = package.launchable_commands().into_iter().find(
                         |(offered, unavailable)| offered.id == command && unavailable.is_none(),
                     )?;
-                    let no_view = package.mode_of(offered.manifest_id()) == CommandMode::NoView;
-                    Some(Opening::of(&offered, no_view, LaunchSource::Hotkey))
+                    let mode = package.mode_of(offered.manifest_id());
+                    Some(Opening::of(&offered, mode, LaunchSource::Hotkey))
                 })
         {
             return Some(opening);

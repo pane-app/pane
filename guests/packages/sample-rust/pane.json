@@ -10,6 +10,20 @@
       "subtitle": "A sample command implemented by a Rust extension",
       "component": "sample_rust.wasm",
       "rootResults": true
+    },
+    {
+      "id": "form",
+      "title": "Greet someone",
+      "subtitle": "A form the guest checks, on the designed tree",
+      "component": "sample_rust.wasm",
+      "mode": "designed"
+    },
+    {
+      "id": "color",
+      "title": "Rust sample color picker",
+      "subtitle": "Pick a color in a canvas the guest draws",
+      "component": "sample_rust.wasm",
+      "mode": "designed"
     }
   ]
 }

@@ -70,7 +70,8 @@ use super::faults::Faults;
 
 use super::{
     CallError, Code, HealthReport, Host, Request, Sent, SharedApplications, SharedClipboard,
-    SharedDirectory, SharedHostFunctions, SharedLaunches, lock, unavailable,
+    SharedDirectory, SharedHostFunctions, SharedLaunches, SharedTextMeasures, SharedViewAsks, lock,
+    unavailable,
 };
 use crate::helpers::runner::Helpers;
 
@@ -210,6 +211,12 @@ pub(super) struct Shared {
     pub(super) launches: SharedLaunches,
     /// What the window and feedback host functions do: the launcher's.
     pub(super) host_functions: SharedHostFunctions,
+    /// What a designed view asking to be drawn again does (`pane:extension/view`,
+    /// #243): the launcher's.
+    pub(super) view_asks: SharedViewAsks,
+    /// What measures text for a canvas's drawing (`pane:extension/view`,
+    /// #242): the window's fonts, which the pane crate owns.
+    pub(super) text_measures: SharedTextMeasures,
     pub(super) health: Arc<Mutex<Option<HealthReport>>>,
     /// Every package's extension log: what guests print, and the runtime's
     /// own messages about their packages.
@@ -227,11 +234,6 @@ pub(super) struct Shared {
     /// (the state handoff, ADR 0041): shared by every runtime thread, so a
     /// restarted one restores them too.
     pub(super) snapshots: super::SharedSnapshots,
-    /// What a search waits on before it starts, if a test replaced the
-    /// clock's [`super::SEARCH_DEBOUNCE`]; a restarted thread keeps it.
-    /// A release build has none.
-    #[cfg(any(test, debug_assertions))]
-    pub(super) search_timer: Arc<Mutex<Option<super::SearchTimer>>>,
     crashes: Mutex<Option<CrashReport>>,
     slow: Mutex<Option<SlowReport>>,
     /// The limits guest calls and the watchdog apply.
@@ -356,14 +358,14 @@ impl Shared {
             directory: SharedDirectory::default(),
             launches: SharedLaunches::default(),
             host_functions: SharedHostFunctions::default(),
+            view_asks: SharedViewAsks::default(),
+            text_measures: SharedTextMeasures::default(),
             health: Arc::default(),
             logs: Default::default(),
             next_view: Arc::default(),
             network: Arc::default(),
             registrations: Arc::default(),
             snapshots: Arc::default(),
-            #[cfg(any(test, debug_assertions))]
-            search_timer: Arc::default(),
             crashes: Mutex::new(None),
             slow: Mutex::new(None),
             limits: Arc::default(),

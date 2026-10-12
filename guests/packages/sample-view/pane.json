@@ -1,0 +1,50 @@
+{
+  "manifestVersion": 1,
+  "title": "Designed view sample",
+  "version": "0.1.0",
+  "apiVersion": "0.1",
+  "commands": [
+    {
+      "id": "sample",
+      "title": "Designed view sample",
+      "subtitle": "A counter whose screen the extension designs as a tree",
+      "component": "sample_view.wasm",
+      "mode": "designed"
+    },
+    {
+      "id": "components",
+      "title": "Components sample",
+      "subtitle": "Every component of the UI component set, drawn by Pane",
+      "component": "sample_view.wasm",
+      "mode": "designed"
+    },
+    {
+      "id": "loading",
+      "title": "loading sample",
+      "subtitle": "Data arriving drawn the moment it lands, with no timer",
+      "component": "sample_view.wasm",
+      "mode": "designed"
+    },
+    {
+      "id": "list",
+      "title": "List sample",
+      "subtitle": "A List with sections, search, an empty view, a detail pane and pagination",
+      "component": "sample_view.wasm",
+      "mode": "designed"
+    },
+    {
+      "id": "grid",
+      "title": "Grid sample",
+      "subtitle": "A Grid of images and colours in sections",
+      "component": "sample_view.wasm",
+      "mode": "designed"
+    },
+    {
+      "id": "detail",
+      "title": "Detail sample",
+      "subtitle": "A Detail of Markdown with images and a metadata panel",
+      "component": "sample_view.wasm",
+      "mode": "designed"
+    }
+  ]
+}

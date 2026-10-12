@@ -1,0 +1,15 @@
+{
+  "manifestVersion": 1,
+  "title": "JavaScript timer sample",
+  "version": "0.1.0",
+  "apiVersion": "0.1",
+  "commands": [
+    {
+      "id": "sample",
+      "title": "JavaScript timer sample",
+      "subtitle": "A clock whose screen refreshes itself",
+      "component": "sample_timer_js.wasm",
+      "mode": "designed"
+    }
+  ]
+}

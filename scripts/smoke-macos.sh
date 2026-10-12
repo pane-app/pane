@@ -347,14 +347,23 @@ capture 1-root.png
 check 1-root.png hint   # the hint line: text renders
 
 # Open each sample command (Rust, JavaScript, TypeScript) and run an item.
-for index in 0 1 2; do
-  for ((i = 0; i < index; i++)); do key 125; done   # not seq: BSD "seq 0" prints 1 0
+# The blank query's order (#199) ranks Pane's own rows among the commands
+# by title, so the samples are not root's first rows: each command is
+# opened by typing its name, as the root search phase below does — typing
+# narrows root to the matching command and Enter opens the best match.
+index=0
+for sample in "Rust sample" "JavaScript sample" "TypeScript sample"; do
+  type_text "$sample"; sleep 1
+  # Typing the command's name leaves its exact-titled row the best match,
+  # selected: Enter opens it. (The samples answer only "reverse <text>"
+  # queries, so no answer card takes the first row.)
   key 36; sleep 3
   capture "$((index + 2))-command-$index.png"
   key 125; key 36; sleep 2
   capture "$((index + 2))-result-$index.png"
   check "$((index + 2))-result-$index.png" success   # the guest's answer
   key 53; sleep 1
+  index=$((index + 1))
 done
 capture 5-back-to-root.png
 # Each command must have answered from its own guest, not the same view twice.
@@ -362,7 +371,9 @@ python3 "$(dirname "$0")/check_screenshot.py" --distinct "$out"/{2,3,4}-result-*
 
 # The Rust command's form (its fifth item): submitting it empty is rejected
 # and focus returns to the name, so typing there and choosing a greeting with
-# Tab and Down makes the guest answer.
+# Tab and Down makes the guest answer. The command is opened by typing its
+# name, as the samples above are.
+type_text "rust sample"; sleep 1
 key 36; sleep 3
 for _ in 1 2 3 4; do key 125; done
 key 36; sleep 1
@@ -425,7 +436,9 @@ focus_pane
 
 # The Rust command's seventh item is declared for Windows only, its eighth
 # for macOS and Linux only. Here the first is explained without running and
-# the second runs.
+# the second runs. The command is opened by typing its name, as the samples
+# above are.
+type_text 'rust sample'; sleep 1
 key 36; sleep 3
 for _ in 1 2 3 4 5 6; do key 125; done
 key 36; sleep 2
@@ -487,7 +500,7 @@ a11y toggle "Settings sample"   # its switch: on
 a11y shown "Enabled Settings sample"
 capture 19-enabled.png
 close_settings
-key 125   # Greeting, after Rust sample
+type_text greeting; sleep 1   # Greeting, wherever the blank order places it
 key 36; sleep 3
 key 125; key 125; key 36; sleep 2   # "Greet me"
 capture 20-greeted.png
@@ -498,10 +511,13 @@ stop_pane
 start_pane
 focus_pane
 
-# The Rust command's color picker (its sixth item), which the guest draws:
+# The Rust command's color picker (its sixth item), which launches the
+# package's color command: a designed view whose canvas the guest draws:
 # Right chooses purple, and a click on the dark green swatch chooses it. The
 # chosen color fills its swatch and the preview, far more pixels than any
-# other swatch covers.
+# other swatch covers. The command is opened by typing its name, as the
+# samples above are.
+type_text 'rust sample'; sleep 1
 key 36; sleep 3
 for _ in 1 2 3 4 5; do key 125; done
 key 36; sleep 2
@@ -568,7 +584,7 @@ extension_action Dev Reload
 a11y shown "Reloaded Dev"
 capture 34-reloaded.png
 close_settings
-for ((i = 0; i < 4; i++)); do key 125; done   # Dev sample
+type_text 'dev sample'; sleep 1   # wherever the blank order places it
 key 36; sleep 3
 key 36; sleep 2   # "Say hello"
 capture 35-dev-after.png
@@ -584,7 +600,7 @@ extension_action Dev Reload
 a11y shown "Dev was not reloaded" prefix
 capture 36-not-reloaded.png
 close_settings
-for ((i = 0; i < 4; i++)); do key 125; done
+type_text 'dev sample'; sleep 1
 key 36; sleep 3
 key 36; sleep 2
 capture 37-still-running.png
@@ -610,7 +626,7 @@ grep -q '"start-attempted": "yes"' "$out/data/extensions/settings.json" || { ech
 # fifth items save a note (content) and sign in (a local credential), and its
 # sixth shows all four.
 start_pane
-key 125   # Greeting, after Rust sample
+type_text greeting; sleep 1   # Greeting, wherever the blank order places it
 key 36; sleep 3
 for ((i = 0; i < 3; i++)); do key 125; done
 key 36; sleep 2   # "Save a note"
@@ -636,7 +652,7 @@ a11y press "Clear cache"
 a11y shown "Cleared the cache of Settings sample"
 capture 42-cache-cleared.png
 close_settings
-key 125   # Greeting, after Rust sample
+type_text greeting; sleep 1   # Greeting, wherever the blank order places it
 key 36; sleep 3
 for ((i = 0; i < 5; i++)); do key 125; done
 key 36; sleep 2   # "Show what Pane keeps"

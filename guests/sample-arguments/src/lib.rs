@@ -24,7 +24,7 @@
 use pane_extension::alloc::{format, string::String, vec::Vec};
 use pane_extension::commands::{self, ArgumentValue, CommandRef, launch_type_name, source_name};
 use pane_extension::feedback::{Toast, show_toast};
-use pane_extension::{Command, LaunchRecord, LaunchType, NoCustomView, settings};
+use pane_extension::{Command, LaunchRecord, LaunchType, settings};
 
 /// The settings key holding how many times "Greet" ran.
 const RUNS: &str = "greet-runs";
@@ -114,7 +114,7 @@ fn relay(text: Option<&str>) -> Result<String, String> {
 }
 
 impl Command for Arguments {
-    type CustomView = NoCustomView;
+    type DesignedView = pane_extension::view::NoDesignedView;
 
     async fn run(command: String, launch: LaunchRecord) -> Result<(), String> {
         let done = match command.as_str() {

@@ -98,14 +98,21 @@ fn move_grants(
     (changed, forget)
 }
 
-/// The row after `command`'s file rows that opens it with `query` typed
-/// into its own search field ("Search Files for “plan”"), if it searches.
+/// The row after the registered Files command's file rows that opens it
+/// with `query` typed into its own search field ("Search Files for
+/// “plan”"). A command's own search is the designed List's search-text
+/// event now (#240); the registered Files command alone opens with the
+/// text in its field, Pane browsing the index for it.
 pub(super) fn search_all_row(command: &CommandRegistration, query: &str) -> Option<(Row, Entry)> {
     let text = query.trim();
-    if !command.search || text.is_empty() {
+    if !files_command(command) || text.is_empty() {
         return None;
     }
-    let mut opening = Opening::of(command, false, LaunchSource::RootSearch);
+    let mut opening = Opening::of(
+        command,
+        crate::packages::CommandMode::View,
+        LaunchSource::RootSearch,
+    );
     opening.initial_search = Some(text.to_owned());
     let row = Row {
         id: format!("{}:search-all-files", command.id),
@@ -114,6 +121,13 @@ pub(super) fn search_all_row(command: &CommandRegistration, query: &str) -> Opti
         unavailable: None,
     };
     Some((row, Entry::Open(opening)))
+}
+
+/// Whether `command` is the registered Files command of Pane's Files
+/// default extension ("Search Files", #177): the one command whose own
+/// search field Pane fills, browsing the index for it.
+pub(super) fn files_command(command: &CommandRegistration) -> bool {
+    super::search_files::registered_command(&command.id, command.manifest_id())
 }
 
 /// The icon of the file index's entry at `path`: the system's icon for it

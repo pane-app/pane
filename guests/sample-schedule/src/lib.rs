@@ -20,9 +20,7 @@
 
 use pane_extension::alloc::{format, string::String, vec::Vec};
 use pane_extension::feedback::{Toast, show_toast};
-use pane_extension::{
-    Command, CustomView, FieldValue, FormError, Item, List, NoCustomView, content, settings,
-};
+use pane_extension::{Command, Item, List, content, settings};
 
 /// The content key holding how many runs the command counted.
 const COUNT: &str = "count";
@@ -100,7 +98,7 @@ async fn outcome(item_id: &str) -> Result<String, String> {
 }
 
 impl Command for Counting {
-    type CustomView = NoCustomView;
+    type DesignedView = pane_extension::view::NoDesignedView;
 
     async fn render() -> Result<List, String> {
         let runs = count()?;
@@ -137,16 +135,5 @@ impl Command for Counting {
                  counted as a crash",
             ),
         ]))
-    }
-
-    async fn submit_form(_item_id: String, _values: Vec<FieldValue>) -> Result<String, FormError> {
-        Err(FormError {
-            field: None,
-            message: "The schedule sample has no forms".into(),
-        })
-    }
-
-    async fn open_view(_item_id: String) -> Result<CustomView, String> {
-        Err("The schedule sample has no custom views".into())
     }
 }

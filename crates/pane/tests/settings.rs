@@ -2749,6 +2749,13 @@ fn a_collection_folder_chosen_from_the_plus_menu_opens_the_choice(cx: &mut TestA
             "{entry} is listed"
         );
     }
+    // The choice the run ended on stays in place of the page; Back leaves
+    // it for the group's page, where an entry opens its extension's page.
+    click_row(&mut settings_cx, "extension-back");
+    until_drawn(
+        &mut settings_cx,
+        "extension-row-Update extensions automatically",
+    );
     open_page(&mut settings_cx, "Clock from Git");
 }
 
@@ -2882,7 +2889,7 @@ fn manage_extensions_and_the_install_rows_open_settings(cx: &mut TestAppContext)
     );
     let view = cx.read_entity(&launcher, |window, _| window.launcher().view());
     assert!(
-        !matches!(view.screen, Screen::Form(_)),
+        !matches!(view.screen, Screen::PaneForm(_)),
         "the launcher shows no form of its own"
     );
 }
@@ -3225,11 +3232,20 @@ fn a_row_waiting_on_a_capability_offers_the_install_row_that_opens_the_install_f
     cx.simulate_resize(gpui::size(gpui::px(640.), gpui::px(420.)));
 
     // The waiting command stays listed, with what it needs under its row.
+    // The blank query lists Pane's own rows with it (#199's no-query
+    // order), so the command is selected by its title and its row read
+    // wherever the order places it.
     let view = settle(&launcher, cx);
-    assert_eq!(view.rows[0].title, "Greet from Rust");
-    assert_eq!(view.selected, Some(0));
+    let greet = view
+        .rows
+        .iter()
+        .position(|row| row.title == "Greet from Rust")
+        .expect("the waiting command is listed");
+    cx.update_entity(&launcher, |window, _| window.launcher().select(greet));
+    let view = cx.read_entity(&launcher, |launcher, _| launcher.launcher().view());
+    assert_eq!(view.selected, Some(greet));
     assert_eq!(
-        view.rows[0]
+        view.rows[greet]
             .unavailable
             .as_ref()
             .map(|reason| reason.reason().to_owned()),

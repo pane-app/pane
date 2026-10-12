@@ -27,10 +27,7 @@
 
 use pane_extension::alloc::{format, string::String, vec::Vec};
 use pane_extension::feedback::{Toast, show_toast};
-use pane_extension::{
-    Command, CustomView, FieldValue, FormError, Item, List, NoCustomView, cache, content,
-    credentials, settings,
-};
+use pane_extension::{Command, Item, List, cache, content, credentials, settings};
 
 /// The settings key holding the chosen greeting style.
 const STYLE: &str = "greeting-style";
@@ -159,7 +156,7 @@ async fn outcome(id: &str) -> Result<String, String> {
 }
 
 impl Command for Greeting {
-    type CustomView = NoCustomView;
+    type DesignedView = pane_extension::view::NoDesignedView;
 
     async fn render() -> Result<List, String> {
         let title = match settings::get(STYLE)? {
@@ -228,16 +225,5 @@ impl Command for Greeting {
                 "Fails with an error, which the extension answers with",
             ),
         ]))
-    }
-
-    async fn submit_form(item_id: String, _values: Vec<FieldValue>) -> Result<String, FormError> {
-        Err(FormError {
-            field: None,
-            message: format!("unknown form: {item_id}"),
-        })
-    }
-
-    async fn open_view(item_id: String) -> Result<CustomView, String> {
-        Err(format!("unknown view: {item_id}"))
     }
 }

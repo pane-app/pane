@@ -102,6 +102,40 @@ without building it, install it from its repository:
   calling each by its dependency id; installing it installs the JavaScript
   sample too ([Dependencies](#dependencies-on-other-extensions)); held by
   `crates/pane-core/tests/dependencies.rs`.
+- `sample-view`, `sample-view-js`, `sample-view-ts`: the designed view
+  sample in Rust, JavaScript and TypeScript (#235, #237, #238,
+  #243): a counter whose screen the extension describes as a tree Pane
+  renders — a column of a text and a row of buttons — a second command,
+  `components`, a gallery of every component of the UI component set,
+  from the layout primitives and the shared controls to Markdown, the
+  tokens and the raw values, whose fields are live and keyed: typing
+  edits at once, the view echoes the value back, "Clear" sets it and
+  "Reorder" moves the fields with their state; and a third, `loading`,
+  data arriving drawn the moment it lands (#243): a loading state, then
+  what the view loaded the moment it arrived, with no timer — the arrival
+  asks for the drawing itself. Written with the Rust builder, the JSX
+  runtime's elements and JSX itself (`"mode": "designed"` in their
+  `pane.json`,
+  [designed-tree.md](../docs/designed-tree.md)); held to the same
+  three-language parity by `crates/pane-core/tests/designed_views.rs`,
+  `crates/pane-core/tests/view_push.rs` for the loading command, and
+  drawn by the window tests of `crates/pane/tests/designed_views.rs`
+  and `crates/pane/tests/designed_components.rs`.
+- `sample-nav`, `sample-nav-js`, `sample-nav-ts`: the navigation sample in
+  Rust, JavaScript and TypeScript (#239): a designed view with a stack
+  Pane owns — rows push a detail view that pushes deeper, the detail pops
+  with a result the rows answer through `onPop`, and the deeper view drops
+  the whole stack through the `window.pop-to-root` host function — using
+  the SDKs' `push`, `replace`, `pop`, the Raycast-style `Action.Push` and
+  `navigationTitle`; held by `crates/pane-core/tests/navigation_stack.rs`
+  and the window tests of `crates/pane/tests/navigation_stack.rs`.
+- `sample-timer`, `sample-timer-js`, `sample-timer-ts`: the timer sample in
+  Rust, JavaScript and TypeScript (#236): a designed view that shows its
+  loading state, then advances an elapsed-seconds counter once a second
+  through `refresh-after-ms` (`useInterval` in JavaScript and TypeScript,
+  `.refresh_after` in Rust); the loading state's arrival asks for the
+  drawing that replaces it itself (#243), so it is drawn the moment the
+  data lands; held by `crates/pane-core/tests/view_refresh.rs`.
 - `sample-icons`, `sample-icons-js`, `sample-icons-ts`: the icons sample in
   Rust, JavaScript and TypeScript (#139): rows with a built-in icon, a
   packaged image with `@light` and `@dark` variants, a light and dark pair,
@@ -275,9 +309,11 @@ without building it, install it from its repository:
   "Icons" command's), held by `crates/pane/tests/default_icons.rs`. The
   default extensions' own packages, and the tile icons they ship, live in
   their repositories.
-- `fixtures/faulty`: test fixture whose actions, form, custom view and root
-  results return an error or trap, and whose actions grow its memory to
-  just under the 128 MiB cap or past it.
+- `fixtures/faulty`: test fixture whose actions, form and root results
+  return an error or trap, whose actions grow its memory to just under
+  the 128 MiB cap or past it, and whose counting designed view (its
+  `counter` command) refuses, traps and draws a canvas over Pane's
+  limits.
 - `fixtures/failing-start`: test fixture that builds and installs but traps
   the first time it is asked for its view (after saving a setting), so a
   reload to it fails to start and Retry then starts it.
@@ -296,14 +332,20 @@ without building it, install it from its repository:
   written by hand, not by `pane-extension`, with fields Pane does not know, a
   newer version, a view Pane cannot show and trees and answers it cannot
   read ([list-tree.md](../docs/list-tree.md)).
+- `fixtures/designed`: test fixture whose designed view's trees and answers
+  are JSON written by hand, not by `pane-extension`, with an unknown node
+  with and without a fallback, a newer minor and another major version, a
+  tree over the node limit, an error, and text that is not JSON, and whose
+  answers navigate by hand — a push, a pop with a result and a replace —
+  drawing the pop events it receives
+  ([designed-tree.md](../docs/designed-tree.md)).
 
 ## Writing a Rust command
 
 The [sample](sample-rust/src/lib.rs) is the complete example. A command is a
 `cdylib` crate depending on `pane-extension` that implements `pane_extension::Command`:
-`render`, its list, whose items' actions are closures, and two functions
-for forms and custom views (see [Forms](#forms) and
-[Custom views](#custom-views)), and names its custom view type. The SDK hands
+`render`, its list, whose items' actions are closures, and its entry
+point for designed views (see [Forms](#forms)), naming its type. The SDK hands
 Pane the list as a versioned JSON tree and runs an item's closure when the
 user chooses it, then Pane asks for the list again
 ([list-tree.md](../docs/list-tree.md)):
@@ -313,13 +355,14 @@ user chooses it, then Pane asks for the list again
 
 use pane_extension::alloc::{string::String, vec::Vec};
 use pane_extension::feedback::{Toast, show_toast};
-use pane_extension::{Command, CustomView, FieldValue, FormError, Item, List, NoCustomView};
+use pane_extension::{Command, Item, List};
+use pane_extension::view::NoDesignedView;
 
 struct Hello;
 pane_extension::export!(Hello);
 
 impl Command for Hello {
-    type CustomView = NoCustomView;
+    type DesignedView = NoDesignedView;
 
     async fn render() -> Result<List, String> {
         Ok(List::new("Hello").item(Item::new("hi", "Say hi").on_action(|| async {
@@ -328,12 +371,11 @@ impl Command for Hello {
         })))
     }
 
-    async fn submit_form(_item_id: String, _values: Vec<FieldValue>) -> Result<String, FormError> {
-        Err(FormError { field: None, message: "this command has no forms".into() })
-    }
-
-    async fn open_view(_item_id: String) -> Result<CustomView, String> {
-        Err("this command has no custom views".into())
+    async fn open_designed_view(
+        _command: String,
+        _launch: pane_extension::LaunchRecord,
+    ) -> Result<NoDesignedView, String> {
+        Err("this command opens no designed view".into())
     }
 }
 ```
@@ -457,9 +499,10 @@ cache.set("last-greeting", greeting);
 The [JavaScript](sample-js/src/index.js) and
 [TypeScript](sample-ts/src/index.ts) samples are complete examples. A command
 is an npm package whose `main` module exports `command` with `render`, its
-list, whose items' actions are functions (`onAction`), and two functions for
-forms and custom views (see [Forms](#forms) and
-[Custom views](#custom-views)). The SDK hands Pane the list as a versioned
+list, whose items' actions are functions (`onAction`), and opens its
+designed views (see [Forms](#forms) and
+[The canvas](#the-canvas-drawing-inside-a-designed-view)). The SDK hands
+Pane the list as a versioned
 JSON tree and runs an item's `onAction` when the user chooses it, then Pane
 asks for the list again ([list-tree.md](../docs/list-tree.md)). Pane's types
 come from
@@ -487,11 +530,8 @@ export const command: Command = {
       ],
     };
   },
-  async submitForm() {
-    throw { message: "this command has no forms" };
-  },
   async openView() {
-    throw new Error("this command has no custom views");
+    throw new Error("this command opens no designed view");
   },
 };
 ```
@@ -584,99 +624,86 @@ queue and the wasm parts.
 
 ## Forms
 
-An item can open a form instead of running an action: a single-line text
-field and a choice of one option per field, and a submit button. Pane renders
-the controls, handles focus, typing and input methods, and calls
-`submit-form` with every field's value; the command validates them and answers
-with a result, or with an error about one field (shown under it, with focus
-moved there) or about the whole form. The contract, keyboard behavior and
-accessibility are described in [docs/forms.md](../docs/forms.md). The "Greet
-someone" item of each sample is the complete example.
+A form is a designed view (#241): a `"mode": "designed"` command whose
+view answers a `form` node with the fields in the author's own layout.
+The fields are the tree's field components — text, password, text area,
+checkbox, toggle, date and date-time pickers, dropdowns with sections
+and search, tag pickers, file and folder pickers, with descriptions,
+separators and links between them — each with a title, a note, an error,
+a default, an auto-focus and a remembered value. Submission is an
+action: Enter in a single-line field submits, Ctrl+Enter does in a text
+area, and the form's submit button does; the values arrive keyed by the
+fields' `id`s, and the tree the view answers with sets each field's
+`error` when it refuses one. The contract, keyboard behavior and
+accessibility are described in
+[docs/designed-tree.md](../docs/designed-tree.md). The "Greet someone"
+command of each sample is the complete example.
 
-Rust:
-
-```rust
-use pane_extension::{Choice, Field, FieldKind, FieldValue, Form, FormError, Item, TextField};
-
-let form = Form {
-    title: "Greet someone".into(),
-    fields: vec![
-        Field {
-            id: "name".into(),
-            label: "Name".into(),
-            kind: FieldKind::Text(TextField { placeholder: Some("Ada Lovelace".into()) }),
-        },
-        Field {
-            id: "greeting".into(),
-            label: "Greeting".into(),
-            kind: FieldKind::Choice(vec![
-                Choice { id: "hello".into(), label: "Hello".into() },
-                Choice { id: "morning".into(), label: "Good morning".into() },
-            ]),
-        },
-    ],
-    submit_label: "Greet".into(),
-};
-let item = Item::new("form", "Greet someone").form(form);
-
-// In `impl Command`:
-async fn submit_form(item_id: String, values: Vec<FieldValue>) -> Result<String, FormError> {
-    let name = values.iter().find(|v| v.id == "name").map_or("", |v| v.value.trim());
-    if name.is_empty() {
-        return Err(FormError { field: Some("name".into()), message: "Enter a name".into() });
-    }
-    Ok(format!("Hello, {name}"))
-}
-```
-
-JavaScript or TypeScript (fields are camelCase; a field's `kind` is a tagged
-value, `{ tag: "text", val: {...} }` or `{ tag: "choice", val: [...] }`):
-
-```ts
-const form: Form = {
-  title: "Greet someone",
-  fields: [
-    { id: "name", label: "Name", kind: { tag: "text", val: { placeholder: "Ada Lovelace" } } },
-    { id: "greeting", label: "Greeting", kind: { tag: "choice", val: [
-      { id: "hello", label: "Hello" }, { id: "morning", label: "Good morning" },
-    ] } },
-  ],
-  submitLabel: "Greet",
-};
-// items: [{ id: "form", title: "Greet someone", form }]
-
-async submitForm(itemId, values) {
-  const name = values.find((v) => v.id === "name")?.value.trim() ?? "";
-  if (!name) throw { field: "name", message: "Enter a name" } satisfies FormError;
-  return `Hello, ${name}`;
-},
-```
-
-In JS/TS, reject a submission by throwing a plain `FormError` object as above.
-Throwing an `Error` (or a string) from `submitForm` rejects the form as a
-whole with its message. The samples validate with Zod and turn its first
-issue into a `FormError`.
-
-A command's whole screen can be a form instead of a list, as Quicklinks'
-Create Quicklink is (#149): in Rust, `render` returns
-`List::form(id, form)`, its fields filled in with `.value(field, value)`.
-Pane shows it as soon as the command opens, `submit_form` receives `id`, and
-Escape leaves the command. A component serving several view commands tells
-which one is opened from `pane_extension::commands::current().command`, its id
-in `pane.json`:
+Rust ([`pane_extension::form`](../guests/pane-extension/src/form.rs)):
 
 ```rust
-async fn render() -> Result<List, String> {
-    if pane_extension::commands::current().command == "create" {
-        return Ok(List::form("create", form).value("name", "Docs"));
+use pane_extension::form;
+
+struct Greeting { name: core::cell::RefCell<String> }
+
+impl pane_extension::view::View for Greeting {
+    fn render(&mut self, cx: &mut pane_extension::view::Cx<Self>) -> impl pane_extension::view::IntoAnswer {
+        let submit = cx.form_listener(|this, values| {
+            let name = values.text("name").unwrap_or_default().trim().to_owned();
+            if name.is_empty() {
+                *this.name.borrow_mut() = String::new();
+                return;
+            }
+            *this.name.borrow_mut() = name;
+        });
+        let error = if self.name.borrow().is_empty() { "Enter a name" } else { "" };
+        form::Form::new()
+            .key("form")
+            .submit_title("Greet")
+            .on_submit(submit)
+            .child(form::text_field("name").title("Name")
+                .placeholder("Ada Lovelace").remember().error(error))
+            .into_answer()
     }
-    Ok(List::new("Notes").items(items))
 }
+
+// In `impl Command`: `type DesignedView = Greeting;` and `open_designed_view`
+// answers it for the form command's id.
 ```
 
-The JavaScript SDK does not write form screens yet; its launch record has
-the same `command`.
+JavaScript or TypeScript (`Form` and `Form.*` from
+`@pane-app/extension/view`):
 
+```tsx
+import { Form, createView, useState } from "@pane-app/extension/view";
+
+function GreetingForm() {
+  const [answer, setAnswer] = useState("");
+  return (
+    <Form
+      submitTitle="Greet"
+      onSubmit={(values) => setAnswer(`Hello, ${values.name}`)}
+    >
+      <Form.TextField id="name" title="Name" placeholder="Ada Lovelace" remember />
+      <Form.PasswordField id="secret" title="Secret" />
+      <Form.TextArea id="notes" title="Notes" />
+      <Form.Checkbox id="updates" label="Send updates" />
+      <Form.DatePicker id="day" title="Day" />
+      <Form.Dropdown id="greeting" title="Greeting"
+        options={[{ value: "hello", label: "Hello" }]} />
+      <Form.TagPicker id="tags" title="Tags" options={[{ value: "friend", label: "Friend" }]} />
+      <Form.FilePicker id="file" title="File" />
+      <Form.Description>{"What the form asks for."}</Form.Description>
+    </Form>
+  );
+}
+
+export const command = { async openView(id) { return createView(GreetingForm); } };
+```
+
+A field's `remember` keeps its last submitted value as the package's
+settings and prefills it the next time the form opens. The three samples'
+"Greet someone" command is the complete example in each language.
 ## Errors and crashes
 
 An error a command returns (Rust `Err`; in JS/TS, anything a handler
@@ -685,7 +712,7 @@ running, however often it happens. The JS/TS build wraps the exported
 handlers ([`guests/js/adapt.js`](js/adapt.js)) so that a thrown `Error`,
 string or `{ message }` object is always such an error. A crash is
 different: a Rust panic, or in JS/TS resolving with a value of the wrong
-type (or a custom view's `render` throwing), traps the guest. Pane reports it and starts a fresh instance for the next
+type, traps the guest. Pane reports it and starts a fresh instance for the next
 call; after three crashes within five minutes, or a component that cannot
 start, Pane pauses the whole package until the user chooses Retry in
 **Settings › Extensions** (where "Why <title> is paused" shows the details),
@@ -742,7 +769,7 @@ and while it is developed each build and reload) between its lines:
   message and location are logged as an error before the guest traps
   ([`pane_extension::log`](pane-extension/src/log.rs)). Logging waits for Pane to
   take the line, which it does at once; it works in a command's calls, not
-  in a custom view's `Drop`.
+  in a view's destructor.
 - **JavaScript and TypeScript:** `console.debug`, `log`, `info`, `warn`,
   `error`, `trace` and `assert`, formatting their arguments roughly as Node
   does (an `Error` with its stack). What a handler throws is logged too,
@@ -896,7 +923,7 @@ index is off, being built (with how many entries it has `found`), current or
 stopped, and why. The path is the extension's to show and copy; Pane opens
 only by the id, which it checks again first (it still exists, is the kind
 indexed, is not a link, is still in the folders file search covers). An
-`open-file` result or a command search result's `file` gives the id; Pane
+`open-file` result gives the id; Pane
 shows the entry's own name, its folder and the system's icon in the row,
 and gives it its [file actions](../docs/files.md#the-file-actions): Enter
 opens a document or a folder, and shows a program in the file manager
@@ -955,8 +982,7 @@ command never names or sees a path: `list-folder()` answers that no folder
 is granted, that Pane is listing it (Pane asks the command again once it is
 done, so answer no files for now), or the listing Pane keeps for this visit
 of root search, whose files have an `id` and a `relative` path. An
-`open-file` result gives the `id`, and so does a command search result's
-`file` (a command that sets `"search": true` too, as Search Files does);
+`open-file` result gives the `id`;
 Pane shows the file's own name and folder in the row, whatever the result's
 title says, drops an id it did not give, and gives the file its own
 [file actions](../docs/files.md#the-file-actions): Open (Enter), Show in
@@ -972,18 +998,6 @@ results root search finds by title. File search itself uses
 for a package that wants an exhaustive listing of one folder the user
 chooses (the test fixture [`fixtures/folder-files`](fixtures/folder-files)
 is what Files was before).
-
-In a command's own search field, the result names the file in `file`:
-
-```rust
-use pane_extension::search::SearchResult;
-
-SearchResult { id: file.relative.clone(), title: file.relative, subtitle: None, file: Some(file.id) }
-```
-
-```ts
-({ id: file.relative, title: file.relative, file: file.id })
-```
 
 Rust (`pane_extension::files`):
 
@@ -1223,9 +1237,10 @@ declare what only a launched command uses (`search`, `takesQuery`,
 reason. It may run a continuing `service` and declare preferences. Its
 component exports the root-results or indexed-results interface beside
 `command` as any other does, but Pane never opens or runs it, so it needs no
-`render` or `run` of its own: in Rust, `impl pane_extension::Command` with only
-`type CustomView = pane_extension::NoCustomView`; in JavaScript or TypeScript,
-`export const command: Command = {}`. Pins, aliases, fallbacks and hotkeys
+`render` or `run` of its own: in Rust, `impl pane_extension::Command`
+with only `type DesignedView = pane_extension::view::NoDesignedView`; in
+JavaScript or TypeScript, `export const command: Command = {}`. Pins,
+aliases, fallbacks and hotkeys
 recorded for a command before it became a provider (an update that changes
 its mode) are dropped at the next start, with a toast naming them.
 
@@ -1456,19 +1471,20 @@ a fallback, and the JSON context another command passed
 Rust: implement `run` in `pane_extension::Command` (one component may serve
 several commands, told apart by their id in `pane.json`); a view command's
 `render` reads its record with `pane_extension::commands::current()`.
-`render`, `submit_form` and `open_view` have defaults, so a no-view command
+`render` and `open_designed_view` have defaults, so a no-view command
 needs none of them:
 
 ```rust
 use pane_extension::alloc::{format, string::String};
 use pane_extension::feedback::{Toast, show_toast};
-use pane_extension::{Command, LaunchRecord, LaunchType, NoCustomView};
+use pane_extension::view::NoDesignedView;
+use pane_extension::{Command, LaunchRecord, LaunchType};
 
 struct Toggle;
 pane_extension::export!(Toggle);
 
 impl Command for Toggle {
-    type CustomView = NoCustomView;
+    type DesignedView = NoDesignedView;
 
     async fn run(command: String, launch: LaunchRecord) -> Result<(), String> {
         // A background launch, such as a schedule's, shows nothing.
@@ -2021,25 +2037,18 @@ An unknown `when` or `matches` is refused at install, with the reason.
 
 ## Searching inside a command
 
-A command that searches an online service as the user types sets
-`"search": true` on its entry in `pane.json` and exports
-`pane:extension/command-search` ([wit/search.wit](../wit/search.wit)) beside
-`command`. Pane gives it a search field of its own once the user opens it
-and calls `search(command, query)` with the text typed there (trimmed,
-never empty); the results (`id`, `title`, optional `subtitle`) replace the
-command's list, and activating one runs it by its id: the SDKs call the
-command's `run_search_result` (Rust) or `runSearchResult` (JS/TS). Root
-search never calls it, so nothing typed there reaches the command or its
-service. Pane waits 150 ms before it starts a search, and stops one it no
-longer needs (the text changed, the user left) where it waits, dropping the
-instance with its web request: code after that `await` never runs and
-in-memory state is lost, so make result ids say which result they are. An
-error it answers with (a service down or unreachable) is shown in place of
-results and never pauses the extension. A result may name an entry of
-[Pane's file index](#panes-file-index) or a file of the package's
-[granted folder](#files-of-a-granted-folder) by its id instead (`file`,
-#150): Pane then lists that file and performs its file actions itself. A command may set both `"search"` and `"rootResults"`; root search
-then asks it too. See [docs/command-search.md](../docs/command-search.md).
+A command's own search is the designed List's search-text event (#240,
+`command-search` retired): a view whose List sets `onSearchText` handles
+the search itself — the header's search field Pane draws, its text told to
+the view throttled (250 ms by default) — and answers the items it found
+([docs/designed-tree.md](../docs/designed-tree.md), the "standard views"
+section). Without `onSearchText`, Pane filters the list's items locally
+with the root-search matcher. Root search never asks the command, so
+nothing typed there reaches it or its service. The search sample
+(sample-search, in Rust, JavaScript and TypeScript) searches the fixture
+service this way. Pane's registered Files command keeps its host-side
+search of the file index (#177): no command of a package opens a search
+field of its own.
 
 **Web requests** go through `wasi:http@0.3.0`'s client, which Pane links for
 every command and sends from the host (`http` and `https` over HTTP/1.1,
@@ -2086,98 +2095,105 @@ default address; `-- --port N` for another, which their item "Service
 address" then sets), install
 `target/guests/packages/sample-search`, open Package search and type.
 
-## Custom views
+## The canvas: drawing inside a designed view
 
-An item can open a custom view that the command draws itself: filled
-rectangles and one-line text in a fixed-size area, redrawn after each key
-(arrows, Home, End) or pointer event (press over the view, drag, release).
-Pane keeps focus and the focus ring, and exposes the view to assistive
-technology as one control with the item's label and role and the value the
-view reports. The command keeps each open view's state in a `custom-view`
-resource that `open-view` returns; Pane drops it when the view closes. The
-contract, input, lifecycle and accessibility are described in
-[docs/custom-views.md](../docs/custom-views.md). The "Choose a color" item of
-each sample is the complete example.
+A command whose `pane.json` entry says `"mode": "designed"` opens a
+designed view: a screen it describes as a tree of layout nodes and UI
+components that Pane renders ([designed-tree.md](../docs/designed-tree.md)).
+What a custom view drew — the filled rectangles and one-line text of #21 —
+is one leaf of it now: the **canvas**, a drawing surface for what the UI
+components cannot show (a chart, a colour wheel, a game board), beside
+ordinary controls. The "Choose a color" item of each sample launches its
+package's `color` command, whose designed view draws the picker as a
+canvas.
 
-Rust (the view is a type implementing `GuestCustomView`; its methods take
-`&self`, so state goes in `Cell`s or `RefCell`s):
+The canvas is sized by its style as any node is — a fixed `width` and
+`height`, or the space the layout gives it, which the render context
+names for it (`"canvases"`, by its key; a change of it is the resize
+event). It takes input — the pointer's press, drag, release, enter and
+leave, the wheel, a double click, the secondary button, keys with their
+modifiers (Tab, Enter and Escape stay with Pane) — and is one node to
+assistive technology, with a role from the widened set, a label and a
+value. A control-like canvas can name the semantic handlers instead of
+parsing keys: `onIncrement` (the up arrow), `onDecrement` (the down one)
+and `onActivate` (Space).
+
+Rust (the view is a type implementing
+[`pane_extension::view::View`](../docs/designed-tree.md#the-canvas);
+drawing operations are `Draw` values, events `CanvasEvent`s):
 
 ```rust
 use core::cell::Cell;
-use pane_extension::alloc::{format, string::String, vec};
-use pane_extension::{
-    CustomView, CustomViewInfo, CustomViewRole, Frame, GuestCustomView, Key, Rect, Shape, ViewEvent,
-};
+use pane_extension::view::{CanvasEvent, Cx, Draw, Paint, View, canvas, column};
+use pane_extension::Color;
 
 struct Picker { column: Cell<i32> }
 
-impl GuestCustomView for Picker {
-    async fn render(&self) -> Frame {
-        let x = self.column.get() * 36;
-        Frame {
-            width: 288,
-            height: 36,
-            shapes: vec![Shape::Rect(Rect { x, y: 0, width: 36, height: 36, fill: 0x1e88e5 })],
-            value: format!("Column {}", self.column.get() + 1),
-        }
-    }
-
-    async fn handle_event(&self, event: ViewEvent) -> Result<(), String> {
-        match event {
-            ViewEvent::Key(Key::Right) => self.column.set((self.column.get() + 1).min(7)),
-            ViewEvent::Key(Key::Left) => self.column.set((self.column.get() - 1).max(0)),
-            ViewEvent::PointerDown(at) => self.column.set((at.x / 36).clamp(0, 7)),
-            _ => {}
-        }
-        Ok(())
+impl View for Picker {
+    fn render(&mut self, cx: &mut Cx<Self>) -> impl IntoAnswer {
+        let x = self.column.get() as f32 * 36.;
+        column().child(
+            canvas()
+                .key("grid")
+                .width(Length::Px(288.))
+                .height(Length::Px(36.))
+                .role(CanvasRole::ColorWell)
+                .label("Column")
+                .value(format!("Column {}", self.column.get() + 1))
+                .on_key(cx.value_listener(|this, key| {
+                    if key == "right" { this.column.set((this.column.get() + 1).min(7)) }
+                }))
+                .on_pointer_down(cx.canvas_listener(|this, event| {
+                    if let CanvasEvent::PointerDown { x, .. } = event {
+                        this.column.set((x as i32 / 36).clamp(0, 7));
+                    }
+                }))
+                .ops([
+                    Draw::rect(x, 0., 36., 36.).filled(Paint::Exact(Color::hex("#1e88e5"))),
+                ]),
+        )
     }
 }
 
-// The item: `Item::new("pick", "Pick").custom_view(CustomViewInfo { title:
-// "Pick".into(), label: "Column".into(), role: CustomViewRole::ColorWell })`.
-// In `impl Command`:
-type CustomView = Picker;
-
-async fn open_view(_item_id: String) -> Result<CustomView, String> {
-    Ok(CustomView::new(Picker { column: Cell::new(0) }))
+// In `impl Command`: `type DesignedView = Picker;`
+async fn open_designed_view(_command: String, _launch: LaunchRecord) -> Result<Picker, String> {
+    Ok(Picker { column: Cell::new(0) })
 }
 ```
 
-JavaScript or TypeScript (a view is any object with `async render()` and
-`async handleEvent(event)`; shapes and events are tagged values):
+JavaScript or TypeScript (a view is what
+[`createView`](../docs/designed-tree.md) makes of a component; operations
+and events are plain objects, every property typed):
 
-```ts
-class Picker implements CustomView {
-  column = 0;
-  async render(): Promise<Frame> {
-    return {
-      width: 288,
-      height: 36,
-      shapes: [{ tag: "rect", val: { x: this.column * 36, y: 0, width: 36, height: 36, fill: 0x1e88e5 } }],
-      value: `Column ${this.column + 1}`,
-    };
-  }
-  async handleEvent(event: ViewEvent) {
-    if (event.tag === "key" && event.val === "right") this.column = Math.min(this.column + 1, 7);
-    if (event.tag === "key" && event.val === "left") this.column = Math.max(this.column - 1, 0);
-    if (event.tag === "pointer-down") this.column = Math.min(Math.max(Math.floor(event.val.x / 36), 0), 7);
-  }
+```tsx
+function Picker() {
+  const [column, setColumn] = useState(0);
+  return (
+    <Column>
+      <Canvas
+        key="grid"
+        width={288}
+        height={36}
+        role="color-well"
+        label="Column"
+        value={`Column ${column + 1}`}
+        onKey={(key) => key === "right" && setColumn(Math.min(column + 1, 7))}
+        onPointerDown={(event) => setColumn(Math.min(Math.max(Math.floor(event.x / 36), 0), 7))}
+        ops={[{ op: "rect", x: column * 36, y: 0, width: 36, height: 36, fill: { raw: "#1e88e5" } }]}
+      />
+    </Column>
+  );
 }
-// items: [{ id: "pick", title: "Pick", customView: { title: "Pick", label: "Column", role: "color-well" } }]
 
-async openView(itemId) {
-  return new Picker();
-},
+// In the command: `openView(commandId) { return createView(Picker); }`.
 ```
 
-Both methods must be `async` in JS/TS (see the
-[contract notes](../docs/custom-views.md#contract)); `@pane-app/extension` types
-them as returning a `Promise`, so the build's type check rejects a
-synchronous one. A frame may have at most 4096 shapes, 256 characters per
-text and 4096 x 4096 pixels; Pane shows a larger one as your error. Throwing from
-`handleEvent` shows the error and keeps the view; a crash closes it. A
-command without custom views uses `type CustomView = NoCustomView;` in Rust
-and makes `open_view`/`openView` fail.
+A canvas may hold at most 20,000 drawing operations (64 KiB per text
+operation); Pane shows a larger one as your error, the view keeping its
+last good tree. While the view renders, its canvases can ask Pane to
+measure text (`measureText` in JS/TS, `pane_extension::view::measure_text`
+in Rust), so text drawn beside shapes fits what it says. Throwing from a
+listener shows the error and keeps the view; a crash closes it.
 
 ## Operations
 
@@ -3032,8 +3048,8 @@ After rebuilding a component, reload the package instead of restarting
 Pane: on the package's page in Settings (its sidebar's **Extensions**
 group), the Actions menu of every enabled package from a folder has
 **Reload**. Choosing it reads the package's source folder again and replaces only that
-package; Pane and every other package keep running, including a custom view
-of another package that is open. It works the same for Rust, JavaScript and
+package; Pane and every other package keep running, including a designed
+view of another package that is open. It works the same for Rust, JavaScript and
 TypeScript packages, since Pane sees only components. A reload goes through
 two stages, and a failure in each is reported differently:
 

@@ -26,7 +26,7 @@ mod rows;
 
 use feedback::shown;
 use guests::guest;
-use rows::titles;
+use rows::{select_title, titles};
 
 /// A package manifest for one command backed by `component`.
 fn manifest(title: &str, version: &str, component: &str) -> String {
@@ -110,10 +110,17 @@ fn a_previewed_local_package_installs_and_its_command_runs() {
             SETTINGS_ROW
         ]
     );
-    assert!(launcher.selected_asks_for_folder());
+    // The first row is selected, and its activation asks the window for a
+    // folder: an authoring row's or the install row's, whichever the
+    // blank query's order places first (#222).
+    assert!(
+        launcher.selected_asks_for_folder() || launcher.selected_folder_ask().is_some(),
+        "the selected row asks for a folder"
+    );
 
     block_on(launcher.preview_package(&folder));
     assert!(!launcher.selected_asks_for_folder());
+    assert!(!launcher.selected_folder_ask().is_some());
 
     let view = launcher.view();
     assert!(
@@ -741,7 +748,6 @@ fn launcher_with_build_command(dirs: &Dirs) -> Launcher {
         subtitle: None,
         component: guest("sample_js"),
         takes_query: false,
-        search: false,
         keywords: Vec::new(),
         when: pane_core::CommandWhen::Always,
         matches: pane_core::CommandMatches::Title,
@@ -794,7 +800,10 @@ fn an_install_finishing_in_the_background_keeps_the_selected_row() {
     block_on(launcher.preview_package(&folder));
     let installing = launcher.activate_selected();
     launcher.back();
-    launcher.select(0);
+    // The install row is selected wherever the blank query's order
+    // places it; the selection is kept when the install finishes and the
+    // list gains the new command's row and the check row (#267).
+    select_title(&launcher, INSTALL_ROW);
     assert_eq!(selected_title(&launcher).as_deref(), Some(INSTALL_ROW));
 
     block_on(installing);
@@ -1229,9 +1238,11 @@ fn a_command_platform_list_pane_does_not_know_is_an_invalid_manifest() {
 }
 
 /// Installs the Rust sample as package "Hello" on `runtime`, opens its
-/// command and its color picker, and returns the launcher and package folder.
+/// color command (a designed view), and returns the launcher and package
+/// folder. The manifest declares both commands: the list command the
+/// package's other tests use, and the color one this one opens.
 fn installed_color_view(dirs: &Dirs, runtime: &Runtime) -> (Launcher, PathBuf) {
-    let folder = package(&dirs.source("hello"), "Hello", "1.0.0", "sample_rust");
+    let folder = color_package(&dirs.source("hello"), "1.0.0");
     let launcher = Launcher::with_packages(
         Ok(runtime.clone()),
         vec![],
@@ -1242,26 +1253,39 @@ fn installed_color_view(dirs: &Dirs, runtime: &Runtime) -> (Launcher, PathBuf) {
     (launcher, folder)
 }
 
-/// From root search, opens the installed command and its color picker.
+/// Writes the package folder at `folder` with both commands of the Rust
+/// sample, `version`'s, and returns it.
+fn color_package(folder: &Path, version: &str) -> PathBuf {
+    fs::create_dir_all(folder).unwrap();
+    fs::write(
+        folder.join("pane.json"),
+        format!(
+            r#"{{"manifestVersion": 1, "title": "Hello", "version": "{version}", "apiVersion": "0.1",
+                "commands": [
+                  {{"id": "hello", "title": "Say hello", "subtitle": "Greets you", "component": "hello.wasm"}},
+                  {{"id": "color", "title": "Choose a color", "subtitle": "Pick a color",
+                    "component": "hello.wasm", "mode": "designed"}}
+                ]}}"#
+        ),
+    )
+    .unwrap();
+    fs::copy(guest("sample_rust"), folder.join("hello.wasm")).unwrap();
+    folder.to_path_buf()
+}
+
+/// From root search, opens the installed package's color command.
 fn open_installed_color_view(launcher: &Launcher) {
-    let hello = launcher
-        .view()
-        .rows
-        .iter()
-        .position(|row| row.title == "Say hello")
-        .expect("the command's row");
-    launcher.select(hello);
-    block_on(launcher.activate_selected());
+    block_on(launcher.set_query("color"));
     let color = launcher
         .view()
         .rows
         .iter()
-        .position(|row| row.title == "Choose a color")
-        .expect("the color item is listed");
+        .position(|row| row.id.ends_with("#color"))
+        .expect("the color command is listed");
     launcher.select(color);
     block_on(launcher.activate_selected());
     assert!(
-        matches!(launcher.view().screen, Screen::CustomView(_)),
+        matches!(launcher.view().screen, Screen::DesignedView(_)),
         "{:?}",
         launcher.view().screen
     );
@@ -1274,7 +1298,7 @@ fn an_update_finishing_while_its_view_is_open_closes_the_old_view_and_reopens_th
     let (launcher, folder) = installed_color_view(&dirs, &runtime);
     launcher.back();
     launcher.back();
-    package(&folder, "Hello", "2.0.0", "sample_rust");
+    color_package(&folder, "2.0.0");
     block_on(launcher.preview_package(&folder));
     let updating = launcher.activate_selected();
     // The user leaves the preview and opens the old copy's view meanwhile.
@@ -1287,9 +1311,11 @@ fn an_update_finishing_while_its_view_is_open_closes_the_old_view_and_reopens_th
     // opens again on it, with the update said on the status line: the
     // pushed view itself is not reopened.
     let view = launcher.view();
-    assert_eq!(view.screen, Screen::Command);
-    assert_eq!(view.status, Status::Result("Updated Hello to 2.0.0".into()));
-    assert_eq!(block_on(runtime.view_count()), 0);
+    assert_eq!(
+        (view.query(), &view.status),
+        (Some(""), &Status::Result("Updated Hello to 2.0.0".into()))
+    );
+    assert_eq!(block_on(runtime.designed_view_count()), 0);
 }
 
 #[test]
@@ -1306,5 +1332,5 @@ fn disabling_a_package_closes_its_open_view_at_once() {
         (view.query(), &view.status),
         (Some(""), &Status::Result("Disabled Hello".into()))
     );
-    assert_eq!(block_on(runtime.view_count()), 0);
+    assert_eq!(block_on(runtime.designed_view_count()), 0);
 }

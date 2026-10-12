@@ -24,8 +24,8 @@ use std::time::Duration;
 use futures::executor::block_on;
 use pane_core::clipboard::{Clock, ManualClock, SystemClock};
 use pane_core::{
-    FieldKind, Launcher, PackageIdentity, PreferenceKind, PreferencesTarget, ResultAction, Runtime,
-    SavedData, Screen, Status,
+    Launcher, PackageIdentity, PreferenceKind, PreferencesTarget, ResultAction, Runtime, SavedData,
+    Screen, Status,
 };
 use tempfile::TempDir;
 
@@ -235,26 +235,115 @@ impl Pane {
         presentation.rows[index].needs_setup
     }
 
-    /// The fields of the Setup screen on display: each's id, label,
-    /// description and whether it is hidden as it is typed.
+    /// The fields of the Setup screen on display: each's key, title,
+    /// note and whether it is hidden as it is typed.
     fn setup_fields(&self) -> Vec<(String, String, Option<String>, bool)> {
         let view = self.launcher.view();
         let form = view
             .form()
             .unwrap_or_else(|| panic!("no Setup screen: {view:?}"));
-        assert!(form.setup.is_some(), "a Setup screen");
-        form.fields
-            .iter()
-            .map(|field| {
-                (
-                    field.id.clone(),
-                    field.label.clone(),
-                    field.description.clone(),
-                    matches!(field.kind, FieldKind::Password { .. }),
-                )
-            })
-            .collect()
+        fields_of(&form.tree)
     }
+}
+
+/// The fields of a Pane form's tree: each's key, title, note and whether
+/// it is hidden as it is typed (a password).
+fn fields_of(tree: &pane_core::DesignedTree) -> Vec<(String, String, Option<String>, bool)> {
+    fn at(node: &pane_core::Node, into: &mut Vec<(String, String, Option<String>, bool)>) {
+        let field = |key: &str, title: Option<String>, info: Option<String>, hidden: bool| {
+            (key.to_owned(), title.unwrap_or_default(), info, hidden)
+        };
+        match &node.kind {
+            pane_core::NodeKind::TextInput(input) | pane_core::NodeKind::PasswordInput(input) => {
+                if let Some(key) = &node.key {
+                    into.push(field(
+                        key,
+                        input.field.title.clone(),
+                        input.field.info.clone(),
+                        matches!(&node.kind, pane_core::NodeKind::PasswordInput(_)),
+                    ));
+                }
+            }
+            pane_core::NodeKind::Select(select) => {
+                if let Some(key) = &node.key {
+                    into.push(field(
+                        key,
+                        select.field.title.clone(),
+                        select.field.info.clone(),
+                        false,
+                    ));
+                }
+            }
+            pane_core::NodeKind::Checkbox(checkbox) => {
+                if let Some(key) = &node.key {
+                    into.push(field(
+                        key,
+                        checkbox.field.title.clone(),
+                        checkbox.field.info.clone(),
+                        false,
+                    ));
+                }
+            }
+            pane_core::NodeKind::FilePicker(picker) | pane_core::NodeKind::FolderPicker(picker) => {
+                if let Some(key) = &node.key {
+                    into.push(field(
+                        key,
+                        picker.field.title.clone(),
+                        picker.field.info.clone(),
+                        false,
+                    ));
+                }
+            }
+            _ => {}
+        }
+        for child in &node.children {
+            at(child, into);
+        }
+    }
+    let mut fields = Vec::new();
+    at(&tree.root, &mut fields);
+    fields
+}
+
+/// Every text a tree holds, plain and in spans.
+fn texts_of(tree: &pane_core::DesignedTree) -> Vec<String> {
+    fn at(node: &pane_core::Node, into: &mut Vec<String>) {
+        if let pane_core::NodeKind::Text(text) = &node.kind {
+            match &text.content {
+                pane_core::TextContent::Plain(text) => into.push(text.clone()),
+                pane_core::TextContent::Spans(spans) => {
+                    into.extend(spans.iter().map(|span| span.text.clone()));
+                }
+            }
+        }
+        for child in &node.children {
+            at(child, into);
+        }
+    }
+    let mut texts = Vec::new();
+    at(&tree.root, &mut texts);
+    texts
+}
+
+/// The error the field `key` of a Pane form's tree carries.
+fn field_error(launcher: &Launcher, key: &str) -> Option<String> {
+    let view = launcher.view();
+    let form = view.form()?;
+    fn at(node: &pane_core::Node, key: &str) -> Option<String> {
+        if node.key.as_deref() == Some(key) {
+            return match &node.kind {
+                pane_core::NodeKind::TextInput(input)
+                | pane_core::NodeKind::PasswordInput(input) => input.field.error.clone(),
+                pane_core::NodeKind::Select(select) => select.field.error.clone(),
+                pane_core::NodeKind::Checkbox(checkbox) => checkbox.field.error.clone(),
+                pane_core::NodeKind::FilePicker(picker)
+                | pane_core::NodeKind::FolderPicker(picker) => picker.field.error.clone(),
+                _ => None,
+            };
+        }
+        node.children.iter().find_map(|child| at(child, key))
+    }
+    at(&form.tree.root, key)
 }
 
 /// The command id of the command `command` of the package from `folder`.
@@ -302,16 +391,20 @@ fn the_setup_screen_asks_only_for_required_unset_values_then_launches(fixture: &
     );
     let view = launcher.view();
     assert_eq!(view.title, fixture.title);
-    let setup = view.form().unwrap().setup.clone().unwrap();
-    assert_eq!(
-        setup.sentence,
-        "Set these up before using Report preferences"
+    // The screen's sentence and the package's help are part of its tree
+    // now (#241), drawn as its own texts.
+    let texts = texts_of(&view.form().expect("the Setup screen").tree);
+    assert!(
+        texts.contains(&"Set these up before using Report preferences".to_owned()),
+        "{texts:?}"
     );
-    assert_eq!(setup.help, HELP);
-    assert_eq!(
-        setup.package,
-        PackageIdentity::local(&folder).unwrap().key()
-    );
+    // The package's `HELP.md` beside the fields, as its paragraphs.
+    for paragraph in HELP {
+        assert!(
+            texts.iter().any(|text| text.contains(paragraph)),
+            "{texts:?}"
+        );
+    }
 
     // Cancelling launches nothing.
     assert!(launcher.back());
@@ -322,14 +415,14 @@ fn the_setup_screen_asks_only_for_required_unset_values_then_launches(fixture: &
     // Submitting saves the value and launches it with its original launch
     // record: from its alias.
     assert_eq!(pane.send("rp"), Status::Idle);
-    block_on(launcher.submit_form());
+    block_on(launcher.submit_pane_form(Vec::new()));
     assert_eq!(
-        launcher.view().form().unwrap().fields[0].error.as_deref(),
+        field_error(launcher, "apiKey").as_deref(),
         Some("Required"),
         "an empty value is not saved"
     );
-    launcher.set_field_value("apiKey", "abc");
-    block_on(launcher.submit_form());
+    // A value is: the same submission saves it and launches.
+    block_on(launcher.submit_pane_form(vec![("apiKey".to_owned(), "abc".to_owned())]));
     let view = launcher.view();
     assert_eq!(view.screen, Screen::Root { query: "rp".into() });
     assert_eq!(
@@ -350,15 +443,16 @@ fn the_setup_screen_asks_only_for_required_unset_values_then_launches(fixture: &
     );
     // A folder that does not exist is no value.
     let gone = pane.sources.path().join("gone");
-    launcher.set_field_value("show#folder", gone.to_str().unwrap());
-    block_on(launcher.submit_form());
+    block_on(launcher.submit_pane_form(vec![(
+        "show#folder".to_owned(),
+        (gone.to_str().unwrap()).to_owned(),
+    )]));
     assert_eq!(
-        launcher.view().form().unwrap().fields[0].error.as_deref(),
+        field_error(launcher, "show#folder").as_deref(),
         Some("No folder has this path")
     );
     let notes = pane.notes();
-    launcher.set_field_value("show#folder", &notes);
-    block_on(launcher.submit_form());
+    block_on(launcher.submit_pane_form(vec![("show#folder".to_owned(), notes.to_owned())]));
     let view = launcher.view();
     assert_eq!(view.screen, Screen::Command);
     assert_eq!(view.title, "Preferences");

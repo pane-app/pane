@@ -32,7 +32,9 @@ const SAMPLES: [(&str, &str, &str, &str); 3] = [
     ),
 ];
 
-/// The three sample commands, Rust first, as root search lists them.
+/// The three sample commands — the blank query lists them by their
+/// titles (#199's no-query order), so the row the number chords pick is
+/// the title order's, not the registration's.
 pub fn sample_commands() -> Vec<CommandRegistration> {
     let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/guests");
     SAMPLES
@@ -43,7 +45,6 @@ pub fn sample_commands() -> Vec<CommandRegistration> {
             subtitle: Some(subtitle.into()),
             component: dir.join(file),
             takes_query: false,
-            search: false,
             keywords: Vec::new(),
             when: pane_core::CommandWhen::Always,
             matches: pane_core::CommandMatches::Title,

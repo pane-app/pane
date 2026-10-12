@@ -183,11 +183,39 @@ fn manage(launcher: &Launcher) {
     assert!(matches!(launcher.view().screen, Screen::Extensions { .. }));
 }
 
+/// The value the open alias form's field starts with.
+fn form_value(launcher: &Launcher, key: &str) -> String {
+    fn at(node: &pane_core::Node, key: &str) -> Option<String> {
+        if node.key.as_deref() == Some(key)
+            && let pane_core::NodeKind::TextInput(input) = &node.kind
+        {
+            return Some(input.value.clone());
+        }
+        node.children.iter().find_map(|child| at(child, key))
+    }
+    let view = launcher.view();
+    let form = view.form().expect("a form is open");
+    at(&form.tree.root, key).expect("the field")
+}
+
+/// The error the open alias form's field carries, if one was set.
+fn form_error(launcher: &Launcher, key: &str) -> Option<String> {
+    fn at(node: &pane_core::Node, key: &str) -> Option<String> {
+        if node.key.as_deref() == Some(key)
+            && let pane_core::NodeKind::TextInput(input) = &node.kind
+        {
+            return input.field.error.clone();
+        }
+        node.children.iter().find_map(|child| at(child, key))
+    }
+    let view = launcher.view();
+    let form = view.form().expect("a form is open");
+    at(&form.tree.root, key)
+}
+
 /// Submits `alias` in the open alias form; returns the status.
 fn submit_alias(launcher: &Launcher, alias: &str) -> Status {
-    let form = launcher.view().form().cloned().expect("the alias form");
-    launcher.set_field_value(&form.fields[0].id, alias);
-    block_on(launcher.submit_form());
+    block_on(launcher.submit_pane_form(vec![("alias".to_owned(), alias.to_owned())]));
     launcher.view().status
 }
 
@@ -314,7 +342,7 @@ fn an_alias_finds_the_command_first_and_sends_the_text_after_it_only_when_invoke
     // Removed by leaving the field empty; its form starts with it.
     manage(&launcher);
     activate(&launcher, "Alias for Echo");
-    assert_eq!(launcher.view().form().unwrap().fields[0].value, "ec");
+    assert_eq!(form_value(&launcher, "alias"), "ec");
     assert_eq!(
         submit_alias(&launcher, ""),
         Status::Result("Echo has no alias now".into())
@@ -501,13 +529,16 @@ fn copies_from_other_sources_with_the_same_title_stay_distinct(fixture: &Fixture
 
     // The rows name their sources, since the titles are the same. The
     // Echo commands match the query's letters themselves now, and Pane's
-    // install row matches them below (#193), so the fallbacks sit last.
+    // own rows match them below — the update check's row between the
+    // commands, the install row under them (#193) — so the fallbacks sit
+    // last.
     search(&launcher, "ec hi");
     let listed = titles(&launcher);
     assert_eq!(
         listed,
         [
             "Echo",
+            "Check for Extension Updates",
             "Echo",
             "Echo",
             "Install extension from folder…",
@@ -519,16 +550,16 @@ fn copies_from_other_sources_with_the_same_title_stay_distinct(fixture: &Fixture
     // package's source after its subtitle. The copy the user gave an
     // alias ranks first of the two (#199's no-query order).
     assert!(
-        subtitle(&launcher, 1).starts_with(&format!("{} · ", fixture.echo_subtitle)),
+        subtitle(&launcher, 2).starts_with(&format!("{} · ", fixture.echo_subtitle)),
         "{}",
-        subtitle(&launcher, 1)
-    );
-    assert_eq!(
-        subtitle(&launcher, 1),
-        format!("{} · {second_source}", fixture.echo_subtitle)
+        subtitle(&launcher, 2)
     );
     assert_eq!(
         subtitle(&launcher, 2),
+        format!("{} · {second_source}", fixture.echo_subtitle)
+    );
+    assert_eq!(
+        subtitle(&launcher, 3),
         format!("{} · {first_source}", fixture.echo_subtitle)
     );
     assert_eq!(
@@ -635,8 +666,7 @@ fn an_alias_that_is_not_one_word_or_is_another_commands_is_refused() {
                 .into()
         )
     );
-    let form = launcher.view().form().cloned().expect("the form stays");
-    assert!(form.fields[0].error.is_some());
+    assert!(form_error(&launcher, "alias").is_some(), "the form stays");
 
     let status = set_alias(&launcher, "e c");
     assert_eq!(
@@ -832,11 +862,17 @@ fn uninstalling_forgets_exactly_its_own_commands_not_those_of_a_longer_source() 
     let recorded = fs::read_to_string(dirs.aliases_file()).unwrap();
     assert!(recorded.contains("x#y#echo\": \"ec\""), "{recorded}");
     search(&launcher, "ec hi");
-    // The Echo command matches the query's letters too, and Pane's
-    // install row matches them below (#193).
+    // The Echo command matches the query's letters too, and Pane's own
+    // rows match them — the update check's row between the command and
+    // the install row (#193).
     assert_eq!(
         titles(&launcher),
-        ["Echo", "Echo", "Install extension from folder…"]
+        [
+            "Echo",
+            "Check for Extension Updates",
+            "Echo",
+            "Install extension from folder…"
+        ]
     );
 }
 
@@ -851,9 +887,7 @@ fn a_change_that_cannot_be_kept_never_brings_back_an_uninstalled_packages_choice
     // The alias applies at once; its write is still to come.
     manage(&launcher);
     activate(&launcher, "Alias for Echo");
-    let form = launcher.view().form().cloned().unwrap();
-    launcher.set_field_value(&form.fields[0].id, "ec");
-    let write = launcher.submit_form();
+    let write = launcher.submit_pane_form(vec![("alias".to_owned(), "ec".to_owned())]);
     // Meanwhile the package is uninstalled, forgetting it.
     uninstall(&launcher, &folder, "Query sample");
     assert!(launcher.packages().is_empty());
@@ -869,11 +903,15 @@ fn a_change_that_cannot_be_kept_never_brings_back_an_uninstalled_packages_choice
         row_subtitle(&launcher, "Alias for Echo")
     );
     search(&launcher, "ec hi");
-    // The command's row is gone; Pane's install row matches the letters
-    // fuzzily (#193).
+    // The command's row is gone; Pane's own rows match the letters
+    // fuzzily, the update check's row above the install row (#193).
     assert_eq!(
         titles(&launcher),
-        ["Echo", "Install extension from folder…"]
+        [
+            "Check for Extension Updates",
+            "Echo",
+            "Install extension from folder…"
+        ]
     );
 }
 

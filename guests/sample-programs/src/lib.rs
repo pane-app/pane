@@ -51,7 +51,7 @@ use core::task::Poll;
 use pane_extension::alloc::{format, string::String, vec::Vec};
 use pane_extension::feedback::{Toast, show_toast};
 use pane_extension::programs::{self, Options, ProgramError, ProgramErrorKind};
-use pane_extension::{Command, Item, LaunchRecord, List, NoCustomView, settings};
+use pane_extension::{Command, Item, LaunchRecord, List, settings};
 
 /// The program every item runs, by its bare name.
 const ECHO: &str = "pane-echo";
@@ -307,7 +307,7 @@ async fn outcome(item_id: &str) -> Result<String, String> {
 }
 
 impl Command for ProgramsSample {
-    type CustomView = NoCustomView;
+    type DesignedView = pane_extension::view::NoDesignedView;
 
     async fn render() -> Result<List, String> {
         let item = |id: &'static str, title: &str, subtitle: &str| {

@@ -15,7 +15,6 @@ use crate::icons::{self, Icon, Tint};
 use serde::Deserialize;
 use serde_json::Value;
 
-use super::{Choice, CustomViewInfo, CustomViewRole, Field, FieldKind, Form};
 use crate::keyboard::Binding;
 use crate::platform::Platform;
 
@@ -24,33 +23,20 @@ use crate::platform::Platform;
 /// drawn as far as Pane understands it.
 pub const TREE_VERSION: u64 = 1;
 
-/// A command's screen, as its tree describes it: a list view, or a form
-/// (`"type": "form"`, #149), whose `items` are then empty.
+/// A command's screen, as its tree describes it: a list view. A form is
+/// a designed view now (#241, `docs/designed-tree.md`), not a screen the
+/// list tree names.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct View {
     pub title: String,
     pub items: Vec<Item>,
-    /// When the screen is a form rather than a list: the form, with the id
-    /// Pane passes to `submit-form` when it is submitted.
-    pub form: Option<ScreenForm>,
-}
-
-/// A form that is a command's whole screen, such as Quicklinks' Create
-/// Quicklink: the user fills it in as soon as the command opens, and Back
-/// leaves the command.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ScreenForm {
-    /// What `submit-form` receives as the item id.
-    pub id: String,
-    pub form: Form,
 }
 
 /// One entry in a command's list view.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Item {
     /// Identifies the item among the list's items: Pane keeps the selection
-    /// on it when the list is drawn again, and passes it to `submit-form`
-    /// and `open-view`.
+    /// on it when the list is drawn again, and passes it to `open-view`.
     pub id: String,
     pub title: String,
     pub subtitle: Option<String>,
@@ -58,15 +44,9 @@ pub struct Item {
     /// (Enter), the second its secondary action (Ctrl+Enter), and the
     /// Actions panel lists them all (#137).
     pub actions: Vec<Action>,
-    /// When set, activating the item opens this form instead of running its
-    /// action.
-    pub form: Option<Form>,
     /// The operating systems the item's action works on; `None` for every
     /// system.
     pub platforms: Option<Vec<Platform>>,
-    /// When set (and `form` is not), activating the item opens this custom
-    /// view instead of running its action.
-    pub custom_view: Option<CustomViewInfo>,
     /// How the item looks beyond its title and subtitle: its icon,
     /// tooltips and accessories (#139).
     pub look: ItemLook,
@@ -136,8 +116,9 @@ impl ItemLook {
 
 /// Reads one accessory: `{"text": …}`, `{"date": <ms>}` or `{"tag": …}`,
 /// with an optional `icon`, `color` and `tooltip`, or an icon alone.
-/// `None` for one Pane cannot read.
-fn read_accessory(value: &Value) -> Option<Accessory> {
+/// `None` for one Pane cannot read. Read for a designed List's items as
+/// for a list tree's (#240).
+pub(crate) fn read_accessory(value: &Value) -> Option<Accessory> {
     let Value::Object(fields) = value else {
         return None;
     };
@@ -286,21 +267,12 @@ pub(crate) fn read_view(tree: &str) -> Result<View, String> {
         None => return Err("its view has no `type`".into()),
     };
     if kind == "form" {
-        let screen: WireScreenForm =
-            serde_json::from_value(tree.view).map_err(|error| format!("its form: {error}"))?;
-        let form = Form::from(WireForm {
-            title: screen.title,
-            fields: screen.fields,
-            submit_label: screen.submit_label,
-        });
-        return Ok(View {
-            title: form.title.clone(),
-            items: Vec::new(),
-            form: Some(ScreenForm {
-                id: screen.id,
-                form,
-            }),
-        });
+        return Err(
+            "it shows a `form` view, the typed form of the list tree that the \
+             designed tree's Form components replaced (#241); a form is now a \
+             designed view, a tree whose fields are components"
+                .into(),
+        );
     }
     if kind != "list" {
         return Err(format!(
@@ -318,7 +290,6 @@ pub(crate) fn read_view(tree: &str) -> Result<View, String> {
     Ok(View {
         title: list.title,
         items,
-        form: None,
     })
 }
 
@@ -374,13 +345,9 @@ struct WireItem {
     subtitle: Option<String>,
     #[serde(default)]
     actions: Option<Vec<WireAction>>,
-    #[serde(default)]
-    form: Option<WireForm>,
     /// Names of systems; a name Pane does not know is ignored.
     #[serde(default)]
     platforms: Option<Vec<String>>,
-    #[serde(default)]
-    custom_view: Option<WireCustomView>,
     /// Read leniently by [`icons::read`]: an icon Pane cannot draw leaves
     /// the item without one, never the tree unreadable.
     #[serde(default)]
@@ -408,19 +375,11 @@ fn item(item: WireItem) -> Result<Item, String> {
         title: item.title,
         subtitle: item.subtitle,
         actions,
-        form: item.form.map(Form::from),
         platforms: item.platforms.map(|names| {
             names
                 .iter()
                 .filter_map(|name| Platform::from_id(name))
                 .collect()
-        }),
-        custom_view: item.custom_view.map(|view| CustomViewInfo {
-            title: view.title,
-            label: view.label,
-            role: match view.role {
-                WireRole::ColorWell => CustomViewRole::ColorWell,
-            },
         }),
         look,
     })
@@ -581,100 +540,6 @@ fn keys(value: &Value) -> Result<Binding, String> {
     Binding::new(control, alt, shift, platform, false, &keys.key)
 }
 
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct WireForm {
-    title: String,
-    fields: Vec<WireField>,
-    submit_label: String,
-}
-
-impl From<WireForm> for Form {
-    fn from(form: WireForm) -> Form {
-        Form {
-            title: form.title,
-            fields: form
-                .fields
-                .into_iter()
-                .map(|field| Field {
-                    id: field.id,
-                    label: field.label,
-                    value: field.value,
-                    kind: match field.kind {
-                        WireFieldKind::Text { placeholder } => FieldKind::Text { placeholder },
-                        WireFieldKind::Choice { choices } => FieldKind::Choice(
-                            choices
-                                .into_iter()
-                                .map(|choice| Choice {
-                                    id: choice.id,
-                                    label: choice.label,
-                                })
-                                .collect(),
-                        ),
-                    },
-                })
-                .collect(),
-            submit_label: form.submit_label,
-        }
-    }
-}
-
-#[derive(Deserialize)]
-struct WireField {
-    id: String,
-    label: String,
-    /// What the field starts with: a text field's text, or the id of the
-    /// option chosen first.
-    #[serde(default)]
-    value: Option<String>,
-    #[serde(flatten)]
-    kind: WireFieldKind,
-}
-
-/// A form that is the command's whole screen: a form's fields with the id
-/// `submit-form` receives.
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct WireScreenForm {
-    id: String,
-    title: String,
-    fields: Vec<WireField>,
-    submit_label: String,
-}
-
-/// A field's kind, named by its `kind`, with that kind's own fields beside
-/// it.
-#[derive(Deserialize)]
-#[serde(tag = "kind", rename_all = "kebab-case")]
-enum WireFieldKind {
-    Text {
-        #[serde(default)]
-        placeholder: Option<String>,
-    },
-    Choice {
-        choices: Vec<WireChoice>,
-    },
-}
-
-#[derive(Deserialize)]
-struct WireChoice {
-    id: String,
-    label: String,
-}
-
-#[derive(Deserialize)]
-struct WireCustomView {
-    title: String,
-    label: String,
-    role: WireRole,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "kebab-case")]
-enum WireRole {
-    ColorWell,
-}
-
 /// An answer object. The first version's `status` text is no longer
 /// shown, so it is ignored with any other unknown field.
 #[derive(Deserialize)]
@@ -722,18 +587,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_list_reads_with_its_items_actions_forms_and_views() {
+    fn a_list_reads_with_its_items_actions_and_views() {
         let view = read_view(
             r#"{"version": 1, "view": {"type": "list", "title": "Notes", "items": [
                 {"id": "a", "title": "A", "subtitle": "first",
                  "actions": [{"title": "Open", "onAction": "open-a"}, {"onAction": "x"}]},
                 {"id": "b", "title": "B", "platforms": ["windows", "plan9"],
-                 "form": {"title": "F", "submitLabel": "Go", "fields": [
-                    {"id": "n", "label": "Name", "kind": "text", "placeholder": "Ada"},
-                    {"id": "c", "label": "Pick", "kind": "choice",
-                     "choices": [{"id": "x", "label": "X"}]}]}},
-                {"id": "c", "title": "C", "subtitle": null, "actions": null,
-                 "customView": {"title": "Color", "label": "Color", "role": "color-well"}}
+                 "actions": [{"onAction": "b"}]},
+                {"id": "c", "title": "C", "subtitle": null, "actions": null}
             ]}}"#,
         )
         .unwrap();
@@ -746,63 +607,37 @@ mod tests {
         assert_eq!(a.action().unwrap().title.as_deref(), Some("Open"));
         let b = &view.items[1];
         assert_eq!(b.platforms, Some(vec![Platform::Windows]));
-        assert_eq!(b.action(), None);
-        let form = b.form.as_ref().unwrap();
-        assert_eq!(
-            form.fields[0].kind,
-            FieldKind::Text {
-                placeholder: Some("Ada".into())
-            }
-        );
-        assert!(matches!(&form.fields[1].kind, FieldKind::Choice(choices) if choices.len() == 1));
         let c = &view.items[2];
         assert_eq!(c.actions, []);
-        assert_eq!(
-            c.custom_view.as_ref().map(|view| view.role),
-            Some(CustomViewRole::ColorWell)
-        );
     }
 
     #[test]
-    fn a_form_screen_reads_with_its_id_and_the_values_its_fields_start_with() {
-        let view = read_view(
+    fn a_form_view_is_refused_naming_the_form_components_that_replaced_it() {
+        // The typed form of the tree's first version: a screen a command
+        // answered as a form, whose submission was `submit-form` (#241
+        // rebuilt both on the designed tree). A component that still
+        // answers one is refused before it runs — by the interface check,
+        // for the export — and a tree naming one here says what replaced
+        // it.
+        let problem = read_view(
             r#"{"version": 1, "view": {"type": "form", "id": "create",
                 "title": "Create Quicklink", "submitLabel": "Create Quicklink", "fields": [
-                    {"id": "name", "label": "Name", "kind": "text", "value": "Docs"},
-                    {"id": "link", "label": "Link", "kind": "text", "placeholder": "https://"},
-                    {"id": "how", "label": "How", "kind": "choice", "value": "b",
-                     "choices": [{"id": "a", "label": "A"}, {"id": "b", "label": "B"}]}]}}"#,
-        )
-        .unwrap();
-
-        assert_eq!(view.title, "Create Quicklink");
-        assert_eq!(view.items, []);
-        let screen = view.form.expect("a form screen");
-        assert_eq!(screen.id, "create");
-        assert_eq!(screen.form.submit_label, "Create Quicklink");
-        let values: Vec<Option<&str>> = screen
-            .form
-            .fields
-            .iter()
-            .map(|field| field.value.as_deref())
-            .collect();
-        assert_eq!(values, [Some("Docs"), None, Some("b")]);
-        assert_eq!(
-            screen.form.fields[1].kind,
-            FieldKind::Text {
-                placeholder: Some("https://".into())
-            }
-        );
-        // A list has no form, and a form screen needs its id.
-        let list =
-            read_view(r#"{"version": 1, "view": {"type": "list", "title": "T", "items": []}}"#);
-        assert_eq!(list.unwrap().form, None);
-        let problem = read_view(
-            r#"{"version": 1, "view": {"type": "form", "title": "T", "submitLabel": "Go",
-                "fields": []}}"#,
+                    {"id": "name", "label": "Name", "kind": "text"}]}}"#,
         )
         .unwrap_err();
-        assert!(problem.contains("missing field `id`"), "{problem}");
+        assert!(
+            problem.contains("the designed tree's Form components"),
+            "{problem}"
+        );
+        // An item's `form` of that shape is an unknown field, ignored as
+        // every one is.
+        let view = read_view(
+            r#"{"version": 1, "view": {"type": "list", "title": "T", "items": [
+                {"id": "a", "title": "A",
+                 "form": {"title": "F", "submitLabel": "Go", "fields": []}}]}}"#,
+        )
+        .unwrap();
+        assert_eq!(view.items[0].title, "A");
     }
 
     #[test]

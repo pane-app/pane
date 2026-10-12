@@ -10,7 +10,7 @@
 
 use pane_extension::alloc::{format, string::String};
 use pane_extension::feedback::{Toast, show_toast};
-use pane_extension::{Command, LaunchRecord, LaunchType, NoCustomView};
+use pane_extension::{Command, LaunchRecord, LaunchType};
 
 struct Echo;
 pane_extension::export!(Echo);
@@ -22,7 +22,7 @@ const REFUSED: &str = "fail";
 const CRASH: &str = "crash";
 
 impl Command for Echo {
-    type CustomView = NoCustomView;
+    type DesignedView = pane_extension::view::NoDesignedView;
 
     /// Shows a toast with the text it was sent; "fail" is refused, to show
     /// how an error looks, and "crash" crashes on purpose (three crashes

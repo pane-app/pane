@@ -24,7 +24,7 @@
 
 use pane_extension::alloc::{format, string::String};
 use pane_extension::feedback::{Toast, show_toast};
-use pane_extension::{Command, LaunchRecord, LaunchType, NoCustomView};
+use pane_extension::{Command, LaunchRecord, LaunchType};
 
 struct Matches;
 pane_extension::export!(Matches);
@@ -33,7 +33,7 @@ pane_extension::export!(Matches);
 const NOTHING: &str = "Heard nothing: a typed web address or path is what reaches these commands";
 
 impl Command for Matches {
-    type CustomView = NoCustomView;
+    type DesignedView = pane_extension::view::NoDesignedView;
 
     /// Shows a toast with the text the command was sent — the address or
     /// path the query was, for a command declared for one (#195). Launched

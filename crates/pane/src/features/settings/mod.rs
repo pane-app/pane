@@ -987,6 +987,7 @@ pub(crate) fn choice(
         subtitle: None,
         keywords: Vec::new(),
         unavailable_reason: unavailable.map(Into::into),
+        section: None,
     }
 }
 

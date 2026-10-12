@@ -21,7 +21,7 @@ use pane_extension::alloc::{format, string::String, string::ToString, vec::Vec};
 use pane_extension::capabilities::{available, call, call_every, providers};
 use pane_extension::feedback::{Toast, show_toast};
 use pane_extension::operations::CallErrorKind;
-use pane_extension::{Command, CustomView, Item, List, NoCustomView};
+use pane_extension::{Command, Item, List};
 use serde_json::{Value, json};
 
 /// The capabilities this package uses, as its pane.json declares them.
@@ -125,7 +125,7 @@ fn item(id: &'static str, title: &str, subtitle: &str) -> Item {
 }
 
 impl Command for Capabilities {
-    type CustomView = NoCustomView;
+    type DesignedView = pane_extension::view::NoDesignedView;
 
     async fn render() -> Result<List, String> {
         Ok(List::new("Greet from Rust").items([
@@ -155,9 +155,5 @@ impl Command for Capabilities {
                 "Asks whether an optional capability has a provider",
             ),
         ]))
-    }
-
-    async fn open_view(item_id: String) -> Result<CustomView, String> {
-        Err(format!("unknown view: {item_id}"))
     }
 }

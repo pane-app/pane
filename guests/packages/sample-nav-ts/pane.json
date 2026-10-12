@@ -1,0 +1,15 @@
+{
+  "manifestVersion": 1,
+  "title": "TypeScript navigation sample",
+  "version": "0.1.0",
+  "apiVersion": "0.1",
+  "commands": [
+    {
+      "id": "sample",
+      "title": "TypeScript navigation sample",
+      "subtitle": "A designed view whose stack Pane owns: pushes, pops and results",
+      "component": "sample_nav_ts.wasm",
+      "mode": "designed"
+    }
+  ]
+}

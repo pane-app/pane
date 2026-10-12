@@ -23,7 +23,7 @@ idle hint is not the result color cannot silently show a result.
 
 With --locate, prints the center of the largest connected region of pixels drawn
 exactly in the given color inside the Pane window
-(such as one swatch of a custom view), as "x y" screenshot pixels, so a
+(such as one swatch of a canvas), as "x y" screenshot pixels, so a
 smoke can click there.
 
 Usage: python3 scripts/check_screenshot.py <png> <role or hex color> [min pixels]

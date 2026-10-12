@@ -30,10 +30,7 @@ use core::sync::atomic::{AtomicU64, Ordering};
 
 use pane_extension::alloc::{format, string::String, vec::Vec};
 use pane_extension::feedback::{Toast, show_toast};
-use pane_extension::{
-    Command, CustomView, FieldValue, FormError, Item, List, NoCustomView, content, lifecycle,
-    settings, state,
-};
+use pane_extension::{Command, Item, List, content, lifecycle, settings, state};
 
 /// The content key holding how many cycles the service has run, ever.
 const CYCLES: &str = "cycles";
@@ -151,7 +148,7 @@ fn outcome(item_id: &str) -> Result<String, String> {
 }
 
 impl Command for Watching {
-    type CustomView = NoCustomView;
+    type DesignedView = pane_extension::view::NoDesignedView;
 
     async fn render() -> Result<List, String> {
         let cycles = counted(CYCLES)?;
@@ -202,17 +199,6 @@ impl Command for Watching {
                 ),
             ]),
         )
-    }
-
-    async fn submit_form(_item_id: String, _values: Vec<FieldValue>) -> Result<String, FormError> {
-        Err(FormError {
-            field: None,
-            message: "The service sample has no forms".into(),
-        })
-    }
-
-    async fn open_view(_item_id: String) -> Result<CustomView, String> {
-        Err("The service sample has no custom views".into())
     }
 }
 

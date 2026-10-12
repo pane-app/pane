@@ -533,6 +533,9 @@ fn a_collection_without_an_id_is_explained_and_an_unknown_one_is_refused() {
     let pane = Pane::new(Answer::Leave);
     let tools = pane.collection();
     let mut client = pane.connect();
+    // The no-id refusal spells the folder as it was named, and the
+    // unknown-id one the collection's resolved root — on macOS, of the
+    // `/var` symlink.
     let root = PackageIdentity::local(&tools)
         .unwrap()
         .local_folder()
@@ -556,7 +559,7 @@ fn a_collection_without_an_id_is_explained_and_an_unknown_one_is_refused() {
             "The folder {} is a collection, not one extension: its root holds \
              pane-collection.json, which lists the extensions it offers by id; name the one to \
              develop after `#`",
-            root.display()
+            tools.display()
         )),
         "{message}"
     );

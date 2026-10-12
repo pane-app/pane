@@ -6,12 +6,14 @@
 use core::cell::Cell;
 
 use pane_extension::alloc::{format, string::String, vec, vec::Vec};
+use pane_extension::commands::{self, CommandRef, LaunchRecord, LaunchType};
 use pane_extension::feedback::{Toast, show_toast};
 use pane_extension::root::WallTime;
-use pane_extension::{
-    Command, CustomView, CustomViewInfo, CustomViewRole, Field, FieldKind, FieldValue, Form,
-    FormError, Frame, GuestCustomView, Item, Key, List, Shape, Text, TextField, ViewEvent,
+use pane_extension::view::{
+    CanvasEvent, CanvasRole, Container, Cx, Draw, IntoAnswer, Length, Paint, TextStyle, View,
+    canvas, column,
 };
+use pane_extension::{Color, Command, Icon, Item, List};
 
 struct Faulty;
 pane_extension::export!(Faulty);
@@ -89,86 +91,117 @@ async fn outcome(id: &str) -> Result<String, String> {
     }
 }
 
-/// A custom view that counts the events it handled, refuses Left and traps
-/// on Right. After Down, Home or End it draws a frame over one of Pane's
-/// limits (too many shapes, too long a text, too wide), until the next other
-/// event.
+/// A designed view that counts the events it handled, refuses "left" and
+/// traps on "right". After "down", "home" or "end" it draws a canvas over
+/// one of Pane's limits (too many operations, too long a text, too much
+/// inline image data), until the next other key.
 struct Counter {
     events: Cell<u32>,
-    oversize: Cell<Option<Key>>,
+    oversize: Cell<Option<&'static str>>,
+    /// Whether the next drawing answers an error, as a refused event.
+    refuse: Cell<bool>,
 }
 
-impl GuestCustomView for Counter {
-    async fn render(&self) -> Frame {
+impl View for Counter {
+    fn render(&mut self, cx: &mut Cx<Self>) -> impl IntoAnswer {
+        if self.refuse.replace(false) {
+            return Err("the view refused".into());
+        }
+        Ok(self.tree(cx))
+    }
+}
+
+impl Counter {
+    /// The view's tree: a canvas drawing how many events it handled, or
+    /// the canvas over one of Pane's limits the last limit key asked for.
+    fn tree(&self, cx: &mut Cx<Self>) -> Container {
         let text = |content: String| {
-            Shape::Text(Text {
-                x: 0,
-                y: 0,
-                content,
-                color: 0xffffff,
-            })
+            Draw::text(content)
+                .at(0., 0.)
+                .style(TextStyle::Body)
+                .color(Paint::Color(Color::hex("#ffffff")))
         };
-        let (width, shapes) = match self.oversize.get() {
-            Some(Key::Down) => (100, vec![text("x".into()); 4097]),
-            Some(Key::Home) => (100, vec![text("x".repeat(257))]),
-            Some(Key::End) => (4097, Vec::new()),
-            _ => (100, Vec::new()),
-        };
-        Frame {
-            width,
-            height: 20,
-            shapes,
-            value: format!("{} events", self.events.get()),
+        let mut ops = Vec::new();
+        match self.oversize.get() {
+            // Too many operations for one canvas.
+            Some("down") => {
+                for _ in 0..20_001 {
+                    ops.push(Draw::rect(0., 0., 1., 1.));
+                }
+            }
+            // A text operation over the character limit.
+            Some("home") => ops.push(text("x".repeat(65_537))),
+            // An image operation over the inline data limit.
+            Some("end") => ops.push(Draw::image(Icon::url(format!(
+                "data:image/png;base64,{}",
+                "a".repeat(1_048_577)
+            )))),
+            _ => ops.push(text(format!("{} events", self.events.get()))),
+        }
+        column().child(
+            canvas()
+                .key("counter")
+                .width(Length::Px(240.))
+                .height(Length::Px(20.))
+                .role(CanvasRole::Generic)
+                .label("Counter")
+                .value(format!("{} events", self.events.get()))
+                .on_key(cx.value_listener(|this, key| this.keyed(key)))
+                .on_pointer_down(cx.canvas_listener(|this, event| this.pointed(event)))
+                .on_pointer_move(cx.canvas_listener(|this, event| this.pointed(event)))
+                .on_pointer_up(cx.canvas_listener(|this, event| this.pointed(event)))
+                .ops(ops),
+        )
+    }
+
+    /// A key the canvas is focused for: "left" refuses, "right" traps, and
+    /// "down", "home" and "end" draw a canvas over one of Pane's limits.
+    fn keyed(&self, key: &str) {
+        match key {
+            "left" => self.refuse.set(true),
+            "right" => panic!("view trap"),
+            "down" => self.oversize.set(Some("down")),
+            "home" => self.oversize.set(Some("home")),
+            "end" => self.oversize.set(Some("end")),
+            _ => {
+                self.oversize.set(None);
+                self.events.set(self.events.get() + 1);
+            }
         }
     }
 
-    async fn handle_event(&self, event: ViewEvent) -> Result<(), String> {
-        match event {
-            ViewEvent::Key(Key::Left) => Err("the view refused".into()),
-            ViewEvent::Key(Key::Right) => panic!("view trap"),
-            _ => {
-                self.oversize.set(match event {
-                    ViewEvent::Key(key @ (Key::Down | Key::Home | Key::End)) => Some(key),
-                    _ => None,
-                });
-                self.events.set(self.events.get() + 1);
-                Ok(())
-            }
-        }
+    /// A pointer event the canvas received: each one counts.
+    fn pointed(&self, _event: CanvasEvent) {
+        self.oversize.set(None);
+        self.events.set(self.events.get() + 1);
     }
 }
 
 impl Command for Faulty {
-    type CustomView = Counter;
+    type DesignedView = Counter;
 
     async fn render() -> Result<List, String> {
-        // A form whose submission is always refused as a whole.
-        let form = Form {
-            title: "Refused".into(),
-            fields: vec![Field {
-                id: "text".into(),
-                label: "Text".into(),
-                kind: FieldKind::Text(TextField { placeholder: None }),
-            }],
-            submit_label: "Submit".into(),
-        };
         Ok(List::new("Faulty").items([
             acting("ok"),
             acting("error"),
             acting("trap"),
-            item("form").form(form.clone()),
+            // A form item of the typed form's shape, which the tree's
+            // reading ignores now that a form is a designed view (#241):
+            // activating it runs its action like any item's.
+            item("form").on_action(|| async { Err("the guest refused the form".into()) }),
             // Declares no operating system, so it is unavailable on every
-            // system; activating it must not open its form.
-            item("nowhere").form(form).platforms([]),
-            item("view").custom_view(CustomViewInfo {
-                title: "Counter".into(),
-                label: "Counter".into(),
-                role: CustomViewRole::ColorWell,
-            }),
-            item("no-view").custom_view(CustomViewInfo {
-                title: "Refused view".into(),
-                label: "Refused".into(),
-                role: CustomViewRole::ColorWell,
+            // system; activating it runs nothing.
+            item("nowhere").on_action(|| async { Ok(()) }).platforms([]),
+            // A designed command of this component, opened with its own
+            // manifest by the tests: a canvas counting the events it
+            // handled.
+            item("counter").on_action(|| async {
+                let counter = CommandRef {
+                    source: None,
+                    command: "counter".into(),
+                };
+                commands::launch(&counter, LaunchType::UserInitiated, &[], None)
+                    .map_err(|problem| format!("the guest refused the view: {problem}"))
             }),
             acting("grow-near-cap"),
             acting("grow-past-cap"),
@@ -181,21 +214,15 @@ impl Command for Faulty {
         run(&id).await
     }
 
-    async fn submit_form(_item_id: String, _values: Vec<FieldValue>) -> Result<String, FormError> {
-        Err(FormError {
-            field: None,
-            message: "the guest refused the form".into(),
-        })
-    }
-
-    async fn open_view(item_id: String) -> Result<CustomView, String> {
-        match item_id.as_str() {
-            "view" => Ok(CustomView::new(Counter {
-                events: Cell::new(0),
-                oversize: Cell::new(None),
-            })),
-            _ => Err("the guest refused the view".into()),
+    async fn open_designed_view(command: String, _launch: LaunchRecord) -> Result<Counter, String> {
+        if command != "counter" {
+            return Err("the guest refused the view".into());
         }
+        Ok(Counter {
+            events: Cell::new(0),
+            oversize: Cell::new(None),
+            refuse: Cell::new(false),
+        })
     }
 }
 

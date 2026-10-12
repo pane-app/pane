@@ -57,8 +57,7 @@ use pane_extension::alloc::{format, string::String, vec::Vec};
 use pane_extension::feedback::{Toast, show_toast};
 use pane_extension::icon::{avatar, favicon, file_icon, progress_ring};
 use pane_extension::{
-    Accessory, Action, Color, Command, CustomView, FieldValue, FormError, Icon, Item, List, Mask,
-    NoCustomView, Tint, Tone, settings,
+    Accessory, Action, Color, Command, Icon, Item, List, Mask, Tint, Tone, settings,
 };
 
 /// 2026-01-01T00:00:00Z, in milliseconds since the Unix epoch: the
@@ -109,7 +108,7 @@ fn action(title: &'static str, icon: Icon) -> Action {
 }
 
 impl Command for Icons {
-    type CustomView = NoCustomView;
+    type DesignedView = pane_extension::view::NoDesignedView;
 
     async fn render() -> Result<List, String> {
         let server = setting(IMAGE_SERVER);
@@ -190,16 +189,5 @@ impl Command for Icons {
                 .subtitle("The system's icon of an application, drawn bare")
                 .icon(file_icon(&setting(ICON_APPLICATION))),
         ]))
-    }
-
-    async fn submit_form(_item_id: String, _values: Vec<FieldValue>) -> Result<String, FormError> {
-        Err(FormError {
-            field: None,
-            message: "The icons sample has no forms".into(),
-        })
-    }
-
-    async fn open_view(_item_id: String) -> Result<CustomView, String> {
-        Err("The icons sample has no custom views".into())
     }
 }

@@ -143,6 +143,7 @@ dependencies = [
  "futures-sink",
  "futures-task",
  "pin-project-lite",
+ "slab",
 ]
 
 [[package]]
@@ -560,6 +561,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "slab"
+version = "0.4.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0c790de23124f9ab44544d7ac05d60440adc586479ce501c1d6d7da3cd8c9cf5"
+
+[[package]]
 name = "syn"
 version = "3.0.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -648,6 +655,7 @@ version = "0.62.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "53cb4b5556c3a791e86838ea287782bdafa704d55b0e68b5b81a3a16b9ea5f4b"
 dependencies = [
+ "futures",
  "wit-bindgen-rust-macro",
 ]
 
@@ -736,3 +744,35 @@ name = "zmij"
 version = "1.0.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "29666d0abbfad1e3dc4dcf6144730dd3a3ab225bbbdac83319345b1b44ccfc1b"
+[[package]]
+name = "designed-fixture"
+version = "0.1.0"
+dependencies = [
+ "dlmalloc",
+ "wasip3",
+ "wit-bindgen",
+]
+
+[[package]]
+name = "sample-nav"
+version = "0.1.0"
+dependencies = [
+ "pane-extension",
+]
+
+[[package]]
+name = "sample-timer"
+version = "0.1.0"
+dependencies = [
+ "pane-extension",
+ "wasip3",
+]
+
+[[package]]
+name = "sample-view"
+version = "0.1.0"
+dependencies = [
+ "pane-extension",
+ "wasip3",
+]
+

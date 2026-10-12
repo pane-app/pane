@@ -1273,14 +1273,16 @@ fn the_form_in_root_search_asks_for_the_repository() {
     block_on(launcher.activate_selected());
     let form = launcher.view().form().cloned().expect("the Git form");
     assert_eq!(launcher.view().title, "Install extension from Git");
-    assert_eq!(form.submit_label, "Show package");
+    assert_eq!(form.submit, "Show package");
     launcher.back();
     assert!(matches!(launcher.view().screen, Screen::Root { .. }));
 
     select_title(&launcher, "Install extension from Git…");
     block_on(launcher.activate_selected());
-    launcher.set_field_value("repository", &format!(" {}@v0.1.0 ", greeter.url));
-    block_on(launcher.submit_form());
+    block_on(launcher.submit_pane_form(vec![(
+        "repository".to_owned(),
+        format!(" {}@v0.1.0 ", greeter.url).to_owned(),
+    )]));
     assert_eq!(launcher.view().title, "Greeter from Git");
     block_on(launcher.activate_selected());
     assert_eq!(dirs.record("greeter")["pinned"], true);
@@ -1475,7 +1477,7 @@ fn every_way_a_collection_index_is_refused_saying_what_is_wrong() {
         (
             "no-extensions",
             r#"{ "renamed": {} }"#,
-            "missing field `extensions`",
+            "missing field `extensions` at line 1 column 17",
         ),
         (
             "duplicate-id",
@@ -2611,8 +2613,11 @@ fn one_extension_installed_by_its_id_from_a_filter_capable_server() {
     .collect();
     clock.sort();
     assert_eq!(wants_of(&fetches[2]), clock);
-    // The repository's own file and the other extensions' were never
-    // asked for.
+    // The repository's own file, and the other extensions' own files,
+    // were never asked for: the wants are exactly `clock`'s, above. (The
+    // other extensions' `src` and component blobs are the clock ones'
+    // — the extensions share their contents — so an id of theirs is
+    // wanted, as the pack holds the one blob it is.)
     let readme = wants("README.md");
     assert!(
         fetches
@@ -2621,7 +2626,7 @@ fn one_extension_installed_by_its_id_from_a_filter_capable_server() {
             .all(|line| !line.contains(readme.as_str())),
         "{fetches:?}"
     );
-    let timers = wants("extensions/timers/dist/git_greeter.wasm");
+    let timers = wants("extensions/timers/pane.json");
     assert!(
         fetches
             .iter()

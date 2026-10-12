@@ -7,13 +7,13 @@
 //! at the top of `launch_opening` (see `launching`), before anything runs:
 //! a command whose required preferences (its package's or its own) are
 //! unset does not run. A launch by the user shows the Setup screen
-//! instead, a form of only those fields, in declaration order, each with
-//! its description, with the extension's title, "Set these up before
-//! using <command>" and the package's `HELP.md` beside them. Submitting
-//! saves the values, checks again and launches the command with its
-//! original launch record; Back cancels and launches nothing. A background
-//! launch does not run and shows nothing. Neither counts as a failure of
-//! the package.
+//! instead, a designed tree of only those fields (#241), in declaration
+//! order, each with its description, with the extension's tile, its title,
+//! "Set these up before using <command>" and the package's `HELP.md`
+//! beside them. Submitting saves the values, checks again and launches
+//! the command with its original launch record; Back cancels and launches
+//! nothing. A background launch does not run and shows nothing. Neither
+//! counts as a failure of the package.
 //!
 //! The gate is one call on the launch path, so other steps before a launch
 //! compose with it: the argument form (#144) goes after it in
@@ -35,28 +35,12 @@ use std::collections::{BTreeMap, HashSet};
 use std::future::Future;
 use std::time::Instant;
 
-use super::{
-    FormField, FormPurpose, FormView, Launcher, LauncherView, OpenForm, Opening, Screen, State,
-    Status, choices, owner,
-};
+use super::pane_form::{self, PaneFieldKind, PaneForm, PaneFormField, PathPick};
+use super::{FormPurpose, Launcher, Opening, Screen, State, Status, choices, next_form_id, owner};
 use crate::extension_data::DataKind;
 use crate::packages::{InstalledPackage, Manifest, PackageIdentity};
 use crate::preferences::{self, Declared, Preference, PreferenceKind};
-use crate::runtime::{Choice, FieldKind, PathKind};
-
-/// What the Setup screen shows above and beside its fields.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct SetupHeader {
-    /// The extension's identity key: the window draws its icon from it.
-    pub package: String,
-    /// The extension's title.
-    pub title: String,
-    /// "Set these up before using <command>".
-    pub sentence: String,
-    /// The paragraphs of the package's `HELP.md`, as plain text; empty when
-    /// it ships none.
-    pub help: Vec<String>,
-}
+use crate::runtime::{DesignedTree, Finite, Layout, Node, NodeKind, Text, TextContent, TextLevel};
 
 /// The launch the Setup screen holds back until it is submitted.
 pub(super) struct SetupGate {
@@ -227,22 +211,20 @@ impl Launcher {
             // "Needs setup".
             return None;
         }
-        let header = SetupHeader {
-            package: identity.key(),
-            title: title.clone(),
-            sentence: format!("Set these up before using {command_title}"),
-            help: preferences::help(&location),
-        };
-        let fields = unset.iter().map(setup_field).collect();
-        let form = FormView {
+        let fields: Vec<PaneFormField> = unset.iter().map(setup_field).collect();
+        let form = setup_form(
+            &state,
+            &identity,
+            &title,
+            &format!("Set these up before using {command_title}"),
+            &preferences::help(&location),
             fields,
-            submit_label: "Save and continue".into(),
-            setup: Some(header),
-        };
+        );
         show_setup_form(
             &mut state,
-            LauncherView::new(Screen::Form(form), title),
             SetupGate { identity, opening },
+            form,
+            title.clone(),
         );
         None
     }
@@ -250,9 +232,15 @@ impl Launcher {
     /// Begins submitting the Setup screen, if it is the form on screen:
     /// every field needs a value (each is a required preference), or it is
     /// marked and nothing is saved. What to save, for
-    /// [`Launcher::finish_setup`].
-    pub(super) fn begin_setup_submit(&self, state: &mut State) -> Option<SetupSubmit> {
-        let (Screen::Form(form), Some(open)) = (&mut state.view.screen, &mut state.form) else {
+    /// [`Launcher::finish_setup`]. The `values` are what the window
+    /// collected from the form's fields.
+    pub(super) fn begin_setup_submit(
+        &self,
+        state: &mut State,
+        values: &[(String, String)],
+    ) -> Option<SetupSubmit> {
+        let (Screen::PaneForm(shown), Some(open)) = (&mut state.view.screen, &mut state.form)
+        else {
             return None;
         };
         let FormPurpose::Setup(gate) = &open.purpose else {
@@ -262,9 +250,8 @@ impl Launcher {
             return None;
         }
         let mut empty = false;
-        for field in &mut form.fields {
-            if field.value.trim().is_empty() {
-                field.error = Some("Required".into());
+        for (key, value) in values {
+            if value.trim().is_empty() && pane_form::mark_error(&mut shown.tree, key, "Required") {
                 empty = true;
             }
         }
@@ -277,11 +264,7 @@ impl Launcher {
         let submit = SetupSubmit {
             identity: gate.identity.clone(),
             opening: gate.opening.clone(),
-            values: form
-                .fields
-                .iter()
-                .map(|field| (field.id.clone(), field.value.clone()))
-                .collect(),
+            values: values.to_vec(),
         };
         state.view.status = Status::Running {
             since: Instant::now(),
@@ -332,12 +315,10 @@ impl Launcher {
             };
             let unset = self.unset_preferences(package, &opening.command);
             if !unset.is_empty() {
-                let still: HashSet<String> = unset.iter().map(UnsetPreference::key).collect();
-                if let Screen::Form(form) = &mut state.view.screen {
-                    for field in &mut form.fields {
-                        if still.contains(&field.id) {
-                            field.error = Some(still_unset(field.kind_of(&unset)));
-                        }
+                if let Screen::PaneForm(shown) = &mut state.view.screen {
+                    for unset in &unset {
+                        let message = still_unset(Some(unset.preference.kind));
+                        pane_form::mark_error(&mut shown.tree, &unset.key(), &message);
                     }
                 }
                 state.view.status =
@@ -616,80 +597,72 @@ fn refusal(preference: &Preference, value: &str) -> Option<String> {
 /// picker for a file, folder or application (as its extension's card in
 /// Settings has), and a text field for text and a password, a password's
 /// hidden as it is typed.
-fn setup_field(unset: &UnsetPreference) -> FormField {
+fn setup_field(unset: &UnsetPreference) -> PaneFormField {
     let preference = &unset.preference;
-    let choice = |id: &str, label: &str| Choice {
-        id: id.to_owned(),
-        label: label.to_owned(),
-    };
     let kind = match preference.kind {
-        PreferenceKind::Checkbox => FieldKind::Choice(vec![
-            choice("false", "Off"),
-            choice("true", preference.label.as_deref().unwrap_or("On")),
-        ]),
-        PreferenceKind::Dropdown => FieldKind::Choice(
+        // A checkbox preference is what it always drew through a choice
+        // of Off and On, now drawn as the checkbox it is.
+        PreferenceKind::Checkbox => {
+            PaneFieldKind::Check(preference.label.clone().unwrap_or_else(|| "On".into()))
+        }
+        PreferenceKind::Dropdown => PaneFieldKind::Choice(
             preference
                 .options
                 .iter()
-                .map(|option| choice(&option.value, &option.title))
+                .map(|option| (option.value.clone(), option.title.clone()))
                 .collect(),
         ),
         // A password's text is hidden as it is typed: the argument form's
         // password field (#144).
-        PreferenceKind::Password => FieldKind::Password {
-            placeholder: preference.placeholder.clone(),
-        },
-        PreferenceKind::Text => FieldKind::Text {
-            placeholder: preference.placeholder.clone(),
-        },
-        PreferenceKind::File => path_field(preference, PathKind::File, "The path of a file"),
-        PreferenceKind::Folder => path_field(preference, PathKind::Folder, "The path of a folder"),
-        PreferenceKind::Application => path_field(
-            preference,
-            PathKind::Application,
-            "The path of an application",
-        ),
+        PreferenceKind::Password => PaneFieldKind::Password,
+        PreferenceKind::Text => PaneFieldKind::Text,
+        PreferenceKind::File => PaneFieldKind::Path(PathPick::File),
+        PreferenceKind::Folder => PaneFieldKind::Path(PathPick::Folder),
+        PreferenceKind::Application => PaneFieldKind::Path(PathPick::Application),
         // A list: its applications' file names, typed.
-        PreferenceKind::Applications => FieldKind::Text {
-            placeholder: Some(
-                preference
-                    .placeholder
-                    .clone()
-                    .unwrap_or_else(|| "File names of applications, separated by commas".into()),
-            ),
-        },
+        PreferenceKind::Applications => PaneFieldKind::Text,
     };
-    let value = match &kind {
-        FieldKind::Choice(choices) => choices
-            .first()
-            .map(|choice| choice.id.clone())
-            .unwrap_or_default(),
-        FieldKind::Text { .. } | FieldKind::Password { .. } | FieldKind::Path { .. } => {
-            String::new()
-        }
-    };
-    FormField {
-        id: unset.key(),
-        label: preference.title.clone(),
-        kind,
-        value,
-        error: None,
-        description: preference.description.clone(),
-        required: true,
-    }
-}
-
-/// A path field choosing a `pick` for `preference`, its placeholder
-/// `placeholder` unless the manifest gives one.
-fn path_field(preference: &Preference, pick: PathKind, placeholder: &str) -> FieldKind {
-    FieldKind::Path {
-        placeholder: Some(
+    let placeholder = |plain: &str| {
+        Some(
             preference
                 .placeholder
                 .clone()
-                .unwrap_or_else(|| placeholder.to_owned()),
-        ),
-        pick,
+                .unwrap_or_else(|| plain.into()),
+        )
+    };
+    PaneFormField {
+        key: unset.key(),
+        kind,
+        title: preference.title.clone(),
+        placeholder: match preference.kind {
+            PreferenceKind::Text
+            | PreferenceKind::Password
+            | PreferenceKind::File
+            | PreferenceKind::Folder
+            | PreferenceKind::Application => placeholder(match preference.kind {
+                PreferenceKind::File => "The path of a file",
+                PreferenceKind::Folder => "The path of a folder",
+                PreferenceKind::Application => "The path of an application",
+                _ => "",
+            }),
+            // A list: its applications' file names, typed.
+            PreferenceKind::Applications => {
+                placeholder("File names of applications, separated by commas")
+            }
+            _ => None,
+        },
+        info: preference.description.clone(),
+        // A dropdown starts at its first option, as the choice it drew
+        // always did; every other field starts empty.
+        value: match &preference.kind {
+            PreferenceKind::Dropdown => preference
+                .options
+                .first()
+                .map(|option| option.value.clone())
+                .unwrap_or_default(),
+            _ => String::new(),
+        },
+        required: true,
     }
 }
 
@@ -704,34 +677,147 @@ fn still_unset(kind: Option<PreferenceKind>) -> String {
     }
 }
 
-impl FormField {
-    /// The kind of the preference among `unset` this Setup screen field
-    /// edits.
-    fn kind_of(&self, unset: &[UnsetPreference]) -> Option<PreferenceKind> {
-        unset
+/// The Setup screen's form: its fields under a `form` node, the
+/// extension's tile and title and the sentence naming the command over
+/// them, and the package's `HELP.md` beside them. The first field that is
+/// empty asks for the keyboard (each is required).
+fn setup_form(
+    state: &State,
+    identity: &PackageIdentity,
+    title: &str,
+    sentence: &str,
+    help: &[String],
+    fields: Vec<PaneFormField>,
+) -> PaneForm {
+    let icon = super::looks::icon_of(state, &identity.key());
+    let mut header = Vec::with_capacity(2);
+    if let Some(icon) = icon {
+        header.push(Node {
+            kind: NodeKind::IconTile(crate::runtime::IconNode {
+                icon: Some(icon),
+                size: None,
+            }),
+            key: Some("tile".into()),
+            ..Node::plain()
+        });
+    }
+    header.push(Node {
+        kind: NodeKind::Column(Layout::default()),
+        key: Some("heading".into()),
+        children: vec![
+            paragraph(title, TextLevel::Primary),
+            paragraph(sentence, TextLevel::Secondary),
+        ],
+        ..Node::plain()
+    });
+    let mut children: Vec<Node> = fields.iter().map(PaneFormField::node).collect();
+    if let Some(first) = children.iter_mut().find(|node| empty_value(node)) {
+        first.focus = true;
+    }
+    let form = Node {
+        kind: NodeKind::Form(crate::runtime::FormNode {
+            on_submit: None,
+            submit_label: Some("Save and continue".into()),
+        }),
+        key: Some("form".into()),
+        children,
+        ..Node::plain()
+    };
+    // The package's help beside the fields, as the screen always showed
+    // it.
+    let beside = (!help.is_empty()).then(|| {
+        let mut help_column = Node {
+            kind: NodeKind::Column(Layout::default()),
+            key: Some("help".into()),
+            ..Node::plain()
+        };
+        help_column.style.sizing.grow = Some(Finite(1.));
+        help_column.children = help
             .iter()
-            .find(|unset| unset.key() == self.id)
-            .map(|unset| unset.preference.kind)
+            .enumerate()
+            .map(|(index, text)| {
+                let mut paragraph = paragraph(text, TextLevel::Tertiary);
+                paragraph.key = Some(format!("help-{index}"));
+                paragraph
+            })
+            .collect();
+        help_column
+    });
+    let tree = DesignedTree {
+        root: Node {
+            kind: NodeKind::Column(Layout::default()),
+            navigation_title: Some(title.to_owned()),
+            key: Some("screen".into()),
+            children: vec![
+                Node {
+                    kind: NodeKind::Row(Layout::default()),
+                    key: Some("header".into()),
+                    children: header,
+                    ..Node::plain()
+                },
+                Node {
+                    kind: NodeKind::Row(Layout::default()),
+                    key: Some("body".into()),
+                    children: match beside {
+                        Some(help) => vec![form, help],
+                        None => vec![form],
+                    },
+                    ..Node::plain()
+                },
+            ],
+            ..Node::plain()
+        },
+    };
+    let mut form = PaneForm {
+        id: next_form_id(),
+        tree,
+        submit: "Save and continue".into(),
+        owner: None,
+        loading: false,
+    };
+    form.land(state, identity);
+    form
+}
+
+/// One line of the screen's own text, at `level`.
+fn paragraph(text: &str, level: TextLevel) -> Node {
+    Node {
+        kind: NodeKind::Text(Text {
+            content: TextContent::Plain(text.to_owned()),
+            style: None,
+            level: Some(level),
+            color: None,
+            size: None,
+            weight: None,
+            truncate: false,
+        }),
+        ..Node::plain()
     }
 }
 
-/// Shows `view`, the Setup screen, over what is on screen: Back returns
+/// Whether the field `node` starts empty: a text field, a password, a
+/// date or a path with nothing in it. A dropdown starts at its first
+/// option and a checkbox at off, so neither is empty.
+fn empty_value(node: &Node) -> bool {
+    match &node.kind {
+        NodeKind::TextInput(input) | NodeKind::PasswordInput(input) => input.value.is_empty(),
+        NodeKind::DatePicker(date) | NodeKind::DateTimePicker(date) => date.value.is_empty(),
+        NodeKind::FilePicker(picker) | NodeKind::FolderPicker(picker) => picker.paths.is_empty(),
+        _ => false,
+    }
+}
+
+/// Shows `form`, the Setup screen, over what is on screen: Back returns
 /// there and launches nothing. If a form is already open (another Setup
 /// screen, say), Back returns to what that form was shown over.
-fn show_setup_form(state: &mut State, view: LauncherView, gate: SetupGate) {
-    let return_to = match state.form.take() {
-        Some(open) => {
-            state.view = view;
-            open.return_to
-        }
-        None => std::mem::replace(&mut state.view, view),
-    };
-    state.form = Some(OpenForm {
-        purpose: FormPurpose::Setup(Box::new(gate)),
-        return_to,
-        submitting: false,
-    });
-    state.next_screen();
+fn show_setup_form(state: &mut State, gate: SetupGate, form: PaneForm, title: String) {
+    // The form already open returns to what IT was shown over, as
+    // replacing one Setup screen with another always has: the new screen
+    // returns there too, not to the form it replaced.
+    if let Some(open) = state.form.take() {
+        state.view = open.return_to;
+    }
+    pane_form::open_pane_form(state, FormPurpose::Setup(Box::new(gate)), form, title);
     state.sent_from = None;
     // A launch from a hidden window (a no-view command's hotkey) needs it
     // now.

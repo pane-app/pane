@@ -1,0 +1,29 @@
+{
+  "manifestVersion": 1,
+  "title": "Designed fixture",
+  "version": "0.1.0",
+  "apiVersion": "0.1",
+  "commands": [
+    {
+      "id": "designed",
+      "title": "Designed fixture",
+      "subtitle": "A designed view whose trees are written by hand",
+      "component": "designed_fixture.wasm",
+      "mode": "designed"
+    },
+    {
+      "id": "canvas",
+      "title": "Designed canvas fixture",
+      "subtitle": "A canvas that fills its space and draws what it receives",
+      "component": "designed_fixture.wasm",
+      "mode": "designed"
+    },
+    {
+      "id": "form",
+      "title": "Designed form fixture",
+      "subtitle": "A form of every field kind, whose submission draws its values",
+      "component": "designed_fixture.wasm",
+      "mode": "designed"
+    }
+  ]
+}

@@ -18,7 +18,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use futures::executor::block_on;
-use pane_core::{Launcher, PackageIdentity, Runtime, SavedData, Screen, Status, Unavailable};
+use pane_core::{
+    FormValue, Launcher, PackageIdentity, Runtime, SavedData, Screen, Status, Unavailable,
+};
 use tempfile::TempDir;
 
 #[path = "support/platforms.rs"]
@@ -186,11 +188,26 @@ fn greet(launcher: &Launcher, source: &str) -> Status {
     block_on(launcher.activate_selected());
     select_title(launcher, "Greet through another extension");
     block_on(launcher.activate_selected());
-    assert!(launcher.view().form().is_some(), "no form");
-    launcher.set_field_value("source", source);
-    launcher.set_field_value("name", "Ada");
-    launcher.set_field_value("times", "once");
-    block_on(launcher.submit_form());
+    // The item's action launches the form's command on Pane's own launch
+    // thread: wait for it to open before reading the screen.
+    assert!(
+        launcher.wait_for_launches(std::time::Duration::from_secs(20)),
+        "the form's command did not launch"
+    );
+    // The form is a designed tree's (#241), submitted through the
+    // designed seam.
+    assert!(
+        matches!(launcher.view().screen, Screen::DesignedView(_)),
+        "no form"
+    );
+    block_on(launcher.submit_designed_form(
+        None,
+        vec![
+            ("source".to_owned(), FormValue::Text(source.to_owned())),
+            ("name".to_owned(), FormValue::Text("Ada".to_owned())),
+            ("times".to_owned(), FormValue::Text("once".to_owned())),
+        ],
+    ));
     launcher.view().status
 }
 
@@ -1092,8 +1109,10 @@ fn a_call_by_dependency_id_reaches_only_the_operations_declared_for_it() {
     block_on(launcher.activate_selected());
     select_title(&launcher, "Wait in another extension");
     block_on(launcher.activate_selected());
-    launcher.set_field_value("source", "greeter");
-    block_on(launcher.submit_form());
+    block_on(launcher.submit_designed_form(
+        None,
+        vec![("source".to_owned(), FormValue::Text("greeter".to_owned()))],
+    ));
 
     assert_eq!(
         launcher.view().status,

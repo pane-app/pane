@@ -9,7 +9,16 @@
       "title": "Package search",
       "subtitle": "Searches the fixture package registry as you type",
       "component": "sample_search.wasm",
-      "search": true
+      "mode": "designed"
+    }
+  ],
+  "preferences": [
+    {
+      "name": "service",
+      "type": "text",
+      "title": "Service address",
+      "description": "The address of the package registry the sample searches; the sample's own Service address view writes it.",
+      "placeholder": "http://127.0.0.1:8740"
     }
   ]
 }

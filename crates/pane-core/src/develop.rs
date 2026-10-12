@@ -226,8 +226,11 @@ mod tests {
     #[test]
     fn every_way_a_name_cannot_be_developed_says_what_is_wrong() {
         let dir = tempfile::tempdir().unwrap();
-        let root = dir.path().join("tools");
-        collection(&root);
+        let folder = dir.path().join("tools");
+        collection(&folder);
+        // The paths the errors spell are resolved, as the identities
+        // are — on macOS, of the `/var` symlink.
+        let root = resolved(&folder);
         // An id the collection does not list, and one that cannot be one.
         assert_eq!(
             target(&root, Some("nobody")).unwrap_err(),
@@ -260,6 +263,7 @@ mod tests {
         let one = dir.path().join("one");
         std::fs::create_dir_all(&one).unwrap();
         manifest(&one, "command.wasm");
+        let one = resolved(&one);
         assert_eq!(
             target(&one, Some("clock")).unwrap_err(),
             format!(
@@ -270,6 +274,7 @@ mod tests {
         );
         let neither = dir.path().join("neither");
         std::fs::create_dir(&neither).unwrap();
+        let neither = resolved(&neither);
         assert_eq!(
             target(&neither, Some("clock")).unwrap_err(),
             format!(

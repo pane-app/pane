@@ -29,8 +29,8 @@ use futures::executor::block_on;
 use pane_core::file_index::{IndexerConfig, WalkOptions};
 use pane_core::system::Clip;
 use pane_core::{
-    ConfirmAnswer, Launcher, LinkOpener, PackageIdentity, Runtime, Screen, Status, SubmenuState,
-    WindowPresence,
+    ConfirmAnswer, DefaultExtension, Launcher, LinkOpener, PackageIdentity, Runtime, Screen,
+    Status, SubmenuState, WindowPresence,
 };
 use tempfile::TempDir;
 
@@ -68,22 +68,29 @@ struct Package {
     title: &'static str,
     /// Its command's title.
     command: &'static str,
+    /// Whether the command owns the launcher's search field: only Pane's
+    /// registered Files command does (#177); the samples answer root
+    /// results instead.
+    browses: bool,
 }
 
 const RUST: Package = Package {
     package: "sample-files",
     title: "Rust files sample",
     command: "Find files (Rust)",
+    browses: false,
 };
 const JAVASCRIPT: Package = Package {
     package: "sample-files-js",
     title: "JavaScript files sample",
     command: "Find files (JavaScript)",
+    browses: false,
 };
 const TYPESCRIPT: Package = Package {
     package: "sample-files-ts",
     title: "TypeScript files sample",
     command: "Find files (TypeScript)",
+    browses: false,
 };
 
 /// The file manager's name on this system.
@@ -265,11 +272,19 @@ impl Pane {
         launcher.show_root_search();
         select_title(launcher, self.fixture.command);
         block_on(launcher.activate_selected());
+        // The registered Files command opens on the field Pane fills;
+        // a sample opens its own list, its files found through root
+        // search.
+        let screen = if self.fixture.browses {
+            Screen::CommandSearch {
+                query: String::new(),
+            }
+        } else {
+            Screen::Command
+        };
         assert_eq!(
             launcher.view().screen,
-            Screen::CommandSearch {
-                query: String::new()
-            },
+            screen,
             "{:?}",
             launcher.view().status
         );
@@ -277,6 +292,9 @@ impl Pane {
 
     /// Types `query` into the field on screen and waits for its answer.
     fn search(&self, query: &str) {
+        if !self.fixture.browses {
+            self.launcher.back();
+        }
         block_on(self.launcher.set_query(query));
         // The JavaScript and TypeScript guests answer past the 200 ms
         // budget while their engine starts, and a folder that was still
@@ -350,37 +368,6 @@ fn listed(pane: &Pane) -> Vec<(String, Option<String>)> {
         .into_iter()
         .map(|row| (row.title, row.subtitle))
         .collect()
-}
-
-fn search_files_lists_the_files_in_the_launchers_own_field(fixture: &'static Package) {
-    let pane = Pane::new(fixture);
-    pane.open();
-    // Its own list.
-    assert_eq!(titles(&pane.launcher), ["What is searched"]);
-
-    pane.search("résumé");
-    let view = pane.launcher.view();
-    assert_eq!(
-        view.screen,
-        Screen::CommandSearch {
-            query: "résumé".into()
-        }
-    );
-    assert_eq!(
-        listed(&pane),
-        [("Résumé plan ü.txt".to_owned(), Some("~".to_owned()))]
-    );
-    pane.search("todo");
-    assert_eq!(
-        listed(&pane),
-        [("todo.txt".to_owned(), Some("~/notes".to_owned()))]
-    );
-    // Folders are found too, a name before the files only in it.
-    pane.search("notes");
-    assert_eq!(listed(&pane)[0], ("notes".to_owned(), Some("~".to_owned())));
-    // Cleared, the command's own list is back.
-    pane.search("");
-    assert_eq!(titles(&pane.launcher), ["What is searched"]);
 }
 
 fn a_documents_actions_act_through_the_system_and_close_the_window(fixture: &'static Package) {
@@ -668,13 +655,14 @@ fn root_searchs_file_results_have_the_same_actions(fixture: &'static Package) {
     // the command with the query typed.
     pane.launcher.show_root_search();
     pane.search("todo");
-    assert_eq!(
-        titles(&pane.launcher),
-        [
-            "todo.txt".to_owned(),
-            format!("{} for “todo”", pane.fixture.command)
-        ]
-    );
+    // The file row, and the row that opens the registered Files
+    // command with the query typed: Files' alone (#177), not a
+    // sample's.
+    let mut expected = vec!["todo.txt".to_owned()];
+    if pane.fixture.browses {
+        expected.push(format!("{} for “todo”", pane.fixture.command));
+    }
+    assert_eq!(titles(&pane.launcher), expected);
     let presentation = pane.launcher.presentation();
     assert_eq!(presentation.rows[0].kind, Some(pane_core::RowKind::File));
     assert!(presentation.rows[0].icon.is_some(), "the system's icon");
@@ -694,32 +682,6 @@ fn root_searchs_file_results_have_the_same_actions(fixture: &'static Package) {
     assert!(same_file(&opened[0], &pane.folder.file("notes/todo.txt")));
     assert_eq!(pane.launcher.view().query(), Some("todo"));
     assert!(pane.closed());
-}
-
-fn search_files_opens_from_root_search_with_the_query_typed(fixture: &'static Package) {
-    let pane = Pane::new(fixture);
-    pane.launcher.show_root_search();
-    pane.search("plan");
-    let row = format!("{} for “plan”", fixture.command);
-    assert!(
-        titles(&pane.launcher).contains(&row),
-        "{:?}",
-        titles(&pane.launcher)
-    );
-    // At most five files, then the row searching them all.
-    assert!(titles(&pane.launcher).len() <= 6);
-    select_title(&pane.launcher, &row);
-    block_on(pane.launcher.activate_selected());
-    assert_eq!(
-        pane.launcher.view().screen,
-        Screen::CommandSearch {
-            query: "plan".into()
-        }
-    );
-    let found = titles(&pane.launcher);
-    for name in ["Résumé plan ü.txt", "plan.md", "run plan.bat"] {
-        assert!(found.iter().any(|title| title == name), "{found:?}");
-    }
 }
 
 fn a_folder_opens_in_the_file_manager(fixture: &'static Package) {
@@ -782,12 +744,10 @@ macro_rules! contract {
 }
 
 contract!(
-    search_files_lists_the_files_in_the_launchers_own_field,
     a_documents_actions_act_through_the_system_and_close_the_window,
     move_to_recycle_bin_is_confirmed_first,
     enter_never_runs_a_program_in_search_files,
     root_searchs_file_results_have_the_same_actions,
-    search_files_opens_from_root_search_with_the_query_typed,
     a_folder_opens_in_the_file_manager,
     a_file_created_while_pane_runs_is_found,
 );

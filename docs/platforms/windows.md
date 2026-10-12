@@ -511,7 +511,7 @@ Screenshots from run [36371205770](https://github.com/wasimysaid/pane/actions/ru
 | Typed "Ada", Tab, Down to "Good morning", submitted | [8-form-result.png](evidence/windows/8-form-result.png) |
 
 - **Accessibility:** see [accessibility of forms](../forms.md#accessibility)
-  and [of custom views](../custom-views.md#accessibility). Narrator/NVDA were
+  and [of the canvas](../designed-tree.md#the-canvas). Narrator/NVDA were
   not run.
 - **Custom view (#21):** after a final restart the smoke opens the Rust command's
   color picker, presses Right and clicks the dark green swatch with `user32`

@@ -510,7 +510,7 @@ fn a_show_of_root_search_that_changed_nothing_asks_applications_for_nothing() {
     // The first query that is not blank asks the provider for its
     // results, which call the host's list once.
     pane.search("zeta");
-    assert_eq!(pane.listed(), ["Zeta Editor"]);
+    assert_eq!(pane.listed(), ["Launch Zeta Editor"]);
     wait_until("watching", || system.watching() == 1);
     let asked = asks.load(Ordering::SeqCst);
     assert!(asked >= 1, "the provider was asked for its results");
@@ -521,14 +521,14 @@ fn a_show_of_root_search_that_changed_nothing_asks_applications_for_nothing() {
     for _ in 0..3 {
         pane.launcher.show_root_search();
         pane.search("zeta");
-        assert_eq!(pane.listed(), ["Zeta Editor"]);
+        assert_eq!(pane.listed(), ["Launch Zeta Editor"]);
     }
     assert_eq!(asks.load(Ordering::SeqCst), asked);
 
     // An application change does ask it again, at once.
     system.set(&["Zeta Editor", "Zeta Mail"]);
     system.report(Change::Changed);
-    pane.wait_for(&["Zeta Editor", "Zeta Mail"], ABOUT_A_SECOND);
+    pane.wait_for(&["Launch Zeta Editor", "Launch Zeta Mail"], ABOUT_A_SECOND);
     assert!(asks.load(Ordering::SeqCst) > asked);
     pane.still_searching("zeta");
 }

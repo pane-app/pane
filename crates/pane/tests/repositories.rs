@@ -151,7 +151,12 @@ fn a_repository_named_in_the_form_is_previewed_installed_and_run(cx: &mut TestAp
         view.status,
         Status::Result("Installed Greeter from Git".into())
     );
-    assert_eq!(titles(&view)[0], "Greeter from Git");
+    // The installed command is the selected row, wherever the blank
+    // query's order places it: Enter runs it.
+    assert_eq!(
+        view.selected.map(|index| view.rows[index].title.as_str()),
+        Some("Greeter from Git")
+    );
 
     cx.simulate_keystrokes("enter");
     settle(&window, cx);
@@ -221,7 +226,12 @@ fn one_extension_of_a_collection_named_by_its_id_is_previewed_installed_and_run(
         view.status,
         Status::Result("Installed Clock from Git".into())
     );
-    assert_eq!(titles(&view)[0], "Clock from Git");
+    // The installed command is the selected row, wherever the blank
+    // query's order places it: Enter runs it.
+    assert_eq!(
+        view.selected.map(|index| view.rows[index].title.as_str()),
+        Some("Clock from Git")
+    );
 
     // Its command runs.
     cx.simulate_keystrokes("enter");
@@ -329,7 +339,6 @@ fn a_collection_opens_the_choice_ticks_previews_and_installs_several(cx: &mut Te
             "the check mark of {title} is rendered"
         );
     }
-    assert!(cx.debug_bounds("row-Install").is_some());
     for line in [
         format!("Source: Git repository {}", &url["http://".len()..]),
         "Tick the extensions to install: each one installs on its own, with its own preview \
@@ -342,8 +351,16 @@ fn a_collection_opens_the_choice_ticks_previews_and_installs_several(cx: &mut Te
         );
     }
 
-    // Choosing Install with nothing ticked is refused.
-    press_enter_on(&window, cx, "Install");
+    // Choosing Install with nothing ticked is refused. The choice's Git
+    // details hold the Install row below the fold of this window until
+    // the selection moves onto it, revealing it; Enter runs it wherever
+    // it is.
+    for _ in 0..3 {
+        cx.simulate_keystrokes("down");
+    }
+    settle(&window, cx);
+    assert!(cx.debug_bounds("row-Install").is_some());
+    cx.simulate_keystrokes("enter");
     assert!(
         matches!(&settle(&window, cx).status, Status::Error(text)
             if text == "No extensions are ticked: tick the ones to install"),
@@ -351,7 +368,11 @@ fn a_collection_opens_the_choice_ticks_previews_and_installs_several(cx: &mut Te
     );
 
     // Space ticks the extension selected; the arrows move the selection
-    // as any list's.
+    // as any list's. The selection walks back to the first extension the
+    // Install row's choice left it below.
+    for _ in 0..3 {
+        cx.simulate_keystrokes("up");
+    }
     cx.simulate_keystrokes("space");
     let view = settle(&window, cx);
     let Screen::Choice(choice) = &view.screen else {

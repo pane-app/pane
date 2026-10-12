@@ -311,7 +311,7 @@ struct Placed {
 /// plain ([`normalize`]) for the aliases' caseless comparison.
 pub(crate) struct Query {
     /// The query as the scorer sees it: folded.
-    text: String,
+    pub(crate) text: String,
     /// The query as aliases see it: normalized, not transliterated.
     plain: String,
     /// Whether the query, as the user typed it, is longer than three

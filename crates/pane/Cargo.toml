@@ -19,6 +19,10 @@ gpui_platform = { package = "gpui_ce_platform", git = "https://github.com/hoangv
 # chooses, keeping Pane's own copy of it, and baking the launcher's backdrop
 # into the frame GPUI draws; already in the tree through GPUI.
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp", "gif", "bmp"] }
+# A canvas stroke's end caps and corner joins (#242): the path builder's
+# `StrokeOptions` takes them, and GPUI exports the options but not the
+# enum types; already in the tree through GPUI.
+lyon = "1.0"
 # Opens web links (quicklinks) and files (file search) with the system's
 # handler. On Windows 5.4.4 passes the target to its PowerShell opener through
 # an environment variable, not the command line, and opens an existing path

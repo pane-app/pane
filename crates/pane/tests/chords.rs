@@ -88,7 +88,6 @@ fn opened_actions(cx: &mut TestAppContext) -> (Entity<LauncherWindow>, &mut Visu
         subtitle: None,
         component,
         takes_query: false,
-        search: false,
         keywords: Vec::new(),
         when: CommandWhen::Always,
         matches: CommandMatches::Title,
@@ -131,7 +130,16 @@ fn open_launcher(
     // scheduler's deterministic control.
     cx.executor().allow_parking();
     cx.update(pane::bind_keys);
-    let (window, cx) = cx.add_window_view(|window, cx| LauncherWindow::new(launcher, window, cx));
+    // The window learns what the launcher changed in the background — a
+    // late answer's merge (#201) — as the binary's window does; without it
+    // the last frame stays what the awaited calls left.
+    let (sender, changes) = pane_core::changes::channel();
+    let launcher = launcher.with_changes(sender);
+    let (window, cx) = cx.add_window_view(|window, cx| {
+        let mut launcher_window = LauncherWindow::new(launcher, window, cx);
+        launcher_window.follow_changes(changes, window, cx);
+        launcher_window
+    });
     (window, cx)
 }
 
@@ -403,7 +411,7 @@ fn the_numpads_digits_pick_as_the_digit_rows_do(cx: &mut TestAppContext) {
     let view = settle(&window, cx);
     assert_eq!(
         (view.screen, view.title.as_str()),
-        (Screen::Command, "JavaScript sample"),
+        (Screen::Command, "Rust sample"),
         "the second row was picked"
     );
     cx.simulate_keystrokes("escape");
