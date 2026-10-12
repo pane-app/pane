@@ -42,7 +42,11 @@ pub fn settle(window: &Entity<LauncherWindow>, cx: &mut VisualTestContext) -> La
     loop {
         cx.run_until_parked();
         let (view, drawn, held) = cx.read_entity(window, |window, _| {
-            (window.launcher().view(), window.drawn_view().cloned(), window.held_keys())
+            (
+                window.launcher().view(),
+                window.drawn_view().cloned(),
+                window.held_keys(),
+            )
         });
         if !matches!(view.status, Status::Running { .. })
             && held.is_empty()

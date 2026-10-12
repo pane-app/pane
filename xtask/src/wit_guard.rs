@@ -134,10 +134,14 @@ fn baseline(root: &Path, scratch: &Path) -> Result<Baseline, String> {
     // resolution that carries a version's content is its adoption, and
     // whatever changes `wit/` on mainline after it is still drift the
     // guard flags.
-    let history = capture(
-        git(root, scratch)
-            .args(["rev-list", "--full-history", "--parents", "HEAD", "--", "wit/"]),
-    )?;
+    let history = capture(git(root, scratch).args([
+        "rev-list",
+        "--full-history",
+        "--parents",
+        "HEAD",
+        "--",
+        "wit/",
+    ]))?;
     // The version sets are cached: a commit is its successor's parent.
     let mut sets: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
     let mut commits = Vec::new();

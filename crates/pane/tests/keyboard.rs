@@ -1148,8 +1148,8 @@ fn a_form_still_submits_with_the_rebound_key_and_the_footer_button(cx: &mut Test
     // launches through the host (#241): only an installed extension's
     // command can do that, so the sample is installed rather than
     // registered as one of Pane's own.
-    let assembled = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../target/guests/packages/sample-rust");
+    let assembled =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/guests/packages/sample-rust");
     assert!(
         assembled.exists(),
         "{} is missing; run `cargo xtask guests`",

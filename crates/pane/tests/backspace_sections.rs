@@ -271,7 +271,11 @@ fn open_command_search<'a>(
     settle(&window, cx);
     cx.simulate_keystrokes("enter");
     let view = settle(&window, cx);
-    assert!(matches!(view.screen, Screen::DesignedView(_)), "{:?}", view.screen);
+    assert!(
+        matches!(view.screen, Screen::DesignedView(_)),
+        "{:?}",
+        view.screen
+    );
     assert_eq!(field_text(&window, cx), "");
     (window, cx)
 }

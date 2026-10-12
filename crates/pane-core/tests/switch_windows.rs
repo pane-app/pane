@@ -490,7 +490,10 @@ impl Pane {
         self.search(sample.title);
         select_title(&self.launcher, sample.title);
         block_on(self.launcher.activate_selected());
-        assert!(matches!(self.launcher.view().screen, Screen::DesignedView(_)));
+        assert!(matches!(
+            self.launcher.view().screen,
+            Screen::DesignedView(_)
+        ));
     }
 
     /// Runs the item titled `item` of the open command and says what it
@@ -980,7 +983,10 @@ mod extension {
             self.search("Switch Windows");
             select_title(&self.launcher, "Switch Windows sample");
             block_on(self.launcher.activate_selected());
-            assert!(matches!(self.launcher.view().screen, Screen::DesignedView(_)));
+            assert!(matches!(
+            self.launcher.view().screen,
+            Screen::DesignedView(_)
+        ));
         }
     }
 
