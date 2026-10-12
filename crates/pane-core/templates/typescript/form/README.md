@@ -1,10 +1,11 @@
 # __TITLE__: a Pane extension in TypeScript, started from the `form` template.
 
-A command whose item opens a form: a name to type and a greeting to
-choose, with a `Greet` button. Submitting it calls `submitForm` in
-`src/index.ts`, which answers the result — or the problem with a field,
-shown next to it. Edit the form or its answer and save, and Pane rebuilds
-and reloads the command while it keeps running.
+A command whose screen is a form: a name to type and a greeting to
+choose, with a `Greet` button. The form is the command's designed view,
+drawn from the tree `src/index.ts` renders; submitting it runs the
+listener the tree names, which answers the result — or the problem with
+a field, shown next to it. Edit the form or its answer and save, and Pane
+rebuilds and reloads the command while it keeps running.
 
 ## What is here
 

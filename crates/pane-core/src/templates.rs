@@ -306,6 +306,19 @@ pub fn add_command(folder: &Path, command: &NewCommand, kind: Kind) -> Result<()
             command.id
         ));
     }
+    if kind == Kind::Form {
+        // The form moved onto the designed tree (#241): a form command is
+        // a designed view, which the entry file's one designed view cannot
+        // take a command from a marker. Until pane-ext can add one, start
+        // a package from the `form` template, or write the command by hand
+        // as a designed view (docs/designed-tree.md).
+        return Err(
+            "pane-ext cannot add a form command yet: the form is a designed view now, and a \
+             package's one designed view cannot take a command added into it; start a package \
+             from the `form` template instead, or add the command by hand"
+                .into(),
+        );
+    }
     let entry = folder.join(entry_file(language));
     let source = match fs::read_to_string(&entry) {
         Ok(source) => source,
@@ -320,19 +333,12 @@ pub fn add_command(folder: &Path, command: &NewCommand, kind: Kind) -> Result<()
     };
     let mut source = insert_after_marker(&source, module_marker(language), &module)?;
     // The arms the kind's dispatches get: a view command's in `render`, a
-    // form's in `submit_form` too, a no-view's in `run`.
+    // no-view's in `run`.
     if kind != Kind::NoView {
         source = insert_after_marker(
             &source,
             view_marker(),
             &render_arm(language, &command.id, &identifier),
-        )?;
-    }
-    if kind == Kind::Form {
-        source = insert_after_marker(
-            &source,
-            form_marker(),
-            &form_arm(language, &command.id, &identifier),
         )?;
     }
     if kind == Kind::NoView {
@@ -456,17 +462,6 @@ fn run_arm(language: Language, id: &str, identifier: &str) -> String {
     }
 }
 
-/// The arm the entry file's `submit_form`/`submitForm` dispatch gets for a
-/// form command.
-fn form_arm(language: Language, id: &str, identifier: &str) -> String {
-    match language {
-        Language::Rust => format!("\"{id}\" => {identifier}::submit_form(item_id, _values).await,"),
-        Language::TypeScript => {
-            format!("case \"{id}\": return {identifier}.submit(itemId, _values);")
-        }
-    }
-}
-
 /// Where `add_command` adds the command's module or import: each language's
 /// entry file carries its own wording of the marker, as its templates write
 /// it.
@@ -485,11 +480,6 @@ fn view_marker() -> &'static str {
 /// Where it adds a no-view command's arm.
 fn no_view_marker() -> &'static str {
     "pane-ext new command adds a no-view command's arm here."
-}
-
-/// Where it adds a form command's arm.
-fn form_marker() -> &'static str {
-    "pane-ext new command adds a form command's arm here."
 }
 
 /// `source` with `added` on its own line after the line holding `marker`,
@@ -620,7 +610,6 @@ fn command_file(language: Language, kind: Kind) -> &'static str {
     match (language, kind) {
         (Language::Rust, Kind::List) => include_str!("../templates/rust/command/list.rs"),
         (Language::Rust, Kind::Detail) => include_str!("../templates/rust/command/detail.rs"),
-        (Language::Rust, Kind::Form) => include_str!("../templates/rust/command/form.rs"),
         (Language::Rust, Kind::NoView) => include_str!("../templates/rust/command/no-view.rs"),
         (Language::TypeScript, Kind::List) => {
             include_str!("../templates/typescript/command/list.ts")
@@ -628,12 +617,12 @@ fn command_file(language: Language, kind: Kind) -> &'static str {
         (Language::TypeScript, Kind::Detail) => {
             include_str!("../templates/typescript/command/detail.ts")
         }
-        (Language::TypeScript, Kind::Form) => {
-            include_str!("../templates/typescript/command/form.ts")
-        }
         (Language::TypeScript, Kind::NoView) => {
             include_str!("../templates/typescript/command/no-view.ts")
         }
+        // [`add_command`] refuses the form kind before it reaches here: a
+        // form command is a designed view, which a marker cannot add.
+        (_, Kind::Form) => unreachable!("a form command is refused before its file is chosen"),
     }
 }
 
@@ -805,10 +794,14 @@ mod tests {
                     matches!(kind, Kind::Detail | Kind::NoView),
                     "{kind:?}"
                 );
-                let mode = if kind == Kind::NoView {
-                    CommandMode::NoView
-                } else {
-                    CommandMode::View
+                // The form is a designed view since the form moved onto
+                // the tree (#241), and the manifest says so: only the list
+                // and the detail open the command's own list, which the
+                // default `view` mode is.
+                let mode = match kind {
+                    Kind::NoView => CommandMode::NoView,
+                    Kind::Form => CommandMode::Designed,
+                    Kind::List | Kind::Detail => CommandMode::View,
                 };
                 assert_eq!(command.mode, mode);
                 let icon = folder.path().join("icon.png");
@@ -953,18 +946,23 @@ mod tests {
     }
 
     #[test]
-    fn add_command_adds_a_form_command_to_the_form_dispatch() {
+    fn add_command_refuses_a_form_command_as_the_designed_view_cannot_take_one() {
+        // The form moved onto the designed tree (#241): a form command is
+        // a designed view, and the entry file's one designed view cannot
+        // take a command a marker would add, so the kind is refused
+        // rather than written as a package that cannot build.
         let folder = tempfile::tempdir().unwrap();
         let name = Name::parse("Word Count").unwrap();
         scaffold(folder.path(), &name, Language::Rust, Kind::List).unwrap();
         let ask = NewCommand::parse(Some("ask"), None).unwrap();
-        add_command(folder.path(), &ask, Kind::Form).unwrap();
-        let entry = folder.path().join("src/lib.rs");
-        let entry = fs::read_to_string(&entry).unwrap();
-        assert!(entry.contains("mod ask;"), "{entry}");
-        assert!(entry.contains("\"ask\" => ask::render().await,"), "{entry}");
-        let arm = "\"ask\" => ask::submit_form(item_id, _values).await,";
-        assert!(entry.contains(arm), "{entry}");
+        let refused = add_command(folder.path(), &ask, Kind::Form).unwrap_err();
+        assert!(refused.contains("cannot add a form command"), "{refused}");
+        // Nothing was written: the entry file keeps its markers, and no
+        // command was added to the manifest.
+        let entry = fs::read_to_string(folder.path().join("src/lib.rs")).unwrap();
+        assert!(!entry.contains("mod ask;"), "{entry}");
+        let (manifest, _) = Manifest::read_parsed(folder.path()).unwrap();
+        assert_eq!(manifest.commands.len(), 1);
     }
 
     #[test]

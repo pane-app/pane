@@ -122,9 +122,22 @@ fn baseline(root: &Path, scratch: &Path) -> Result<Baseline, String> {
     // commits that touched `wit/`, newest first, each with its first
     // parent (a parent that never touched `wit/` is elided, so a commit
     // that introduced the tree has none): the versions both declare say
-    // where a version was declared.
-    let history =
-        capture(git(root, scratch).args(["rev-list", "--parents", "HEAD", "--", "wit/"]))?;
+    // where a version was declared. The walk is over the full history:
+    // the default simplification would prune a merge that is treesame
+    // with one of its sides for `wit/`, and main's adoption of a
+    // version's content is exactly such a merge — without the merges
+    // the walk linearizes through the branch that changed the content,
+    // and the adoption itself reads as post-declaration drift. Full
+    // history keeps the adoption merges, and the parents it shows are
+    // the nearest ancestors that touched `wit/`, so the baseline is the
+    // last commit that changed the version on mainline: a merge
+    // resolution that carries a version's content is its adoption, and
+    // whatever changes `wit/` on mainline after it is still drift the
+    // guard flags.
+    let history = capture(
+        git(root, scratch)
+            .args(["rev-list", "--full-history", "--parents", "HEAD", "--", "wit/"]),
+    )?;
     // The version sets are cached: a commit is its successor's parent.
     let mut sets: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
     let mut commits = Vec::new();

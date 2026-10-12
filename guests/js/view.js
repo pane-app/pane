@@ -811,6 +811,10 @@ function builtinNode(name, props, path, callbacks, cells, used) {
       if (typeof given.onSubmit === "function") {
         node.onSubmit = valueListener(callbacks, given.onSubmit);
       }
+      // The form's fields are its children, as any container's are: the
+      // values a submission collects are keyed by the fields' ids, which
+      // travel with the nodes.
+      node.children = children;
       return node;
     }
     case "date-picker":
