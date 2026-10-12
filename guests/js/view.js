@@ -33,7 +33,7 @@
 // a Pane that renders another major refuses it naming both versions, and
 // one that knows less draws what it understands.
 
-import { askToRender, measureText as witMeasureText } from "pane:extension/view@0.1.0";
+import { askToRender, measureText as witMeasureText } from "pane:extension/view@0.2.0";
 
 /** The version of the UI component set this SDK writes. */
 const COMPONENT_SET = "1.3";

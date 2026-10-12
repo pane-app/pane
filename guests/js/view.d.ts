@@ -878,10 +878,10 @@ export declare function selectedKey(): string | null;
  * the next value (a function is called with the current one); Pane asks
  * for the tree again after each event, which is when it is read.
  */
-/** `pane:extension/view@0.1.0`: a designed view asking Pane to draw it
+/** `pane:extension/view@0.2.0`: a designed view asking Pane to draw it
  * again (wit/view.wit). Used by `usePending`; a view can ask itself, with
  * the id its `render` context names. */
-declare module "pane:extension/view@0.1.0" {
+declare module "pane:extension/view@0.2.0" {
   /**
    * Ask Pane to draw the designed view `view` again, now: `view` is the
    * id the view's `render` context named. At most one drawing of a view is
