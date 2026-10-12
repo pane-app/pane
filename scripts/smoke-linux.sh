@@ -420,10 +420,10 @@ focus_launcher
 index=0
 for sample in "Rust sample" "JavaScript sample" "TypeScript sample"; do
   "$xdotool" type --delay 50 "$sample"; sleep 1
-  # The Rust sample also answers the query itself (#285): its answer card
-  # takes the first row, so a Down lands on the command row — and clamps
-  # at the single row of the samples that answer nothing.
-  "$xdotool" key Down key Return; sleep 3
+  # Typing the command's name leaves its exact-titled row the best match,
+  # selected: Enter opens it. (The samples answer only "reverse <text>"
+  # queries, so no answer card takes the first row.)
+  "$xdotool" key Return; sleep 3
   capture "$((index + 2))-command-$index.png"
   "$xdotool" key Down key Return; sleep 2
   capture "$((index + 2))-result-$index.png"
@@ -440,7 +440,7 @@ python3 "$(dirname "$0")/check_screenshot.py" --distinct "$out"/{2,3,4}-result-*
 # Tab and Down makes the guest answer. The command is opened by typing its
 # name, as the samples above are.
 "$xdotool" type --delay 50 "rust sample"; sleep 1
-"$xdotool" key Down key Return; sleep 3
+"$xdotool" key Return; sleep 3
 for _ in 1 2 3 4; do "$xdotool" key Down; done
 "$xdotool" key Return; sleep 1
 capture 6-form.png
@@ -505,9 +505,9 @@ focus_launcher
 # The Rust command's seventh item is declared for Windows only, its eighth
 # for macOS and Linux only. Here the first is explained without running and
 # the second runs. The command is opened by typing its name, as the samples
-# above are.
+# above are; its exact-titled row is the selected best match.
 "$xdotool" type --delay 50 'rust sample'; sleep 1
-"$xdotool" key Down key Return; sleep 3
+"$xdotool" key Return; sleep 3
 for _ in 1 2 3 4 5 6; do "$xdotool" key Down; done
 "$xdotool" key Return; sleep 2
 capture 13-windows-only.png
@@ -586,9 +586,9 @@ focus_launcher
 # Right chooses purple, and a click on the dark green swatch chooses it. The
 # chosen color fills its swatch and the preview, far more pixels than any
 # other swatch covers. The command is opened by typing its name, as the
-# samples above are.
+# samples above are; its exact-titled row is the selected best match.
 "$xdotool" type --delay 50 'rust sample'; sleep 1
-"$xdotool" key Down key Return; sleep 3
+"$xdotool" key Return; sleep 3
 for _ in 1 2 3 4 5; do "$xdotool" key Down; done
 "$xdotool" key Return; sleep 2
 capture 21-color.png
@@ -660,7 +660,7 @@ close_settings
 # The blank query's order ranks Pane's own rows among the commands, so the
 # command is opened by typing its name, as the samples above are.
 "$xdotool" type --delay 50 'dev sample'; sleep 1
-"$xdotool" key Down key Return; sleep 3   # below the answer card
+"$xdotool" key Return; sleep 3
 "$xdotool" key Return; sleep 2   # "Say hello"
 capture 35-dev-after.png
 check 35-dev-after.png success   # "Hello from the JavaScript guest"
@@ -676,7 +676,7 @@ a11y shown "Dev was not reloaded" prefix
 capture 36-not-reloaded.png
 close_settings
 "$xdotool" type --delay 50 'dev sample'; sleep 1
-"$xdotool" key Down key Return; sleep 3   # below the answer card
+"$xdotool" key Return; sleep 3
 "$xdotool" key Return; sleep 2
 capture 37-still-running.png
 python3 "$(dirname "$0")/check_screenshot.py" --same "$out/35-dev-after.png" "$out/37-still-running.png"

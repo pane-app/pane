@@ -366,7 +366,6 @@ impl Shared {
             network: Arc::default(),
             registrations: Arc::default(),
             snapshots: Arc::default(),
-            #[cfg(any(test, debug_assertions))]
             crashes: Mutex::new(None),
             slow: Mutex::new(None),
             limits: Arc::default(),
