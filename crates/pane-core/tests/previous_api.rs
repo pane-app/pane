@@ -21,7 +21,6 @@
 use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
-use std::sync::Arc;
 
 use futures::executor::block_on;
 use pane_core::feedback::{Hud, ToastStyle};
@@ -102,7 +101,7 @@ fn copy(name: &str, folder: &Path) -> PathBuf {
 #[test]
 fn a_command_built_into_pane_runs_through_the_adapter() {
     let launcher = Launcher::new(
-        Runtime::start().unwrap(),
+        Ok(Runtime::start().unwrap()),
         vec![CommandRegistration {
             id: "previous".into(),
             title: TITLE.into(),
@@ -133,7 +132,7 @@ fn a_package_built_for_the_previous_api_installs_and_runs() {
     let sources = tempfile::tempdir().unwrap();
     let data = tempfile::tempdir().unwrap();
     let launcher = Launcher::with_packages(
-        Runtime::start().unwrap(),
+        Ok(Runtime::start().unwrap()),
         vec![],
         data.path().join("extensions"),
     );
@@ -150,7 +149,10 @@ fn a_package_built_for_the_previous_api_installs_and_runs() {
     // any other's.
     let packages = launcher.packages();
     assert_eq!(packages.len(), 1);
-    assert_eq!(packages[0].identity, PackageIdentity::local(&folder).unwrap());
+    assert_eq!(
+        packages[0].identity,
+        PackageIdentity::local(&folder).unwrap()
+    );
     assert_eq!(launcher.extension_mark(&packages[0].identity), None);
 
     open(&launcher);
@@ -177,7 +179,7 @@ fn a_default_built_for_the_previous_api_installs_and_runs_adapted() {
 
     let data = tempfile::tempdir().unwrap();
     let launcher = Launcher::with_packages(
-        Runtime::start().unwrap(),
+        Ok(Runtime::start().unwrap()),
         vec![],
         data.path().join("extensions"),
     )
