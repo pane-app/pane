@@ -279,6 +279,9 @@ impl Launcher {
             }
             return;
         }
+        // [diag-ff8] Diagnostic scaffolding for the guest-launched form
+        // that opens no view: the open's reply and whether the epoch still
+        // holds. fix-forward-9 removes it with the root fix.
         let result = match self.runtime() {
             Ok(runtime) => {
                 runtime
@@ -287,7 +290,20 @@ impl Launcher {
             }
             Err(error) => Err(error),
         };
+        crate::diagnostics::report(
+            "[diag-ff8d] designed open replied",
+            &format!(
+                "[diag-ff8d] designed open replied: command={command} {}",
+                if result.is_ok() { "ok" } else { "error" }
+            ),
+        );
         let current = self.lock_if_current(epoch);
+        if current.is_none() {
+            crate::diagnostics::report(
+                "[diag-ff8d] designed open dropped",
+                &format!("[diag-ff8d] designed open dropped: the screen moved (command={command})"),
+            );
+        }
         let stopped = current
             .as_ref()
             .and_then(|state| stopped(state, &component, &data));
@@ -522,6 +538,14 @@ impl Launcher {
         // A dropped event never reaches the view: its node went (or its
         // handler), or the view rendered twice since the user saw it.
         if let Some((_, Some(why))) = &held {
+            // [diag-ff8] Diagnostic scaffolding for the designed search's
+            // never-firing fetch: the drop is silent for packages that are
+            // not developed, so the tests never learn their event went.
+            // fix-forward-9 removes it with the root fix.
+            crate::diagnostics::report(
+                "[diag-ff8s] designed event dropped",
+                &format!("[diag-ff8s] designed event dropped: {why}"),
+            );
             let dropped = held
                 .as_ref()
                 .map(|(event, _)| (event.key.as_str(), event.render));
@@ -539,6 +563,19 @@ impl Launcher {
         async move {
             if let Some(event) = sent {
                 let result = event.reply.await;
+                // [diag-ff8] Diagnostic scaffolding; removed with the root
+                // fix.
+                let shape = match &result {
+                    Ok(DesignedNext::Tree(_)) => "tree",
+                    Ok(DesignedNext::Pushed(..)) => "pushed",
+                    Ok(DesignedNext::Replaced(..)) => "replaced",
+                    Ok(DesignedNext::Popped { .. }) => "popped",
+                    Err(_) => "error",
+                };
+                crate::diagnostics::report(
+                    "[diag-ff8s] designed event replied",
+                    &format!("[diag-ff8s] designed event replied: {shape}"),
+                );
                 launcher.show_designed_answer(epoch, event.view, event.number, result);
             }
         }

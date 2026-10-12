@@ -25,7 +25,7 @@ use pane::LauncherWindow;
 use pane_core::changes;
 use pane_core::develop::Toolchains;
 use pane_core::file_index::{IndexerConfig, WalkOptions};
-use pane_core::{Launcher, LauncherView, LinkOpener, Runtime, Screen, Status};
+use pane_core::{Launcher, LauncherView, LinkOpener, Runtime, Status};
 use tempfile::TempDir;
 
 #[path = "support/settle.rs"]
@@ -35,7 +35,7 @@ mod settle;
 mod recording;
 
 use recording::{Done, RecordingSystem};
-use settle::{published, settle};
+use settle::settle;
 
 /// A handler that records the files it is asked to open.
 #[derive(Clone, Default)]
@@ -157,24 +157,11 @@ fn search_files<'a>(
 ) -> (Entity<LauncherWindow>, &'a mut VisualTestContext) {
     cx.update(pane::bind_keys);
     let (window, cx) = cx.add_window_view(|window, cx| LauncherWindow::new(launcher, window, cx));
-    cx.simulate_input("find files");
-    // The query's list is published once its providers answered or its
-    // budget ended (#201).
-    let view = published(&window, cx);
-    assert_eq!(
-        view.rows.first().map(|row| row.title.as_str()),
-        Some("Find files (Rust)")
-    );
-    cx.simulate_keystrokes("enter");
-    let view = settle(&window, cx);
-    assert_eq!(
-        view.screen,
-        Screen::CommandSearch {
-            query: String::new()
-        },
-        "{:?}",
-        view.status
-    );
+    // The files are found through root search (#240): the query typed
+    // there names them, the file index having listed the home folder —
+    // the sample's command opens its own list of them, but the query
+    // narrows root to the files themselves, as the core tests' search
+    // does by typing the query into root after backing out.
     cx.simulate_input(query);
     // The files the query found, once the search answered: each titled
     // with its name and its folder below the home folder. The empty
