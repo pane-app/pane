@@ -542,7 +542,8 @@ impl Launcher {
                 // fix.
                 crate::diagnostic!(
                     "[diag-ff6] designed event sent: view={:?} number={}",
-                    event.view, event.number
+                    event.view,
+                    event.number
                 );
                 let result = event.reply.await;
                 crate::diagnostic!("[diag-ff6] designed event replied");

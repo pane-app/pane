@@ -1640,7 +1640,8 @@ impl Runtime {
         // fix-forward-7 removes it with the root fix.
         crate::diagnostic!(
             "[diag-ff6] runtime designed_view_event: view={view:?} render={} callback={}",
-            event.render, event.callback
+            event.render,
+            event.callback
         );
         let (reply, response) = oneshot::channel();
         self.call(Request::DesignedViewEvent { view, event, reply }, response)
