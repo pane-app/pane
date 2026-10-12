@@ -31,6 +31,14 @@
     ".": {
       "types": "./pane.d.ts"
     },
+    "./view": {
+      "types": "./view.d.ts",
+      "default": "./view.js"
+    },
+    "./jsx-runtime": {
+      "types": "./jsx-runtime.d.ts",
+      "default": "./jsx-runtime.js"
+    },
     "./http": {
       "types": "./http.d.ts",
       "default": "./http.js"

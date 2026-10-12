@@ -35,12 +35,10 @@ use std::time::Instant;
 
 use super::developing::slot;
 use super::off_thread;
-use super::{
-    FormField, FormPurpose, FormView, Launcher, LauncherView, OpenForm, Screen, State, Status,
-};
+use super::pane_form::{self, PaneFieldKind, PaneForm, PaneFormField};
+use super::{FormPurpose, Launcher, State, Status, next_form_id};
 use crate::develop::PaneManifest;
 use crate::packages::PackageIdentity;
-use crate::runtime::{Choice, FieldKind};
 use crate::templates::{self, Kind, Language, Name};
 
 /// The id of the root row that starts Create Extension.
@@ -89,13 +87,10 @@ fn template_label(kind: Kind) -> &'static str {
 }
 
 /// The choices of the form's template field, one per template.
-fn template_choices() -> Vec<Choice> {
+fn template_choices() -> Vec<(String, String)> {
     Kind::ALL
         .iter()
-        .map(|kind| Choice {
-            id: kind.name().into(),
-            label: template_label(*kind).into(),
-        })
+        .map(|kind| (kind.name().to_owned(), template_label(*kind).to_owned()))
         .collect()
 }
 
@@ -106,63 +101,61 @@ impl Launcher {
     /// for the folder an Install-from-folder picks, and calls this once it
     /// is chosen; activating the row itself does nothing in the launcher.
     pub fn show_create_form(&self, parent: &Path) {
-        let form = FormView {
-            fields: vec![
-                FormField {
-                    id: NAME_FIELD.into(),
-                    label: "Extension name".into(),
-                    kind: FieldKind::Text {
-                        placeholder: Some("such as Word Count".into()),
-                    },
+        let form = PaneForm::of(
+            next_form_id(),
+            "Create Extension",
+            "Create extension",
+            vec![
+                PaneFormField {
+                    key: NAME_FIELD.into(),
+                    kind: PaneFieldKind::Text,
+                    title: "Extension name".into(),
+                    placeholder: Some("such as Word Count".into()),
+                    info: None,
                     value: String::new(),
-                    error: None,
-                    description: None,
                     required: true,
                 },
-                FormField {
-                    id: LANGUAGE_FIELD.into(),
-                    label: "Language".into(),
-                    kind: FieldKind::Choice(vec![
-                        Choice {
-                            id: Language::TypeScript.name().to_ascii_lowercase(),
-                            label: Language::TypeScript.name().into(),
-                        },
-                        Choice {
-                            id: Language::Rust.name().to_ascii_lowercase(),
-                            label: Language::Rust.name().into(),
-                        },
+                PaneFormField {
+                    key: LANGUAGE_FIELD.into(),
+                    kind: PaneFieldKind::Choice(vec![
+                        (
+                            Language::TypeScript.name().to_ascii_lowercase(),
+                            Language::TypeScript.name().to_owned(),
+                        ),
+                        (
+                            Language::Rust.name().to_ascii_lowercase(),
+                            Language::Rust.name().to_owned(),
+                        ),
                     ]),
+                    title: "Language".into(),
+                    placeholder: None,
+                    info: None,
                     value: Language::TypeScript.name().to_ascii_lowercase(),
-                    error: None,
-                    description: None,
                     required: false,
                 },
-                FormField {
-                    id: TEMPLATE_FIELD.into(),
-                    label: "Template".into(),
-                    kind: FieldKind::Choice(template_choices()),
-                    value: Kind::List.name().into(),
-                    error: None,
-                    description: Some(
+                PaneFormField {
+                    key: TEMPLATE_FIELD.into(),
+                    kind: PaneFieldKind::Choice(template_choices()),
+                    title: "Template".into(),
+                    placeholder: None,
+                    info: Some(
                         "List opens items to run, Detail answers a query, Form asks for \
                          values, No view runs without a screen"
                             .into(),
                     ),
+                    value: Kind::List.name().into(),
                     required: false,
                 },
             ],
-            submit_label: "Create extension".into(),
-            setup: None,
-        };
+            None,
+        );
         let mut state = self.lock();
-        let view = LauncherView::new(Screen::Form(form), "Create Extension");
-        let return_to = std::mem::replace(&mut state.view, view);
-        state.form = Some(OpenForm {
-            purpose: FormPurpose::Create(parent.to_path_buf()),
-            return_to,
-            submitting: false,
-        });
-        state.screen_epoch += 1;
+        pane_form::open_pane_form(
+            &mut state,
+            FormPurpose::Create(parent.to_path_buf()),
+            form,
+            "Create Extension".into(),
+        );
     }
 
     /// Shows the install preview of the package in `folder`, which Pane
@@ -182,17 +175,15 @@ impl Launcher {
     /// marked on its field as an extension's rejection is, with the form
     /// staying. `None` when no such form is open or submitting, or the
     /// name names no package.
-    pub(in crate::launcher) fn begun_creation(state: &mut State) -> Option<Creation> {
-        let values: Vec<(String, String)> = match &state.view.screen {
-            Screen::Form(form) => form
-                .fields
-                .iter()
-                .map(|field| (field.id.clone(), field.value.clone()))
-                .collect(),
-            _ => return None,
-        };
+    pub(in crate::launcher) fn begun_creation(
+        state: &mut State,
+        values: &[(String, String)],
+    ) -> Option<Creation> {
+        if !matches!(state.view.screen, super::Screen::PaneForm(_)) {
+            return None;
+        }
         let parent = match &state.form {
-            Some(OpenForm {
+            Some(super::OpenForm {
                 purpose: FormPurpose::Create(parent),
                 submitting: false,
                 ..
@@ -209,12 +200,10 @@ impl Launcher {
         let name = match Name::parse(&value(NAME_FIELD)) {
             Ok(name) => name,
             Err(problem) => {
-                if let Screen::Form(form) = &mut state.view.screen
-                    && let Some(field) = form.fields.iter_mut().find(|field| field.id == NAME_FIELD)
+                if let super::Screen::PaneForm(form) = &mut state.view.screen
+                    && pane_form::mark_error(&mut form.tree, NAME_FIELD, &problem)
                 {
-                    field.error = Some(problem.clone());
-                    let label = field.label.clone();
-                    state.view.status = Status::Error(format!("{label}: {problem}"));
+                    state.view.status = Status::Error(format!("Extension name: {problem}"));
                 }
                 return None;
             }

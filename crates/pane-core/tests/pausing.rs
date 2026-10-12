@@ -10,9 +10,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use futures::executor::block_on;
-use pane_core::{
-    CallError, FormError, Launcher, PackageIdentity, Row, Runtime, Screen, Status, Unavailable,
-};
+use pane_core::{CallError, Launcher, PackageIdentity, Row, Runtime, Screen, Status, Unavailable};
 use tempfile::TempDir;
 
 #[path = "support/feedback.rs"]
@@ -644,33 +642,4 @@ fn an_uninstall_that_cannot_be_recorded_keeps_the_pause() {
     fs::remove_dir_all(&registry).unwrap();
     fs::write(&registry, text).unwrap();
     assert!(is_paused(&dirs.reader()));
-}
-
-fn an_error_thrown_from_a_form_is_an_error_not_a_crash(fixture: &Fixture) {
-    let runtime = Runtime::start().unwrap();
-    let component = assembled(fixture).join(fixture.component);
-    // The sample has no form: submitting one is refused as a whole, which
-    // JavaScript and TypeScript do by throwing an `Error`.
-    assert_eq!(
-        block_on(runtime.submit_form(&component, "nothing", vec![])),
-        Err(CallError::Form(FormError {
-            field: None,
-            message: "unknown form: nothing".into()
-        }))
-    );
-}
-
-#[test]
-fn an_error_thrown_from_a_rust_form_is_an_error_not_a_crash() {
-    an_error_thrown_from_a_form_is_an_error_not_a_crash(&RUST);
-}
-
-#[test]
-fn an_error_thrown_from_a_javascript_form_is_an_error_not_a_crash() {
-    an_error_thrown_from_a_form_is_an_error_not_a_crash(&JAVASCRIPT);
-}
-
-#[test]
-fn an_error_thrown_from_a_typescript_form_is_an_error_not_a_crash() {
-    an_error_thrown_from_a_form_is_an_error_not_a_crash(&TYPESCRIPT);
 }

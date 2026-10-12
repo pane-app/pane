@@ -155,12 +155,13 @@ pub struct ListPresentation {
     pub shows_a_date: bool,
 }
 
-/// Whether `state`'s rows are an opened command's own list, whose items'
-/// looks are projected (#139).
+/// Whether `state`'s rows are an opened command's own list or a designed
+/// view's List (#240), whose items' looks are projected (#139).
 fn listed(state: &State) -> bool {
     match &state.view.screen {
         Screen::Command => true,
         Screen::CommandSearch { query } => query.trim().is_empty(),
+        Screen::DesignedView(view) => view.list.is_some(),
         _ => false,
     }
 }
@@ -347,9 +348,15 @@ pub(super) fn want_row_icons(state: &State, index: usize) {
     }
 }
 
-/// Root search's section labels over `state`'s rows; none on another
-/// screen.
+/// The section labels over `state`'s rows: root search's, the update
+/// results view's, and a designed view's List's (#240, the snapshot's
+/// presentation); none on another screen.
 fn sections(state: &State) -> Vec<Section> {
+    if let Screen::DesignedView(view) = &state.view.screen
+        && let Some(list) = view.list.as_ref()
+    {
+        return list.sections.clone();
+    }
     let Screen::Root { .. } = &state.view.screen else {
         // The update results view's groups, over its rows: the groups in
         // the view's order, a group hidden when it lists nothing.
@@ -413,7 +420,10 @@ fn sections(state: &State) -> Vec<Section> {
 
 /// The update results view's sections (see [`sections`]): each group's
 /// label over its first row listed, in the order Updated, Waiting,
-/// Skipped, Failed, a group with nothing listed hidden.
+/// Skipped, No longer offered, Failed, a group with nothing listed
+/// hidden. The No longer offered group holds the extensions of collections
+/// the pass found no longer offered by them (ADR 0044, #310): a notice,
+/// not a fault.
 fn update_sections(state: &State) -> Vec<Section> {
     let results = &state.update_results.results;
     let mut sections = Vec::new();
@@ -421,6 +431,7 @@ fn update_sections(state: &State) -> Vec<Section> {
         ("Updated", &results.updated),
         ("Waiting", &results.waiting),
         ("Skipped", &results.skipped),
+        ("No longer offered", &results.removed),
         ("Failed", &results.failed),
     ] {
         let first = state

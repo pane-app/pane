@@ -11,7 +11,8 @@
       "id": "__NAME__",
       "title": "__TITLE__",
       "subtitle": "Fills in a form and answers what was filled in",
-      "component": "target/wasm32-wasip2/release/__CRATE__.wasm"
+      "component": "target/wasm32-wasip2/release/__CRATE__.wasm",
+      "mode": "designed"
     }
   ]
 }

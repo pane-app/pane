@@ -20,6 +20,7 @@
 
 use super::aliases::Via;
 use super::learned;
+use super::pane_form::form_submit_of;
 use super::{
     Entry, Launcher, LauncherView, Mode, Screen, SelectedAction, State, Status, quick_slots,
     shortcuts,
@@ -382,17 +383,18 @@ pub(in crate::launcher) fn selected_action(state: &State) -> SelectedAction {
         .selected
         .and_then(|index| state.entries.get(index));
     match (&state.view.screen, entry) {
-        // A form submits: the form's own control keeps the label the
-        // extension gave it, but Enter — and the footer's button with it —
-        // submits the form.
-        (Screen::Form(_), _) => acting("Submit"),
-        // A custom view takes the keys itself, and the network and program
-        // details screens have only Back: Enter does nothing, so there is
-        // no primary action to show.
-        (
-            Screen::CustomView(_) | Screen::NetworkDetails { .. } | Screen::ProgramDetails { .. },
-            _,
-        ) => unusable(""),
+        // A form Pane itself asks submits: the form's own control keeps
+        // the label it was given, but Enter — and the footer's button with
+        // it — submits the form. A designed view holding a form is the
+        // same: its submission is the view's primary action.
+        (Screen::PaneForm(form), _) => acting(&form.submit),
+        (Screen::DesignedView(view), _) => match form_submit_of(&view.tree) {
+            Some(submit) => acting(&submit),
+            None => unusable(""),
+        },
+        // The network and program details screens have only Back: Enter
+        // does nothing, so there is no primary action to show.
+        (Screen::NetworkDetails { .. } | Screen::ProgramDetails { .. }, _) => unusable(""),
         // A row is selected: what activating it does is the action.
         // A no-view command runs and opens no screen.
         (_, Some(Entry::Open(opening))) if opening.no_view => acting("Run command"),
@@ -430,19 +432,20 @@ pub(in crate::launcher) fn selected_action(state: &State) -> SelectedAction {
         // ellipsis menu entry and the local shortcut do (the window, not
         // the launcher, acts; see [`Launcher::selected_opens_settings`]).
         (_, Some(Entry::Settings)) => acting("Open settings"),
-        (_, Some(Entry::Run(_))) => acting("Run item"),
         // A dynamic root item's row runs its first action (#158).
         (_, Some(Entry::DynamicAction(_))) => acting("Run item"),
         // An item of a command's list: its primary action, by the title the
         // extension gave it (#137).
         (_, Some(Entry::Actions(listed))) => acting(&listed.primary()),
         (_, Some(Entry::NoActions)) => unusable("No actions"),
-        (_, Some(Entry::Form(..))) => acting("Open form"),
-        (_, Some(Entry::CustomView(..))) => acting("Open view"),
         (_, Some(Entry::ChooseFolder(_))) => acting("Choose folder"),
         (_, Some(Entry::StopSharingFolder(_))) => acting("Stop sharing"),
         (_, Some(Entry::Install(_, Mode::Install, _))) => acting("Install"),
         (_, Some(Entry::Install(_, Mode::Update(_), _))) => acting("Update"),
+        // The choice of a collection's extensions (#308): a row previews
+        // its extension, and the Install row runs the ticked ones.
+        (_, Some(Entry::PreviewChoice(_))) => acting("Show package"),
+        (_, Some(Entry::InstallChoice)) => acting("Install"),
         // A confirmation's rows are its answers; the direction a toggle
         // turns in comes from the state it acts on, not from a title.
         (_, Some(Entry::Toggle(identity))) => {
@@ -532,5 +535,8 @@ pub(in crate::launcher) fn selected_action(state: &State) -> SelectedAction {
         (Screen::ExtensionLog { .. }, None) => acting("Copy line"),
         // The update results view: a row opens its extension's page.
         (Screen::UpdateResults { .. }, None) => unusable("Show extension"),
+        // The choice of a collection's extensions (#308): Enter installs
+        // what is ticked.
+        (Screen::Choice { .. }, None) => unusable("Install"),
     }
 }

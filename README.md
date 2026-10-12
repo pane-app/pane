@@ -55,7 +55,7 @@ Installed packages go in Pane's data folder (`%LOCALAPPDATA%\Pane\data` on Windo
 
 Layout:
 
-- `wit/extension.wit`: the host/guest contract for one extension command: a list view, item actions, [forms](docs/forms.md) and [custom views](docs/custom-views.md).
+- `wit/extension.wit`: the host/guest contract for one extension command: a list view, item actions, [forms](docs/forms.md) and [designed views](docs/designed-tree.md) (whose canvas is what a custom view was).
 - `crates/pane-core`: the launcher model (the public host interface the tests drive), extension packages (manifest, identity, managed copies) and the extension runtime, a Wasmtime 49.0.1 engine registering only WASI 0.3.
 - `crates/pane`: the GPUI CE window, with [root search](docs/root-search.md) as its first screen, and the Settings window.
 - `crates/pane-build`: how a package is built from its source folder, once or after each save; development mode and `pane-ext` both build with it.

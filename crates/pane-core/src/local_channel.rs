@@ -24,12 +24,17 @@
 //! 1. `subscribe` asks for the package's development status and extension
 //!    log, as `log` events, from the moment Pane develops it.
 //! 2. `develop` hands over a build of the folder, staged in a folder of
-//!    `pane-ext`'s. If Pane has not installed the folder, it shows its
-//!    ordinary install preview of it, with this build, which the author
-//!    confirms in Pane (`previewing`). Pane then develops the package (see
-//!    `Launcher::develop_remotely`): it answers `developing` once the
-//!    package runs that build, or `refused` saying why not. Each later
-//!    `develop` reloads the package from its build.
+//!    `pane-ext`'s. Where `extension` names the id of one extension of the
+//!    collection at the folder (ADR 0044) — `pane-ext dev <folder>#<id>`
+//!    develops one — that extension alone is developed, as the package it
+//!    is, and the collection's other extensions are untouched. If Pane has
+//!    not installed the package, it shows its ordinary install preview of
+//!    it — the extension's own, for one extension of a collection — with
+//!    this build, which the author confirms in Pane (`previewing`). Pane
+//!    then develops the package (see `Launcher::develop_remotely`): it
+//!    answers `developing` once the package runs that build, or `refused`
+//!    saying why not. Each later `develop` reloads the package from its
+//!    build.
 //! 3. `building` and `failed` tell Pane of `pane-ext`'s later builds, so that
 //!    Pane shows them as it shows its own.
 //! 4. `stop`, or the connection closing (`pane-ext` stopped with Ctrl+C),
@@ -52,14 +57,15 @@ use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 
-use crate::develop::PaneManifest;
+use crate::develop::{DevTarget, PaneManifest, target};
 use crate::extension_log::{LogLine, LogSource, LogStream};
 use crate::launcher::{BuildNow, InstallPreview, Launcher, Remote};
-use crate::packages::{Manifest, PackageIdentity};
+use crate::packages::Manifest;
 
 /// The version of the requests this Pane answers. A request names it;
-/// Pane refuses one of another version, saying so.
-pub const VERSION: u32 = 1;
+/// Pane refuses one of another version, saying so. Version 2 names the id
+/// of one extension of a collection in `develop` (ADR 0044).
+pub const VERSION: u32 = 2;
 
 /// The environment variable naming another endpoint than the user's own:
 /// a named pipe's name on Windows, a socket's path elsewhere.
@@ -113,8 +119,13 @@ impl fmt::Display for Endpoint {
 pub enum Request {
     /// Develop the package in `folder` with the build staged in `staging`,
     /// which `command` built: its `pane.json`, components and helpers.
+    /// Where `extension` names the id of one extension of the collection
+    /// at `folder` (ADR 0044) — `pane-ext dev <folder>#<id>` develops one
+    /// — that extension alone is developed, as the package it is.
     Develop {
         folder: PathBuf,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        extension: Option<String>,
         staging: PathBuf,
         command: String,
     },
@@ -241,14 +252,27 @@ impl Drop for Server {
     }
 }
 
-/// The folders whose install preview the window is asked to show, with the
-/// window brought forward: `pane-ext dev`'s first run of a folder Pane has
-/// not installed.
-pub struct Previews(UnboundedReceiver<PathBuf>);
+/// What the window is asked to show an install preview of, with the
+/// window brought forward: `pane-ext dev`'s first run of a package Pane
+/// has not installed — a package folder, or one extension of the
+/// collection at one, named by its id (ADR 0044), whose own preview it
+/// is.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ToPreview {
+    /// The package in `folder`.
+    Folder(PathBuf),
+    /// The extension `id` of the collection at `folder`.
+    Collection(PathBuf, String),
+}
+
+/// The packages whose install preview the window is asked to show, with
+/// the window brought forward: `pane-ext dev`'s first run of a package
+/// Pane has not installed (#217).
+pub struct Previews(UnboundedReceiver<ToPreview>);
 
 impl Previews {
-    /// The next folder to preview, or `None` once Pane stopped listening.
-    pub async fn next(&mut self) -> Option<PathBuf> {
+    /// The next package to preview, or `None` once Pane stopped listening.
+    pub async fn next(&mut self) -> Option<ToPreview> {
         self.0.recv().await
     }
 }
@@ -257,7 +281,7 @@ impl Previews {
 /// `launcher`, on a thread of its own. Fails if Pane cannot listen there,
 /// such as when another Pane already does.
 pub fn serve(launcher: Launcher, endpoint: &Endpoint) -> io::Result<(Server, Previews)> {
-    let (previews, asked) = unbounded_channel();
+    let (previews, asked) = unbounded_channel::<ToPreview>();
     let (stop, stopped) = tokio::sync::oneshot::channel();
     let (bound, binding) = std::sync::mpsc::sync_channel(1);
     let path = endpoint.path().to_path_buf();
@@ -307,7 +331,7 @@ pub fn serve(launcher: Launcher, endpoint: &Endpoint) -> io::Result<(Server, Pre
 async fn accept(
     mut listener: platform::Listener,
     launcher: Launcher,
-    previews: UnboundedSender<PathBuf>,
+    previews: UnboundedSender<ToPreview>,
 ) {
     loop {
         match listener.accept().await {
@@ -325,7 +349,7 @@ async fn accept(
 /// Serves one connection: its requests are handled in order on a thread of
 /// their own, which may wait (for the author to install the package, for a
 /// reload), while this task reads the next ones and notes when it closes.
-async fn connection<S>(stream: S, launcher: Launcher, previews: UnboundedSender<PathBuf>)
+async fn connection<S>(stream: S, launcher: Launcher, previews: UnboundedSender<ToPreview>)
 where
     S: AsyncRead + AsyncWrite + Send + 'static,
 {
@@ -372,7 +396,7 @@ async fn write_lines<W: AsyncWrite + Unpin>(mut write: W, mut lines: UnboundedRe
 /// One connection's requests, handled in order.
 struct Handler {
     launcher: Launcher,
-    previews: UnboundedSender<PathBuf>,
+    previews: UnboundedSender<ToPreview>,
     events: UnboundedSender<String>,
     /// Set once the connection closed.
     closed: Arc<AtomicBool>,
@@ -408,9 +432,10 @@ impl Handler {
         match request {
             Request::Develop {
                 folder,
+                extension,
                 staging,
                 command,
-            } => self.develop(&folder, &staging, &command),
+            } => self.develop(&folder, extension.as_deref(), &staging, &command),
             Request::Building => {
                 if let Some(remote) = &self.developed {
                     remote.building();
@@ -439,11 +464,16 @@ impl Handler {
         }
     }
 
-    fn develop(&mut self, folder: &Path, staging: &Path, command: &str) {
-        let identity = match PackageIdentity::local(folder) {
-            Ok(identity) => identity,
-            Err(error) => return self.refuse(error.to_string()),
+    fn develop(&mut self, folder: &Path, extension: Option<&str>, staging: &Path, command: &str) {
+        // What the request develops: the package in `folder`, or — where
+        // `extension` names one — the extension of the collection at it
+        // (ADR 0044), refused as an install of one is, with a collection
+        // named without an id explained.
+        let target = match target(folder, extension) {
+            Ok(target) => target,
+            Err(message) => return self.refuse(message),
         };
+        let identity = target.identity.clone();
         if let Some(remote) = &self.developed {
             // Ended in Pane meanwhile (stopped there, or taken over by
             // another pane-ext): it is not taken back.
@@ -462,7 +492,7 @@ impl Handler {
             .packages()
             .iter()
             .any(|package| package.identity == identity);
-        if !installed && let Err(message) = self.preview(&identity, staging) {
+        if !installed && let Err(message) = self.preview(&target, staging) {
             return self.refuse(message);
         }
         let build: BuildNow = {
@@ -471,7 +501,10 @@ impl Handler {
                 let _ = events.send(event_line(&Event::Build));
             })
         };
-        let lines = match self.launcher.develop_remotely(&identity, command, build) {
+        let lines = match self
+            .launcher
+            .develop_remotely(&identity, &target.folder, command, build)
+        {
             Ok((remote, lines)) => {
                 self.developed = Some(remote);
                 lines
@@ -512,12 +545,12 @@ impl Handler {
         }
     }
 
-    /// Shows the install preview of the package in `identity`'s folder,
+    /// Shows the install preview of the package `target` develops — the
+    /// extension's own, for one extension of a collection (ADR 0044) —
     /// with the build in `staging`, and waits for the author to install it.
-    fn preview(&self, identity: &PackageIdentity, staging: &Path) -> Result<(), String> {
-        let Some(folder) = identity.local_folder() else {
-            return Err(format!("{identity} is not a local folder"));
-        };
+    fn preview(&self, target: &DevTarget, staging: &Path) -> Result<(), String> {
+        let identity = &target.identity;
+        let folder = &target.folder;
         // The preview shows, and installing installs, this build.
         pane_build::copy_components(&PaneManifest, staging, folder);
         let title = Manifest::read(folder)
@@ -526,16 +559,22 @@ impl Handler {
         self.send(&Event::Previewing {
             title: title.clone(),
         });
-        if self.previews.send(folder.to_path_buf()).is_err() {
+        // What the window is asked to preview: the package folder, or the
+        // collection's with the id, both as the identity spells them.
+        let asked = match &target.collection {
+            Some((root, id)) => ToPreview::Collection(root.clone(), id.clone()),
+            None => ToPreview::Folder(folder.clone()),
+        };
+        if self.previews.send(asked.clone()).is_err() {
             return Err("This Pane has no window to show the install preview in".into());
         }
-        let asked = Instant::now();
+        let asked_at = Instant::now();
         let mut shown = false;
         loop {
             if self.closed.load(Ordering::SeqCst) {
                 return Err(format!("pane-ext left before {title} was installed"));
             }
-            match self.launcher.previewing(identity) {
+            match self.launcher.previewing(identity, &asked) {
                 InstallPreview::Installed => return Ok(()),
                 InstallPreview::Shown => shown = true,
                 InstallPreview::Refused(why) => {
@@ -546,7 +585,7 @@ impl Handler {
                         "{title} was not installed, so Pane does not develop it"
                     ));
                 }
-                InstallPreview::Elsewhere if asked.elapsed() > PREVIEW_LIMIT => {
+                InstallPreview::Elsewhere if asked_at.elapsed() > PREVIEW_LIMIT => {
                     return Err(format!("Pane did not show the install preview of {title}"));
                 }
                 InstallPreview::Elsewhere => {}
@@ -870,6 +909,7 @@ mod tests {
     fn requests_are_json_lines_with_the_channel_version() {
         let request = Request::Develop {
             folder: PathBuf::from("hello"),
+            extension: None,
             staging: PathBuf::from("staging"),
             command: "cargo build".into(),
         };
@@ -878,7 +918,20 @@ mod tests {
         assert_eq!(value["request"], "develop");
         assert_eq!(value["version"], VERSION);
         assert_eq!(value["folder"], "hello");
+        assert_eq!(value["extension"], serde_json::Value::Null);
         assert_eq!(parse_request(&line), Ok(request));
+        // The id of one extension of a collection the request develops
+        // (ADR 0044), as `pane-ext dev <folder>#<id>` names it.
+        let extension = Request::Develop {
+            folder: PathBuf::from("hello"),
+            extension: Some("clock".into()),
+            staging: PathBuf::from("staging"),
+            command: "cargo build".into(),
+        };
+        let line = request_line(&extension);
+        let value: serde_json::Value = serde_json::from_str(&line).unwrap();
+        assert_eq!(value["extension"], "clock");
+        assert_eq!(parse_request(&line), Ok(extension));
         for request in [Request::Building, Request::Subscribe, Request::Stop] {
             assert_eq!(parse_request(&request_line(&request)), Ok(request));
         }
@@ -886,12 +939,12 @@ mod tests {
 
     #[test]
     fn a_request_of_another_version_or_none_is_refused_saying_why() {
-        let error = parse_request(r#"{"version": 2, "request": "stop"}"#).unwrap_err();
-        assert!(error.contains("version 1"), "{error}");
+        let error = parse_request(r#"{"version": 3, "request": "stop"}"#).unwrap_err();
         assert!(error.contains("version 2"), "{error}");
+        assert!(error.contains("version 3"), "{error}");
         let error = parse_request(r#"{"request": "stop"}"#).unwrap_err();
         assert!(error.contains("no version"), "{error}");
-        let error = parse_request(r#"{"version": 1, "request": "publish"}"#).unwrap_err();
+        let error = parse_request(r#"{"version": 2, "request": "publish"}"#).unwrap_err();
         assert!(error.contains("does not know"), "{error}");
         assert!(parse_request("not json").is_err());
     }
@@ -944,6 +997,7 @@ mod tests {
         let (sender, events) = connect(&endpoint).unwrap();
         assert!(sender.send(&Request::Develop {
             folder: data.path().join("missing"),
+            extension: None,
             staging: data.path().join("staging"),
             command: "cargo build".into(),
         }));

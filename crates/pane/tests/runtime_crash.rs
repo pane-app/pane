@@ -24,7 +24,7 @@ use settle::{enter_flow, settle, settle_shown};
 #[path = "support/packages.rs"]
 mod packages;
 
-use packages::package;
+use packages::color_package;
 
 /// A window whose launcher tells it of background changes, as Pane's does,
 /// with the package in `folder` installed.
@@ -96,13 +96,14 @@ fn press_enter_on(
 #[gpui::test]
 fn a_runtime_crash_is_explained_and_the_runtime_restarted_from_the_window(cx: &mut TestAppContext) {
     let (sources, data) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
-    let folder = package(&sources.path().join("hello"));
+    let folder = color_package(&sources.path().join("hello"));
     let (window, cx, runtime) = open(cx, &data, &folder);
     settle(&window, cx);
-    // A custom view is open in the runtime.
+    // A designed view is open in the runtime: the list's color item
+    // launches the package's color command.
     press_enter_on(&window, cx, "Say hello");
     let view = press_enter_on(&window, cx, "Choose a color");
-    assert!(matches!(view.screen, Screen::CustomView(_)), "{view:?}");
+    assert!(matches!(view.screen, Screen::DesignedView(_)), "{view:?}");
 
     runtime.inject(Fault::Crash);
 
@@ -114,9 +115,9 @@ fn a_runtime_crash_is_explained_and_the_runtime_restarted_from_the_window(cx: &m
         cx,
         |status| matches!(status, RuntimeStatus::Restarted { .. }),
         "Pane's extension runtime stopped unexpectedly and was started again",
-        |screen| *screen == Screen::Command,
+        |screen| matches!(screen, Screen::Root { .. }),
     );
-    assert_eq!(view.screen, Screen::Command);
+    assert!(matches!(view.screen, Screen::Root { .. }));
     let Status::Error(toast) = &view.status else {
         panic!("expected the explanation, got {:?}", view.status);
     };

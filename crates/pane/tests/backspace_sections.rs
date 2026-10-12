@@ -96,9 +96,9 @@ const VIM_NEXT: &str = if cfg!(target_os = "macos") {
     "alt-j"
 };
 
-/// The calculator's assembled package, for its computed answers.
-fn calculator() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/guests/packages/calculator")
+/// The Rust sample's assembled package, for its computed answers.
+fn rust_sample() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/guests/packages/sample-rust")
 }
 
 /// The actions sample as a root command, titled "Actions sample": the
@@ -118,7 +118,6 @@ fn actions_command() -> CommandRegistration {
         subtitle: None,
         component,
         takes_query: false,
-        search: false,
         keywords: Vec::new(),
         when: CommandWhen::Always,
         matches: CommandMatches::Title,
@@ -141,7 +140,6 @@ fn command(id: &str, title: &str) -> CommandRegistration {
         subtitle: None,
         component,
         takes_query: false,
-        search: false,
         keywords: Vec::new(),
         when: CommandWhen::Always,
         matches: CommandMatches::Title,
@@ -188,7 +186,16 @@ fn open_launcher(
 ) -> (Entity<LauncherWindow>, &mut VisualTestContext) {
     cx.executor().allow_parking();
     cx.update(pane::bind_keys);
-    cx.add_window_view(|window, cx| LauncherWindow::new(launcher, window, cx))
+    // The window learns what the launcher changed in the background — a
+    // late answer's merge (#201) — as the binary's window does; without it
+    // the last frame stays what the awaited calls left.
+    let (sender, changes) = pane_core::changes::channel();
+    let launcher = launcher.with_changes(sender);
+    cx.add_window_view(|window, cx| {
+        let mut launcher_window = LauncherWindow::new(launcher, window, cx);
+        launcher_window.follow_changes(changes, window, cx);
+        launcher_window
+    })
 }
 
 /// The window over `commands` root commands, on root search.
@@ -485,18 +492,27 @@ fn backspace_does_nothing_in_root_search_and_never_from_a_form(cx: &mut TestAppC
     cx.simulate_keystrokes("backspace");
     assert_eq!(settle(&window, cx).query(), Some("command 0"));
 
-    // A form's fields — an argument's among them — keep the key.
+    // A command's fields — an argument's among them — keep the key.
     let data = tempfile::tempdir().unwrap();
     let (window, cx) = open_installed(cx, vec![], data.path(), "sample-arguments");
     cx.simulate_input("greet");
     settle(&window, cx);
     cx.simulate_keystrokes("enter");
     let view = settle(&window, cx);
-    assert!(view.form().is_some(), "{:?}", view.screen);
+    // The no-view command's argument fields show after the query (#205),
+    // Enter taking the focus to the first blank one.
+    assert!(
+        matches!(view.screen, Screen::Root { .. }),
+        "{:?}",
+        view.screen
+    );
     assert_eq!(focused_label(cx).as_deref(), Some("Name"));
     cx.simulate_keystrokes("backspace");
     let view = settle(&window, cx);
-    assert!(view.form().is_some(), "the form stays open");
+    assert!(
+        matches!(view.screen, Screen::Root { .. }),
+        "the fields stay"
+    );
     assert_eq!(focused_label(cx).as_deref(), Some("Name"));
 }
 
@@ -630,7 +646,7 @@ fn a_command_search_moves_five_rows(cx: &mut TestAppContext) {
 }
 
 /// Ctrl+Down and Ctrl+Up cross root search's result sections: from the
-/// computed answer's "Calculator" to the matches' "Results", the first
+/// computed answer's "Rust sample" to the matches' "Results", the first
 /// row of the next section and of the previous one, the last row when
 /// there is no next section, and the section's label scrolling into view
 /// over the row the jump lands on.
@@ -638,27 +654,32 @@ fn a_command_search_moves_five_rows(cx: &mut TestAppContext) {
 fn ctrl_arrows_cross_root_searches_sections_scrolling_the_label_into_view(cx: &mut TestAppContext) {
     let data = tempfile::tempdir().unwrap();
     let commands: Vec<_> = (1..=20)
-        .map(|index| command(&format!("command-{index:02}"), &format!("6*7 {index:02}")))
+        .map(|index| {
+            command(
+                &format!("command-{index:02}"),
+                &format!("reverse 42 {index:02}"),
+            )
+        })
         .collect();
     let launcher =
         Launcher::with_packages(Runtime::start(), commands, data.path().join("extensions"));
-    block_on(launcher.install_package(&calculator()));
+    block_on(launcher.install_package(&rust_sample()));
     let (window, cx) = open_launcher(cx, launcher);
 
-    // The answer above twenty matches: "Calculator" and "Results".
-    cx.simulate_input("6*7");
-    let expected: Vec<String> = std::iter::once("42".to_owned())
-        .chain((1..=20).map(|index| format!("6*7 {index:02}")))
+    // The answer above twenty matches: "Rust sample" and "Results".
+    cx.simulate_input("reverse 42");
+    let expected: Vec<String> = std::iter::once("24".to_owned())
+        .chain((1..=20).map(|index| format!("reverse 42 {index:02}")))
         .collect();
     until(&window, cx, |view| row_titles(view) == expected);
     let view = settle(&window, cx);
     assert_eq!(view.selected, Some(0));
-    assert!(in_view(cx, "section-Calculator"));
+    assert!(in_view(cx, "section-Rust sample"));
     assert!(in_view(cx, "section-Results"));
 
     // The first row of the next section: the first match.
     cx.simulate_keystrokes("ctrl-down");
-    assert_eq!(selected_title(&settle(&window, cx)), "6*7 01");
+    assert_eq!(selected_title(&settle(&window, cx)), "reverse 42 01");
 
     // Ten rows down, the "Results" label is out of view; the jump back
     // lands on the section's first row with its label scrolled into view.
@@ -667,26 +688,26 @@ fn ctrl_arrows_cross_root_searches_sections_scrolling_the_label_into_view(cx: &m
     assert!(!in_view(cx, "section-Results"), "the label is out of view");
     cx.simulate_keystrokes("ctrl-up");
     let view = settle(&window, cx);
-    assert_eq!(selected_title(&view), "6*7 01");
+    assert_eq!(selected_title(&view), "reverse 42 01");
     assert!(
         in_view(cx, "section-Results"),
         "the label scrolled into view"
     );
 
-    // From the section's first row, up: the "Calculator" answer, and
+    // From the section's first row, up: the "Rust sample" answer, and
     // nothing above it to reach.
     cx.simulate_keystrokes("ctrl-up");
-    assert_eq!(selected_title(&settle(&window, cx)), "42");
+    assert_eq!(selected_title(&settle(&window, cx)), "24");
     cx.simulate_keystrokes("ctrl-up");
-    assert_eq!(selected_title(&settle(&window, cx)), "42");
+    assert_eq!(selected_title(&settle(&window, cx)), "24");
 
     // No next section past the last: the last row, and it stays there.
     cx.simulate_keystrokes("ctrl-down");
-    assert_eq!(selected_title(&settle(&window, cx)), "6*7 01");
+    assert_eq!(selected_title(&settle(&window, cx)), "reverse 42 01");
     cx.simulate_keystrokes("ctrl-down");
-    assert_eq!(selected_title(&settle(&window, cx)), "6*7 20");
+    assert_eq!(selected_title(&settle(&window, cx)), "reverse 42 20");
     cx.simulate_keystrokes("ctrl-down");
-    assert_eq!(selected_title(&settle(&window, cx)), "6*7 20");
+    assert_eq!(selected_title(&settle(&window, cx)), "reverse 42 20");
 }
 
 /// In the vertical pinned layout the pinned rows count as the first
@@ -764,7 +785,9 @@ fn the_actions_panel_jumps_entries_and_groups(cx: &mut TestAppContext) {
     // "Share" and "Danger" sections.
     let runs = panel_runs;
 
-    // Five entries at a time, clamped at the last.
+    // Five entries at a time, clamped at the last. Up lands on the
+    // page's first entry, as the downs within the same panel left it:
+    // each `runs` call opens the panel afresh.
     assert_eq!(
         runs("alt-down", &window, cx),
         Status::Result("Copy Link: Alpha note".into())
@@ -774,7 +797,7 @@ fn the_actions_panel_jumps_entries_and_groups(cx: &mut TestAppContext) {
         Status::Result("Delete: Alpha note".into())
     );
     assert_eq!(
-        runs("alt-up", &window, cx),
+        runs("alt-down alt-down alt-up", &window, cx),
         Status::Result("Duplicate: Alpha note".into())
     );
 
@@ -833,10 +856,13 @@ fn the_emacs_pair_moves_the_selection_and_the_argument_fields(cx: &mut TestAppCo
     );
     let (window, cx) = open_installed(cx, vec![], data.path(), "sample-arguments");
 
+    // The install left the command's row selected, wherever the blank
+    // query's collated order places it (#199); the pair moves by one.
+    let before = settle(&window, cx).selected;
     cx.simulate_keystrokes(EMACS_NEXT);
-    assert_eq!(settle(&window, cx).selected, Some(1));
+    assert_eq!(settle(&window, cx).selected, before.map(|at| at + 1));
     cx.simulate_keystrokes(EMACS_PREVIOUS);
-    assert_eq!(settle(&window, cx).selected, Some(0));
+    assert_eq!(settle(&window, cx).selected, before);
 
     // The argument form: Left and Right between its fields.
     cx.simulate_input("greet");

@@ -108,7 +108,6 @@ fn a_command_built_into_pane_runs_through_the_adapter() {
             subtitle: None,
             component: guest("previous_api"),
             takes_query: false,
-            search: false,
             keywords: Vec::new(),
             when: pane_core::CommandWhen::Always,
             matches: pane_core::CommandMatches::Title,

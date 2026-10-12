@@ -1132,15 +1132,24 @@ fn the_install_preview_lists_the_capabilities_a_package_uses(cx: &mut TestAppCon
         view.status,
         Status::Result("Installed Caller with Greeter, which it names".into())
     );
+    // The blank query lists Pane's own rows with the command, in its
+    // order; the command's row is the selected one.
+    assert_eq!(
+        view.selected.map(|index| view.rows[index].title.as_str()),
+        Some("Call")
+    );
     assert_eq!(
         titles(&view),
         [
             "Call",
-            INSTALL_ROW,
-            NPM_ROW,
-            GIT_ROW,
-            MANAGE_ROW,
-            SETTINGS_ROW
+            "Check for Extension Updates",
+            "Create Extension…",
+            "Import Extension…",
+            "Install extension from folder…",
+            "Install extension from Git…",
+            "Install extension from npm…",
+            "Manage Extensions",
+            "Settings…"
         ]
     );
 

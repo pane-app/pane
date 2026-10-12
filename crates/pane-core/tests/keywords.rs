@@ -9,10 +9,10 @@
 //! indexed result.
 
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use futures::executor::block_on;
-use pane_core::{Launcher, Runtime, Screen, Status};
+use pane_core::{Launcher, PackageIdentity, Runtime, Screen, Status};
 use tempfile::TempDir;
 
 #[path = "support/feedback.rs"]
@@ -210,14 +210,20 @@ fn two_copies_of_a_package_each_name_their_source() {
         shown[0].starts_with("Keywords sample"),
         "the source comes after the subtitle: {shown:?}"
     );
-    assert!(
-        shown[0].ends_with(&format!("· local folder {}", first.display())),
-        "{shown:?}"
-    );
-    assert!(
-        shown[1].ends_with(&format!("· local folder {}", second.display())),
-        "{shown:?}"
-    );
+    // The source each row names is its identity's: the resolved folder,
+    // which on macOS is the temp folder's `/private/var` path.
+    let source = |folder: &Path| {
+        format!(
+            "· local folder {}",
+            PackageIdentity::local(folder)
+                .unwrap()
+                .local_folder()
+                .unwrap()
+                .display()
+        )
+    };
+    assert!(shown[0].ends_with(&source(&first)), "{shown:?}");
+    assert!(shown[1].ends_with(&source(&second)), "{shown:?}");
 
     search(&launcher, "moon");
     assert_eq!(titles(&launcher), ["The Moon", "The Moon"]);

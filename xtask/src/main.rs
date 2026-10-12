@@ -230,9 +230,9 @@ fn guests() -> Result<(), String> {
             &[
                 "sample_rust",
                 "sample_settings",
-                "run",
-                "system_commands",
-                "switch_windows",
+                "sample_view",
+                "sample_nav",
+                "sample_timer",
                 "sample_operations",
                 "sample_dependencies",
                 "sample_greet",
@@ -258,6 +258,7 @@ fn guests() -> Result<(), String> {
                 "sample_files",
                 "faulty",
                 "folder_files",
+                "quick",
                 "operations_fixture",
                 "capabilities_fixture",
                 "registrations_fixture",
@@ -267,6 +268,7 @@ fn guests() -> Result<(), String> {
                 "previous_api",
                 "failing_start",
                 "refusing_view",
+                "designed_fixture",
                 "tree_fixture",
                 "git_greeter",
             ],
@@ -289,6 +291,10 @@ fn guests() -> Result<(), String> {
                 .map_err(|error| format!("copy {} failed: {error}", built.display()))?;
         }
     }
+    // The designed fixture's hand-written manifests name it by its package
+    // ("designed"), not its crate.
+    std::fs::copy(out.join("designed_fixture.wasm"), out.join("designed.wasm"))
+        .map_err(|error| error.to_string())?;
     for (name, _) in js_guests::SAMPLES {
         let prebuilt = root.join(format!("guests/prebuilt/{name}.wasm"));
         std::fs::copy(&prebuilt, out.join(format!("{name}.wasm")))
@@ -518,22 +524,20 @@ fn git_sample(root: &Path, out: &Path) -> Result<(), String> {
     Ok(())
 }
 
-/// (package folder in `guests/packages`, component) of each sample package.
+/// (package folder in `guests/packages`, component) of each sample package,
+/// and of the extension-UI samples and the designed fixture the extension
+/// UI work added, and of the previous-API fixture the version window runs
+/// through its adapter (ADR 0046).
 /// The default extensions' packages are not here: their sources left this
 /// repository for their own (#285), and a Pane release installs them from
-/// the commits its pins name (`crates/pane/defaults.json`) — except the
-/// Windows power features' three (#125), which this repository still
-/// builds until their own repositories release.
-const SAMPLE_PACKAGES: [(&str, &str); 85] = [
+/// the commits its pins name (`crates/pane/defaults.json`).
+const SAMPLE_PACKAGES: [(&str, &str); 92] = [
     ("sample-rust", "sample_rust"),
     ("sample-settings", "sample_settings"),
     ("sample-js", "sample_js"),
     ("sample-ts", "sample_ts"),
     ("sample-settings-js", "sample_settings_js"),
     ("sample-settings-ts", "sample_settings_ts"),
-    ("run", "run"),
-    ("system-commands", "system_commands"),
-    ("switch-windows", "switch_windows"),
     ("sample-operations", "sample_operations"),
     ("sample-operations-js", "sample_operations_js"),
     ("sample-operations-ts", "sample_operations_ts"),
@@ -601,6 +605,16 @@ const SAMPLE_PACKAGES: [(&str, &str); 85] = [
     ("sample-programs", "sample_programs"),
     ("sample-programs-js", "sample_programs_js"),
     ("sample-programs-ts", "sample_programs_ts"),
+    ("sample-view", "sample_view"),
+    ("sample-view-js", "sample_view_js"),
+    ("sample-view-ts", "sample_view_ts"),
+    ("sample-nav", "sample_nav"),
+    ("sample-nav-js", "sample_nav_js"),
+    ("sample-nav-ts", "sample_nav_ts"),
+    ("sample-timer", "sample_timer"),
+    ("sample-timer-js", "sample_timer_js"),
+    ("sample-timer-ts", "sample_timer_ts"),
+    ("designed", "designed_fixture"),
     ("sample-run", "sample_run"),
     ("sample-run-js", "sample_run_js"),
     ("sample-run-ts", "sample_run_ts"),

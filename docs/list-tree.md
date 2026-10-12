@@ -21,8 +21,11 @@ Adding to the tree needs no WIT change: every later list feature (several
 actions, icons, accessories) is a field here, and the "Extension UI you can
 design" specification (#121) adds layout primitives, components, Detail,
 Grid, Form, navigation and the canvas to the same envelope without
-redefining it. Forms (#20) and custom views (#21) keep their own functions,
-`submit-form` and `open-view`, which take the item's id.
+redefining it. The form is a designed view now (#241) — the tree's field
+components and its submission an event — so `submit-form` is gone from the
+interface, and a component built for the older shape is refused naming the
+change; the custom view of #21 became the canvas of the
+designed tree (#242, [designed-tree.md](designed-tree.md)).
 
 Authors never see the JSON or the callback ids. In Rust (`pane-extension`) a
 command implements `pane_extension::Command`, whose `render` returns a
@@ -32,18 +35,20 @@ or an untitled `.on_action(..)`). In JavaScript and TypeScript
 (`@pane-app/extension`) the exported `command`'s `render` resolves with
 `{ title, items }`, each item with `actions` (objects with a `title` and an
 `onAction` function) or an untitled `onAction` function; the SDK's adapter
-(`guests/js/adapt.js`) writes the tree. A Rust command whose screen is a
-form returns `List::form(id, form)`, its fields filled in with
-`.value(field, value)`; `pane_extension::commands::current().command` says which
+(`guests/js/adapt.js`) writes the tree. A form is a designed view now (#241, `docs/designed-tree.md`): the
+`"mode": "designed"` command of the same package holds the field
+components and its submission an event — `List::form` is gone.
+`pane_extension::commands::current().command` says which
 of a component's commands is opened (the launch record's `command`), so one
-component can draw several view commands' screens. The JavaScript SDK does
-not write form screens yet. Both SDKs name an item's first
+component can draw several view commands' screens. Both SDKs name an item's first
 action by the item's id and its later ones by the id and their place
 (`<id>#1`, `<id>#2`, ...), so the same action has the same callback in every
 drawing, and an instance that has not drawn the list yet draws it before it
 runs a callback it does not know. An id the list does
 not name goes to the command's `run_search_result` (`runSearchResult`), which
-is how a search result's id ([command search](command-search.md)) is run.
+a designed List that handles its own search runs for its items' presses
+(#240; the `command-search` export it once answered is retired —
+[designed-tree.md](designed-tree.md), the "standard views" section).
 
 An action may open a submenu instead (#140): in Rust
 `Action::submenu("Open With…", Submenu::new("Open With").entries([..]))`, or
@@ -89,20 +94,11 @@ and a lazy submenu's `onOpen` as the action itself would be named.
       {
         "id": "new",
         "title": "New note",
-        "form": {
-          "title": "New note",
-          "submitLabel": "Save",
-          "fields": [
-            { "id": "text", "label": "Text", "kind": "text", "placeholder": "Write here" },
-            { "id": "where", "label": "Where", "kind": "choice",
-              "choices": [{ "id": "inbox", "label": "Inbox" }] }
-          ]
-        }
+        "subtitle": "Type a note in a form the command checks"
       },
       {
         "id": "color",
         "title": "Choose a color",
-        "customView": { "title": "Choose a color", "label": "Color", "role": "color-well" },
         "platforms": ["windows", "macos"]
       }
     ]
@@ -112,19 +108,15 @@ and a lazy submenu's `onOpen` as the action itself would be named.
 
 - **`version`** (number, at least 1): the version of the component set the
   tree uses. Pane knows version 1.
-- **`view`**: the screen. Its **`type`** is `list` or `form`. A list has a
-  **`title`** and **`items`**, in order. A form is the command's whole
-  screen (#149, as Quicklinks' Create Quicklink is): it has an **`id`**,
-  which `submit-form` receives as the item id, and a form's **`title`**,
-  **`submitLabel`** and **`fields`** (as an item's `form` below). Pane
-  shows it as soon as the command opens; submitting it calls `submit-form`,
-  and Back (Escape) leaves the command for root search
-  (`{"version": 1, "view": {"type": "form", "id": "create", "title": "Create
-  Quicklink", "submitLabel": "Create Quicklink", "fields": [...]}}`). The
-  "Extension UI you can design" specification (#121) extends it.
+- **`view`**: the screen. Its **`type`** is `list`. A list has a
+  **`title`** and **`items`**, in order. A `form` view — the typed form of
+  the tree's first version, submitted through `submit-form` — is refused,
+  naming the change: a form is a designed view now (#241,
+  `docs/designed-tree.md`), its fields the tree's field components and its
+  submission an event.
 - An item has an **`id`** (Pane keeps the selection on it when the list is
-  drawn again, and passes it to `submit-form` and `open-view`), a
-  **`title`**, and optionally:
+  drawn again, and passes it to `open-view`), a **`title`**, and
+  optionally:
   - **`subtitle`**: a second line;
   - **`actions`**: what the item offers, in order (#137). The first is its
     **primary action**: Enter and the footer's button run it, and the
@@ -174,13 +166,6 @@ and a lazy submenu's `onOpen` as the action itself would be named.
       entry calls the command back with its `onAction` and draws the list
       again, as any action does. Enter, an action chord or the shortcut of
       an item's action that opens a submenu open the panel at it;
-  - **`form`**: choosing the item opens this form instead (fields of kind
-    `text`, with an optional `placeholder`, or `choice`, with `choices`).
-    A field's optional **`value`** is what it starts with (#149): a text
-    field's text, or the id of the choice chosen first; without one a text
-    field starts empty and a choice with its first option;
-  - **`customView`**: choosing the item opens this custom view instead
-    (ignored when `form` is set);
   - **`platforms`**: the systems (`windows`, `macos`, `linux`) the item's
     action works on; elsewhere the item is listed as unavailable;
   - **`icon`**: drawn before the title ([Icons](#icons), #139);
@@ -190,7 +175,7 @@ and a lazy submenu's `onOpen` as the action itself would be named.
   - **`accessories`**: shown on the right of the row, in order
     ([Accessories](#accessories), #139).
 
-  An item with no action, form or custom view cannot be activated: the
+  An item with no action cannot be activated: the
   footer's button says "No actions", and Enter says so in the status line.
   A held key's repeats and a double click's second click never run an
   action again. Optional fields may be omitted or `null`. A field whose

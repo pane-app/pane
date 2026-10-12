@@ -38,7 +38,16 @@ use crate::list::Item;
 pub enum Tone {
     Primary,
     Secondary,
+    /// The primary ink, the tone the UI component set's token names
+    /// (#237).
+    Neutral,
     Accent,
+    /// The theme's own colour for success (#237).
+    Success,
+    /// The theme's own colour for warnings (#237).
+    Warning,
+    /// The theme's own colour for danger (#237).
+    Danger,
     Red,
     Orange,
     Yellow,
@@ -54,7 +63,11 @@ impl Tone {
         match self {
             Tone::Primary => "primary",
             Tone::Secondary => "secondary",
+            Tone::Neutral => "neutral",
             Tone::Accent => "accent",
+            Tone::Success => "success",
+            Tone::Warning => "warning",
+            Tone::Danger => "danger",
             Tone::Red => "red",
             Tone::Orange => "orange",
             Tone::Yellow => "yellow",

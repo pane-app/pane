@@ -1243,7 +1243,6 @@ fn the_search_sensitivity_control_changes_the_results_live(cx: &mut TestAppConte
         subtitle: None,
         component,
         takes_query: false,
-        search: false,
         keywords: Vec::new(),
         when: CommandWhen::Always,
         matches: CommandMatches::Title,

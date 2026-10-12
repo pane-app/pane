@@ -6,18 +6,27 @@
 //! WIT the 0.1 contract froze), the previous interface names a
 //! component's exports are looked up by, the adapter — the previous
 //! world's host traits, implemented over the same host code the current
-//! world's use, converting the one shape that differs between the
+//! world's use, converting the shapes that differ between the
 //! versions — and the wrappers that keep an instance's calls shape-ident
-//! to the current world's, so no call site branches on the version. When
+//! to the current world's, so no call site branches on the version.
+//! When
 //! the window ends, with the first Pane release after the one that
 //! replaced 0.1, this module and `wit/previous/` are deleted together:
 //! nothing outside them knows the previous world's names.
 //!
 //! A component built for 0.1 is instantiated against this world
 //! wherever the current world's would be: every interface it imports is
-//! served through the adapter, every command it exports is called
-//! through it, and the two paths are indistinguishable in behaviour. The
-//! imports the two worlds share an instance name for — WASI 0.3 and
+//! served through the adapter, and every export the current world still
+//! calls — a command's screen (`render` and `handle-event`, its run, its
+//! root, indexed and published results, its service, events and
+//! lifecycle) — is called through it, indistinguishably. The screens the
+//! current API has since replaced are not: a 0.1 command's typed forms
+//! and custom views — the current world renders designed views instead
+//! — are the same the current API refuses of any component (see
+//! `tree`), and its command-search export is no longer driven by the
+//! launcher (root search answers through `root-results` and
+//! `indexed-results`). The imports the two worlds share an instance
+//! name for — WASI 0.3 and
 //! `wasi:http` — are registered once, as `Code::new` does; the previous
 //! interfaces' instance names (`@0.1.0`) do not collide with the current
 //! ones (`@0.2.0`) in the one linker, so a component of either world
@@ -88,15 +97,6 @@ pub(crate) mod indexed_bindings {
     });
 }
 
-/// The previous world's `command-search` export.
-pub(crate) mod search_bindings {
-    wasmtime::component::bindgen!({
-        path: "../../wit/previous",
-        world: "command-search-provider",
-        exports: { default: async | store },
-    });
-}
-
 /// The previous world's `service` export.
 pub(crate) mod service_bindings {
     wasmtime::component::bindgen!({
@@ -149,10 +149,6 @@ pub(crate) const INDEXED_RESULTS_INTERFACE: &str = "pane:extension/indexed-resul
 /// previous version also exports.
 pub(crate) const OPERATIONS_INTERFACE: &str = "pane:extension/published-operations@0.1.0";
 
-/// The interface a command that searches as the user types built for the
-/// previous version also exports.
-pub(crate) const COMMAND_SEARCH_INTERFACE: &str = "pane:extension/command-search@0.1.0";
-
 /// The interface a command that runs a continuing service built for the
 /// previous version also exports.
 pub(crate) const SERVICE_INTERFACE: &str = "pane:extension/service@0.1.0";
@@ -199,7 +195,6 @@ use super::indexed_bindings::exports::pane::extension::indexed_results as curren
 use super::lifecycle_bindings::exports::pane::extension::lifecycle as current_lifecycle;
 use super::operations_bindings::exports::pane::extension::published_operations as current_operations;
 use super::root_bindings::exports::pane::extension::root_results as current_root;
-use super::search_bindings::exports::pane::extension::command_search as current_search;
 use super::service_bindings::exports::pane::extension::service as current_service;
 use super::{CallError, Checked, Exports, GuestState, lock, stopped_code};
 use bindings::exports::pane::extension::command;
@@ -230,7 +225,6 @@ use indexed_bindings::exports::pane::extension::indexed_results;
 use lifecycle_bindings::exports::pane::extension::lifecycle;
 use operations_bindings::exports::pane::extension::published_operations;
 use root_bindings::exports::pane::extension::root_results;
-use search_bindings::exports::pane::extension::command_search;
 use service_bindings::exports::pane::extension::service;
 
 // =========================================================== the exports
@@ -309,81 +303,27 @@ impl WorldCommand<'_> {
         }
     }
 
-    pub(crate) async fn call_submit_form(
-        &self,
-        store: &Accessor<GuestState>,
-        item_id: String,
-        values: Vec<current_command::FieldValue>,
-    ) -> wasmtime::Result<Result<String, current_command::FormError>> {
-        match self {
-            WorldCommand::Current(command) => {
-                command.call_submit_form(store, item_id, values).await
-            }
-            WorldCommand::Previous(command) => {
-                let values = values.into_iter().map(command::FieldValue::from).collect();
-                command
-                    .call_submit_form(store, item_id, values)
-                    .await
-                    .map(|answer| answer.map_err(current_command::FormError::from))
-            }
-        }
-    }
-
     pub(crate) async fn call_open_view(
         &self,
         store: &Accessor<GuestState>,
-        item_id: String,
+        command: String,
+        launch: super::launching::LaunchRecord,
     ) -> wasmtime::Result<Result<ResourceAny, String>> {
         match self {
-            WorldCommand::Current(command) => command.call_open_view(store, item_id).await,
-            WorldCommand::Previous(command) => command.call_open_view(store, item_id).await,
-        }
-    }
-
-    /// The custom-view resource of the command interface, as
-    /// `custom_view` is on the current world's handle.
-    pub(crate) fn custom_view(&self) -> WorldCustomView<'_> {
-        match self {
-            WorldCommand::Current(command) => WorldCustomView::Current(command.custom_view()),
-            WorldCommand::Previous(command) => WorldCustomView::Previous(command.custom_view()),
-        }
-    }
-}
-
-/// A custom view the component exports, of either world: the handle the
-/// command interface lends, which the resource's methods are called
-/// through.
-pub(crate) enum WorldCustomView<'a> {
-    Current(current_command::GuestCustomView<'a>),
-    Previous(command::GuestCustomView<'a>),
-}
-
-impl WorldCustomView<'_> {
-    pub(crate) async fn call_render(
-        &self,
-        store: &Accessor<GuestState>,
-        resource: ResourceAny,
-    ) -> wasmtime::Result<current_command::Frame> {
-        match self {
-            WorldCustomView::Current(view) => view.call_render(store, resource).await,
-            WorldCustomView::Previous(view) => view
-                .call_render(store, resource)
-                .await
-                .map(current_command::Frame::from),
-        }
-    }
-
-    pub(crate) async fn call_handle_event(
-        &self,
-        store: &Accessor<GuestState>,
-        resource: ResourceAny,
-        event: current_command::ViewEvent,
-    ) -> wasmtime::Result<Result<(), String>> {
-        match self {
-            WorldCustomView::Current(view) => view.call_handle_event(store, resource, event).await,
-            WorldCustomView::Previous(view) => {
-                view.call_handle_event(store, resource, event.into()).await
+            WorldCommand::Current(exported) => {
+                exported.call_open_view(store, command, launch).await
             }
+            // The previous world's `open-view` opens an item's custom
+            // view, a screen the current API replaced with the designed
+            // view (#242): no command built for the previous version
+            // opens one, so a component whose manifest names a designed
+            // command while its exports name 0.1 is refused here — the
+            // shape check's safety net (ADR 0046), in Pane's words.
+            WorldCommand::Previous(_) => Ok(Err(
+                "this component was built for extension API 0.1, which opens no designed \
+                 view; rebuild it for extension API 0.2"
+                    .into(),
+            )),
         }
     }
 }
@@ -530,58 +470,6 @@ impl OperationsHandle {
             OperationsHandle::Previous(provider) => {
                 provider.call_run_operation(store, operation, input).await
             }
-        }
-    }
-}
-
-/// An instance's `command-search` export, of either world.
-pub(crate) enum WorldCommandSearch {
-    Current(super::search_bindings::CommandSearchProvider),
-    Previous(search_bindings::CommandSearchProvider),
-}
-
-impl WorldCommandSearch {
-    pub(crate) fn pane_extension_command_search(&self) -> CommandSearchHandle {
-        match self {
-            WorldCommandSearch::Current(provider) => {
-                CommandSearchHandle::Current(provider.pane_extension_command_search().clone())
-            }
-            WorldCommandSearch::Previous(provider) => {
-                CommandSearchHandle::Previous(provider.pane_extension_command_search().clone())
-            }
-        }
-    }
-}
-
-/// The `command-search` interface an instance exports, of either world.
-#[derive(Clone)]
-pub(crate) enum CommandSearchHandle {
-    Current(current_search::Guest),
-    Previous(command_search::Guest),
-}
-
-impl CommandSearchHandle {
-    pub(crate) async fn call_search(
-        &self,
-        store: &Accessor<GuestState>,
-        command: String,
-        query: String,
-    ) -> wasmtime::Result<Result<Vec<current_search::SearchResult>, String>> {
-        match self {
-            CommandSearchHandle::Current(provider) => {
-                provider.call_search(store, command, query).await
-            }
-            CommandSearchHandle::Previous(provider) => provider
-                .call_search(store, command, query)
-                .await
-                .map(|answer| {
-                    answer.map(|results| {
-                        results
-                            .into_iter()
-                            .map(current_search::SearchResult::from)
-                            .collect()
-                    })
-                }),
         }
     }
 }
@@ -766,77 +654,6 @@ impl From<super::launching::LaunchRecord> for launching::LaunchRecord {
     }
 }
 
-impl From<current_command::FieldValue> for command::FieldValue {
-    fn from(value: current_command::FieldValue) -> command::FieldValue {
-        command::FieldValue {
-            id: value.id,
-            value: value.value,
-        }
-    }
-}
-
-impl From<command::FormError> for current_command::FormError {
-    fn from(error: command::FormError) -> current_command::FormError {
-        current_command::FormError {
-            field: error.field,
-            message: error.message,
-        }
-    }
-}
-
-impl From<current_command::ViewEvent> for command::ViewEvent {
-    fn from(event: current_command::ViewEvent) -> command::ViewEvent {
-        let point = |current_command::Point { x, y }| command::Point { x, y };
-        match event {
-            current_command::ViewEvent::Key(key) => command::ViewEvent::Key(match key {
-                current_command::Key::Left => command::Key::Left,
-                current_command::Key::Right => command::Key::Right,
-                current_command::Key::Up => command::Key::Up,
-                current_command::Key::Down => command::Key::Down,
-                current_command::Key::Home => command::Key::Home,
-                current_command::Key::End => command::Key::End,
-            }),
-            current_command::ViewEvent::PointerDown(at) => {
-                command::ViewEvent::PointerDown(point(at))
-            }
-            current_command::ViewEvent::PointerMove(at) => {
-                command::ViewEvent::PointerMove(point(at))
-            }
-            current_command::ViewEvent::PointerUp(at) => command::ViewEvent::PointerUp(point(at)),
-        }
-    }
-}
-
-impl From<command::Frame> for current_command::Frame {
-    fn from(frame: command::Frame) -> current_command::Frame {
-        let shapes = frame
-            .shapes
-            .into_iter()
-            .map(|shape| match shape {
-                command::Shape::Rect(rect) => current_command::Shape::Rect(current_command::Rect {
-                    x: rect.x,
-                    y: rect.y,
-                    width: rect.width,
-                    height: rect.height,
-                    fill: rect.fill,
-                }),
-                command::Shape::Text(text) => current_command::Shape::Text(current_command::Text {
-                    x: text.x,
-                    y: text.y,
-                    content: text.content,
-                    color: text.color,
-                }),
-            })
-            .collect();
-        current_command::Frame {
-            width: frame.width,
-            height: frame.height,
-            shapes,
-            value: frame.value,
-        }
-    }
-}
-
 impl From<current_root::WallTime> for root_results::WallTime {
     fn from(at: current_root::WallTime) -> root_results::WallTime {
         root_results::WallTime {
@@ -894,17 +711,6 @@ impl From<indexed_results::IndexedResult> for current_indexed::IndexedResult {
                     })
                 }
             },
-        }
-    }
-}
-
-impl From<command_search::SearchResult> for current_search::SearchResult {
-    fn from(result: command_search::SearchResult) -> current_search::SearchResult {
-        current_search::SearchResult {
-            id: result.id,
-            title: result.title,
-            subtitle: result.subtitle,
-            file: result.file,
         }
     }
 }
@@ -1056,14 +862,6 @@ pub(crate) fn check(
             CallError::Interface(format!(
                 "its manifest publishes operations it serves, but it does not export \
                  {OPERATIONS_INTERFACE} with the functions Pane calls: {error:#}"
-            ))
-        })?;
-    }
-    if exports.search {
-        search_bindings::CommandSearchProviderPre::new(pre.clone()).map_err(|error| {
-            CallError::Interface(format!(
-                "its manifest says it searches as the user types, but it does not export \
-                 {COMMAND_SEARCH_INTERFACE} with the functions Pane calls: {error:#}"
             ))
         })?;
     }

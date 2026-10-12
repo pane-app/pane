@@ -4648,6 +4648,7 @@ dependencies = [
  "gpui_ce_elements",
  "gpui_ce_platform",
  "image",
+ "lyon",
  "objc2 0.6.4",
  "open",
  "pane-core",

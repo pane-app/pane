@@ -136,14 +136,10 @@ impl OperationError {
             | CallError::Incompatible(_)
             | CallError::Interface(_)
             | CallError::OlderApiShape { .. } => (Incompatible, format!("{title}: {error}")),
-            // A form's rejection answers only `submit-form`, a live
-            // instance (started just before the call) is never missing, only
-            // root search's own calls are cancelled, and only a command's
-            // tree and event answers are read.
-            CallError::Form(_)
-            | CallError::ViewClosed
-            | CallError::Cancelled
-            | CallError::Unreadable(_) => {
+            // A live instance (started just before the call) is never
+            // missing, only root search's own calls are cancelled, and
+            // only a command's tree and event answers are read.
+            CallError::ViewClosed | CallError::Cancelled | CallError::Unreadable(_) => {
                 unreachable!("an operation call cannot end with {error:?}")
             }
         };
@@ -892,9 +888,13 @@ pub(crate) fn identity_key(source: &str) -> Option<String> {
     match SourceSpec::parse(source) {
         Ok(SourceSpec::Local(path)) if Path::new(&path).is_absolute() => Some(source.to_owned()),
         Ok(SourceSpec::Npm(spec)) if spec.version.is_none() => Some(source.to_owned()),
-        Ok(SourceSpec::Git(spec)) if spec.reference.is_none() => {
-            Some(crate::packages::PackageIdentity::git(&spec.repository).key())
-        }
+        Ok(SourceSpec::Git(spec)) if spec.reference.is_none() => Some(match &spec.extension {
+            // One extension of a collection: the id after `#` is part of
+            // the identity it names (ADR 0044), so the call reaches that
+            // extension, not the repository's root.
+            Some(id) => crate::packages::PackageIdentity::git_extension(&spec.repository, id).key(),
+            None => crate::packages::PackageIdentity::git(&spec.repository).key(),
+        }),
         _ => None,
     }
 }

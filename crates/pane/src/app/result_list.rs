@@ -240,6 +240,16 @@ impl LauncherWindow {
         };
         #[cfg(any(test, debug_assertions))]
         self.results.drawn_rows.insert(index);
+        // A designed List's item may be the author's own subtree, drawn in
+        // the place of the standard row while Pane still selects and
+        // activates it (#240).
+        if let pane_core::Screen::DesignedView(view) = &frame.view.screen
+            && let Some(element) =
+                self.render_designed_row(view, &row.id, frame.view.selected == Some(index), cx)
+        {
+            // The author's own row subtree carries its own accessibility.
+            return element;
+        }
         let selected = frame.view.selected == Some(index);
         let shown = self.launcher.present_row(index);
         let number = frame

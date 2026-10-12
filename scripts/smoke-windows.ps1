@@ -1,11 +1,11 @@
 # Native GUI smoke on Windows: launches Pane, drives it with real key events
 # and captures the screen. Pane keeps installed packages in <output-dir>\data,
 # not the user's data folder. Settings is driven through UI Automation (see
-# Press-Named). The phases that set the default extensions up serve their
-# repositories (made from the packages `cargo xtask guests` assembles) on
-# 127.0.0.1, so they run after it. The update phases serve the artifacts
-# the #51 phase's package build leaves in target\dist\artifacts, so they
-# run after it too.
+# Press-Named). The phases that set the default extensions up serve the
+# repositories `clone-defaults` cloned at the pinned commits on 127.0.0.1,
+# so they run after the #51 phase that clones them. The update phases
+# serve the artifacts the #51 phase's package build leaves in
+# target\dist\artifacts, so they run after it too.
 # Usage: scripts/smoke-windows.ps1 -OutDir <output-dir>
 param([string]$OutDir = "smoke")
 $ErrorActionPreference = "Stop"
@@ -358,9 +358,10 @@ function Wait-For($file, $text, [bool]$present, $tries = 100) {
 
 # The Rust, JavaScript and TypeScript samples are no commands of Pane's
 # own (#162): installed with `pane --install` into a data folder of their
-# own, they are root's first three rows, in install order (Rust sample,
-# JavaScript sample, TypeScript sample), then Pane's install rows. The
-# first phase and the root search phase run there.
+# own. The blank query's order (#199) ranks Pane's own rows among the
+# commands by title, so the samples are not root's first rows: each is
+# opened by typing its name. The first phase and the root search phase
+# run there.
 $samplesData = Join-Path $OutDir "samples-data"
 if (Test-Path $samplesData) { Remove-Item -Recurse -Force $samplesData }
 $env:PANE_DATA_DIR = $samplesData
@@ -376,14 +377,21 @@ $process = Start-Pane "stderr.log"
 Capture "1-root.png"
 Check "1-root.png" "hint"   # the hint line: text renders
 # Open each sample command (Rust, JavaScript, TypeScript) and run an item.
-foreach ($index in 0..2) {
-    for ($i = 0; $i -lt $index; $i++) { Send "{DOWN}" }
-    Send "{ENTER}"; Start-Sleep -Seconds 3
+# Typing the command's name narrows root to it and Enter opens the best
+# match, as the root search phase below does.
+$index = 0
+foreach ($sample in "Rust sample", "JavaScript sample", "TypeScript sample") {
+    Send $sample; Start-Sleep -Seconds 1
+    # The Rust sample also answers the query itself (#285): its answer card
+    # takes the first row, so a Down lands on the command row - and clamps
+    # at the single row of the samples that answer nothing.
+    Send "{DOWN}"; Start-Sleep -Milliseconds 120; Send "{ENTER}"; Start-Sleep -Seconds 3
     Capture "$($index + 2)-command-$index.png"
     Send "{DOWN}"; Start-Sleep -Milliseconds 120; Send "{ENTER}"; Start-Sleep -Seconds 2
     Capture "$($index + 2)-result-$index.png"
     Check "$($index + 2)-result-$index.png" "success"   # the guest's answer
     Send "{ESC}"; Start-Sleep -Seconds 1
+    $index++
 }
 Capture "5-back-to-root.png"
 # Each command must have answered from its own guest, not the same view twice.
@@ -392,8 +400,10 @@ if ($LASTEXITCODE -ne 0) { throw "screenshot check failed: result screenshots ar
 
 # The Rust command's form (its fifth item): submitting it empty is rejected
 # and focus returns to the name, so typing there and choosing a greeting with
-# Tab and Down makes the guest answer.
-Send "{ENTER}"; Start-Sleep -Seconds 3
+# Tab and Down makes the guest answer. The command is opened by typing its
+# name, as the samples above are.
+Send "rust sample"; Start-Sleep -Seconds 1
+Send "{DOWN}"; Start-Sleep -Milliseconds 120; Send "{ENTER}"; Start-Sleep -Seconds 3
 Send "{DOWN}{DOWN}{DOWN}{DOWN}{ENTER}"; Start-Sleep -Seconds 1
 Capture "6-form.png"
 Send "{ENTER}"; Start-Sleep -Seconds 2
@@ -456,8 +466,10 @@ Focus-Pane $process
 
 # The Rust command's seventh item is declared for Windows only, its eighth
 # for macOS and Linux only. Here the first runs and the second is explained
-# without running.
-Send "{ENTER}"; Start-Sleep -Seconds 3
+# without running. The command is opened by typing its name, as the samples
+# above are.
+Send "rust sample"; Start-Sleep -Seconds 1
+Send "{DOWN}"; Start-Sleep -Milliseconds 120; Send "{ENTER}"; Start-Sleep -Seconds 3
 Send "{DOWN}{DOWN}{DOWN}{DOWN}{DOWN}{DOWN}{ENTER}"; Start-Sleep -Seconds 2
 Capture "13-windows-only.png"
 Check "13-windows-only.png" "success"   # Windows: the guest's answer
@@ -519,7 +531,7 @@ Press-Named "Settings sample" -Toggle   # its switch: on
 Wait-Shown "Enabled Settings sample"
 Capture "19-enabled.png"
 Close-Settings
-Send "{DOWN}"   # Greeting, after Rust sample
+Send "greeting"; Start-Sleep -Seconds 1   # Greeting, wherever the blank order places it
 Send "{ENTER}"; Start-Sleep -Seconds 3
 Send "{DOWN}{DOWN}{ENTER}"; Start-Sleep -Seconds 2   # "Greet me"
 Capture "20-greeted.png"
@@ -529,11 +541,14 @@ Stop-Pane $process
 # Restarted, root lists Greeting again, after Rust sample.
 $process = Start-Pane "stderr-color.log"
 
-# The Rust command's color picker (its sixth item), which the guest draws:
+# The Rust command's color picker (its sixth item), which launches the
+# package's color command: a designed view whose canvas the guest draws:
 # Right chooses purple, and a click on the dark green swatch chooses it. The
 # chosen color fills its swatch and the preview, far more pixels than any
-# other swatch covers.
-Send "{ENTER}"; Start-Sleep -Seconds 3
+# other swatch covers. The command is opened by typing its name, as the
+# samples above are.
+Send "rust sample"; Start-Sleep -Seconds 1
+Send "{DOWN}"; Start-Sleep -Milliseconds 120; Send "{ENTER}"; Start-Sleep -Seconds 3
 Send "{DOWN}{DOWN}{DOWN}{DOWN}{DOWN}{ENTER}"; Start-Sleep -Seconds 2
 Capture "21-color.png"
 Check "21-color.png" "1e88e5" 3000   # blue, chosen when the view opens
@@ -605,8 +620,8 @@ Extension-Action "Dev" "Reload"
 Wait-Shown "Reloaded Dev"
 Capture "34-reloaded.png"
 Close-Settings
-Send "{DOWN 4}"   # Dev sample
-Send "{ENTER}"; Start-Sleep -Seconds 3
+Send "dev sample"; Start-Sleep -Seconds 1   # wherever the blank order places it
+Send "{DOWN}"; Start-Sleep -Milliseconds 120; Send "{ENTER}"; Start-Sleep -Seconds 3   # below the answer card
 Send "{ENTER}"; Start-Sleep -Seconds 2   # "Say hello"
 Capture "35-dev-after.png"
 Check "35-dev-after.png" "success"   # "Hello from the JavaScript guest"
@@ -622,8 +637,8 @@ Extension-Action "Dev" "Reload"
 Wait-Shown "Dev was not reloaded" -Prefix
 Capture "36-not-reloaded.png"
 Close-Settings
-Send "{DOWN 4}"
-Send "{ENTER}"; Start-Sleep -Seconds 3
+Send "dev sample"; Start-Sleep -Seconds 1
+Send "{DOWN}"; Start-Sleep -Milliseconds 120; Send "{ENTER}"; Start-Sleep -Seconds 3   # below the answer card
 Send "{ENTER}"; Start-Sleep -Seconds 2
 Capture "37-still-running.png"
 python "$PSScriptRoot/check_screenshot.py" --same (Join-Path $OutDir "35-dev-after.png") (Join-Path $OutDir "37-still-running.png")
@@ -649,7 +664,7 @@ if (-not (Select-String -Quiet -SimpleMatch '"start-attempted": "yes"' (Join-Pat
 # fifth items save a note (content) and sign in (a local credential), and its
 # sixth shows all four.
 $process = Start-Pane "stderr-kept.log"
-Send "{DOWN}"   # Greeting
+Send "greeting"; Start-Sleep -Seconds 1   # Greeting, wherever the blank order places it
 Send "{ENTER}"; Start-Sleep -Seconds 3
 Send "{DOWN 3}"
 Send "{ENTER}"; Start-Sleep -Seconds 2   # "Save a note"
@@ -686,7 +701,7 @@ Press-Named "Clear cache"
 Wait-Shown "Cleared the cache of Settings sample"
 Capture "42-cache-cleared.png"
 Close-Settings
-Send "{DOWN}"   # Greeting
+Send "greeting"; Start-Sleep -Seconds 1   # Greeting, wherever the blank order places it
 Send "{ENTER}"; Start-Sleep -Seconds 3
 Send "{DOWN 5}"
 Send "{ENTER}"; Start-Sleep -Seconds 2   # "Show what Pane keeps"
@@ -944,64 +959,6 @@ Check "83-tap-opened.png" "selected" 3000   # Greeting's first item, selected
 $shots = "82-tap-unfocused", "83-tap-opened" | ForEach-Object { Join-Path $OutDir "$_.png" }
 python "$PSScriptRoot/check_screenshot.py" --distinct @shots
 if ($LASTEXITCODE -ne 0) { throw "screenshot check failed: the tapped hotkey opened nothing" }
-
-# Switch Windows (#263, ADR 0040): the default extension lists the open
-# windows as Alt+Tab does -- with their titles, their applications' names
-# and icons, in z-order with the front application's window first -- and
-# Enter brings the chosen one to the front, restoring it if it is
-# minimized. The phase opens a Notepad of its own, on a file the smoke
-# makes so the window's title says which window it is; Pane's window
-# opens over it, so Notepad is the front application and its window is
-# the first row, selected, and one Enter switches to it. Pane's window
-# closed as the switch happened: the open-pane hotkey brings it back,
-# and typing in the command's search field filters by title, so the
-# second switch finds the window by what is typed. A data folder of its
-# own.
-$data = Join-Path $OutDir "switch-windows-data"
-if (Test-Path $data) { Remove-Item -Recurse -Force $data }
-$env:PANE_DATA_DIR = $data
-$notes = Join-Path $OutDir "switch-me.txt"
-Set-Content -Path $notes -Value "switch to me"
-$notepad = Start-Process notepad -PassThru -ArgumentList @("`"$notes`"")
-for ($i = 0; $i -lt 100 -and $notepad.MainWindowHandle -eq 0; $i++) {
-    Start-Sleep -Milliseconds 100; $notepad.Refresh()
-}
-if ($notepad.MainWindowHandle -eq 0) { throw "the smoke's Notepad window did not appear" }
-$process = Start-Pane "stderr-switch-windows.log" @("--install", "target/guests/packages/switch-windows")
-Send "{ENTER}"; Start-Sleep -Seconds 2   # Install; Switch Windows is selected
-Send "switch"; Start-Sleep -Seconds 2
-Send "{ENTER}"; Start-Sleep -Seconds 2   # the open windows, Notepad's first, selected
-Capture "610-switch-listed.png"
-Check "610-switch-listed.png" "selected" 3000   # a window's row is selected
-Send "{ENTER}"; Start-Sleep -Seconds 1   # switch to the selected window
-$switched = $false
-for ($i = 0; $i -lt 150; $i++) {
-    if ([Win]::GetForegroundWindow() -eq $notepad.MainWindowHandle) { $switched = $true; break }
-    Start-Sleep -Milliseconds 100
-}
-if (-not $switched) { throw "Switch Windows did not bring the smoke's window to the front" }
-Capture "612-switch-in-front.png"   # evidence only: Notepad is in front, Pane hidden
-# The open-pane hotkey brings the launcher back over Notepad, whose
-# window is the front application's again; typing filters the list by
-# title before the second switch.
-Send "^% "; Start-Sleep -Seconds 2
-Send "switch"; Start-Sleep -Seconds 2
-Send "{ENTER}"; Start-Sleep -Seconds 2
-Send "switch-me"; Start-Sleep -Seconds 2   # the command's search field filters by title
-Capture "613-switch-filtered.png"
-Check "613-switch-filtered.png" "selected" 3000   # the filtered window's row, selected
-Send "{ENTER}"; Start-Sleep -Seconds 1
-$switched = $false
-for ($i = 0; $i -lt 150; $i++) {
-    if ([Win]::GetForegroundWindow() -eq $notepad.MainWindowHandle) { $switched = $true; break }
-    Start-Sleep -Milliseconds 100
-}
-if (-not $switched) { throw "the filtered window did not come to the front" }
-$shots = "610-switch-listed", "612-switch-in-front" | ForEach-Object { Join-Path $OutDir "$_.png" }
-python "$PSScriptRoot/check_screenshot.py" --distinct @shots
-if ($LASTEXITCODE -ne 0) { throw "screenshot check failed: switching changed nothing on screen" }
-[void]$notepad.CloseMainWindow()
-Stop-Pane $process
 
 # Pausing a broken extension: the settings sample's last item, Crash, crashes
 # on purpose; the third crash within five minutes pauses the package and
@@ -2217,10 +2174,11 @@ try {
 # shortcut touch nothing of the runner's user) and a PATH that holds
 # nothing at all, so no Rust, Node, npm, Git or compiler can be reached —
 # and Pane, started from what the install script installed, fetches its
-# default extensions (the five of #60; no sample is one, #162) from the
-# commits this release pins: their repositories, cloned at those commits
-# from their real addresses on GitHub (the smoke's own setup on the
-# runner) and served on 127.0.0.1 over Git's smart
+# default extensions (on Windows all eight: the five of #60 plus Run,
+# System Commands and Switch Windows, ADR 0040; no sample is one, #162)
+# from the commits this release pins: their repositories, cloned at
+# those commits from their real addresses on GitHub (the smoke's own
+# setup on the runner) and served on 127.0.0.1 over Git's smart
 # HTTP protocol (scripts/repository_server.py; the Pane under test
 # reaches no network address and no real Git host), named by the pins
 # file the development build reads through PANE_DEFAULTS. The clones hold
@@ -2307,9 +2265,11 @@ try {
     # Generous: a slow runner may take a while to check every revision's
     # components (120 s each).
     if ($process.HasExited) { throw "the installed Pane exited during setup" }
-    # The default extensions (#60): all five, in every build; no sample
-    # is set up (#162).
-    foreach ($default in "calculator", "applications", "quicklinks", "files", "clipboard-history") {
+    # The default extensions: on Windows all eight -- the five of #60
+    # plus Run, System Commands and Switch Windows (ADR 0040), pinned
+    # "platform": "windows" so only a Windows first setup acquires them
+    # (the pins file's platform gate); no sample is set up (#162).
+    foreach ($default in "calculator", "applications", "quicklinks", "files", "clipboard-history", "run", "system-commands", "switch-windows") {
         Wait-For (Join-Path $extensions "installed.json") ('"default": "' + $default + '"') $true 1200
     }
     Start-Sleep -Seconds 1
@@ -2341,8 +2301,8 @@ try {
 } finally {
     Stop-Process -Id $server.Id -ErrorAction SilentlyContinue
     # The default extensions' repository server keeps serving: the
-    # clipboard and update phases below set the installed Panes up from
-    # the same repositories, and the last of them stops it.
+    # Switch Windows, clipboard and update phases below set their Panes
+    # up from the same repositories, and the last of them stops it.
     Remove-Item Env:PANE_ARTIFACTS -ErrorAction SilentlyContinue
     Remove-Item Env:PANE_DEFAULTS -ErrorAction SilentlyContinue
     $env:PANE_DEFAULTS = $NoDefaultPins
@@ -2351,15 +2311,96 @@ try {
     $env:LOCALAPPDATA = $realLocal
 }
 
+# Switch Windows (#263, ADR 0040): the default extension lists the open
+# windows as Alt+Tab does -- with their titles, their applications' names
+# and icons, in z-order with the front application's window first -- and
+# Enter brings the chosen one to the front, restoring it if it is
+# minimized. The phase's Pane acquires it at its first setup, from the
+# pinned repositories the #51 phase serves -- the path every other
+# default takes, where the phase once installed the package directly
+# because the extension was unpinned -- and the other seven defaults
+# with it, all waited for below. The phase opens a Notepad of its own,
+# on a file the smoke makes so the window's title says which window it
+# is; Pane's window opens over it, so Notepad is the front application
+# and its window is the first row, selected, and one Enter switches to
+# it. Pane's window closed as the switch happened: the open-pane hotkey
+# brings it back, and typing in the command's search field filters by
+# title, so the second switch finds the window by what is typed. A data
+# folder of its own.
+$data = Join-Path $OutDir "switch-windows-data"
+if (Test-Path $data) { Remove-Item -Recurse -Force $data }
+$env:PANE_DATA_DIR = $data
+$notes = Join-Path $OutDir "switch-me.txt"
+Set-Content -Path $notes -Value "switch to me"
+$notepad = Start-Process notepad -PassThru -ArgumentList @("`"$notes`"")
+for ($i = 0; $i -lt 100 -and $notepad.MainWindowHandle -eq 0; $i++) {
+    Start-Sleep -Milliseconds 100; $notepad.Refresh()
+}
+if ($notepad.MainWindowHandle -eq 0) { throw "the smoke's Notepad window did not appear" }
+$env:PANE_DEFAULTS = $DefaultPins
+$process = $null
+try {
+    $process = Start-Pane "stderr-switch-windows.log"
+    if ($process.HasExited) { throw "Pane exited during its first setup" }
+    # The default extensions, set up at this first start: on Windows all
+    # eight -- the five of #60 plus Run, System Commands and Switch
+    # Windows (ADR 0040), pinned "platform": "windows" (the pins file's
+    # platform gate) -- all waited for, so the phase's driving and
+    # screenshots meet no background acquisition.
+    foreach ($default in "calculator", "applications", "quicklinks", "files", "clipboard-history", "run", "system-commands", "switch-windows") {
+        Wait-For (Join-Path $data "extensions/installed.json") ('"default": "' + $default + '"') $true 1200
+    }
+    Start-Sleep -Seconds 3   # the defaults run, their commands listed
+    Send "switch"; Start-Sleep -Seconds 2
+    Send "{ENTER}"; Start-Sleep -Seconds 2   # the open windows, Notepad's first, selected
+    Capture "610-switch-listed.png"
+    Check "610-switch-listed.png" "selected" 3000   # a window's row is selected
+    Send "{ENTER}"; Start-Sleep -Seconds 1   # switch to the selected window
+    $switched = $false
+    for ($i = 0; $i -lt 150; $i++) {
+        if ([Win]::GetForegroundWindow() -eq $notepad.MainWindowHandle) { $switched = $true; break }
+        Start-Sleep -Milliseconds 100
+    }
+    if (-not $switched) { throw "Switch Windows did not bring the smoke's window to the front" }
+    Capture "612-switch-in-front.png"   # evidence only: Notepad is in front, Pane hidden
+    # The open-pane hotkey brings the launcher back over Notepad, whose
+    # window is the front application's again; typing filters the list by
+    # title before the second switch.
+    Send "^% "; Start-Sleep -Seconds 2
+    Send "switch"; Start-Sleep -Seconds 2
+    Send "{ENTER}"; Start-Sleep -Seconds 2
+    Send "switch-me"; Start-Sleep -Seconds 2   # the command's search field filters by title
+    Capture "613-switch-filtered.png"
+    Check "613-switch-filtered.png" "selected" 3000   # the filtered window's row, selected
+    Send "{ENTER}"; Start-Sleep -Seconds 1
+    $switched = $false
+    for ($i = 0; $i -lt 150; $i++) {
+        if ([Win]::GetForegroundWindow() -eq $notepad.MainWindowHandle) { $switched = $true; break }
+        Start-Sleep -Milliseconds 100
+    }
+    if (-not $switched) { throw "the filtered window did not come to the front" }
+    $shots = "610-switch-listed", "612-switch-in-front" | ForEach-Object { Join-Path $OutDir "$_.png" }
+    python "$PSScriptRoot/check_screenshot.py" --distinct @shots
+    if ($LASTEXITCODE -ne 0) { throw "screenshot check failed: switching changed nothing on screen" }
+    [void]$notepad.CloseMainWindow()
+    Stop-Pane $process
+} finally {
+    # No pins are named between the phases that name their own: the
+    # clipboard phase below sets its own when it starts.
+    if ($process -and -not $process.HasExited) { Stop-Pane $process }
+    $env:PANE_DEFAULTS = $NoDefaultPins
+}
+
 # Clipboard history (#35, #166, #167): Pane's own Clipboard History
 # records what is copied from the first start, with nothing to turn on.
 # Only the registered default extension does (a copy installed from its
 # folder starts off and shows the generic list), so this phase sets
-# the default set up from the pinned repositories the #51 phase serves,
-# with the smoke's own build; Files' index covers an
-# empty folder of the smoke's (PANE_TEST_FILE_INDEX_HOME), not the
-# runner's home. The text this smoke copies is kept, except text marked as
-# a password manager marks it (ExcludeClipboardContentFromMonitorProcessing,
+# the default extensions up -- on Windows all eight -- from the pinned
+# repositories the #51 phase serves, with the smoke's own build; Files'
+# index covers an empty folder of the smoke's (PANE_TEST_FILE_INDEX_HOME),
+# not the runner's home. The text this smoke copies is kept, except text
+# marked as a password manager marks it
+# (ExcludeClipboardContentFromMonitorProcessing,
 # CanIncludeInClipboardHistory, CanUploadToCloudClipboard); nothing is kept
 # while recording is paused (Pause Recording and Resume Recording, in the
 # view's Actions panel, Ctrl+K) or the extension is disabled (its switch
@@ -2500,8 +2541,12 @@ function History-Action($label) {
 $process = $null
 try {
     $process = Start-Pane "stderr-clipboard.log"
-    # The default set (#60), set up at this first start.
-    foreach ($default in "calculator", "applications", "quicklinks", "files", "clipboard-history") {
+    # The default extensions, set up at this first start: on Windows all
+    # eight -- the five of #60 plus Run, System Commands and Switch
+    # Windows (ADR 0040), pinned "platform": "windows" (the pins file's
+    # platform gate) -- all waited for, so the phase's screenshots are
+    # settled.
+    foreach ($default in "calculator", "applications", "quicklinks", "files", "clipboard-history", "run", "system-commands", "switch-windows") {
         Wait-For $registry ('"default": "' + $default + '"') $true 1200
     }
     Start-Sleep -Seconds 3   # Clipboard History runs, and the watch with it
@@ -2721,8 +2766,11 @@ try {
     # request reaches the artifact source for them), and Pane's own check
     # reads the index once — its request is the first.
     if ($process.HasExited) { throw "the installed Pane exited during setup" }
-    # The default set (#60).
-    foreach ($default in "calculator", "applications", "quicklinks", "files", "clipboard-history", "run", "switch-windows") {
+    # The default extensions: on Windows all eight -- the five of #60
+    # plus Run, System Commands and Switch Windows (ADR 0040), pinned
+    # "platform": "windows" so only a Windows first setup acquires them
+    # (the pins file's platform gate); no sample is set up (#162).
+    foreach ($default in "calculator", "applications", "quicklinks", "files", "clipboard-history", "run", "system-commands", "switch-windows") {
         Wait-For $registry ('"default": "' + $default + '"') $true 1200
     }
     # The check has read the index: the offer is in root search. The

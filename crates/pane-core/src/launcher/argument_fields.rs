@@ -27,9 +27,60 @@
 //! accepts fallback text keeps the row that sends the text after the
 //! alias on Enter, since that text is its input.
 
-use super::{Entry, FormField, Launcher, Screen, State, Status, argument_form, owner};
+use super::pane_form::PathPick;
+use super::{Entry, Launcher, Screen, State, Status, argument_form, owner};
 use crate::arguments::{self, ArgumentKind, ManifestArgument};
-use crate::runtime::{Choice, FieldKind};
+
+/// One option of a dropdown argument field.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Choice {
+    pub id: String,
+    pub label: String,
+}
+
+/// What an inline argument field is, as the window draws it: a text field,
+/// a concealed one for a password, or a dropdown's options as a choice.
+/// A path names what its picker chooses, as Pane's own forms' path fields
+/// do (`pane_form`), though an argument never is one.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum FieldKind {
+    /// A single-line text field, which starts with the field's value, else
+    /// empty.
+    Text { placeholder: Option<String> },
+    /// A single-line text field whose text is concealed while it is typed:
+    /// a password argument.
+    Password { placeholder: Option<String> },
+    /// Exactly one of these options; the first starts chosen.
+    Choice(Vec<Choice>),
+    /// A path, typed or chosen with the system's picker for `pick`. An
+    /// argument never is one; the kind stays so the window draws every
+    /// field shape one way.
+    Path {
+        placeholder: Option<String>,
+        pick: PathPick,
+    },
+}
+
+/// One field of root search's inline argument fields, with its current
+/// value.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FormField {
+    /// The argument's name, as the command's manifest declares it.
+    pub id: String,
+    /// The argument's label.
+    pub label: String,
+    /// What the field is.
+    pub kind: FieldKind,
+    /// The text of a text field, or the id of the chosen option.
+    pub value: String,
+    /// Why the field is marked: a required argument left blank.
+    pub error: Option<String>,
+    /// What the value is for, shown under the field; `None` for an
+    /// argument.
+    pub description: Option<String>,
+    /// Whether the command needs a value in it.
+    pub required: bool,
+}
 
 /// The fields of root search's selected row, as the window draws them
 /// inline after the query (see [`Launcher::argument_fields`]): the

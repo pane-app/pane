@@ -9,7 +9,7 @@
       "title": "Package search",
       "subtitle": "A TypeScript command searching the fixture package registry as you type",
       "component": "sample_search_ts.wasm",
-      "search": true
+      "mode": "designed"
     }
   ]
 }

@@ -9,7 +9,7 @@
       "title": "Package search",
       "subtitle": "A JavaScript command searching the fixture package registry as you type",
       "component": "sample_search_js.wasm",
-      "search": true
+      "mode": "designed"
     }
   ]
 }

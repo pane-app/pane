@@ -26,6 +26,7 @@
 /// <reference path="./windows.d.ts" />
 
 import type { LaunchRecord } from "pane:extension/commands@0.2.0";
+import type { Outcome, Rendered, UiEvent } from "./view.js";
 
 export type {
   ArgumentValue,
@@ -36,15 +37,14 @@ export type {
 } from "pane:extension/commands@0.2.0";
 
 /**
- * One entry in a command's list. Choosing it opens its form, else its
+ * One entry in a command's list.
  * custom view, else runs its primary action (its first); an item with none
  * of them cannot be activated, and Pane says so.
  */
 export interface Item {
   /**
    * Identifies the item among the list's items: Pane keeps the selection on
-   * it when the list is drawn again, and passes it to `submitForm` and
-   * `openView`.
+   * it when the list is drawn again, and passes it to `openView`.
    */
   id: string;
   title: string;
@@ -67,24 +67,12 @@ export interface Item {
    */
   actions?: Action[] | null;
   /**
-   * When set, choosing the item opens this form instead of running its
-   * action, and submitting it calls `submitForm`. Omitted or `null` for
-   * none.
-   */
-  form?: Form | null;
-  /**
-   * The operating systems the item's action (or form) works on; omitted or
-   * `null` for every system Pane runs on. Elsewhere Pane still lists the
-   * item but shows it as unavailable with the reason, and never runs its
-   * action or opens the form for it.
+   * The operating systems the item's action works on; omitted or `null`
+   * for every system Pane runs on. Elsewhere Pane still lists the item
+   * but shows it as unavailable with the reason, and never runs its
+   * action.
    */
   platforms?: Platform[] | null;
-  /**
-   * When set, choosing the item opens this custom view instead of running
-   * its action: Pane calls `openView` and shows what the view draws. Ignored
-   * when `form` is set. Omitted or `null` for none.
-   */
-  customView?: CustomViewInfo | null;
   /** Drawn before the title (#139); omitted or `null` for none. */
   icon?: Icon | null;
   /** Shown while the pointer rests on the title: all of it, say. */
@@ -205,142 +193,34 @@ export interface List {
   items: Item[];
 }
 
-/** A form the user fills in and submits to the command. */
-export interface Form {
-  title: string;
-  fields: Field[];
-  /** The submit button's label. */
-  submitLabel: string;
-}
-
-export interface Field {
-  /** Identifies the field's value in `submitForm`. */
-  id: string;
-  /** Names the field on screen and to assistive technology. */
-  label: string;
-  kind: FieldKind;
-}
 
 /**
- * A single-line text field, which starts empty, or a choice of exactly one
- * option, whose first option starts chosen.
- */
-export type FieldKind =
-  | { tag: "text"; val: TextField }
-  | { tag: "choice"; val: Choice[] };
-
-export interface TextField {
-  /** Shown while the field is empty; omitted or `null` for none. */
-  placeholder?: string | null;
-}
-
-export interface Choice {
-  /** The field's value while this option is chosen. */
-  id: string;
-  label: string;
-}
-
-/** A field's submitted value: its text, or the chosen option's id. */
-export interface FieldValue {
-  id: string;
-  value: string;
-}
 
 /**
- * Why a submitted form was not accepted. Throw it from `submitForm` as a
- * plain object: `throw { field: "name", message: "Enter a name" }`.
+ * A designed view the user has open, holding the view's state: what
+ * `createView` makes, or any object with these methods. `openView` returns
+ * a new one for each opened view; Pane drops it when the view leaves the
+ * screen and never uses it again. The tree is the versioned JSON document
+ * of docs/designed-tree.md; `@pane-app/extension/view`'s `createView`
+ * writes it, so an author never does.
  */
-export interface FormError {
-  /** The field the message is about; omitted or `null` for the whole form. */
-  field?: string | null;
-  message: string;
-}
-
-/** What Pane shows of an item's custom view besides the view's drawing. */
-export interface CustomViewInfo {
-  /** The screen's title. */
-  title: string;
-  /** Names the view to assistive technology. */
-  label: string;
-  /** What kind of control the view is to assistive technology. */
-  role: CustomViewRole;
-}
-
-/** `"color-well"`: a color chooser; its frame's value names the chosen color. */
-export type CustomViewRole = "color-well";
-
-/**
- * A filled rectangle. Coordinates are logical pixels from the view's top-left
- * corner; `fill` is a color as 0xRRGGBB.
- */
-export interface Rect {
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-  fill: number;
-}
-
-/** One line of text in Pane's font, its top-left corner at `x`, `y`. */
-export interface Text {
-  x: number;
-  y: number;
-  content: string;
-  /** 0xRRGGBB. */
-  color: number;
-}
-
-export type Shape = { tag: "rect"; val: Rect } | { tag: "text"; val: Text };
-
-/**
- * What a custom view shows: `shapes` painted in order, later ones over earlier
- * ones, clipped to `width` x `height` logical pixels.
- */
-export interface Frame {
-  width: number;
-  height: number;
-  shapes: Shape[];
-  /** The view's current value for assistive technology, such as the chosen color's name. */
-  value: string;
-}
-
-/**
- * A position in the view, in logical pixels from its top-left corner. It can
- * lie outside the view while a pointer drag continues outside it.
- */
-export interface Point {
-  x: number;
-  y: number;
-}
-
-/** The keys a focused custom view receives; Tab, Enter and Escape stay with Pane. */
-export type Key = "left" | "right" | "up" | "down" | "home" | "end";
-
-/**
- * The user's input to a custom view: a key pressed while it has focus; the
- * primary pointer button pressed over it; the pointer moved while that button
- * is held; the button released, over the view or not.
- */
-export type ViewEvent =
-  | { tag: "key"; val: Key }
-  | { tag: "pointer-down"; val: Point }
-  | { tag: "pointer-move"; val: Point }
-  | { tag: "pointer-up"; val: Point };
-
-/**
- * A custom view the user has open, holding the view's state: any object with
- * these methods, such as an instance of a class. `openView` returns a new one
- * for each opened view; Pane drops it when the view closes and never uses it
- * again.
- */
-export interface CustomView {
-  /** Draws the view as it is now. Throwing is a crash. */
-  render(): Promise<Frame>;
+export interface DesignedView {
   /**
-   * Handles the user's input to the view; Pane then calls `render`. Throwing
-   * reports an error to the user; the view stays open.
+   * Draws the view as it is now. `context` is JSON: the sequence number of
+   * this render, so each render's listeners can be named by it, and the
+   * version of the UI component set Pane supports. Throwing reports an
+   * error to the user; the view keeps its last good tree.
    */
-  handleEvent(event: ViewEvent): Promise<void>;
+  render(context: string): Promise<Rendered>;
+  /**
+   * Handle the user's input to the view: `event.callback`, the id the tree
+   * named for what was pressed, with the sequence number of the render
+   * whose tree the user saw. Pane then calls `render`. The answer may
+   * navigate (#239): `push` a view above this one, `replace` this view, or
+   * `pop` it with a result. Throwing reports an error to the user; the
+   * view stays open.
+   */
+  handleEvent(event: UiEvent): Promise<Outcome>;
 }
 
 /**
@@ -355,8 +235,6 @@ export interface CustomView {
  *       items: [{ id: "greet", title: "Say hello", onAction: async () => { showToast({ title: "Hello" }); } }],
  *     };
  *   },
- *   async submitForm(id, values) { ... },
- *   async openView(id) { return new MyView(); },
  * };
  * ```
  *
@@ -377,15 +255,15 @@ export interface CustomView {
  * Resolving gives Pane the value. Throwing (rejecting) reports an error to the
  * user, never a crash: from `render`, `run`, an item's `onAction`,
  * `runSearchResult`, `openView` and a view's `handleEvent` an `Error`'s
- * message, or a thrown string as is; from `submitForm` a {@link FormError}
- * object as is, and an `Error` or string as a message about the whole form.
+ * message, or a thrown string as is. A form is a designed view now
+ * (#241), whose submission is an event, so `submitForm` is gone.
  * An action, `run` and `runSearchResult` resolve with nothing: Pane shows
  * nothing of what they resolve with (text is let through and ignored).
  * Resolving with a value of the wrong type, such as an action resolving
  * with `null` or a number, or a provider's `results` resolving with a
  * string, is a crash: Pane reports it and starts a fresh instance for the
  * next call, and repeated crashes pause the extension.
- * A crash closes any open custom view, whose state was in the old instance.
+ * A crash closes any open view, whose state was in the old instance.
  * A list Pane cannot read, such as one whose title is not a string, is the
  * command's failure, which Pane reports, not a crash.
  */
@@ -412,24 +290,28 @@ export interface Command {
    */
   run?(command: string, launch: LaunchRecord): Promise<void>;
   /**
-   * Runs the search result with id `id` the user chose, for a command that
-   * searches as the user types ({@link CommandSearch}); throwing shows the
-   * error as a failure toast. Without it, choosing a result is an error.
+   * Runs the search result with id `id` the user chose, for a command whose
+   * List handles its search itself (#240: the List's search-text event, the
+   * `command-search` export retired); throwing shows the error as a failure
+   * toast. Without it, choosing a result is an error.
    */
   runSearchResult?(id: string): Promise<void>;
   /**
-   * Handle the submitted form of the item with `itemId`. `values` holds every
-   * field of the form, in order. The text is shown as the result; a thrown
-   * {@link FormError} is shown next to its field. Without it, a submitted
-   * form is refused.
+   * Open the designed view of the command with id `command` (its id in
+   * `pane.json`, so one component can serve several commands), launched as
+   * `launch` says: a screen the extension describes as a tree of layout
+   * nodes and UI components that Pane renders (`"mode": "designed"` in
+   * `pane.json`, docs/designed-tree.md). `createView` makes the answer:
+   *
+   * ```ts
+   * import { createView } from "@pane-app/extension/view";
+   * async openView(command) { return createView(Counter); },
+   * ```
+   *
+   * Throwing reports an error and opens nothing. Without it, opening one is
+   * an error. Pane never calls `render` for the command.
    */
-  submitForm?(itemId: string, values: FieldValue[]): Promise<string>;
-  /**
-   * Open the custom view of the item with `itemId`: a new {@link CustomView}
-   * with its own state. Throwing reports an error and opens nothing. Without
-   * it, opening one is an error.
-   */
-  openView?(itemId: string): Promise<CustomView>;
+  openView?(command: string, launch: LaunchRecord): Promise<DesignedView>;
 }
 
 /** What invoking a root result does; Pane performs it. */
@@ -544,65 +426,6 @@ export interface WallTime {
 }
 
 
-/** One thing a command's search found, listed as a row of the command. */
-export interface SearchResult {
-  /**
-   * Passed to the command's `runSearchResult` when the user activates the
-   * row, so it should say which result it is (the instance may have been
-   * replaced meanwhile).
-   */
-  id: string;
-  title: string;
-  subtitle?: string;
-  /**
-   * An entry of Pane's file index, by the `id` `search()` of
-   * "pane:extension/file-index@0.2.0" gave it, a file of the folder
-   * granted to the command's package, by the `id` `listFolder()` gave it,
-   * or an entry of the folder the user typed, by the `id` `listEntries()`
-   * of "pane:extension/typed-folder@0.2.0" gave it, when the result is
-   * that file (as Search Files' are): Pane lists it
-   * with the file's own name and folder, and gives it
-   * Pane's own file actions (Open, Reveal, Open With…, Copy Path, Copy
-   * File, Move to Recycle Bin; for a program, Enter reveals it and only
-   * Run runs it), which Pane performs without calling the command.
-   */
-  file?: string;
-}
-
-/**
- * A command that searches as the user types into its own search field
- * (`pane:extension/command-search` in wit/search.wit), such as one
- * searching an online service. Pane asks it only once the user has opened
- * it, never while they type in root search. It sets `"search": true` on its
- * entry in `pane.json`, and `"pane": { "search": true }` in its
- * `package.json` so that it is built with the interface; its module exports
- * it as `commandSearch`:
- *
- * ```ts
- * import { get } from "@pane-app/extension/http";
- *
- * export const commandSearch: CommandSearch = {
- *   async search(command, query) {
- *     const response = await get(`https://example.com/search?q=${encodeURIComponent(query)}`);
- *     return response.json().results.map((r: { id: string; name: string }) => ({ id: r.id, title: r.name }));
- *   },
- * };
- * ```
- */
-export interface CommandSearch {
-  /**
-   * Searches for `query`, the text in the search field of the command with
-   * id `command` (its id in `pane.json`), trimmed and never empty. The
-   * results replace the command's list while the text stays; activating one
-   * calls the command's `runSearchResult` with its id. Throwing shows the error in place of
-   * results; it does not count against the extension, so a service that is
-   * down or unreachable is an expected error. Pane stops a search it no
-   * longer needs (the text changed again, the user left) where it waits,
-   * dropping the instance: code after that `await` never runs, and the
-   * instance's memory is lost.
-   */
-  search(command: string, query: string): Promise<SearchResult[]>;
-}
 
 /**
  * What invoking an indexed result does; Pane performs it.

@@ -171,7 +171,7 @@ have not been run for this change.
 ### Custom view (#21)
 
 The smoke then restarts Pane again and opens the Rust command's "Choose a color", a
-color picker the guest draws ([custom views](../custom-views.md)), presses
+color picker the guest draws as a canvas of its designed view, presses
 Right with a real X11 key event, then moves the real pointer onto the dark
 green swatch (found in the screenshot by its color with
 `check_screenshot.py --locate`) and clicks it with `xdotool`. Each screenshot
@@ -1137,7 +1137,7 @@ until the first record is collected and the user confirms ceilings.
   platform-independent. **No screen reader (Orca/AT-SPI) was run**, so
   announcement behaviour on Linux is unverified. Forms are covered in
   [accessibility of forms](../forms.md#accessibility) and custom views in
-  [their accessibility](../custom-views.md#accessibility), which apply to all
+  [their accessibility](../designed-tree.md#the-canvas), which apply to all
   three platforms.
 
 ## Remaining limits

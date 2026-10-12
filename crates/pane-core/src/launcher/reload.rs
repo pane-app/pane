@@ -569,17 +569,15 @@ impl Launcher {
             Screen::CommandSearch { query } => Some(query.clone()),
             _ => None,
         };
-        // The selection is the command's root list's, kept by key: a view
-        // or form the command pushed holds the root list's state to
-        // return to, which is what the reopened screen keeps.
-        let view = state
-            .custom_view
-            .as_ref()
-            .map(|open| &open.return_to)
-            .unwrap_or(&state.view);
-        let selected = view
+        // The selection is the command's root list's, kept by key: the
+        // view on display is what the reopened screen keeps, and a
+        // designed view it pushed above the command's root list has no
+        // rows of its own (its state is the window's keyed one, which a
+        // fresh root view starts afresh).
+        let selected = state
+            .view
             .selected
-            .and_then(|at| view.rows.get(at))
+            .and_then(|at| state.view.rows.get(at))
             .map(|row| row.id.clone());
         self.leave_command(state);
         // The new code's command of the same id, one that opens a screen:
@@ -596,12 +594,13 @@ impl Launcher {
         let opening = Opening {
             component: registration.component.clone(),
             command,
-            search: registration.search,
             no_view: false,
+            designed: false,
             launch,
             // Reopened with the text its search field held, where the new
-            // code's command still searches.
-            initial_search: search.filter(|_| registration.search),
+            // code's command still owns the launcher's field (the
+            // registered Files command).
+            initial_search: search,
         };
         Some(Reopen { opening, selected })
     }

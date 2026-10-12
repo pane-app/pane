@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 //
-// Pane's registrations sample in JavaScript: a command that registers at
+// Pane's registrations sample in TypeScript: a command that registers at
 // run time what it owns (ADR 0041, #158) — a dynamic root item under its
 // own command, updated by a timer; a folder watcher on the folder its
 // settings name; and a provision of the `pane-samples:greet@1` capability,
@@ -100,7 +100,7 @@ function countedItem(): Item {
   return {
     id: "counted",
     title: "Registrations: counting",
-    subtitle: `${counted(TICKS)} timer firings, ${counted(CHANGES)} watcher changes (JavaScript)`,
+    subtitle: `${counted(TICKS)} timer firings, ${counted(CHANGES)} watcher changes (TypeScript)`,
     actions: [
       {
         title: "Add one",

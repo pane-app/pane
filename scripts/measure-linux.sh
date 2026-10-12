@@ -463,8 +463,10 @@ stop_pane
 # Files' index covers an empty folder of the workload's
 # (PANE_TEST_FILE_INDEX_HOME), not the runner's home, so the phase
 # measures Pane idling, not a first walk of a home folder. The launcher is
-# hidden while the setup runs; the phase starts once the five defaults are
-# recorded and Pane has settled for PANE_MEASURE_SETTLE_SECONDS. Whatever
+# hidden while the setup runs; the phase starts once the five defaults this
+# system's pins install are recorded (the Windows-only three are pinned
+# "windows" and never fetched here) and Pane has settled for
+# PANE_MEASURE_SETTLE_SECONDS. Whatever
 # still runs then (the applications' icons, say) is part of the phase, and
 # the per-thread wake-ups and CPU in summary.json say whose it is. No
 # application update source is named, so no update of Pane's own is

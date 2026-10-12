@@ -7,7 +7,7 @@
 //! return a future that applies the extension's reply when awaited.
 //!
 //! Every reply is checked against the screen it was requested from: once the
-//! user has left that screen, the reply is discarded, and a custom view that
+//! user has left that screen, the reply is discarded, and a view that
 //! opened after the user left is closed again.
 //!
 //! A call into an installed package also belongs to the package's
@@ -29,10 +29,11 @@
 //! service itself answers with, each cycle a call into the generation
 //! current when the services thread asked for it.
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Instant;
 
@@ -45,13 +46,17 @@ mod application_update;
 mod argument_fields;
 mod argument_form;
 pub(crate) mod capability_choices;
+mod choice;
 mod choices;
 mod clipboard_settings;
 pub mod clipboard_view;
-mod command_search;
 mod confirmations;
 mod crash_notice;
 mod create;
+mod designed_list;
+mod designed_views;
+
+pub use designed_list::{DesignedDropdown, DesignedList, DesignedRow, GridShape, LOADING_MS};
 mod feedback;
 mod hotkeys;
 mod icon_loads;
@@ -60,11 +65,13 @@ mod item_actions;
 mod launching;
 mod network;
 mod own_actions;
+mod pane_form;
 mod presentation;
 mod programs;
 mod providers;
 mod publishing;
 mod quick_slots;
+mod refresh;
 mod run;
 pub mod search_files;
 mod submenus;
@@ -85,17 +92,17 @@ use crate::launch::{LaunchRecord, LaunchSource};
 use crate::links::{LinkOpener, NoOpener};
 use crate::operations::Installed;
 use crate::packages::{
-    CommandMatches, CommandWhen, InstalledPackage, PackageError, PackageIdentity, RetainedData,
-    SavedData, SourcePackage, Store, paused_reason,
+    CommandMatches, CommandMode, CommandWhen, InstalledPackage, PackageError, PackageIdentity,
+    RetainedData, SavedData, SourcePackage, Store, paused_reason,
 };
 use crate::platform;
 use crate::runtime::{
-    AnswerDetail as ComputedDetail, CallError, CustomViewInfo, CustomViewRole, FieldKind,
-    FieldValue, Form, Frame, Item, Point, ResultListing, RootAction, RootResult as ComputedResult,
-    Runtime, ScreenForm, View, ViewEvent, ViewId, WallTime, WeakRuntime,
+    AnswerDetail as ComputedDetail, CallError, DesignedHandler, DesignedTree, Item, ResultListing,
+    RootAction, RootResult as ComputedResult, Runtime, View, ViewId, WallTime, WeakRuntime,
 };
 use crate::search::{self, Candidate, Keys, Query};
 use crate::waiting::{Fix, Waiting};
+pub use pane_form::{PaneForm, PaneFormField, PathPick};
 
 mod dependents;
 mod developing;
@@ -132,8 +139,9 @@ pub use aliases::AliasFlow;
 pub use aliases::AliasOutcome;
 pub use application_update::ApplicationUpdate;
 use application_update::{Application, Updates};
-pub use argument_fields::ArgumentFields;
+pub use argument_fields::{ArgumentFields, Choice, FieldKind, FormField};
 pub use capability_choices::{Capability, CapabilityProvider};
+pub use choice::{ChoiceExtension, ChoiceOutcome, ChoiceView};
 use choices::Record;
 pub use crash_notice::{LogNotice, UNEXPECTED_QUIT};
 pub use create::FolderAsk;
@@ -159,9 +167,7 @@ pub use presentation::{
 pub use quick_slots::{PinTarget, QuickSlot, SlotChange};
 use schedules::Schedules;
 use services::Services;
-pub use setup::{
-    CommandPreferences, PackagePreferences, PreferenceField, PreferencesTarget, SetupHeader,
-};
+pub use setup::{CommandPreferences, PackagePreferences, PreferenceField, PreferencesTarget};
 pub use shortcuts::{ShortcutCatalog, ShortcutCommand, ShortcutGroup};
 pub use submenus::{OpenSubmenu, SubmenuState};
 pub use update_results::{UpdateResult, UpdateResults, UpdateResultsAction};
@@ -212,9 +218,6 @@ pub struct CommandRegistration {
     /// argument that is text with every other optional): text typed into
     /// root search, sent to it through its alias or as a fallback.
     pub takes_query: bool,
-    /// Whether the command searches as the user types into its own search
-    /// field once it is open (`"search": true`); root search never asks it.
-    pub search: bool,
     /// When root search lists the command (`"when"` in its manifest, #195;
     /// always when it does not say).
     pub when: CommandWhen,
@@ -236,7 +239,11 @@ impl CommandRegistration {
 }
 
 /// Which screen the launcher shows, with what only that screen has.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
+// The designed view's snapshot is the largest variant, carried whole: the
+// screen is cloned on every change, and a box would touch every match in
+// both crates for the parser's sake.
+#[allow(clippy::large_enum_variant)]
 pub enum Screen {
     /// Root search: the root results matching `query`, the text typed into
     /// it, best match first, or every root result when it is empty.
@@ -252,15 +259,25 @@ pub enum Screen {
     /// A package folder's identity and compatibility, before installing it,
     /// as lines of information under the title.
     Package { details: Vec<String> },
-    /// A form opened from an item of the command's list view. It has no
-    /// rows.
-    Form(FormView),
+    /// The extensions a collection offers, to tick some or all of them
+    /// and install each on its own (#308, ADR 0044): one row per
+    /// extension, the Install row after them, the lines under the title
+    /// saying where the collection came from — or, while the run of the
+    /// ticked extensions installs one, that extension's preview of what
+    /// it uses.
+    Choice(ChoiceView),
+    /// A form Pane itself asks the user: the argument form, the Setup
+    /// screen, the alias form, or the npm or Git install form, as a
+    /// designed tree whose fields are the tree's field components (#241)
+    /// — the same ones an extension's form uses. It has no rows.
+    PaneForm(PaneForm),
     /// The installed packages, each enabled or disabled, with lines of
     /// information under the title.
     Extensions { details: Vec<String> },
-    /// A custom view opened from an item of the command's list view. It has
-    /// no rows.
-    CustomView(CustomViewSnapshot),
+    /// A designed view opened as the command's own screen (`"mode":
+    /// "designed"`): the tree its extension describes, which the window
+    /// renders. It has no rows.
+    DesignedView(DesignedViewSnapshot),
     /// What an installed package that uses the network did on it this
     /// session (the addresses it tried to reach), as lines of information
     /// under the title. It has no rows.
@@ -436,20 +453,17 @@ struct CommandList {
 
 impl CommandList {
     /// The list of a command whose list view has `items`. Choosing an item
-    /// opens its form, else its custom view, else runs its primary action
-    /// (the first, by its callback id); an item with none of them cannot be
-    /// activated and says so.
+    /// runs its primary action (the first, by its callback id); an item
+    /// with none cannot be activated and says so.
     fn of(items: Vec<Item>) -> CommandList {
         let (rows, entries) = items
             .into_iter()
             .map(|item| {
                 let unavailable = platform::unavailable(item.platforms.as_deref(), "this action");
-                let entry = match (&unavailable, item.form, item.custom_view) {
-                    (Some(reason), ..) => Entry::Unavailable(reason.clone()),
-                    (None, Some(form), _) => Entry::Form(item.id.clone(), form),
-                    (None, None, Some(info)) => Entry::CustomView(item.id.clone(), info),
-                    (None, None, None) if item.actions.is_empty() => Entry::NoActions,
-                    (None, None, None) => Entry::Actions(item_actions::Listed {
+                let entry = match &unavailable {
+                    Some(reason) => Entry::Unavailable(reason.clone()),
+                    None if item.actions.is_empty() => Entry::NoActions,
+                    None => Entry::Actions(item_actions::Listed {
                         id: item.id.clone(),
                         title: item.title.clone(),
                         actions: item.actions,
@@ -513,11 +527,12 @@ pub enum Status {
 /// synthesis ([#70](https://github.com/pane-app/pane/issues/70)), named
 /// here so behavior and wording move together. Dispatch itself stays where
 /// it is: both Enter and the button route through
-/// [`Launcher::activate_selected`], or [`Launcher::submit_form`] on a form.
+/// [`Launcher::activate_selected`], or [`Launcher::submit_pane_form`] on a
+/// form.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SelectedAction {
     /// The action's label, from its identity. Empty where there is no
-    /// primary action to show at all: a custom view takes the keys itself,
+    /// primary action to show at all: a designed view takes the keys itself,
     /// the network details screen has only Back, and the hotkey screen
     /// with no row to remove has only the keys it records — the window
     /// shows no button there.
@@ -529,57 +544,33 @@ pub struct SelectedAction {
     /// this keeps the button from dispatching what cannot run.
     pub available: bool,
 }
-
-/// An open form, as the user is filling it in.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct FormView {
-    pub fields: Vec<FormField>,
-    pub submit_label: String,
-    /// What the Setup screen shows above and beside its fields, when the
-    /// form is the Setup screen Pane shows before a command whose required
-    /// preferences are unset (see `setup`); `None` for every other form.
-    pub setup: Option<SetupHeader>,
-}
-
-/// One field of an open form with its current value.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct FormField {
-    pub id: String,
-    pub label: String,
-    pub kind: FieldKind,
-    /// The text of a text field, or the id of the chosen option.
-    pub value: String,
-    /// Why the extension rejected this field on the last submission.
-    pub error: Option<String>,
-    /// What the value is for, shown under the field: a preference's
-    /// description on the Setup screen; `None` on other forms.
-    pub description: Option<String>,
-    /// Whether the form needs a value in it: a required argument in Pane's
-    /// argument form, whose first empty one the window focuses. An
-    /// extension's form and Pane's other forms say `false`.
-    pub required: bool,
-}
-
-/// An open custom view as the extension last drew it.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct CustomViewSnapshot {
-    /// Which opened view this is: a view opened again, even of the same
-    /// item, has another id.
+/// The designed view on screen, as the window draws it (`Screen::DesignedView`,
+/// ADR 0036): the tree its extension described, typed, so the window never
+/// meets the JSON the extension answered with.
+#[derive(Clone, Debug, PartialEq)]
+pub struct DesignedViewSnapshot {
+    /// Which opened view this is: a view opened again has another id.
     pub id: ViewId,
-    /// Names the view to assistive technology.
-    pub label: String,
-    pub role: CustomViewRole,
-    /// The latest drawing: the answer to the most recent event whose answer
-    /// has arrived, or the first drawing.
-    pub frame: Frame,
+    /// The render whose tree this is: the number the view's events carry
+    /// back, naming the tree the user saw (#238's stale-event rule).
+    pub render: u64,
+    /// The latest tree: the answer to the most recent event whose answer has
+    /// arrived, or the first render. A tree the extension answered with an
+    /// error or over a limit never reaches here; the last good one stays.
+    pub tree: DesignedTree,
+    /// The List or Grid the tree names, as the launcher presents it (#240),
+    /// with the rows it fills the view with; `None` on a tree that names
+    /// none. The window's list, its header's search field, the empty view,
+    /// the detail pane and the grid's cells draw from it.
+    pub list: Option<designed_list::DesignedList>,
 }
 
 /// A snapshot of what the launcher shows.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct LauncherView {
     pub screen: Screen,
     pub title: String,
-    /// Empty on the form and custom view screens.
+    /// Empty on the form and designed view screens.
     pub rows: Vec<Row>,
     /// Index into `rows`; `None` when there are no rows.
     pub selected: Option<usize>,
@@ -637,22 +628,14 @@ impl LauncherView {
             | Screen::BuildDetails { details, .. }
             | Screen::RuntimeDetails { details }
             | Screen::Hotkey { details, .. } => details,
+            Screen::Choice(choice) => &choice.details,
             _ => &[],
         }
     }
-
-    /// The open form, on the form screen.
-    pub fn form(&self) -> Option<&FormView> {
+    /// The open form, on the Pane form screen.
+    pub fn form(&self) -> Option<&PaneForm> {
         match &self.screen {
-            Screen::Form(form) => Some(form),
-            _ => None,
-        }
-    }
-
-    /// The open custom view, on the custom view screen.
-    pub fn custom_view(&self) -> Option<&CustomViewSnapshot> {
-        match &self.screen {
-            Screen::CustomView(view) => Some(view),
+            Screen::PaneForm(form) => Some(form),
             _ => None,
         }
     }
@@ -667,6 +650,9 @@ impl Screen {
             Screen::Root { query }
             | Screen::CommandSearch { query }
             | Screen::UpdateResults { query } => Some(query),
+            // A designed view's List owns the header's search field (#240);
+            // a tree that names no list has none.
+            Screen::DesignedView(view) => view.list.as_ref().map(|list| list.search.as_str()),
             _ => None,
         }
     }
@@ -709,6 +695,11 @@ pub struct Launcher {
     /// ([`Launcher::with_clock`]). Only a launcher that installs packages
     /// runs any.
     services: Option<Arc<Services>>,
+    /// Re-renders the open designed view on the delay its render answers
+    /// (`refresh-after-ms`), by the launcher's clock
+    /// ([`Launcher::with_clock`]). Only a launcher that installs packages
+    /// refreshes one.
+    refresh: Option<Arc<refresh::Refresh>>,
     /// Fires the timers the packages' code registered at run time (#158),
     /// by the launcher's clock ([`Launcher::with_clock`]).
     timers: Option<Arc<timers::Timers>>,
@@ -757,6 +748,9 @@ struct WeakLauncher {
     /// Held weakly, so that Pane stops running continuing services as soon
     /// as the launcher is dropped.
     services: Option<std::sync::Weak<Services>>,
+    /// Held weakly, so that Pane stops re-rendering designed views as soon
+    /// as the launcher is dropped.
+    refresh: Option<std::sync::Weak<refresh::Refresh>>,
     /// Held weakly, so that Pane stops firing registered timers as soon as
     /// the launcher is dropped.
     timers: Option<std::sync::Weak<timers::Timers>>,
@@ -797,6 +791,7 @@ impl WeakLauncher {
             clipboard,
             schedules: self.schedules.as_ref().and_then(std::sync::Weak::upgrade),
             services: self.services.as_ref().and_then(std::sync::Weak::upgrade),
+            refresh: self.refresh.as_ref().and_then(std::sync::Weak::upgrade),
             registrations_hook: self.registrations_hook.clone(),
             timers: self.timers.as_ref().and_then(std::sync::Weak::upgrade),
             watchers: self.watchers.as_ref().and_then(std::sync::Weak::upgrade),
@@ -898,15 +893,30 @@ struct State {
     /// The launch record the open command's screen was opened with: its
     /// `render` receives it again each time the screen is drawn again.
     launch: LaunchRecord,
-    /// The open command's search, when it searches as the user types.
-    searching: Option<command_search::Searching>,
+    /// Search Files' browsing, while Pane's registered Files command is
+    /// open on its own search field (#177): the file index it lists, whose
+    /// pages it asks for as the selection nears the end. A command's own
+    /// search is the designed List's search-text event now (#240).
+    browsing: Option<search_files::Browsing>,
     /// The form on screen, if one is open.
     form: Option<OpenForm>,
     /// The search an alias or hotkey flow returns to when the Actions
     /// panel opened it; `None` when the flow came from the extension list.
     actions_return: Option<actions::Return>,
-    /// The custom view on screen, if one is open.
-    custom_view: Option<OpenCustomView>,
+    /// The designed view on screen, if one is open: the command's own
+    /// screen, a navigation stack of views (its root the command opened,
+    /// each further one a push added), rather than one opened from an item
+    /// of its list (see `designed_views`).
+    designed_view: Option<designed_views::DesignedStack>,
+    /// The designed view events the launcher delivers in the background
+    /// (the pop event the back key or a view's own pop sends) that are
+    /// still running.
+    designed_events: Arc<launching::InFlight>,
+    /// The choice of a collection's extensions in progress (#308), while
+    /// the choice screen — or the preview of one of its extensions,
+    /// opened from it — is on show. Holds the revision fetched for a
+    /// collection from Git, so it stays while the choice lists it.
+    choice: Option<choice::Choice>,
     /// The open command's items' icons, tooltips and accessories, by item
     /// id (see `looks`).
     looks: looks::Looks,
@@ -1280,22 +1290,27 @@ struct OpenForm {
     purpose: FormPurpose,
     /// The command view that Back returns to.
     return_to: LauncherView,
-    /// Whether a submission is waiting for the extension's reply; further
-    /// submissions are ignored meanwhile.
+    /// Whether a submission is waiting for its reply; further submissions
+    /// are ignored meanwhile.
     submitting: bool,
+}
+
+/// The number the next form Pane itself opens takes as its identity, so
+/// the window's keyed state follows a form whose tree changes (an error
+/// set on a field) and leaves with the form.
+static NEXT_FORM: AtomicU64 = AtomicU64::new(1);
+
+/// The identity the next Pane form opened takes.
+fn next_form_id() -> u64 {
+    NEXT_FORM.fetch_add(1, Ordering::Relaxed)
 }
 
 /// What submitting a form does.
 enum FormPurpose {
-    /// Sends it to the open command, for its item with this id.
-    Item(String),
-    /// Sends it to the open command with this id: the form is the
-    /// command's whole screen (`"type": "form"`), so Back leaves the
-    /// command for root search.
-    Screen(String),
-    /// Sets the alias of the installed command with this id (Pane's own).
+    /// Sets the alias of the installed command with this id (Pane's own;
+    /// see `aliases`).
     Alias(String),
-    /// Previews the npm package it names (Pane's own).
+    /// Previews the npm package it names (Pane's own; see `install`).
     Npm,
     /// Previews the Git repository it names (Pane's own).
     Git,
@@ -1309,51 +1324,6 @@ enum FormPurpose {
     /// Launches the command waiting for its arguments, with the form's
     /// values (Pane's own argument form; see `argument_form`).
     Arguments(Box<argument_form::Asking>),
-}
-
-/// What the launcher keeps about the open custom view besides its snapshot.
-struct OpenCustomView {
-    /// The view in the runtime; closed when the view leaves the screen.
-    id: ViewId,
-    /// The command view that Back returns to.
-    return_to: LauncherView,
-    /// Whether the primary pointer button was pressed over the view and is
-    /// still held; pointer moves and the release are sent only meanwhile.
-    pressed: bool,
-    /// How many events were sent to the view.
-    sent: u64,
-    /// The number of the event whose answer is on screen, so an older answer
-    /// arriving late does not replace a newer one.
-    shown: u64,
-    /// Pointer moves sent to the view and not answered yet. While there are
-    /// any, a further move waits in `waiting_move` instead of being sent.
-    moves_in_flight: u32,
-    /// The latest move of a drag that has not been sent: sent when the
-    /// moves in flight are answered, or before the next other event.
-    waiting_move: Option<Point>,
-}
-
-/// An event sent to the open view, whose answer is still to be shown.
-struct SentEvent {
-    /// The event's number among those sent to the view.
-    number: u64,
-    is_move: bool,
-    reply: Pin<Box<dyn Future<Output = Result<Frame, CallError>> + Send>>,
-}
-
-impl OpenCustomView {
-    fn send(&mut self, runtime: &Runtime, event: ViewEvent) -> SentEvent {
-        self.sent += 1;
-        let is_move = matches!(event, ViewEvent::PointerMove(_));
-        if is_move {
-            self.moves_in_flight += 1;
-        }
-        SentEvent {
-            number: self.sent,
-            is_move,
-            reply: Box::pin(runtime.view_event(self.id, event)),
-        }
-    }
 }
 
 /// A result root search can list: its row, what activating it does, and
@@ -1476,9 +1446,6 @@ enum Entry {
     /// Open Pane's log folder with the system's file manager, after Pane
     /// quit unexpectedly last time (root; see `crash_notice`).
     OpenLogFolder,
-    /// Have the open command handle this callback, a search result's id
-    /// (`handle-event`), then list it again.
-    Run(String),
     /// Run the first of this item's actions (Enter), or another of them
     /// (see `item_actions`): the open command handles its callback, then
     /// lists it again.
@@ -1490,14 +1457,18 @@ enum Entry {
     /// registration (#158): its callback goes to the command's `handle-
     /// event`, in the component whose instance registered it (root).
     DynamicAction(dynamic::DynamicAction),
-    /// Open this form of the open command's item with this id.
-    Form(String, Form),
-    /// Open the custom view of the open command's item with this id.
-    CustomView(String, CustomViewInfo),
     /// Install the previewed package from this folder or npm package, or
     /// replace its installed copy, as the preview's plan assumed things to
     /// be.
     Install(install::Request, Mode, dependencies::Assumptions),
+    /// The ordinary preview of one extension of the open choice, opened
+    /// from the choice (#308): the extension's own preview screen, whose
+    /// Back returns to the choice. The entry's id is the extension's id
+    /// in the collection's index.
+    PreviewChoice(String),
+    /// Install every ticked extension of the open choice, one after
+    /// another, each as its own package (#308).
+    InstallChoice,
     /// Pane's "Manage Extensions" command (root): the launcher window
     /// opens Settings at the extensions instead (see
     /// [`Launcher::selected_settings_target`]); activated here, it enters
@@ -1630,8 +1601,15 @@ enum Pending {
     },
     Run(String),
     DynamicAction(dynamic::DynamicAction),
-    CustomView(String, CustomViewInfo),
     OpenUrl(String),
+    /// One event of the open designed view (#240): sent to it by its
+    /// callback id, its answer shown by the designed view's own path.
+    DesignedEvent {
+        handler: DesignedHandler,
+        callback: u32,
+        key: Option<String>,
+        payload: String,
+    },
     /// One of Pane's own actions on a row (see `own_actions`).
     Own(own_actions::Work),
     ClearCache(PackageIdentity),
@@ -1644,6 +1622,11 @@ enum Pending {
     Uninstall(uninstall::Uninstall),
     DeleteRetained(RetainedData),
     Install(install::Begun),
+    /// The preview of one extension of the open choice, opened from it
+    /// (#308).
+    PreviewChoice(install::Request),
+    /// The run of the open choice's ticked extensions (#308).
+    ChoiceRun(choice::Begun),
     Acquire(String),
     InstallUpdate,
     CheckUpdate,
@@ -1660,12 +1643,12 @@ struct Opening {
     /// Its id in its package manifest, sent with each of its searches and
     /// to its run entry point.
     command: String,
-    /// Whether it searches as the user types into its own search field
-    /// ([`CommandRegistration::search`]).
-    search: bool,
     /// Whether it is a no-view command, which runs instead of opening a
     /// screen.
     no_view: bool,
+    /// Whether its screen is a designed view (`"mode": "designed"`, ADR
+    /// 0036), which opening it calls `open-view` for instead of `render`.
+    designed: bool,
     /// How it is launched.
     launch: LaunchRecord,
     /// The text its own search field opens with, for a command that
@@ -1674,14 +1657,14 @@ struct Opening {
 }
 
 impl Opening {
-    /// `command`, launched by the user from `source`; a no-view command if
-    /// `no_view`.
-    fn of(command: &CommandRegistration, no_view: bool, source: LaunchSource) -> Opening {
+    /// `command`, launched by the user from `source`, of `mode`
+    /// (`packages::CommandMode`, read from its manifest by the caller).
+    fn of(command: &CommandRegistration, mode: CommandMode, source: LaunchSource) -> Opening {
         Opening {
             component: command.component.clone(),
             command: command.manifest_id().to_owned(),
-            search: command.search,
-            no_view,
+            no_view: mode == CommandMode::NoView,
+            designed: mode == CommandMode::Designed,
             launch: LaunchRecord::by_user(source),
             initial_search: None,
         }
@@ -1851,10 +1834,12 @@ impl Launcher {
             files: runtime.as_ref().ok().map(Runtime::file_access),
             open: None,
             launch: LaunchRecord::default(),
-            searching: None,
+            browsing: None,
             form: None,
             actions_return: None,
-            custom_view: None,
+            designed_view: None,
+            designed_events: Arc::default(),
+            choice: None,
             looks: looks::Looks::default(),
             icon_loads,
             application_icons,
@@ -1952,6 +1937,7 @@ impl Launcher {
             clipboard: None,
             schedules: None,
             services: None,
+            refresh: None,
             timers: None,
             watchers: None,
             registrations_hook: None,
@@ -1981,7 +1967,7 @@ impl Launcher {
         }
         // Scheduled work and continuing services follow the system's clock
         // until a test or a development build gives the launcher another
-        // one.
+        // one; a designed view's refreshes do too (see `refresh`).
         if let Some(installation) = &launcher.installation {
             let schedules =
                 Schedules::start(Arc::new(crate::clipboard::SystemClock), &installation.data);
@@ -1991,6 +1977,10 @@ impl Launcher {
                 Services::start(Arc::new(crate::clipboard::SystemClock), &installation.data);
             services.run(launcher.downgrade());
             launcher.services = Some(services);
+            let clock = Arc::new(crate::clipboard::SystemClock);
+            let refresh = refresh::Refresh::start(clock);
+            launcher.refresh = Some(refresh.clone());
+            refresh.run(launcher.downgrade());
             // The timers and watchers the packages' code registers at run
             // time (#158) run only with a runtime to deliver their events.
             if let Some(registrations) = launcher.runtime.as_ref().ok().map(Runtime::registrations)
@@ -2079,15 +2069,16 @@ impl Launcher {
         Launcher { sources, ..self }
     }
 
-    /// This launcher telling the time for clipboard history, scheduled work,
-    /// continuing services and root search's publishing by `clock` rather
-    /// than the system's clock, for tests and development builds: clipboard
-    /// items are kept and expire by it, scheduled commands run by it, their
-    /// intervals restarting from its now, services cycle by it, their
-    /// cadence restarting from its now, and a query's list is published by
-    /// its budget (#201). Items that already expired by the system's clock
-    /// were removed when the launcher started. Release builds have no way
-    /// to replace the system's clock.
+    /// This launcher telling the time for clipboard history, scheduled work
+    /// and continuing services by `clock` rather than the system's clock,
+    /// for tests and development builds: clipboard items are kept and
+    /// expire by it, scheduled commands run by it, their intervals
+    /// restarting from its now, services cycle by it, their cadence
+    /// restarting from its now, a query's list is published by its budget
+    /// (#201), and a designed view's refreshes are asked for by it, a
+    /// refresh already scheduled keeping its due time. Items that already
+    /// expired by the system's clock were removed when the launcher
+    /// started. Release builds have no way to replace the system's clock.
     #[cfg(any(test, debug_assertions))]
     pub fn with_clock(self, clock: Arc<dyn crate::clipboard::Clock>) -> Self {
         // Rows' dates are shown relative to it too (see `looks`).
@@ -2103,11 +2094,11 @@ impl Launcher {
         if let Some(services) = &self.services {
             services.follow(clock.clone());
         }
+        if let Some(refresh) = &self.refresh {
+            refresh.follow(clock.clone());
+        }
         if let Some(timers) = &self.timers {
             timers.follow(clock.clone());
-        }
-        if let Some(watchers) = &self.watchers {
-            watchers.poke();
         }
         if let Some(updates) = &self.updates {
             updates.follow(clock.clone());
@@ -2221,6 +2212,29 @@ impl Launcher {
             .is_some_and(|services| services.settled(limit))
     }
 
+    /// Waits until the open designed view's refresh thread looked at every
+    /// change of the clock so far, and every refresh it sent has been
+    /// answered and shown; `false` if it did not within `limit`. For tests
+    /// and development builds, which so wait for a view's refresh without
+    /// timing it.
+    #[cfg(any(test, debug_assertions))]
+    #[doc(hidden)]
+    pub fn wait_for_view_refresh(&self, limit: std::time::Duration) -> bool {
+        self.refresh
+            .as_ref()
+            .is_some_and(|refresh| refresh.settled(limit))
+    }
+
+    /// Has `measures` measure text for the drawing of a designed view's
+    /// canvases (`pane:extension/view.measure-text`, #242): the fonts the
+    /// window drew the view with, which the pane crate owns. Until a
+    /// window installs one, a measurement answers no extent.
+    pub fn set_text_measures(&self, measures: crate::TextMeasures) {
+        if let Ok(runtime) = &self.runtime {
+            runtime.set_text_measures(measures);
+        }
+    }
+
     /// Waits until the updater completed a check after this was asked —
     /// the one shortly after Pane starts, or the next one after the clock
     /// moved a cadence on or a control changed — and applied or deferred
@@ -2314,9 +2328,19 @@ impl Launcher {
     fn report_failures(&self) {
         self.report_runtime_crashes();
         // The window and feedback host functions commands call are the
-        // launcher's, for every command it runs (see `feedback`).
+        // launcher's, for every command it runs (see `feedback`), and a
+        // designed view asking to be drawn again reaches this launcher's
+        // refresh thread (see `refresh`, #243).
         if let Ok(runtime) = &self.runtime {
             runtime.set_host_functions(Arc::new(feedback::Hosted(self.downgrade())));
+            if let Some(refresh) = &self.refresh {
+                let refresh = Arc::downgrade(refresh);
+                runtime.set_view_asks(Arc::new(move |view| {
+                    if let Some(refresh) = refresh.upgrade() {
+                        refresh.pushed(view);
+                    }
+                }));
+            }
             // The commands that asked for the installed applications are
             // asked for their results again when the list changes (see
             // `application_changes`).
@@ -2361,6 +2385,7 @@ impl Launcher {
             clipboard: self.clipboard.as_ref().map(Arc::downgrade),
             schedules: self.schedules.as_ref().map(Arc::downgrade),
             services: self.services.as_ref().map(Arc::downgrade),
+            refresh: self.refresh.as_ref().map(Arc::downgrade),
             registrations_hook: self.registrations_hook.clone(),
             timers: self.timers.as_ref().map(Arc::downgrade),
             watchers: self.watchers.as_ref().map(Arc::downgrade),
@@ -2517,6 +2542,24 @@ impl Launcher {
     /// Moves the selection by `delta` rows, clamped to the list.
     pub fn move_selection(&self, delta: isize) {
         let mut state = self.lock();
+        // A designed view's List or Grid: the selection's move is told to
+        // the view, which answers the tree for it (#240) — the lazy
+        // detail pane's content among it.
+        if matches!(&state.view.screen, Screen::DesignedView(_)) {
+            let rows = state.view.rows.len();
+            if rows == 0 {
+                return;
+            }
+            let last = rows - 1;
+            let at = match state.view.selected {
+                Some(selected) => (selected as isize + delta).clamp(0, last as isize) as usize,
+                // Down chooses the first, Up the last.
+                None => usize::from(delta > 0) * last,
+            };
+            self.designed_list_selected(&mut state, at);
+            self.changed();
+            return;
+        }
         let view = &mut state.view;
         match view.selected {
             Some(selected) => {
@@ -2562,19 +2605,22 @@ impl Launcher {
     /// kept for later queries. Until then the results kept from before are
     /// listed.
     ///
-    /// On an open command that searches as the user types, `query` is the
-    /// text of its own search field instead: see
-    /// [`Launcher::search_in_command`]. Root search's providers are not
-    /// asked then, and the opened command never is from root search.
+    /// On Search Files, which browses the file index on its own field
+    /// (#177), `query` is the text of it instead; and on a designed view
+    /// whose List or Grid owns the field (#240), the text of the list's
+    /// search. Root search's providers are not asked then, and the opened
+    /// command never is from root search.
     pub fn set_query(&self, query: &str) -> impl Future<Output = ()> + Send + 'static {
         let mut state = self.lock();
         let in_command = match &state.view.screen {
             Screen::CommandSearch { query: current } if current != query => {
-                // The command's search has taken the field: root search is
-                // not waiting on anything (#248; its own wait is the
-                // status running, `command_search` stamps it).
-                state.root_search_since = None;
-                self.search_in_command(&mut state, query)
+                self.ask_files(&mut state, query, 0)
+            }
+            // A designed view's List: the search field's text (#240). A
+            // host-filtered list is filtered at once; a view that handles
+            // the search itself is told the text.
+            Screen::DesignedView(_) if state.view.screen.search_field() != Some(query) => {
+                self.designed_list_searched(&mut state, query)
             }
             _ => None,
         };
@@ -3251,9 +3297,18 @@ impl Launcher {
     /// Selects the row at `index`, if there is one.
     pub fn select(&self, index: usize) {
         let mut state = self.lock();
-        if index < state.view.rows.len() {
-            state.view.selected = Some(index);
+        if index >= state.view.rows.len() {
+            return;
         }
+        // A designed view's List or Grid: the selection's change is told
+        // to the view, which answers the tree for it (#240) — the lazy
+        // detail pane's content among it.
+        if matches!(&state.view.screen, Screen::DesignedView(_)) {
+            self.designed_list_selected(&mut state, index);
+            self.changed();
+            return;
+        }
+        state.view.selected = Some(index);
     }
 
     /// The text activating the selected row copies to the clipboard, if it
@@ -3342,9 +3397,11 @@ impl Launcher {
         }
     }
 
-    /// Leaves an open form or custom view for its command's list, or an open
-    /// command, package preview or the extension list for root search. A
-    /// custom view is closed. On root search it clears the query. The
+    /// Leaves an open form for its command's list, or an open command,
+    /// package preview or the extension list for root search. A designed
+    /// view's stack pops one view at
+    /// a time — the back key's order, its root leaving the command as
+    /// leaving its list does. On root search it clears the query. The
     /// answer is whether something was left: on root search with an empty
     /// query there is nothing left to back out of — `false`, which the
     /// window takes as the end of the Escape chain (the specification's
@@ -3352,19 +3409,7 @@ impl Launcher {
     pub fn back(&self) -> bool {
         let mut state = self.lock();
         match &state.view.screen {
-            Screen::Form(_)
-                if matches!(
-                    state.form,
-                    Some(OpenForm {
-                        purpose: FormPurpose::Screen(_),
-                        ..
-                    })
-                ) =>
-            {
-                // The command's own screen: leaving it leaves the command.
-                self.show_root(&mut state, None);
-            }
-            Screen::Form(_) => {
+            Screen::PaneForm(_) => {
                 let form = state.form.take().expect("a form is open");
                 if !self.return_from_actions_flow(&mut state) {
                     state.next_screen();
@@ -3372,7 +3417,20 @@ impl Launcher {
                 }
                 state.view.status = Status::Idle;
             }
-            Screen::CustomView(_) => self.return_from_custom_view(&mut state, Status::Idle),
+            // The designed view is the command's own screen, with a stack
+            // of views: the back key clears the List's search field first,
+            // as it clears root search's query (#240; the general order is
+            // the launcher polish's, #123), then pops the top view,
+            // showing the view below at once and telling it the view above
+            // popped. The root view's own back leaves the command, as
+            // leaving its list does.
+            Screen::DesignedView(_) => {
+                if designed_list::search_typed(&state) {
+                    self.clear_designed_list_search(&mut state);
+                } else if !self.pop_designed_stack(&mut state) {
+                    self.show_root(&mut state, None);
+                }
+            }
             Screen::Confirm { .. } => self.leave_confirm(&mut state),
             Screen::Hotkey { command, .. } => {
                 let command = command.clone();
@@ -3430,21 +3488,32 @@ impl Launcher {
             Screen::RuntimeDetails { .. } => {
                 self.show_extensions_at(&mut state, |entry| matches!(entry, Entry::RuntimeDetails));
             }
-            // Escape clears the command's search before leaving it, as it
-            // clears root search's query.
+            // Escape clears Search Files' field before leaving it, as it
+            // clears root search's query. A designed List's search field
+            // is cleared the same way before the stack pops (#240).
             Screen::CommandSearch { query } if !query.is_empty() => {
-                self.clear_search_in_command(&mut state);
+                self.clear_files_search(&mut state);
             }
             Screen::Command | Screen::CommandSearch { .. } | Screen::Extensions { .. } => {
                 self.show_root(&mut state, None)
             }
+            // The choice of a collection's extensions (#308): leaving it
+            // leaves for root search, as a package preview's Back does,
+            // and the choice — with the revision it holds — goes with it.
+            Screen::Choice { .. } => self.show_root(&mut state, None),
             // Leaving an install preview drops what Create Extension or
             // Import Extension asked Pane to do once the package was
             // installed (see `create`): not installing it is the author's
-            // answer.
+            // answer. A package preview that is one extension of the
+            // collection the choice lists (#308), opened from the choice,
+            // returns to the choice instead.
             Screen::Package { .. } => {
-                state.develop_after = None;
-                self.show_root(&mut state, None);
+                if state.choice.is_some() {
+                    self.choice_view(&mut state);
+                } else {
+                    state.develop_after = None;
+                    self.show_root(&mut state, None);
+                }
             }
             Screen::Root { query } => {
                 if !query.is_empty() {
@@ -3476,14 +3545,14 @@ impl Launcher {
     /// with the selected row now (see [`SelectedAction`]). One definition
     /// for the label, the availability and the binding the window shows;
     /// dispatch is the one both inputs already take —
-    /// [`Launcher::activate_selected`], or [`Launcher::submit_form`] on a
-    /// form — so a click and a key press cannot diverge.
+    /// [`Launcher::activate_selected`], or [`Launcher::submit_pane_form`]
+    /// on a form — so a click and a key press cannot diverge.
     pub fn selected_action(&self) -> SelectedAction {
         selected_action(&self.lock())
     }
 
-    /// Opens the selected command (root), opens the selected item's form or
-    /// runs its action (command view), or installs or updates the previewed
+    /// Opens the selected command (root), or runs the selected item's
+    /// action (command view), or installs or updates the previewed
     /// package. Await the returned future to apply the reply.
     ///
     /// A row that [asks for a folder](Launcher::selected_asks_for_folder)
@@ -3491,6 +3560,14 @@ impl Launcher {
     /// reason as the status error without calling the extension.
     pub fn activate_selected(&self) -> impl Future<Output = ()> + Send + 'static {
         let mut state = self.lock();
+        // A designed view's List or Grid: Enter presses the selected item
+        // (the callback its tree named, on its key), as the rows list's
+        // Enter runs the selected row's action (#240).
+        if let Some(pending) = self.designed_list_press(&mut state) {
+            let work = self.pending_work(&state, pending);
+            drop(state);
+            return work;
+        }
         let entry = state
             .view
             .selected
@@ -3548,7 +3625,7 @@ impl Launcher {
             // A dynamic root item's action is a call into the package's
             // component (#158), with its generation as of now.
             Pending::DynamicAction(action) => Some(&action.component),
-            Pending::Run(_) | Pending::CustomView(..) => open.as_ref(),
+            Pending::Run(_) => open.as_ref(),
             _ => None,
         };
         let data = called.and_then(|component| self.data_in(state, component));
@@ -3556,6 +3633,11 @@ impl Launcher {
         async move {
             match pending {
                 Pending::Nothing => {}
+                Pending::Run(callback) => {
+                    if let Some(component) = open {
+                        launcher.run_action(epoch, component, callback, data).await;
+                    }
+                }
                 Pending::Open(opening) => launcher.launch_opening(epoch, opening, data).await,
                 Pending::Send(sending) => {
                     launcher.launch_opening(epoch, sending.opening, data).await
@@ -3568,10 +3650,15 @@ impl Launcher {
                     application,
                     name,
                 } => launcher.open_target(epoch, target, application, name).await,
-                Pending::Run(callback) => {
-                    if let Some(component) = open {
-                        launcher.run_action(epoch, component, callback, data).await
-                    }
+                Pending::DesignedEvent {
+                    handler,
+                    callback,
+                    key,
+                    payload,
+                } => {
+                    launcher
+                        .send_designed_seen(handler, callback, key.as_deref(), None, payload)
+                        .await;
                 }
                 Pending::DynamicAction(action) => {
                     launcher.run_dynamic_action(epoch, action, data).await
@@ -3579,13 +3666,6 @@ impl Launcher {
                 Pending::OpenUrl(url) => launcher.open_url(epoch, url).await,
                 Pending::Own(work) => launcher.do_own(epoch, work).await,
                 Pending::ClearCache(identity) => launcher.clear_cache(epoch, identity).await,
-                Pending::CustomView(item_id, info) => {
-                    if let Some(component) = open {
-                        launcher
-                            .open_custom_view(epoch, component, item_id, info, data)
-                            .await
-                    }
-                }
                 Pending::Develop(identity, start) => {
                     launcher.finish_developing(identity, start).await
                 }
@@ -3599,6 +3679,8 @@ impl Launcher {
                     launcher.finish_delete_retained(epoch, retained).await
                 }
                 Pending::Install(install) => launcher.finish_install(epoch, install).await,
+                Pending::PreviewChoice(request) => launcher.preview_after(epoch, request).await,
+                Pending::ChoiceRun(begun) => launcher.run_choice(epoch, begun).await,
                 Pending::Acquire(id) => launcher.retry_acquiring(&id).await,
                 Pending::InstallUpdate => launcher.install_application_update().await,
                 Pending::CheckUpdate => launcher.check_application_update_again().await,
@@ -3642,10 +3724,6 @@ impl Launcher {
             }
             Entry::Copy(text) => {
                 state.view.status = Status::Result(format!("Copied {text} to the clipboard"));
-                Pending::Nothing
-            }
-            Entry::Form(item_id, form) => {
-                open_form(state, item_id, form);
                 Pending::Nothing
             }
             // Any scheme, as Raycast opens it (ADR 0037): the extension is
@@ -3809,6 +3887,8 @@ impl Launcher {
             Entry::Install(request, mode, assumptions) => self
                 .begin_install(state, request, mode, assumptions)
                 .map_or(Pending::Nothing, Pending::Install),
+            Entry::PreviewChoice(id) => self.preview_choice(state, &id),
+            Entry::InstallChoice => self.begin_choice_run(state),
             Entry::Acquire(id) => {
                 state.view.status = Status::Running {
                     since: Instant::now(),
@@ -3864,12 +3944,6 @@ impl Launcher {
                 }
                 Pending::Open(opening)
             }
-            Entry::Run(callback) => {
-                state.view.status = Status::Running {
-                    since: Instant::now(),
-                };
-                Pending::Run(callback)
-            }
             Entry::Actions(listed) => match listed.actions[0].callback() {
                 Some(callback) => {
                     state.view.status = Status::Running {
@@ -3890,12 +3964,6 @@ impl Launcher {
                     since: Instant::now(),
                 };
                 Pending::DynamicAction(action)
-            }
-            Entry::CustomView(item_id, info) => {
-                state.view.status = Status::Running {
-                    since: Instant::now(),
-                };
-                Pending::CustomView(item_id, info)
             }
             Entry::OpenApplication { id, name } => {
                 state.view.status = Status::Running {
@@ -4263,7 +4331,22 @@ impl Launcher {
     /// Shows root search with an empty query: this build's commands, then
     /// the installed packages' commands, then the install row. Selects the
     /// command with component `select` if given, else the first row.
+    /// Leaves the open command, and any form or designed view of it, for
+    /// another screen, which the caller then shows: the view is closed in
+    /// the runtime, and replies for the old screen are discarded.
+    fn leave_command(&self, state: &mut State) {
+        self.close_designed_view(state);
+        state.open = None;
+        state.open_command = None;
+        state.launch = LaunchRecord::default();
+        state.form = None;
+        state.next_screen();
+    }
+
     fn show_root(&self, state: &mut State, select: Option<PathBuf>) {
+        // The choice of a collection's extensions goes with the screen it
+        // was shown on (#308), and the revision it holds with it.
+        state.choice = None;
         state.list_entered = false;
         self.note_setup_needed(state);
         state.root = self.root_results(state);
@@ -4364,8 +4447,9 @@ impl Launcher {
     /// to. Root search always is, and so are the screens of Pane's own
     /// flows (a package's preview, details and confirmations); the
     /// extension list is not, since it is the flow Settings drives and the
-    /// launcher window has no screen for it (#168); a command's view — its list, its search, a form or
-    /// a custom view of it — is only while the command's package is still
+    /// launcher window has no screen for it (#168); a command's view — its
+    /// list, its search, a form or a designed view of it — is only while
+    /// the command's package is still
     /// installed and enabled, since a removed or disabled extension
     /// leaves nothing to restore and a reopening launcher returns safely
     /// to root search instead. A command not installed as a package — one
@@ -4406,10 +4490,14 @@ impl Launcher {
             Screen::Command
             | Screen::CommandSearch { .. }
             | Screen::Package { .. }
-            | Screen::Form(_)
-            | Screen::CustomView(_)
+            | Screen::PaneForm(_)
+            | Screen::DesignedView(_)
             | Screen::Confirm { .. }
             | Screen::Hotkey { .. } => {}
+            // The choice's rows are the collection's, not the installed
+            // packages'; the run of its ticked extensions redraws it
+            // itself as each lands (#308).
+            Screen::Choice { .. } => {}
             // The error overlay covers the screen it stands over: what it
             // was about does not change underneath it. A new development
             // event of the package ends it (see `show_development`).
@@ -4566,7 +4654,7 @@ impl Launcher {
                     launcher.registered();
                 });
             if let Err(error) = started {
-                eprintln!("Pane could not activate an extension: {error}");
+                crate::diagnostic!("Pane could not activate an extension: {error}");
                 state.activating.remove(&key);
             }
         }
@@ -4667,7 +4755,7 @@ impl Launcher {
             });
         };
         let command = |(command, unavailable): (CommandRegistration, Option<Unavailable>),
-                       no_view: bool,
+                       mode: CommandMode,
                        waiting: Option<&PackageIdentity>,
                        manifest: &str| {
             let entry = match &unavailable {
@@ -4679,7 +4767,7 @@ impl Launcher {
                     manifest: manifest.to_owned(),
                 },
                 Some(reason) => Entry::Unavailable(reason.reason().to_owned()),
-                None => Entry::Open(Opening::of(&command, no_view, LaunchSource::RootSearch)),
+                None => Entry::Open(Opening::of(&command, mode, LaunchSource::RootSearch)),
             };
             // A subtitle the command set replaces its manifest's.
             let subtitle = state
@@ -4699,7 +4787,7 @@ impl Launcher {
         // A disabled package contributes nothing to root search.
         let enabled = || state.packages.iter().filter(|package| package.enabled);
         for built in self.commands.iter() {
-            let (row, entry) = command((built.clone(), None), false, None, "");
+            let (row, entry) = command((built.clone(), None), CommandMode::View, None, "");
             add(
                 row,
                 entry,
@@ -4734,20 +4822,19 @@ impl Launcher {
                     .clone()
                     .or(waiting)
                     .or(unavailable.map(Unavailable::OnThisSystem));
-                let no_view = package.mode_of(registration.manifest_id())
-                    == crate::packages::CommandMode::NoView;
+                let mode = package.mode_of(registration.manifest_id());
                 let (when, matches) = (registration.when, registration.matches);
                 let target = aliases::Target {
                     registration: registration.clone(),
                     identity: package.identity.clone(),
                     unavailable: unavailable.clone(),
-                    no_view,
+                    mode,
                 };
                 let manifest = registration.manifest_id().to_owned();
                 let keywords = registration.keywords.clone();
                 let (row, entry) = command(
                     (registration, unavailable),
-                    no_view,
+                    mode,
                     Some(&package.identity),
                     &manifest,
                 );
@@ -5003,219 +5090,6 @@ impl Launcher {
             results.push(RootResult { keys, ..result });
         }
         results
-    }
-
-    /// Sets the value of the open form's field `field_id`: a text field's
-    /// text, or the id of an option of a choice field. Unknown fields and
-    /// options are ignored. Editing a field clears its error.
-    pub fn set_field_value(&self, field_id: &str, value: &str) {
-        let mut state = self.lock();
-        let Screen::Form(form) = &mut state.view.screen else {
-            return;
-        };
-        let Some(field) = form.fields.iter_mut().find(|field| field.id == field_id) else {
-            return;
-        };
-        if let FieldKind::Choice(choices) = &field.kind
-            && !choices.iter().any(|choice| choice.id == value)
-        {
-            return;
-        }
-        field.value = value.to_owned();
-        field.error = None;
-    }
-
-    /// Submits the open form to its extension. Await the returned future to
-    /// apply the reply: the answer as the result, or the extension's
-    /// rejection next to its field. While a submission is waiting for its
-    /// reply, submitting again does nothing.
-    ///
-    /// Pane's own alias form is applied at once instead (see `aliases`);
-    /// the future records it. Pane's argument form launches its command
-    /// with the values given, or takes focus to a required field left
-    /// empty (see `argument_form`); the future runs the command.
-    pub fn submit_form(&self) -> impl Future<Output = ()> + Send + 'static {
-        let mut state = self.lock();
-        let state = &mut *state;
-        // The Setup screen saves the preferences it asks for, then launches
-        // the command it held back (see `setup`).
-        let setup = self.begin_setup_submit(state);
-        let arguments = self.submit_arguments(state);
-        let alias_change = match (&state.view.screen, &state.form) {
-            (
-                Screen::Form(_),
-                Some(OpenForm {
-                    purpose: FormPurpose::Alias(command),
-                    ..
-                }),
-            ) => {
-                let command = command.clone();
-                self.submit_alias(state, &command)
-            }
-            _ => None,
-        };
-        // Pane's own npm and Git forms preview the package they name; the
-        // form stays until the preview replaces it, and Back meanwhile
-        // discards it.
-        let named = match (&state.view.screen, &mut state.form) {
-            (
-                Screen::Form(form),
-                Some(
-                    open @ OpenForm {
-                        purpose: FormPurpose::Npm | FormPurpose::Git,
-                        submitting: false,
-                        ..
-                    },
-                ),
-            ) => {
-                open.submitting = true;
-                state.view.status = Status::Running {
-                    since: Instant::now(),
-                };
-                let git = matches!(open.purpose, FormPurpose::Git);
-                form.fields.first().map(|field| (git, field.value.clone()))
-            }
-            _ => None,
-        };
-        // Pane's own Create Extension form: the package is written from
-        // the templates, built once and handed to the install preview the
-        // author confirms, after which Pane develops it (see `create`).
-        let creation = Launcher::begun_creation(state);
-        let submission = match (&state.view.screen, &mut state.form, &state.open) {
-            (
-                Screen::Form(form),
-                Some(
-                    open @ OpenForm {
-                        purpose: FormPurpose::Item(_) | FormPurpose::Screen(_),
-                        ..
-                    },
-                ),
-                Some(component),
-            ) if !open.submitting => {
-                let (FormPurpose::Item(item_id) | FormPurpose::Screen(item_id)) = &open.purpose
-                else {
-                    unreachable!("matched above");
-                };
-                let item_id = item_id.clone();
-                open.submitting = true;
-                let values: Vec<FieldValue> = form
-                    .fields
-                    .iter()
-                    .map(|field| FieldValue {
-                        id: field.id.clone(),
-                        value: field.value.clone(),
-                    })
-                    .collect();
-                Some((component.clone(), item_id, values))
-            }
-            _ => None,
-        };
-        if submission.is_some() {
-            state.view.status = Status::Running {
-                since: Instant::now(),
-            };
-        }
-        let epoch = state.screen_epoch;
-        let data = submission
-            .as_ref()
-            .and_then(|(component, ..)| self.data_in(state, component));
-        let launcher = self.clone();
-        async move {
-            if let Some(setup) = setup {
-                launcher.finish_setup(epoch, setup).await;
-            }
-            if let Some(submitted) = arguments {
-                launcher.launch_submitted(submitted).await;
-            }
-            if let Some(change) = alias_change {
-                launcher.finish_choice_change(change).await;
-            }
-            match named {
-                Some((false, spec)) => launcher.preview_npm(&spec).await,
-                Some((true, spec)) => launcher.preview_git(&spec).await,
-                None => {}
-            }
-            if let Some(creation) = creation {
-                launcher.finish_creation(epoch, creation).await;
-            }
-            if let Some((component, item_id, values)) = submission {
-                launcher
-                    .submit(epoch, component, item_id, values, data)
-                    .await
-            }
-        }
-    }
-
-    /// Sends `values` and applies the reply as though it had arrived before
-    /// any edit made meanwhile: a rejected field that the user has changed
-    /// since is not marked, since editing a field clears its error.
-    async fn submit(
-        &self,
-        epoch: u64,
-        component: PathBuf,
-        item_id: String,
-        values: Vec<FieldValue>,
-        data: Option<PackageData>,
-    ) {
-        let result = match self.runtime() {
-            Ok(runtime) => {
-                runtime
-                    .submit_form_with(&component, &item_id, values.clone(), data.clone())
-                    .await
-            }
-            Err(error) => Err(error),
-        };
-        // The submission ran the command's form callback, itself a change
-        // nothing tells of (Create Quicklink saves a quicklink): every
-        // command's results are marked stale, as a run's ending marks them
-        // (#202), so the next query asks for them again. Not even the
-        // screen having moved on meanwhile — the command's own
-        // pop-to-root — holds this back: the change is the package's, not
-        // the screen's.
-        self.lock().indexes.stale(&[]);
-        let Some(mut state) = self.lock_if_current(epoch) else {
-            return;
-        };
-        let state = &mut *state;
-        state.form.as_mut().expect("a form is open").submitting = false;
-        if let Some(problem) = stopped(state, &component, &data) {
-            // Stopped while it was submitting: its answer is not shown.
-            state.view.status = Status::Error(problem);
-            return;
-        }
-        let view = &mut state.view;
-        let Screen::Form(form) = &mut view.screen else {
-            unreachable!("a form is open");
-        };
-        let fields = &mut form.fields;
-        for field in fields.iter_mut() {
-            field.error = None;
-        }
-        view.status = match result {
-            Ok(answer) => Status::Result(answer),
-            Err(CallError::Form(error)) => {
-                let field = error
-                    .field
-                    .as_deref()
-                    .and_then(|id| fields.iter_mut().find(|field| field.id == id));
-                match field {
-                    Some(field) => {
-                        let status = format!("{}: {}", field.label, error.message);
-                        let unchanged = values
-                            .iter()
-                            .any(|sent| sent.id == field.id && sent.value == field.value);
-                        if unchanged {
-                            field.error = Some(error.message);
-                        }
-                        Status::Error(status)
-                    }
-                    // A rejection of the form as a whole is the extension's
-                    // message to the user, shown as it is.
-                    None => Status::Error(error.message),
-                }
-            }
-            Err(error) => Status::Error(error.to_string()),
-        };
     }
 
     /// Shows why Pane paused the installed package with `identity`: how it
@@ -5495,227 +5369,6 @@ impl Launcher {
         );
     }
 
-    /// Opens the custom view of `item_id` and shows its first drawing, or
-    /// closes it again if the user has left the command meanwhile.
-    async fn open_custom_view(
-        &self,
-        epoch: u64,
-        component: PathBuf,
-        item_id: String,
-        info: CustomViewInfo,
-        data: Option<PackageData>,
-    ) {
-        let result = match self.runtime() {
-            Ok(runtime) => {
-                runtime
-                    .open_view_with(&component, &item_id, data.clone())
-                    .await
-            }
-            Err(error) => Err(error),
-        };
-        let current = self.lock_if_current(epoch);
-        let stopped = current
-            .as_ref()
-            .and_then(|state| stopped(state, &component, &data));
-        let Some(mut state) = current.filter(|_| stopped.is_none()) else {
-            if let (Ok((id, _)), Ok(runtime)) = (result, self.runtime()) {
-                runtime.close_view(id);
-            }
-            if let Some(problem) = stopped {
-                // Stopped while it was opening.
-                self.lock().view.status = Status::Error(problem);
-            }
-            return;
-        };
-        match result {
-            Ok((id, frame)) => {
-                let snapshot = CustomViewSnapshot {
-                    id,
-                    label: info.label,
-                    role: info.role,
-                    frame,
-                };
-                let view = LauncherView::new(Screen::CustomView(snapshot), info.title);
-                let return_to = LauncherView {
-                    status: Status::Idle,
-                    ..std::mem::replace(&mut state.view, view)
-                };
-                state.custom_view = Some(OpenCustomView {
-                    id,
-                    return_to,
-                    pressed: false,
-                    sent: 0,
-                    shown: 0,
-                    moves_in_flight: 0,
-                    waiting_move: None,
-                });
-                state.next_screen();
-            }
-            Err(error) => {
-                // A developed package's crash, or error its command answered
-                // with, while the custom view opens shows as the error
-                // overlay (see `error_overlay`), in place of the status
-                // line; every other case, including a command whose
-                // package Pane does not know (its own registered
-                // commands), keeps the status line.
-                let shown = Launcher::open_again(&state, &component).is_some_and(|retry| {
-                    self.show_error_overlay(&mut state, &component, &error, retry)
-                });
-                if !shown {
-                    state.view.status = Status::Error(error.to_string());
-                }
-            }
-        }
-    }
-
-    /// Sends the user's input to the open custom view. Await the returned
-    /// future to show the view's new drawing. A pointer move or release is
-    /// sent only while the button pressed over the view is held; anything
-    /// sent when no view is open is ignored.
-    ///
-    /// Events are handled in order, and a drawing is shown only if no later
-    /// event's drawing is on screen yet. An error the extension reports is
-    /// shown while the view stays open; a crash closes the view.
-    ///
-    /// A drag is coalesced: while a pointer move is being handled, a further
-    /// move is not sent; only the latest one waiting is, once the moves in
-    /// flight are answered (by the future of the move answered last), or
-    /// before the next other event. Await every returned future.
-    pub fn send_view_event(&self, event: ViewEvent) -> impl Future<Output = ()> + Send + 'static {
-        let mut state = self.lock();
-        let epoch = state.screen_epoch;
-        // Sent now, so the view handles events in the order of these calls
-        // whenever the returned futures are awaited.
-        let mut sent: VecDeque<SentEvent> = self.send_to_view(&mut state, event).into();
-        drop(state);
-        let launcher = self.clone();
-        async move {
-            while let Some(event) = sent.pop_front() {
-                let result = event.reply.await;
-                launcher.show_view_answer(epoch, event.number, result);
-                if event.is_move {
-                    sent.extend(launcher.finish_move(epoch));
-                }
-            }
-        }
-    }
-
-    /// Whether the primary pointer button was pressed over the open view and
-    /// is still held, so the window should forward pointer moves and the
-    /// release.
-    pub fn pointer_held(&self) -> bool {
-        self.lock()
-            .custom_view
-            .as_ref()
-            .is_some_and(|open| open.pressed)
-    }
-
-    /// Sends `event` to the open view, after a waiting move, unless it is a
-    /// move or release with no press held, or a move to wait (see
-    /// [`Launcher::send_view_event`]).
-    fn send_to_view(&self, state: &mut State, event: ViewEvent) -> Vec<SentEvent> {
-        let (Some(open), Ok(runtime)) = (state.custom_view.as_mut(), self.runtime()) else {
-            return Vec::new();
-        };
-        match event {
-            ViewEvent::PointerDown(_) => open.pressed = true,
-            ViewEvent::PointerMove(_) | ViewEvent::PointerUp(_) if !open.pressed => {
-                return Vec::new();
-            }
-            ViewEvent::PointerUp(_) => open.pressed = false,
-            ViewEvent::PointerMove(_) | ViewEvent::Key(_) => {}
-        }
-        if let ViewEvent::PointerMove(at) = event
-            && open.moves_in_flight > 0
-        {
-            open.waiting_move = Some(at);
-            return Vec::new();
-        }
-        let mut sent = Vec::new();
-        if let Some(at) = open.waiting_move.take() {
-            sent.push(open.send(runtime, ViewEvent::PointerMove(at)));
-        }
-        sent.push(open.send(runtime, event));
-        sent
-    }
-
-    /// Notes that a move sent to the view of `epoch` was answered, and
-    /// sends the waiting move once no other move is in flight.
-    fn finish_move(&self, epoch: u64) -> Option<SentEvent> {
-        let mut state = self.lock_if_current(epoch)?;
-        let runtime = self.runtime().ok()?;
-        let open = state.custom_view.as_mut()?;
-        open.moves_in_flight = open.moves_in_flight.saturating_sub(1);
-        if open.moves_in_flight > 0 {
-            return None;
-        }
-        let at = open.waiting_move.take()?;
-        Some(open.send(runtime, ViewEvent::PointerMove(at)))
-    }
-
-    /// Shows the open view's answer to its event number `number`.
-    fn show_view_answer(&self, epoch: u64, number: u64, result: Result<Frame, CallError>) {
-        let Some(mut state) = self.lock_if_current(epoch) else {
-            return;
-        };
-        let state = &mut *state;
-        let open = state.custom_view.as_mut().expect("a view is open");
-        match result {
-            // An answer to an event older than the one on screen is stale.
-            Ok(_) | Err(CallError::Guest(_)) if number <= open.shown => {}
-            Ok(frame) => {
-                open.shown = number;
-                let Screen::CustomView(snapshot) = &mut state.view.screen else {
-                    unreachable!("a view is open");
-                };
-                snapshot.frame = frame;
-                state.view.status = Status::Idle;
-            }
-            // The view refused the event and keeps its drawing.
-            Err(error @ CallError::Guest(_)) => {
-                open.shown = number;
-                state.view.status = Status::Error(error.to_string());
-            }
-            // The guest instance, and the view with it, is gone.
-            Err(error) => self.return_from_custom_view(state, Status::Error(error.to_string())),
-        }
-    }
-
-    /// Closes the open custom view and shows the command view it was opened
-    /// from, with `status`, as a new screen.
-    fn return_from_custom_view(&self, state: &mut State, status: Status) {
-        let return_to = self.close_custom_view(state).expect("a view is open");
-        state.next_screen();
-        state.view = LauncherView {
-            status,
-            ..return_to
-        };
-    }
-
-    /// Leaves the open command, and any form or custom view of it, for
-    /// another screen, which the caller then shows: the view is closed in
-    /// the runtime, and replies for the old screen are discarded.
-    fn leave_command(&self, state: &mut State) {
-        self.close_custom_view(state);
-        // Its search in progress, if any, is stopped.
-        state.searching = None;
-        state.open = None;
-        state.open_command = None;
-        state.launch = LaunchRecord::default();
-        state.form = None;
-        state.next_screen();
-    }
-
-    /// Closes the open custom view, if there is one, and returns the command
-    /// view it was opened from.
-    fn close_custom_view(&self, state: &mut State) -> Option<LauncherView> {
-        let open = state.custom_view.take()?;
-        if let Ok(runtime) = self.runtime() {
-            runtime.close_view(open.id);
-        }
-        Some(open.return_to)
-    }
-
     /// Opens `url` with the link opener, off the calling thread, and reports
     /// the outcome while the screen is the one it was opened from.
     async fn open_url(&self, epoch: u64, url: String) {
@@ -5923,8 +5576,7 @@ impl Launcher {
 
     /// Shows `view`, the open command's tree drawn again, keeping the
     /// selection on the same item when it is still listed (else at the same
-    /// place). While the command's search field holds text, what it found
-    /// stays listed, and `view` is kept for when the text is cleared.
+    /// place).
     fn relist(&self, state: &mut State, component: &Path, view: View) {
         if search_files::browsing(state) {
             // Search Files lists the file index, not the command's own
@@ -5932,21 +5584,13 @@ impl Launcher {
             state.view.title = view.title;
             return;
         }
-        let extra = looks::remember(state, component, &view.items);
-        let list = self.command_list(state, component, view.items);
-        let searching = match &state.view.screen {
-            Screen::Command => false,
-            Screen::CommandSearch { query } => !query.trim().is_empty(),
-            _ => return,
-        };
-        self.report_extra_accessories(state, extra, false);
-        state.view.title = view.title;
-        if searching {
-            if let Some(search) = state.searching.as_mut() {
-                search.keep(list);
-            }
+        if !matches!(&state.view.screen, Screen::Command) {
             return;
         }
+        let extra = looks::remember(state, component, &view.items);
+        let list = self.command_list(state, component, view.items);
+        self.report_extra_accessories(state, extra, false);
+        state.view.title = view.title;
         let shown = state.view.selected;
         let selected_id = shown
             .and_then(|index| state.view.rows.get(index))
@@ -5981,7 +5625,6 @@ impl Launcher {
         let Opening {
             component,
             command,
-            search,
             launch,
             initial_search,
             ..
@@ -6050,6 +5693,11 @@ impl Launcher {
             let mut guard = state;
             let state = &mut *guard;
             let mut searching = None;
+            // Pane's registered Files command alone owns the launcher's
+            // search field (#177): a command's own search is the designed
+            // List's search-text event now (#240), and no command of a
+            // package opens one.
+            let search = Self::registered_files(state, &component, command.as_str());
             match result {
                 Ok(view) => {
                     // A command the query's alias named and a space opened
@@ -6064,12 +5712,12 @@ impl Launcher {
                         self.command_list(state, &component, view.items);
                     state.open_command = Some(command.clone());
                     let screen = if search {
-                        state.searching = Some(command_search::Searching::new(command));
+                        state.browsing = None;
                         Screen::CommandSearch {
                             query: String::new(),
                         }
                     } else {
-                        state.searching = None;
+                        state.browsing = None;
                         Screen::Command
                     };
                     state.entries = entries;
@@ -6098,19 +5746,15 @@ impl Launcher {
                         };
                     self.report_unbound(state);
                     self.report_extra_accessories(state, extra, true);
-                    // A command whose screen is a form (#149) shows it at once;
-                    // Back from it leaves the command.
-                    if let Some(ScreenForm { id, form }) = view.form {
-                        open_form_for(state, FormPurpose::Screen(id), form);
-                    } else if let Some(text) = initial_search.filter(|_| search) {
+                    if let Some(text) = initial_search.filter(|_| search) {
                         // Opened with text in its field ("Search Files for
                         // “…”"): searched at once, as if typed.
-                        searching = self.search_in_command(state, &text);
+                        searching = self.ask_files(state, &text, 0);
                     } else if files {
                         searching = self.ask_files(state, "", 0);
                     } else if let Some(text) = alias_search {
                         // Searched at once, as if typed.
-                        searching = self.search_in_command(state, &text);
+                        searching = self.ask_files(state, &text, 0);
                     }
                 }
                 Err(error) => {
@@ -6121,10 +5765,10 @@ impl Launcher {
                     let retry = Opening {
                         component: component.clone(),
                         command: command.clone(),
-                        search,
                         launch: launch.clone(),
                         initial_search: None,
                         no_view: false,
+                        designed: false,
                     };
                     if !self.show_error_overlay(state, &component, &error, retry) {
                         state.view.status = Status::Error(error.to_string());
@@ -6263,131 +5907,6 @@ fn disabled(state: &State, component: &Path) -> String {
     match owner(&state.packages, component) {
         Some(package) => format!("{} is disabled", package.title()),
         None => CallError::Disabled.to_string(),
-    }
-}
-
-/// Replaces the command view with `form`, which belongs to item `item_id`.
-/// The command's row entries stay, for when the form closes.
-fn open_form(state: &mut State, item_id: String, form: Form) {
-    open_form_for(state, FormPurpose::Item(item_id), form);
-}
-
-/// Replaces the command view with `form`, which `purpose` submits: each
-/// field starts with the value the tree gives it (a text field's text, a
-/// choice's option), else empty or with the first option.
-fn open_form_for(state: &mut State, purpose: FormPurpose, form: Form) {
-    let fields = form
-        .fields
-        .into_iter()
-        .map(|field| {
-            let value = match &field.kind {
-                FieldKind::Text { .. } | FieldKind::Password { .. } | FieldKind::Path { .. } => {
-                    field.value.clone().unwrap_or_default()
-                }
-                FieldKind::Choice(choices) => field
-                    .value
-                    .as_ref()
-                    .filter(|value| choices.iter().any(|choice| &choice.id == *value))
-                    .or_else(|| choices.first().map(|choice| &choice.id))
-                    .cloned()
-                    .unwrap_or_default(),
-            };
-            FormField {
-                id: field.id,
-                label: field.label,
-                kind: field.kind,
-                value,
-                error: None,
-                description: None,
-                required: false,
-            }
-        })
-        .collect();
-    let form_view = LauncherView::new(
-        Screen::Form(FormView {
-            fields,
-            submit_label: form.submit_label,
-            setup: None,
-        }),
-        form.title,
-    );
-    let return_to = std::mem::replace(&mut state.view, form_view);
-    state.form = Some(OpenForm {
-        purpose,
-        return_to,
-        submitting: false,
-    });
-    state.next_screen();
-}
-
-/// The user's home folder, which `~` in a typed path resolves to
-/// (#195), as the environment names it: `USERPROFILE` on Windows, `HOME`
-/// elsewhere. The file index's configuration replaces it with the home it
-/// is built over (see [`Launcher::with_file_index`]), which is the same
-/// folder on a real Pane; the typed folder the user names is resolved with
-/// the same home ([`crate::typed_folder`]).
-pub(crate) fn home_folder() -> Option<PathBuf> {
-    let var = if cfg!(windows) { "USERPROFILE" } else { "HOME" };
-    std::env::var_os(var).map(PathBuf::from)
-}
-
-/// When a query is asked about, by the clock root search's own dates are
-/// shown by (a test's, in a test): the moment the user stopped at the
-/// query, and how far the local time there is from UTC, so a command can
-/// answer about the local date or time (#196). The whole search shares
-/// one moment, whatever a slow command delays.
-fn asked_at(state: &State) -> WallTime {
-    let milliseconds = state.clock.now();
-    WallTime {
-        milliseconds,
-        offset: state.clock.local_offset(milliseconds),
-    }
-}
-
-/// What a listed row can show to tell itself apart from another row
-/// with the same folded title (#197): an installed command names its
-/// package's source after its subtitle, as the send rows already do. An
-/// indexed result's own subtitle is what its provider gave to tell it
-/// apart (an application's distinction, a quicklink's target), a
-/// computed result's section names the command that computed it, and a
-/// file row shows its folder, so none of them adds anything.
-#[derive(Clone)]
-enum Told {
-    /// The package the command was installed from.
-    Source(PackageIdentity),
-    /// Nothing: the row already tells itself apart.
-    Apart,
-}
-
-/// One root result as the search module ranks it (see `Candidate`): the
-/// result's keys, what kind of thing it is, the position of the provider
-/// that supplied it among the others, and what root search learned about
-/// it (#199), looked up by its row id.
-fn candidate<'a>(
-    result: &'a RootResult,
-    kind: search::Kind,
-    provider: usize,
-    learned: &'a HashMap<String, search::Learned>,
-) -> Candidate<'a> {
-    Candidate {
-        keys: &result.keys,
-        kind,
-        provider,
-        learned: learned.get(&result.row.id),
-    }
-}
-
-/// What kind of thing a root result is, as the comparator ranks kinds:
-/// commands above links, above applications, above files. Folders,
-/// fallbacks and the like are never ranked by the comparator — they keep
-/// their places below the results — so they take the lowest kind, which
-/// the order names for files.
-fn kind(entry: &Entry) -> search::Kind {
-    match presentation::kind(entry) {
-        Some(presentation::RowKind::Command) => search::Kind::Command,
-        Some(presentation::RowKind::Link) => search::Kind::Link,
-        Some(presentation::RowKind::Application) => search::Kind::Application,
-        _ => search::Kind::File,
     }
 }
 
@@ -6845,6 +6364,74 @@ async fn off_thread<T: Send + 'static>(work: impl FnOnce() -> T + Send + 'static
         let _ = reply.send(work());
     });
     response.await.expect("package file work panicked")
+}
+
+/// The user's home folder, which `~` in a typed path resolves to
+/// (#195), as the environment names it: `USERPROFILE` on Windows, `HOME`
+/// elsewhere. The file index's configuration replaces it with the home it
+/// is built over (see [`Launcher::with_file_index`]), which is the same
+/// folder on a real Pane; the typed folder the user names is resolved with
+/// the same home ([`crate::typed_folder`]).
+pub(crate) fn home_folder() -> Option<PathBuf> {
+    let var = if cfg!(windows) { "USERPROFILE" } else { "HOME" };
+    std::env::var_os(var).map(PathBuf::from)
+}
+
+/// When a query is asked about, by the clock root search's own dates are
+/// shown by (a test's, in a test): the moment the user stopped at the
+/// query, and how far the local time there is from UTC, so a command can
+/// answer about the local date or time (#196). The whole search shares
+/// one moment, whatever a slow command delays.
+fn asked_at(state: &State) -> WallTime {
+    let milliseconds = state.clock.now();
+    WallTime {
+        milliseconds,
+        offset: state.clock.local_offset(milliseconds),
+    }
+}
+
+/// How a row tells itself apart from another with the same folded title
+/// (#197): an installed command names its package's source after its
+/// subtitle, as the send rows already do; an indexed result's own
+/// subtitle is what its provider gave to tell it apart.
+#[derive(Clone)]
+enum Told {
+    /// The package the command was installed from.
+    Source(PackageIdentity),
+    /// Nothing: the row already tells itself apart.
+    Apart,
+}
+
+/// One root result as the search module ranks it (see `Candidate`): the
+/// result's keys, what kind of thing it is, the position of the provider
+/// that supplied it among the others, and what root search learned about
+/// it (#199), looked up by its row id.
+fn candidate<'a>(
+    result: &'a RootResult,
+    kind: search::Kind,
+    provider: usize,
+    learned: &'a HashMap<String, search::Learned>,
+) -> Candidate<'a> {
+    Candidate {
+        keys: &result.keys,
+        kind,
+        provider,
+        learned: learned.get(&result.row.id),
+    }
+}
+
+/// What kind of thing a root result is, as the comparator ranks kinds:
+/// commands above links, above applications, above files. Folders,
+/// fallbacks and the like are never ranked by the comparator — they keep
+/// their places below the results — so they take the lowest kind, which
+/// the order names for files.
+fn kind(entry: &Entry) -> search::Kind {
+    match presentation::kind(entry) {
+        Some(presentation::RowKind::Command) => search::Kind::Command,
+        Some(presentation::RowKind::Link) => search::Kind::Link,
+        Some(presentation::RowKind::Application) => search::Kind::Application,
+        _ => search::Kind::File,
+    }
 }
 
 /// The installed packages as the operation router resolves calls against

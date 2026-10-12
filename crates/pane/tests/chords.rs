@@ -88,7 +88,6 @@ fn opened_actions(cx: &mut TestAppContext) -> (Entity<LauncherWindow>, &mut Visu
         subtitle: None,
         component,
         takes_query: false,
-        search: false,
         keywords: Vec::new(),
         when: CommandWhen::Always,
         matches: CommandMatches::Title,
@@ -103,11 +102,12 @@ fn opened_samples(cx: &mut TestAppContext) -> (Entity<LauncherWindow>, &mut Visu
     open_launcher(cx, Launcher::new(Runtime::start(), commands))
 }
 
-/// The calculator package installed, as the window tests install it,
-/// back at root search.
-fn with_calculator(cx: &mut TestAppContext, data: &std::path::Path) -> Launcher {
+/// The Rust sample package installed, as `window.rs`'s `with_rust_sample`
+/// installs it, back at root search: its root provider answers
+/// "reverse <text>" with the text reversed, copying it.
+fn with_rust_sample(cx: &mut TestAppContext, data: &std::path::Path) -> Launcher {
     let folder =
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/guests/packages/calculator");
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/guests/packages/sample-rust");
     let launcher = Launcher::with_packages(Runtime::start(), vec![], data.join("extensions"));
     // The install's guest check answers from the runtime thread.
     cx.executor().allow_parking();
@@ -130,7 +130,16 @@ fn open_launcher(
     // scheduler's deterministic control.
     cx.executor().allow_parking();
     cx.update(pane::bind_keys);
-    let (window, cx) = cx.add_window_view(|window, cx| LauncherWindow::new(launcher, window, cx));
+    // The window learns what the launcher changed in the background — a
+    // late answer's merge (#201) — as the binary's window does; without it
+    // the last frame stays what the awaited calls left.
+    let (sender, changes) = pane_core::changes::channel();
+    let launcher = launcher.with_changes(sender);
+    let (window, cx) = cx.add_window_view(|window, cx| {
+        let mut launcher_window = LauncherWindow::new(launcher, window, cx);
+        launcher_window.follow_changes(changes, window, cx);
+        launcher_window
+    });
     (window, cx)
 }
 
@@ -340,13 +349,13 @@ fn an_altgr_character_reaches_the_field_and_matches_no_chord(cx: &mut TestAppCon
 #[gpui::test]
 fn ctrl_c_copies_a_selection_and_without_one_runs_the_rows_copy_action(cx: &mut TestAppContext) {
     let data = tempfile::tempdir().unwrap();
-    let launcher = with_calculator(cx, data.path());
+    let launcher = with_rust_sample(cx, data.path());
     let (window, cx) = open_launcher(cx, launcher);
 
-    cx.simulate_input("6*7");
-    wait_for_rows(&window, cx, &["42"]);
+    cx.simulate_input("reverse 42");
+    wait_for_rows(&window, cx, &["24"]);
     assert!(
-        cx.debug_bounds("row-42").is_some(),
+        cx.debug_bounds("row-24").is_some(),
         "the answer is the selected row"
     );
 
@@ -354,11 +363,15 @@ fn ctrl_c_copies_a_selection_and_without_one_runs_the_rows_copy_action(cx: &mut 
     // action on the same chord does not run.
     cx.simulate_keystrokes(SELECT_ALL);
     cx.simulate_keystrokes(COPY);
-    assert_eq!(clipboard(cx), "6*7", "the field's selection was copied");
+    assert_eq!(
+        clipboard(cx),
+        "reverse 42",
+        "the field's selection was copied"
+    );
     let view = settle(&window, cx);
     assert_ne!(
         view.status,
-        Status::Result("Copied 42 to the clipboard".into()),
+        Status::Result("Copied 24 to the clipboard".into()),
         "the row's action did not run"
     );
 
@@ -368,20 +381,20 @@ fn ctrl_c_copies_a_selection_and_without_one_runs_the_rows_copy_action(cx: &mut 
     let view = settle(&window, cx);
     assert_eq!(
         view.status,
-        Status::Result("Copied 42 to the clipboard".into()),
+        Status::Result("Copied 24 to the clipboard".into()),
         "the row's copy action ran"
     );
-    assert_eq!(clipboard(cx), "42");
+    assert_eq!(clipboard(cx), "24");
 
     // Ctrl+Shift+C is unaffected: nothing binds it, so nothing runs.
     cx.simulate_keystrokes(SHIFT_COPY);
     let view = settle(&window, cx);
     assert_eq!(
         view.status,
-        Status::Result("Copied 42 to the clipboard".into()),
+        Status::Result("Copied 24 to the clipboard".into()),
         "nothing further ran"
     );
-    assert_eq!(clipboard(cx), "42");
+    assert_eq!(clipboard(cx), "24");
 }
 
 /// The numpad's digits act as the digit row's for Ctrl+digit chords:
@@ -398,7 +411,7 @@ fn the_numpads_digits_pick_as_the_digit_rows_do(cx: &mut TestAppContext) {
     let view = settle(&window, cx);
     assert_eq!(
         (view.screen, view.title.as_str()),
-        (Screen::Command, "JavaScript sample"),
+        (Screen::Command, "Rust sample"),
         "the second row was picked"
     );
     cx.simulate_keystrokes("escape");

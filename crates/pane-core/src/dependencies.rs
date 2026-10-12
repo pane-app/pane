@@ -796,6 +796,23 @@ impl Plan {
             .collect()
     }
 
+    /// The identities the dependencies of the package `dependent` resolved
+    /// to, by dependency id, as the plan resolved them: a dependency whose
+    /// source named an old id a collection renamed resolves, as the read
+    /// reads it, to the extension's current id (ADR 0044, #310), which the
+    /// package's record names so a call through the dependency reaches the
+    /// package that installed.
+    pub(crate) fn resolved_dependencies_of(
+        &self,
+        dependent: &PackageIdentity,
+    ) -> Vec<(String, PackageIdentity)> {
+        self.required
+            .iter()
+            .filter(|required| required.dependent.identity == *dependent)
+            .map(|required| (required.id.clone(), required.target.identity.clone()))
+            .collect()
+    }
+
     /// The titles of the default providers of uses installed with the
     /// requested one.
     pub fn named_defaults(&self) -> Vec<String> {
@@ -981,7 +998,7 @@ impl<R: FnMut(&PackageIdentity, &str) -> Result<SourcePackage, PackageError>> Pl
                     }));
                 continue;
             }
-            let target = package.identity.dependency(&dependency.source);
+            let target = package.dependency_at(&dependency.source);
             if !dependency.required {
                 if is_requested {
                     let state = self.optional_state(target);
@@ -1017,42 +1034,10 @@ impl<R: FnMut(&PackageIdentity, &str) -> Result<SourcePackage, PackageError>> Pl
                 target,
                 state,
             };
-            if self.seen.contains(&target) {
-                // Found before, or the requested package in a cycle.
-                let found = self
-                    .plan
-                    .required
-                    .iter()
-                    .find(|required| required.target.identity == target)
-                    .map(|required| (required.target.clone(), required.state));
-                let (named, state) =
-                    found.unwrap_or_else(|| (self.plan.requested.clone(), RequiredState::Install));
-                self.plan.required.push(edge(named, state));
+            if self.already(&dependent, &id, &target) {
                 continue;
             }
             self.seen.push(target.clone());
-            if let Some(installed) = installed_as(self.installed, &target) {
-                let paused = self.paused.contains(&target);
-                let state = match (installed.enabled, paused) {
-                    (false, _) => RequiredState::Disabled,
-                    (true, true) => RequiredState::Paused,
-                    (true, false) => RequiredState::Installed,
-                };
-                self.plan.assumptions.packages.push((
-                    target.clone(),
-                    Assumed::Installed {
-                        location: installed.location.clone(),
-                        enabled: installed.enabled,
-                        paused,
-                    },
-                ));
-                let named = Named {
-                    identity: target,
-                    title: installed.title(),
-                };
-                self.plan.required.push(edge(named, state));
-                continue;
-            }
             if self.plan.install.len() + self.visiting() >= MAX_INSTALLED_WITH {
                 if !self.too_many {
                     self.too_many = true;
@@ -1066,6 +1051,32 @@ impl<R: FnMut(&PackageIdentity, &str) -> Result<SourcePackage, PackageError>> Pl
             }
             match (self.read)(&target, &dependency.source) {
                 Ok(source) => {
+                    // A read that resolved a rename (ADR 0044, #310): the
+                    // package it returns is the extension's current id, not
+                    // the old id the source's text named, so the plan takes
+                    // the read's identity as the dependency's target — the
+                    // demand, the edge, the assumption and the install name
+                    // the package that installs — and the current id may be
+                    // one already installed, or read already for another
+                    // dependency: taken as it is, with nothing read for it.
+                    // The id the source named comes off the plan's seen list
+                    // for that look, the current one taking its place only
+                    // where nothing else names it.
+                    let mut target = target;
+                    if source.identity != target {
+                        let renamed = source.identity.clone();
+                        let demand = self
+                            .demands
+                            .last_mut()
+                            .expect("the dependency's demand, pushed above");
+                        demand.target = renamed.clone();
+                        self.seen.pop();
+                        target = renamed;
+                        if self.already(&dependent, &id, &target) {
+                            continue;
+                        }
+                        self.seen.push(target.clone());
+                    }
                     let named = Named {
                         identity: target.clone(),
                         title: source.manifest.title.clone(),
@@ -1085,6 +1096,60 @@ impl<R: FnMut(&PackageIdentity, &str) -> Result<SourcePackage, PackageError>> Pl
                 })),
             }
         }
+    }
+
+    /// Records the dependency `id` of `dependent` on `target` as one the
+    /// plan does not read: `target` already installed (its assumption and
+    /// its edge recorded, with the state it is in), or read already for
+    /// another dependency (its edge recorded with that one's). Whether it
+    /// was either.
+    fn already(&mut self, dependent: &Named, id: &str, target: &PackageIdentity) -> bool {
+        if self.seen.contains(target) {
+            // Found before, or the requested package in a cycle.
+            let found = self
+                .plan
+                .required
+                .iter()
+                .find(|required| required.target.identity == *target)
+                .map(|required| (required.target.clone(), required.state));
+            let (named, state) =
+                found.unwrap_or_else(|| (self.plan.requested.clone(), RequiredState::Install));
+            self.plan.required.push(Required {
+                dependent: dependent.clone(),
+                id: id.to_owned(),
+                target: named,
+                state,
+            });
+            return true;
+        }
+        let Some(installed) = installed_as(self.installed, target) else {
+            return false;
+        };
+        let paused = self.paused.contains(target);
+        let state = match (installed.enabled, paused) {
+            (false, _) => RequiredState::Disabled,
+            (true, true) => RequiredState::Paused,
+            (true, false) => RequiredState::Installed,
+        };
+        self.plan.assumptions.packages.push((
+            target.clone(),
+            Assumed::Installed {
+                location: installed.location.clone(),
+                enabled: installed.enabled,
+                paused,
+            },
+        ));
+        let named = Named {
+            identity: target.clone(),
+            title: installed.title(),
+        };
+        self.plan.required.push(Required {
+            dependent: dependent.clone(),
+            id: id.to_owned(),
+            target: named,
+            state,
+        });
+        true
     }
 
     /// Plans the capabilities the requested package and the default

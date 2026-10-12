@@ -30,13 +30,14 @@ pane-extension = "0.2"
 
 use pane_extension::alloc::{string::String, vec::Vec};
 use pane_extension::feedback::{Toast, show_toast};
-use pane_extension::{Command, CustomView, FieldValue, FormError, Item, List, NoCustomView};
+use pane_extension::view::NoDesignedView;
+use pane_extension::{Command, Item, List};
 
 struct Hello;
 pane_extension::export!(Hello);
 
 impl Command for Hello {
-    type CustomView = NoCustomView;
+    type DesignedView = NoDesignedView;
 
     async fn render() -> Result<List, String> {
         Ok(List::new("Hello").item(Item::new("hello", "Say hello").on_action(|| async {
@@ -45,15 +46,11 @@ impl Command for Hello {
         })))
     }
 
-    async fn submit_form(_item_id: String, _values: Vec<FieldValue>) -> Result<String, FormError> {
-        Err(FormError {
-            field: None,
-            message: "this command has no forms".into(),
-        })
-    }
-
-    async fn open_view(_item_id: String) -> Result<CustomView, String> {
-        Err("this command has no custom views".into())
+    async fn open_designed_view(
+        _command: String,
+        _launch: pane_extension::LaunchRecord,
+    ) -> Result<NoDesignedView, String> {
+        Err("this command opens no designed view".into())
     }
 }
 ```

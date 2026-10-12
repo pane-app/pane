@@ -30,7 +30,7 @@
 //! given up on and replaced, as a crashed one is.
 
 use std::cell::{Cell, RefCell};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::future::Future;
 use std::path::{Path, PathBuf};
@@ -52,6 +52,7 @@ use crate::http;
 
 mod application_list;
 pub(crate) mod deadlines;
+mod designed;
 mod faults;
 mod host_functions;
 mod memory;
@@ -63,6 +64,7 @@ mod system_functions;
 mod tree;
 mod windows_functions;
 
+pub use crate::tokens::{Space, TextLevel, TextStyle};
 use deadlines::Doing;
 #[doc(hidden)]
 pub use deadlines::Limits;
@@ -71,6 +73,20 @@ pub use deadlines::Limits;
 pub use deadlines::Timers;
 pub use deadlines::{COMPUTE_LIMIT, UNRESPONSIVE_LIMIT, WARN_AFTER};
 pub(crate) use deadlines::{HostCall, Hosted, Watch};
+
+pub use designed::{
+    Align, Badge, Border, Button, COMPONENT_SET, Canvas, CanvasA11y, CanvasHandlers, CanvasOp,
+    CanvasRole, CanvasStroke, CanvasText, Checkbox, DateField, DesignedHandler, DesignedTree,
+    DropdownItem, EmptyState, FieldProps, FilePicker, Finite, Fit, FormNode, FormValue,
+    GRID_COLUMNS, GridItem, IconExtent, IconNode, Image, Justify, KeySequence, Keycap, Layout,
+    Length, Link, ListAction, ListDropdown, ListItem, ListNode, ListSection, Loading,
+    MAX_CANVAS_OPS, MAX_CANVAS_TEXT_CHARS, MAX_DEPTH, MAX_GRID_COLUMNS, MAX_INLINE_IMAGE,
+    MAX_MARKDOWN_CHARS, MAX_NODES, MAX_PAGE_SIZE, MAX_PX, MAX_TREE_BYTES, Markdown, MetadataItem,
+    MetadataList, Node, NodeKind, Offset, Orientation, Padding, Paint, Place, Progress,
+    RadiusLength, RichRow, RowAccessory, SectionHeader, Segment, Segmented, Select, Sizing, Slider,
+    Span, StrokeCap, StrokeJoin, Style, Surface, Tag, TagPicker, Text, TextContent, TextInput,
+    Toggle, Tone as ButtonTone, key_problems,
+};
 #[cfg(any(test, debug_assertions))]
 #[doc(hidden)]
 pub use faults::Fault;
@@ -87,8 +103,8 @@ pub use supervisor::{RuntimeFailure, RuntimeStatus};
 pub(crate) use tree::read_shortcut;
 pub use tree::{Accessory, AccessoryContent, ItemLook, MAX_ACCESSORIES};
 pub use tree::{
-    Action, ActionKind, ActionStyle, ActionSubmenu, Answer, Item, ScreenForm, SubmenuEntries,
-    TREE_VERSION, View,
+    Action, ActionKind, ActionStyle, ActionSubmenu, Answer, Item, SubmenuEntries, TREE_VERSION,
+    View,
 };
 
 pub(crate) mod bindings {
@@ -159,16 +175,6 @@ mod indexed_bindings {
     });
 }
 
-/// The `command-search` export of a command that searches as the user types
-/// into its own search field.
-mod search_bindings {
-    wasmtime::component::bindgen!({
-        path: "../../wit",
-        world: "command-search-provider",
-        exports: { default: async | store },
-    });
-}
-
 /// The `service` export of a command that runs a continuing service.
 mod service_bindings {
     wasmtime::component::bindgen!({
@@ -211,6 +217,7 @@ use bindings::exports::pane::extension::command;
 use bindings::pane::extension::commands as launching;
 use bindings::pane::extension::preferences as preference_values;
 use bindings::pane::extension::registrations as registering;
+use bindings::pane::extension::view as view_host;
 use bindings::pane::extension::{
     applications, cache, clipboard_history, content, credentials, settings,
 };
@@ -254,9 +261,6 @@ const INDEXED_RESULTS_INTERFACE: &str = "pane:extension/indexed-results@0.2.0";
 /// The interface a component serving published operations also exports.
 const OPERATIONS_INTERFACE: &str = "pane:extension/published-operations@0.2.0";
 
-/// The interface a command that searches as the user types also exports.
-const COMMAND_SEARCH_INTERFACE: &str = "pane:extension/command-search@0.2.0";
-
 /// The interface a command that runs a continuing service also exports.
 const SERVICE_INTERFACE: &str = "pane:extension/service@0.2.0";
 
@@ -293,76 +297,14 @@ struct StagedSnapshot {
 type SharedSnapshots = Arc<Mutex<HashMap<(String, PathBuf), StagedSnapshot>>>;
 
 /// What a result a command answers with shows as a row: the fields its
-/// computed root results, indexed results and search results share (each
-/// interface's WIT declares its own record, as a WIT record cannot extend
-/// another).
+/// computed root results and indexed results share (each interface's WIT
+/// declares its own record, as a WIT record cannot extend another).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ResultListing {
-    /// Identifies the result among the command's results; a search result's
-    /// is the callback id passed to the command's `handle-event` when its
-    /// row is activated.
+    /// Identifies the result among the command's results.
     pub id: String,
     pub title: String,
     pub subtitle: Option<String>,
-}
-
-/// One thing a command's search found, listed as a row of the command.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct SearchResult {
-    pub listing: ResultListing,
-    /// The id of the file of the package's granted folder the result is,
-    /// when it is one (Search Files): Pane lists it as that file, with its
-    /// own actions.
-    pub file: Option<String>,
-}
-
-/// Stops a search that is no longer needed: when it is stopped or dropped,
-/// the search is not started if it has not been, and stopped where its guest
-/// waits if it has (see [`Runtime::search_with`]).
-pub(crate) struct StopSearch(#[allow(dead_code)] oneshot::Sender<()>);
-
-/// Tells the runtime that a search was stopped.
-struct SearchStopped(oneshot::Receiver<()>);
-
-impl SearchStopped {
-    /// Whether the search has been stopped.
-    fn stopped(&mut self) -> bool {
-        !matches!(self.0.try_recv(), Err(oneshot::error::TryRecvError::Empty))
-    }
-
-    /// Waits until the search is stopped or `wait` ends, whichever comes
-    /// first; whether it was stopped (also when both are).
-    async fn stopped_before(&mut self, wait: impl Future<Output = ()>) -> bool {
-        let mut wait = std::pin::pin!(wait);
-        std::future::poll_fn(|context| {
-            if std::pin::Pin::new(&mut self.0).poll(context).is_ready() {
-                return std::task::Poll::Ready(true);
-            }
-            wait.as_mut().poll(context).map(|()| false)
-        })
-        .await
-    }
-}
-
-/// What a search waits on before it starts, given [`SEARCH_DEBOUNCE`]: the
-/// clock's sleep, unless a test sets another
-/// (`Runtime::set_search_timer`, in debug builds).
-#[cfg(any(test, debug_assertions))]
-type SearchTimer = Arc<
-    dyn Fn(std::time::Duration) -> std::pin::Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync,
->;
-
-/// How long the runtime waits before it starts a search: one the user
-/// replaces by typing on within it is stopped before its command is asked
-/// (and before its instance could be dropped for it), so fast typing asks
-/// only for the text the user stops at. The runtime serves other calls
-/// meanwhile.
-pub(crate) const SEARCH_DEBOUNCE: std::time::Duration = std::time::Duration::from_millis(150);
-
-/// A way to stop a search, and what the runtime watches for it.
-fn stoppable() -> (StopSearch, SearchStopped) {
-    let (stop, stopped) = oneshot::channel();
-    (StopSearch(stop), SearchStopped(stopped))
 }
 
 /// A result a command computed from root search's query.
@@ -457,9 +399,6 @@ pub(crate) struct Exports {
     pub indexed_results: bool,
     /// `published-operations`: it serves published operations.
     pub operations: bool,
-    /// `command-search`: it searches as the user types into its own search
-    /// field.
-    pub search: bool,
     /// `service`: it runs a continuing service while the package's code
     /// may run.
     pub service: bool,
@@ -490,6 +429,26 @@ type SharedLaunches = Arc<Mutex<Option<Launches>>>;
 /// (`wit/feedback.wit`, and `commands.set-subtitle`), once the launcher has
 /// said: the launcher's own.
 type SharedHostFunctions = Arc<Mutex<Option<Arc<dyn HostFunctions>>>>;
+
+/// What Pane does when a designed view asks to be drawn again
+/// (`pane:extension/view`, #243): told the view's id, the id its render
+/// context named. Set by the launcher, which owns the drawing it asks
+/// for; held weakly by the runtime, so it keeps neither the launcher nor
+/// the runtime running. The runtime alone has none, and an ask names
+/// nothing.
+type SharedViewAsks = Arc<Mutex<Option<Arc<dyn Fn(u64) + Send + Sync>>>>;
+/// What measures text for a designed view's canvases
+/// (`pane:extension/view.measure-text`, #242): told a text and the JSON a
+/// canvas text operation names, the width and height it occupies. The
+/// window's fonts, which the pane crate owns; see
+/// [`Runtime::set_text_measures`].
+pub type TextMeasures = Arc<dyn Fn(&str, &str) -> (f32, f32) + Send + Sync>;
+
+/// What measures text for a designed view's canvases
+/// (`pane:extension/view.measure-text`, #242): the window's fonts, which
+/// the pane crate owns, handed to the runtime. Installed by the launcher
+/// before any call; `None` until then, answering no extent.
+type SharedTextMeasures = Arc<Mutex<Option<Arc<dyn Fn(&str, &str) -> (f32, f32) + Send + Sync>>>>;
 
 /// What a call into a guest is for, as the host functions it calls see it
 /// (`crate::feedback::Caller`): the command it runs for, if Pane knows it,
@@ -524,125 +483,61 @@ impl CallFor {
     }
 }
 
-/// What Pane shows of an item's custom view besides the view's drawing.
+/// What one render of a designed view answers: its tree, the render's
+/// sequence number, and how long the view asked Pane to wait before
+/// rendering it again (`refresh-after-ms`, #236: the launcher schedules
+/// the refresh through it).
+#[derive(Clone, Debug, PartialEq)]
+pub struct DesignedRendered {
+    pub tree: DesignedTree,
+    /// The sequence number the render was asked with: the context's
+    /// `render`, which the view's events carry back.
+    pub render: u64,
+    /// `refresh-after-ms`: how long Pane waits before drawing the view
+    /// again.
+    pub refresh_after_ms: Option<u32>,
+}
+
+/// The user's input to a designed view, as its tree's callback ids name
+/// it (the WIT `ui-event`): the sequence number of the render whose tree
+/// the user saw, the key of the node the event was raised on, the callback
+/// id the tree named, and the event's details as JSON.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct CustomViewInfo {
-    /// The screen's title.
-    pub title: String,
-    /// Names the view to assistive technology.
-    pub label: String,
-    pub role: CustomViewRole,
+pub struct DesignedEvent {
+    pub render: u64,
+    pub key: String,
+    pub callback: u32,
+    pub payload: String,
 }
 
-/// What kind of control a custom view is to assistive technology.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum CustomViewRole {
-    /// A color chooser; its frame's value names the chosen color.
-    ColorWell,
+/// The most views one command's navigation stack may hold: a push that
+/// would go beyond it is the extension's error, the view keeping its last
+/// good tree (the specification's proposed default, #239).
+pub const MAX_NAVIGATION_DEPTH: usize = 32;
+
+/// What a designed view's event answered it does next, as the launcher
+/// owns the navigation stack: nothing (the view re-rendered, as a designed
+/// view does), a view the answer pushed above it or replaced it with (now
+/// the top of the stack, its first tree drawn), or a pop of the view
+/// itself — dropped in the runtime, its result answered to the view below.
+#[derive(Clone, Debug, PartialEq)]
+pub enum DesignedNext {
+    /// The view answered nothing next: its tree, as re-rendered.
+    Tree(DesignedRendered),
+    /// The view pushed a view: the top of the stack, its first tree
+    /// drawn; the pushing view stays below it.
+    Pushed(ViewId, DesignedRendered),
+    /// The view replaced itself: the new view is the top, at the replaced
+    /// view's depth, which is dropped in the runtime.
+    Replaced(ViewId, DesignedRendered),
+    /// The view popped itself, answering `result` to the view below: the
+    /// view is dropped, the view below's last tree shows, and it is then
+    /// told the view above popped. A pop of the root view leaves the
+    /// command with it.
+    Popped { result: String },
 }
 
-/// What a custom view shows: shapes painted in order over a
-/// `width` x `height` area of logical pixels.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Frame {
-    pub width: u32,
-    pub height: u32,
-    pub shapes: Vec<Shape>,
-    /// The view's current value for assistive technology.
-    pub value: String,
-}
-
-/// The most shapes a frame may have.
-pub const MAX_FRAME_SHAPES: usize = 4096;
-/// The most characters a text shape may have.
-pub const MAX_TEXT_CHARS: usize = 256;
-/// The largest width and height of a frame, in logical pixels.
-pub const MAX_FRAME_SIZE: u32 = 4096;
-
-impl Frame {
-    /// Why the frame is over one of Pane's limits, if it is. The window
-    /// draws each shape as an element, so a frame from an extension is
-    /// bounded before it reaches the window.
-    fn over_limits(&self) -> Option<String> {
-        if self.shapes.len() > MAX_FRAME_SHAPES {
-            return Some(format!(
-                "the frame has {} shapes; at most {MAX_FRAME_SHAPES} are drawn",
-                self.shapes.len()
-            ));
-        }
-        if self.width > MAX_FRAME_SIZE || self.height > MAX_FRAME_SIZE {
-            return Some(format!(
-                "the frame is {} x {} pixels; at most {MAX_FRAME_SIZE} x {MAX_FRAME_SIZE} are drawn",
-                self.width, self.height
-            ));
-        }
-        self.shapes.iter().find_map(|shape| match shape {
-            Shape::Text { content, .. } if content.chars().count() > MAX_TEXT_CHARS => {
-                Some(format!(
-                    "a text of the frame has {} characters; at most {MAX_TEXT_CHARS} are drawn",
-                    content.chars().count()
-                ))
-            }
-            _ => None,
-        })
-    }
-}
-
-/// One thing a custom view draws. Coordinates are logical pixels from the
-/// view's top-left corner.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Shape {
-    Rect {
-        x: i32,
-        y: i32,
-        width: u32,
-        height: u32,
-        fill: Rgb,
-    },
-    /// One line of text, its top-left corner at `x`, `y`.
-    Text {
-        x: i32,
-        y: i32,
-        content: String,
-        color: Rgb,
-    },
-}
-
-/// An opaque color as 0xRRGGBB, the WIT `rgb`; the top byte is ignored.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct Rgb(pub u32);
-
-/// A position in a custom view, in logical pixels from its top-left corner.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Point {
-    pub x: i32,
-    pub y: i32,
-}
-
-/// The keys a focused custom view receives.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Key {
-    Left,
-    Right,
-    Up,
-    Down,
-    Home,
-    End,
-}
-
-/// The user's input to a custom view.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ViewEvent {
-    Key(Key),
-    /// The primary pointer button was pressed over the view.
-    PointerDown(Point),
-    /// The pointer moved while that button is held.
-    PointerMove(Point),
-    /// That button was released.
-    PointerUp(Point),
-}
-
-/// Identifies a custom view open in a [`Runtime`]. Ids are never reused,
+/// Identifies a designed view open in a [`Runtime`]. Ids are never reused,
 /// even by a runtime thread that replaced a crashed one.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct ViewId {
@@ -652,84 +547,26 @@ pub struct ViewId {
 }
 
 impl ViewId {
+    /// A view id with number `id`: a Pane form's identity is its own
+    /// number, not a view's, so the window's keyed state follows either.
+    #[doc(hidden)]
+    pub fn of_number(id: u64) -> ViewId {
+        ViewId { thread: 0, id }
+    }
+
     /// The number of the runtime thread that holds the view: a crash of
     /// that thread (see [`supervisor::CrashReport`]) closes it.
     pub(crate) fn thread(&self) -> u64 {
         self.thread
     }
-}
 
-/// A form an item opens, as produced by the guest.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Form {
-    pub title: String,
-    pub fields: Vec<Field>,
-    pub submit_label: String,
-}
-
-/// One field of a [`Form`].
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Field {
-    pub id: String,
-    pub label: String,
-    pub kind: FieldKind,
-    /// What the field starts with: a text field's text, or the id of the
-    /// option chosen first; `None` for an empty text field, or the first
-    /// option.
-    pub value: Option<String>,
-}
-
-/// What a field holds.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum FieldKind {
-    /// A single-line text field, which starts with the field's value, else
-    /// empty.
-    Text { placeholder: Option<String> },
-    /// A single-line text field whose text is concealed while it is typed:
-    /// a password argument in Pane's argument form. An extension's form
-    /// has none yet.
-    Password { placeholder: Option<String> },
-    /// Exactly one of these options; the first starts chosen.
-    Choice(Vec<Choice>),
-    /// A path, typed or chosen with the system's picker for `pick`: a
-    /// file, folder or application preference on Pane's Setup screen, as
-    /// its extension's card in Settings has them. An extension's form has
-    /// none yet.
-    Path {
-        placeholder: Option<String>,
-        pick: PathKind,
-    },
-}
-
-/// What a path field's picker chooses.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum PathKind {
-    File,
-    Folder,
-    /// An application: a program's file, or on macOS its bundle (a folder).
-    Application,
-}
-
-/// An option of a choice field.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Choice {
-    pub id: String,
-    pub label: String,
-}
-
-/// A field's submitted value: its text, or the chosen option's id.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct FieldValue {
-    pub id: String,
-    pub value: String,
-}
-
-/// Why the guest did not accept a submitted form.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct FormError {
-    /// The field the message is about; `None` for the form as a whole.
-    pub field: Option<String>,
-    pub message: String,
+    /// The view's id, as its render context names it and
+    /// `pane:extension/view`'s `ask-to-render` asks for (#243): a number
+    /// shared by every thread the runtime started, so it names this view
+    /// alone.
+    pub(crate) fn number(&self) -> u64 {
+        self.id
+    }
 }
 
 /// What one cycle of a continuing service answers: the status to show on
@@ -769,8 +606,6 @@ pub enum CallError {
     },
     /// The guest ran and reported an error.
     Guest(String),
-    /// The guest did not accept a submitted form.
-    Form(FormError),
     /// The guest answered something Pane cannot read: a tree that is not
     /// JSON, or lacks a field Pane needs (see `tree`). The command's
     /// failure, as an error it answered with is, never a crash.
@@ -795,8 +630,8 @@ pub enum CallError {
     /// until the user retries it. A call pending when it was paused is
     /// stopped with this.
     Paused,
-    /// The custom view was closed, or its guest instance has stopped, so it
-    /// cannot handle events any more.
+    /// The view was closed, or its guest instance has stopped, so it cannot
+    /// handle events any more.
     ViewClosed,
     /// The caller no longer wanted the answer (root search's query changed,
     /// or root search was left), so the call was not started, or was stopped
@@ -834,7 +669,6 @@ impl fmt::Display for CallError {
                 api.0, api.1
             ),
             CallError::Guest(message) => write!(f, "The extension reported an error: {message}"),
-            CallError::Form(error) => f.write_str(&error.message),
             CallError::Unreadable(reason) => {
                 write!(
                     f,
@@ -987,39 +821,57 @@ enum Request {
         data: Option<PackageData>,
         reply: oneshot::Sender<Result<Vec<RootResult>, CallError>>,
     },
-    Search {
-        component: PathBuf,
-        command: String,
-        query: String,
-        data: Option<PackageData>,
-        stopped: SearchStopped,
-        reply: oneshot::Sender<Result<Vec<SearchResult>, CallError>>,
-    },
     Forget {
         components: Vec<PathBuf>,
     },
-    SubmitForm {
-        component: PathBuf,
-        item_id: String,
-        values: Vec<FieldValue>,
-        data: Option<PackageData>,
-        reply: oneshot::Sender<Result<String, CallError>>,
-    },
-    OpenView {
-        component: PathBuf,
-        item_id: String,
-        data: Option<PackageData>,
-        reply: oneshot::Sender<Result<(ViewId, Frame), CallError>>,
-    },
-    ViewEvent {
+    /// Notes the size a canvas of an open designed view was laid out at
+    /// (#242): the render context names it, and its change is an event.
+    NoteCanvasSize {
         view: ViewId,
-        event: ViewEvent,
-        reply: oneshot::Sender<Result<Frame, CallError>>,
+        key: String,
+        width: f32,
+        height: f32,
     },
-    CloseView {
+    OpenDesignedView {
+        component: PathBuf,
+        command: String,
+        launch: LaunchRecord,
+        data: Option<PackageData>,
+        reply: oneshot::Sender<Result<(ViewId, DesignedRendered), CallError>>,
+    },
+    DesignedViewEvent {
+        view: ViewId,
+        event: DesignedEvent,
+        reply: oneshot::Sender<Result<DesignedNext, CallError>>,
+    },
+    RefreshDesignedView {
+        view: ViewId,
+        /// Whether the view's own work asked for this drawing (its push,
+        /// #243) rather than the clock making the view's ask due: the
+        /// render's context says so, and the SDKs run an interval's work
+        /// only on the ask's drawing.
+        pushed: bool,
+        reply: oneshot::Sender<Result<DesignedRendered, CallError>>,
+    },
+    /// Keeps the component's instance running between Pane's calls (#243):
+    /// the work a designed view's answer started is driven to its end, so
+    /// the view can push a drawing of what landed. Asked of the thread by
+    /// itself, as a render of an open view answers.
+    Pump {
+        component: PathBuf,
+    },
+    CloseDesignedView {
         view: ViewId,
     },
-    ViewCount {
+    /// Names the selected item of a designed view's List or Grid (#240):
+    /// its key, or `None` when no item is selected. The view's render
+    /// context carries the key, so the view builds the detail pane's
+    /// content for the item it names.
+    SetViewSelection {
+        view: ViewId,
+        key: Option<String>,
+    },
+    DesignedViewCount {
         reply: oneshot::Sender<Result<usize, CallError>>,
     },
     Running {
@@ -1037,12 +889,12 @@ impl Request {
     /// The component this request's call runs in, when it is a call the
     /// user asked the package for — opening (or drawing again) a command,
     /// handling an event of its list, running an item, running a no-view
-    /// command the user launched, a command's search, a form submission or
-    /// opening a custom view. Not the background and ambient ones (a
-    /// scheduled run, a background launch, a service cycle, a root search's
-    /// ask), which a replacement of the package's code ends and its new code
-    /// restarts or re-asks, nor a view event, whose screen is what the
-    /// launcher checks.
+    /// command the user launched, a form submission, opening a custom view
+    /// or opening a designed view. Not the background
+    /// and ambient ones (a scheduled run, a background launch, a service
+    /// cycle, a root search's ask), which a replacement of the package's
+    /// code ends and its new code restarts or re-asks, nor a view's event
+    /// or refresh, whose screen is what the launcher checks.
     fn user_component(&self) -> Option<&Path> {
         match self {
             Request::Run {
@@ -1051,9 +903,7 @@ impl Request {
             Request::Render { component, .. }
             | Request::HandleEvent { component, .. }
             | Request::RunItem { component, .. }
-            | Request::Search { component, .. }
-            | Request::SubmitForm { component, .. }
-            | Request::OpenView { component, .. } => Some(component),
+            | Request::OpenDesignedView { component, .. } => Some(component),
             _ => None,
         }
     }
@@ -1063,8 +913,8 @@ impl Request {
 /// there until it has been served or dropped (see [`Watch::call`]): the
 /// thread's epoch ticker and watchdog wait while none is. Every request
 /// sent through the runtime ([`Shared::send`]) is counted, whatever it is:
-/// guest calls of every kind, a custom view's destructor, and the host
-/// work that waits on guests (`Runtime::running`, `view_count`). The
+/// guest calls of every kind, a view's destructor, and the host
+/// work that waits on guests (`Runtime::running`, `designed_view_count`). The
 /// thread's own nudge to drop stopped instances runs no guest code and is
 /// not.
 struct Sent {
@@ -1207,22 +1057,6 @@ impl Runtime {
         self.shared.network.set_limits(limits);
     }
 
-    /// Has every search the runtime starts from now on wait for the future
-    /// `timer` returns (given [`SEARCH_DEBOUNCE`]) instead of the clock, so
-    /// a test decides when the wait ends, and sees each search reach it,
-    /// however slow the machine is. For tests only; debug builds only.
-    #[cfg(any(test, debug_assertions))]
-    #[doc(hidden)]
-    pub fn set_search_timer(
-        &self,
-        timer: impl Fn(std::time::Duration) -> std::pin::Pin<Box<dyn Future<Output = ()> + Send>>
-        + Send
-        + Sync
-        + 'static,
-    ) {
-        *lock(&self.shared.search_timer) = Some(Arc::new(timer));
-    }
-
     /// The runtime's web requests: their limits and what each package
     /// reached, which Pane's downloads of extensions' web images share
     /// (#142).
@@ -1348,8 +1182,8 @@ impl Runtime {
     }
 
     /// Has the command in `component` handle the user's choice of
-    /// `callback`, a callback id its tree named (or a search result's id),
-    /// with `details`, a JSON object (`handle-event`). The caller asks for
+    /// `callback`, a callback id its tree named, with `details`, a JSON
+    /// object (`handle-event`). The caller asks for
     /// the tree again afterwards. The command has no extension data.
     pub async fn handle_event(
         &self,
@@ -1750,71 +1584,36 @@ impl Runtime {
         .await
     }
 
-    /// Searches for `query` with the command with manifest id `command` in
-    /// `component`, which searches as the user types; the command reads and
-    /// saves `data`. Starts its instance if it has none.
-    ///
-    /// The search is sent at once; the returned future waits for its
-    /// answer. Stopping or dropping the returned [`StopSearch`] stops it:
-    /// a search queued behind other calls is then never started, and one
-    /// waiting inside the guest (on a web request, say) is dropped with its
-    /// instance, as when a generation ends; either answers
-    /// [`CallError::Cancelled`], and so does a search that completes
-    /// once it was stopped, whose results are discarded. A stopped search is
-    /// not a failure of the extension.
-    pub(crate) fn search_with(
+    /// Opens the designed view of the command `command` in the command in
+    /// `component`, launched as `launch` says (`open-view`), and draws it
+    /// once. The view stays open, holding its state in the guest, until
+    /// [`Runtime::close_designed_view`] or until its instance stops.
+    /// The command has no extension data.
+    pub async fn open_designed_view(
         &self,
         component: &Path,
         command: &str,
-        query: &str,
-        data: Option<PackageData>,
-    ) -> (
-        StopSearch,
-        impl Future<Output = Result<Vec<SearchResult>, CallError>> + Send + 'static,
-    ) {
-        let (stop, watched) = stoppable();
-        let (reply, response) = oneshot::channel();
-        let answer = self.call(
-            Request::Search {
-                component: component.to_path_buf(),
-                command: command.to_owned(),
-                query: query.to_owned(),
-                data,
-                stopped: watched,
-                reply,
-            },
-            response,
-        );
-        (stop, answer)
-    }
-
-    /// Submits the form of `item_id` in the command in `component`. A
-    /// rejection by the guest is [`CallError::Form`]. The command has no
-    /// extension data.
-    pub async fn submit_form(
-        &self,
-        component: &Path,
-        item_id: &str,
-        values: Vec<FieldValue>,
-    ) -> Result<String, CallError> {
-        self.submit_form_with(component, item_id, values, None)
+        launch: &LaunchRecord,
+    ) -> Result<(ViewId, DesignedRendered), CallError> {
+        self.open_designed_view_with(component, command, launch, None)
             .await
     }
 
-    /// Like [`Runtime::submit_form`]; the command reads and saves `data`.
-    pub(crate) async fn submit_form_with(
+    /// Like [`Runtime::open_designed_view`]; the command reads and saves
+    /// `data`.
+    pub(crate) async fn open_designed_view_with(
         &self,
         component: &Path,
-        item_id: &str,
-        values: Vec<FieldValue>,
+        command: &str,
+        launch: &LaunchRecord,
         data: Option<PackageData>,
-    ) -> Result<String, CallError> {
+    ) -> Result<(ViewId, DesignedRendered), CallError> {
         let (reply, response) = oneshot::channel();
         self.call(
-            Request::SubmitForm {
+            Request::OpenDesignedView {
                 component: component.to_path_buf(),
-                item_id: item_id.to_owned(),
-                values,
+                command: command.to_owned(),
+                launch: launch.clone(),
                 data,
                 reply,
             },
@@ -1823,75 +1622,115 @@ impl Runtime {
         .await
     }
 
-    /// Opens the custom view of `item_id` in the command in `component` and
-    /// draws it. The view stays open, holding its state in the guest, until
-    /// [`Runtime::close_view`] or until its instance stops.
-    /// The command has no extension data.
-    pub async fn open_view(
-        &self,
-        component: &Path,
-        item_id: &str,
-    ) -> Result<(ViewId, Frame), CallError> {
-        self.open_view_with(component, item_id, None).await
-    }
-
-    /// Like [`Runtime::open_view`]; the command reads and saves `data`.
-    pub(crate) async fn open_view_with(
-        &self,
-        component: &Path,
-        item_id: &str,
-        data: Option<PackageData>,
-    ) -> Result<(ViewId, Frame), CallError> {
-        let (reply, response) = oneshot::channel();
-        self.call(
-            Request::OpenView {
-                component: component.to_path_buf(),
-                item_id: item_id.to_owned(),
-                data,
-                reply,
-            },
-            response,
-        )
-        .await
-    }
-
-    /// Has the open custom view `view` handle `event`, then draws it again.
+    /// Has the open designed view `view` handle `event`, then draws what
+    /// the event answered it does next ([`DesignedNext`]): the view again,
+    /// the view the answer pushed or replaced (now the top of the stack,
+    /// drawn for the first time), or nothing when the view popped itself.
     /// A view that has closed answers [`CallError::ViewClosed`].
     ///
     /// The event is sent when this is called, not when the returned future
     /// is first polled: events are handled one at a time, in the order of
     /// these calls.
-    pub fn view_event(
+    pub fn designed_view_event(
         &self,
         view: ViewId,
-        event: ViewEvent,
-    ) -> impl Future<Output = Result<Frame, CallError>> + Send + 'static {
+        event: DesignedEvent,
+    ) -> impl Future<Output = Result<DesignedNext, CallError>> + Send + 'static {
         let (reply, response) = oneshot::channel();
-        self.call(Request::ViewEvent { view, event, reply }, response)
+        self.call(Request::DesignedViewEvent { view, event, reply }, response)
     }
 
-    /// Closes the custom view `view`: the guest's view is dropped, after any
-    /// event already sent to it, and later events are refused.
-    pub fn close_view(&self, view: ViewId) {
+    /// Draws the open designed view `view` again, with no event: the
+    /// refresh its last render asked for by `refresh-after-ms`. The view
+    /// stays open; a view that has closed answers
+    /// [`CallError::ViewClosed`].
+    ///
+    /// The refresh is sent when this is called, not when the returned
+    /// future is first polled, and is numbered as an event's render is, so
+    /// a late refresh answer never replaces a newer tree (the launcher
+    /// drops it, as it drops a stale event's).
+    pub fn refresh_designed_view(
+        &self,
+        view: ViewId,
+    ) -> impl Future<Output = Result<DesignedRendered, CallError>> + Send + 'static {
+        self.ask_designed_view(view, false)
+    }
+
+    /// Draws the open designed view `view` again as its own push asked
+    /// (#243, `pane:extension/view`): the drawing a view asks for when its
+    /// work answered. Sent as a refresh is — numbered with the view's
+    /// events, so a late answer never replaces a newer tree — with the
+    /// render's context saying the view's work asked for it, so an
+    /// interval's work does not run in it as the ask's drawing does.
+    pub fn push_designed_view(
+        &self,
+        view: ViewId,
+    ) -> impl Future<Output = Result<DesignedRendered, CallError>> + Send + 'static {
+        self.ask_designed_view(view, true)
+    }
+
+    /// Sends the drawing of `view` a refresh or a push asked for.
+    fn ask_designed_view(
+        &self,
+        view: ViewId,
+        pushed: bool,
+    ) -> impl Future<Output = Result<DesignedRendered, CallError>> + Send + 'static {
+        let (reply, response) = oneshot::channel();
+        self.call(
+            Request::RefreshDesignedView {
+                view,
+                pushed,
+                reply,
+            },
+            response,
+        )
+    }
+
+    /// Names the selected item of the designed view `view`'s List or Grid
+    /// (#240): its key, or `None` when no item is selected. The key is
+    /// carried in the view's render context — the view builds the detail
+    /// pane's content for the item it names — and moves with the
+    /// selection, which the launcher owns.
+    pub fn set_view_selection(&self, view: ViewId, key: Option<String>) {
         // A stopped runtime holds no views.
-        let _ = self.send(Request::CloseView { view });
+        let _ = self.send(Request::SetViewSelection { view, key });
     }
 
-    /// How many custom views are open in guest instances, counting the
-    /// requests sent before this call. A diagnostic for tests and logs, not
-    /// part of how the launcher decides anything: it tracks its own open
-    /// view.
-    pub async fn view_count(&self) -> usize {
+    /// Closes the designed view `view`: the guest's view is dropped, after
+    /// any event already sent to it, and later events are refused.
+    pub fn close_designed_view(&self, view: ViewId) {
+        // A stopped runtime holds no views.
+        let _ = self.send(Request::CloseDesignedView { view });
+    }
+
+    /// How many designed views are open in guest instances, counting the
+    /// requests sent before this call. A diagnostic for tests and logs, as
+    /// [`Runtime::designed_view_count`] is.
+    pub async fn designed_view_count(&self) -> usize {
         let (reply, response) = oneshot::channel();
-        // A stopped runtime, or a thread Pane gave up on, holds no views.
-        self.call(Request::ViewCount { reply }, response)
+        self.call(Request::DesignedViewCount { reply }, response)
             .await
             .unwrap_or(0)
     }
 
+    /// Notes the size the canvas `key` of the designed view `view` was laid
+    /// out at (#242): every render context of the view names it, and its
+    /// change is an event the view's tree asked for by `onResize`. Sent
+    /// ahead of the render a resize asks for, so that render's context
+    /// already carries the new size. Noted for a view that is no longer
+    /// open does nothing.
+    pub fn note_canvas_size(&self, view: ViewId, key: &str, width: f32, height: f32) {
+        let _ = self.send(Request::NoteCanvasSize {
+            view,
+            key: key.to_owned(),
+            width,
+            height,
+        });
+    }
+
     /// The components that have a live guest instance, counting the
     /// requests sent before this call, in no particular order. A diagnostic
-    /// for tests and logs, like [`Runtime::view_count`]: listing or
+    /// for tests and logs, like [`Runtime::designed_view_count`]: listing or
     /// searching commands starts none; invoking a command starts its own.
     pub async fn running(&self) -> Vec<PathBuf> {
         self.try_running().await.unwrap_or_default()
@@ -1915,8 +1754,8 @@ impl Runtime {
     /// user is waiting on is interrupted mid-run. Background and ambient
     /// calls (a scheduled run, a service cycle, a root search's ask) are
     /// not counted: a replacement ends them and the new code restarts or
-    /// re-asks them. Nor is a custom view event, whose open screen is what
-    /// the launcher waits for instead. In no particular order.
+    /// re-asks them. Nor is a designed view's event, whose open screen is
+    /// what the launcher waits for instead. In no particular order.
     pub(crate) fn busy(&self) -> Vec<PathBuf> {
         lock(&self.shared.busy)
             .iter()
@@ -2041,6 +1880,26 @@ impl Runtime {
     /// subtitle is refused.
     pub(crate) fn set_host_functions(&self, host_functions: Arc<dyn HostFunctions>) {
         *lock(&self.shared.host_functions) = Some(host_functions);
+    }
+
+    /// Has `asks` hear every designed view that asks to be drawn again
+    /// (`pane:extension/view`, #243) from now on, also for asks made by
+    /// calls already queued and on a restarted runtime thread. Until then
+    /// an ask names nothing: the view is not drawn for it. The runtime
+    /// holds `asks` weakly — it keeps neither the launcher nor itself
+    /// running.
+    pub(crate) fn set_view_asks(&self, asks: Arc<dyn Fn(u64) + Send + Sync>) {
+        *lock(&self.shared.view_asks) = Some(asks);
+    }
+
+    /// Has `measures` measure text for the drawing of a designed view's
+    /// canvases (`pane:extension/view.measure-text`, #242) from now on,
+    /// also for calls already queued and on a restarted runtime thread:
+    /// the fonts the view is drawn with, which the window owns. Until then
+    /// a measurement answers no extent (0 x 0), which a guest drawing from
+    /// it sees as no text laid out.
+    pub(crate) fn set_text_measures(&self, measures: TextMeasures) {
+        *lock(&self.shared.text_measures) = Some(measures);
     }
 
     /// Tells `health` of each later failure of a call into an installed
@@ -2342,6 +2201,15 @@ pub(crate) struct GuestState {
     launches: SharedLaunches,
     /// Carries out the window and feedback host functions the guest calls.
     host_functions: SharedHostFunctions,
+    /// What a designed view asking to be drawn again does
+    /// (`pane:extension/view`, #243): the drawing it asks for is not the
+    /// instance's to run, so the ask is handed on here, however the
+    /// instance is running.
+    view_asks: SharedViewAsks,
+    /// What measures text for a canvas's drawing
+    /// (`pane:extension/view.measure-text`, #242): the window's fonts,
+    /// handed to the runtime by the launcher.
+    text_measures: SharedTextMeasures,
     /// What the call the guest runs now is for, as its host functions see
     /// it. Set through [`GuestState::set_call`].
     call: CallFor,
@@ -3086,6 +2954,97 @@ fn launch_record(launch: &LaunchRecord, command: Option<&str>) -> launching::Lau
     }
 }
 
+/// Why Pane asks a designed view for its tree, as its render's context
+/// names: the view's first drawing, the render an event's answer asks
+/// for, the refresh the view's own answer asked for by `refresh-after-ms`
+/// (#236), or the drawing the view's work asked for itself (#243). The
+/// SDKs run an interval's work only in the refresh's render; a push's
+/// drawing shows what landed, without ticking.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Why {
+    Open,
+    Event,
+    Refresh,
+    Push,
+}
+
+impl Why {
+    /// The word the context names it by.
+    fn as_str(self) -> &'static str {
+        match self {
+            Why::Open => "open",
+            Why::Event => "event",
+            Why::Refresh => "refresh",
+            Why::Push => "push",
+        }
+    }
+}
+
+/// The context of a designed view's `render` number `render`: JSON naming
+/// it, the id of the view it draws, why Pane asks, and the version of the
+/// UI component set Pane renders, so the extension can name each render's
+/// callbacks, ask for a drawing again through `pane:extension/view`
+/// (#243), run an interval's work only where it is due, and refuse trees
+/// of a component set it cannot target. It can grow without WIT changes.
+fn render_context(
+    view: ViewId,
+    render: u64,
+    why: Why,
+    selected: Option<&str>,
+    canvases: &HashMap<String, (f32, f32)>,
+) -> String {
+    // The selected item's key of the view's List or Grid (#240): the view
+    // builds the detail pane's content for the item it names; absent when
+    // no item is selected.
+    let selected = selected
+        .map(|selected| format!(",\"selected\":\"{}\"", escaped(selected)))
+        .unwrap_or_default();
+    // The sizes the view's canvases were laid out at, by their keys
+    // (#242) — a canvas that fills the space the layout gives it draws
+    // what its size asks.
+    let canvases = if canvases.is_empty() {
+        String::new()
+    } else {
+        let sizes = canvases
+            .iter()
+            .map(|(key, (width, height))| {
+                format!(
+                    "\"{}\":{{\"width\":{width},\"height\":{height}}}",
+                    escaped(key)
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(",");
+        format!(",\"canvases\":{{{sizes}}}")
+    };
+    format!(
+        "{{\"render\":{render},\"view\":{},\"why\":\"{}\"{selected},\"ui\":\"{}.{}\"{canvases}}}",
+        view.id,
+        why.as_str(),
+        designed::COMPONENT_SET.0,
+        designed::COMPONENT_SET.1
+    )
+}
+
+/// `text` as a JSON string's content, escaped.
+fn escaped(text: &str) -> String {
+    let mut escaped = String::with_capacity(text.len());
+    for character in text.chars() {
+        match character {
+            '"' => escaped.push_str("\\\""),
+            '\\' => escaped.push_str("\\\\"),
+            '\n' => escaped.push_str("\\n"),
+            '\r' => escaped.push_str("\\r"),
+            '\t' => escaped.push_str("\\t"),
+            other if (other as u32) < 0x20 => {
+                escaped.push_str(&format!("\\u{:04x}", other as u32));
+            }
+            other => escaped.push(other),
+        }
+    }
+    escaped
+}
+
 impl GuestState {
     fn applications(&self) -> Arc<dyn Applications> {
         self.applications.current()
@@ -3299,9 +3258,6 @@ struct Instance {
     indexed_results: Option<previous::WorldIndexedResults>,
     /// Its published operations export, if it has one, of either world.
     operations: Option<previous::WorldOperations>,
-    /// Its search export, if it searches as the user types, of either
-    /// world.
-    command_search: Option<previous::WorldCommandSearch>,
     /// Its continuing-service export, if it runs one, of either world.
     service: Option<previous::WorldService>,
     /// Its events export, if it registers timers or watchers, of either
@@ -3321,15 +3277,38 @@ struct Instance {
     _undo: Option<Registration>,
 }
 
-/// A custom view open in a guest instance.
+/// A designed view open in a guest instance.
 #[derive(Clone)]
-struct LiveView {
+struct LiveDesignedView {
+    /// The id Pane handed out for the view.
+    id: ViewId,
     /// The component whose instance holds the view.
     component: PathBuf,
-    /// The guest's `custom-view` resource.
+    /// The guest's `view` resource.
     resource: ResourceAny,
     /// The instance holding it ([`Instance::serial`]).
     serial: u64,
+    /// The sequence number of the last render asked of it: each `render`
+    /// call's context names it, so the view can name each render's
+    /// callbacks, and each event carries the number of the tree the user
+    /// saw.
+    rendered: u64,
+    /// The view's depth in its command's navigation stack: the root view
+    /// the command opened is 1, each view a push added one deeper. A push
+    /// that would go beyond [`MAX_NAVIGATION_DEPTH`] is refused.
+    depth: usize,
+    /// The key problems already reported for this view in development: a
+    /// tree that re-renders with the same problem reports it once, not
+    /// once per refresh.
+    reported: RefCell<HashSet<String>>,
+    /// The selected item's key of the view's List or Grid (#240), named in
+    /// its render context: the view builds the detail pane's content for
+    /// the item it names. Set by the launcher, which owns the selection.
+    selected: RefCell<Option<String>>,
+    /// The size each of the view's canvases was last laid out at, by its
+    /// key (#242): what every render context names for them. Noted as the
+    /// window lays the tree out; a change asks the view to draw again.
+    canvases: RefCell<HashMap<String, (f32, f32)>>,
 }
 
 /// The engine and the host interfaces guests link against, shared by the
@@ -3367,6 +3346,19 @@ struct Lane {
     /// While the instance is out for a call: its generation, and
     /// `forgotten` as it was when it was taken out.
     out: Option<(Option<Generation>, u64)>,
+    /// Whether a call is waiting for the turn: a park that holds it ends
+    /// (see [`Host::park_guest`]), so the call never waits behind the
+    /// guest's own work. One waiter at most can hold the turn, so a
+    /// boolean says it.
+    wanted: Arc<AtomicBool>,
+    /// Wakes a park holding the turn: the waiter it notes itself by
+    /// `wanted` first, then wakes it here (the park re-reads `wanted`, so
+    /// a wake it misses is caught by its next poll).
+    woken: Arc<tokio::sync::Notify>,
+    /// Whether a park of the component's instance is running or waiting
+    /// for its turn (see [`Host::park_guest`]): at most one at a time, so
+    /// the render whose answer it follows never starts a second.
+    parking: bool,
 }
 
 /// A call's turn on its instance's [`Lane`]; the next call queued takes it
@@ -3385,6 +3377,17 @@ impl Drop for Turn<'_> {
         {
             lane.holder = None;
         }
+    }
+}
+
+/// Notes, until dropped, that a call wants a lane's turn (see
+/// [`Host::turn`]): a park holding the lane ends, and the note goes when
+/// the call takes the turn — or stops waiting for it.
+struct Wanting(Arc<AtomicBool>);
+
+impl Drop for Wanting {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::SeqCst);
     }
 }
 
@@ -3412,7 +3415,7 @@ type Tasks<'a> = FuturesUnordered<Task<'a>>;
 type Task<'a> = Pin<Box<dyn Future<Output = ()> + 'a>>;
 
 /// Runtime-thread state: compiled components, their live instances and the
-/// custom views open in them, shared by the requests the thread serves at
+/// designed views open in them, shared by the requests the thread serves at
 /// once (see [`Host::serve`]). Only the thread uses it, one task at a time,
 /// and nothing borrowed from it is held across an await.
 struct Host {
@@ -3425,7 +3428,9 @@ struct Host {
     lanes: RefCell<HashMap<PathBuf, Lane>>,
     /// The lane each chain waits for, while it waits.
     waiting: RefCell<HashMap<u64, PathBuf>>,
-    views: RefCell<HashMap<ViewId, LiveView>>,
+    /// The designed views open in guest instances, keyed by the ids Pane
+    /// handed out for them.
+    designed_views: RefCell<HashMap<ViewId, LiveDesignedView>>,
     /// The next view id, shared with the threads that replace this one.
     next_view: Arc<AtomicU64>,
     /// The next chain's id.
@@ -3448,6 +3453,12 @@ struct Host {
     launches: SharedLaunches,
     /// Carries out the window and feedback host functions guests call.
     host_functions: SharedHostFunctions,
+    /// What a designed view asking to be drawn again does
+    /// (`pane:extension/view`, #243).
+    view_asks: SharedViewAsks,
+    /// What measures text for a canvas's drawing
+    /// (`pane:extension/view.measure-text`, #242).
+    text_measures: SharedTextMeasures,
     /// The helper processes guests started.
     helpers: Helpers,
     /// Told of each failure of a call into an installed package's code.
@@ -3468,10 +3479,6 @@ struct Host {
     network: Arc<http::Network>,
     /// The granted folders and their listings.
     files: FileAccess,
-    /// What a search waits on before it starts, if a test replaced the
-    /// clock. A release build has none.
-    #[cfg(any(test, debug_assertions))]
-    search_timer: Arc<Mutex<Option<SearchTimer>>>,
     /// Keeps clipboard history for guests' packages.
     clipboard: SharedClipboard,
     /// What the packages' guests register at run time, shared with the
@@ -3545,6 +3552,8 @@ impl Code {
         .expect("registering the typed folder listing in a fresh linker cannot conflict");
         launching::add_to_linker::<_, wasmtime::component::HasSelf<_>>(&mut linker, |state| state)
             .expect("registering launching commands in a fresh linker cannot conflict");
+        view_host::add_to_linker::<_, wasmtime::component::HasSelf<_>>(&mut linker, |state| state)
+            .expect("registering the view's push in a fresh linker cannot conflict");
         window_host::add_to_linker::<_, wasmtime::component::HasSelf<_>>(&mut linker, |state| {
             state
         })
@@ -3664,16 +3673,31 @@ impl Code {
             func("handle-event")?,
             &cx,
         )?;
-        check::<(String, Vec<command::FieldValue>), (Result<String, command::FormError>,)>(
-            "submit-form",
-            func("submit-form")?,
+        // The typed form of the interface's earlier shape: a component
+        // that still answers it is one built before the Form components of
+        // the designed tree replaced it (#241), refused naming the change
+        // instead of running a form Pane can no longer submit.
+        if interface.get_export(&self.engine, "submit-form").is_some() {
+            return Err(older(
+                "it still exports `submit-form`, the typed form of the command \
+                 interface that the designed tree's Form components replaced; \
+                 a form is now a tree whose fields are components"
+                    .into(),
+            ));
+        }
+        check::<(String, launching::LaunchRecord), (Result<ResourceAny, String>,)>(
+            "open-view",
+            func("open-view")?,
             &cx,
         )?;
-        check::<(String,), (Result<ResourceAny, String>,)>("open-view", func("open-view")?, &cx)?;
-        let render = "[method]custom-view.render";
-        check::<(ResourceAny,), (command::Frame,)>(render, func(render)?, &cx)?;
-        let handle_event = "[method]custom-view.handle-event";
-        check::<(ResourceAny, command::ViewEvent), (Result<(), String>,)>(
+        let render = "[method]view.render";
+        check::<(ResourceAny, String), (Result<command::Rendered, String>,)>(
+            render,
+            func(render)?,
+            &cx,
+        )?;
+        let handle_event = "[method]view.handle-event";
+        check::<(ResourceAny, command::UiEvent), (Result<command::Outcome, String>,)>(
             handle_event,
             func(handle_event)?,
             &cx,
@@ -3721,14 +3745,6 @@ impl Code {
                 CallError::Interface(format!(
                     "its manifest publishes operations it serves, but it does not export \
                      {OPERATIONS_INTERFACE} with the functions Pane calls: {error:#}"
-                ))
-            })?;
-        }
-        if exports.search {
-            search_bindings::CommandSearchProviderPre::new(pre.clone()).map_err(|error| {
-                CallError::Interface(format!(
-                    "its manifest says it searches as the user types, but it does not export \
-                     {COMMAND_SEARCH_INTERFACE} with the functions Pane calls: {error:#}"
                 ))
             })?;
         }
@@ -3781,7 +3797,7 @@ impl Host {
             instances: RefCell::default(),
             lanes: RefCell::default(),
             waiting: RefCell::default(),
-            views: RefCell::default(),
+            designed_views: RefCell::default(),
             next_view: shared.next_view.clone(),
             next_chain: Cell::new(0),
             next_serial: Cell::new(0),
@@ -3791,6 +3807,8 @@ impl Host {
             directory: shared.directory.clone(),
             launches: shared.launches.clone(),
             host_functions: shared.host_functions.clone(),
+            view_asks: shared.view_asks.clone(),
+            text_measures: shared.text_measures.clone(),
             helpers: shared.helpers.clone(),
             health: shared.health.clone(),
             logs: shared.logs.clone(),
@@ -3801,8 +3819,6 @@ impl Host {
             applications: shared.applications.clone(),
             network: shared.network.clone(),
             files: shared.files.clone(),
-            #[cfg(any(test, debug_assertions))]
-            search_timer: shared.search_timer.clone(),
             clipboard: shared.clipboard.clone(),
             registrations: shared.registrations.clone(),
             snapshots: shared.snapshots.clone(),
@@ -3966,65 +3982,123 @@ impl Host {
                     .await;
                 let _ = reply.send(result);
             }),
-
-            Request::Search {
-                component,
-                command,
-                query,
-                data,
-                stopped,
-                reply,
-            } => Box::pin(async move {
-                let result = self.search(&component, command, query, data, stopped).await;
-                let _ = reply.send(result);
-            }),
             Request::Forget { components } => {
                 self.forget(&components);
                 return;
             }
             Request::DropStopped | Request::Quit => return,
-            Request::SubmitForm {
+            Request::NoteCanvasSize {
+                view,
+                key,
+                width,
+                height,
+            } => {
+                // Noted at once, for the render the requests sent after this
+                // ask for: the context of a view's renders names its
+                // canvases' sizes.
+                if let Some(open) = self.designed_views.borrow_mut().get_mut(&view) {
+                    open.canvases.borrow_mut().insert(key, (width, height));
+                }
+                Box::pin(async {})
+            }
+            Request::OpenDesignedView {
                 component,
-                item_id,
-                values,
+                command,
+                launch,
                 data,
                 reply,
             } => Box::pin(async move {
-                let result = self.submit_form(&component, item_id, values, data).await;
-                let _ = reply.send(result);
+                let _ = reply.send(
+                    self.open_designed_view(&component, command, launch, data)
+                        .await,
+                );
             }),
-            Request::OpenView {
-                component,
-                item_id,
-                data,
-                reply,
-            } => Box::pin(async move {
-                let _ = reply.send(self.open_view(&component, item_id, data).await);
-            }),
-            Request::ViewEvent { view, event, reply } => {
+            Request::DesignedViewEvent { view, event, reply } => {
                 // The view as it is now: an event sent before the view was
                 // closed is still handled, before the view is dropped.
-                let open = self.views.borrow().get(&view).cloned();
+                let open = self.designed_views.borrow().get(&view).cloned();
                 let Some(open) = open else {
                     let _ = reply.send(Err(CallError::ViewClosed));
                     return;
                 };
                 Box::pin(async move {
-                    let _ = reply.send(self.view_event(open, event).await);
+                    let _ = reply.send(self.designed_view_event(open, event).await);
                 })
             }
-            Request::CloseView { view } => {
+            Request::RefreshDesignedView {
+                view,
+                pushed,
+                reply,
+            } => {
+                // The view as it is now: a refresh asked for before the view
+                // was closed is still drawn, before the view is dropped.
+                let open = self.designed_views.borrow().get(&view).cloned();
+                let Some(open) = open else {
+                    let _ = reply.send(Err(CallError::ViewClosed));
+                    return;
+                };
+                Box::pin(async move {
+                    let _ = reply.send(self.draw_designed_view(open, pushed).await);
+                })
+            }
+            Request::Pump { component } => {
+                // At most one park at a time: the render whose answer asked
+                // for this one has ended, and the next that answers asks
+                // again, so a second would drive the same work twice. A
+                // lane already parking (running, or waiting for its turn)
+                // keeps the park it has.
+                let already = self
+                    .lanes
+                    .borrow_mut()
+                    .entry(component.clone())
+                    .or_default()
+                    .parking;
+                if already {
+                    return;
+                }
+                self.lanes
+                    .borrow_mut()
+                    .get_mut(&component)
+                    .expect("the lane was just made")
+                    .parking = true;
+                let chain = self.chain();
+                Box::pin(async move {
+                    // The instance's turn, as a call's: the park holds it
+                    // while it runs, and a call that wants it ends the park
+                    // (see [`Host::turn`]). Waiting for it here, the park
+                    // task may follow the render whose answer asked for it
+                    // still holding the turn — this waits behind it, and
+                    // drives the work both started.
+                    if let Ok(_turn) = self.turn_for(&component, &chain).await {
+                        self.park_guest(&component, &chain).await;
+                    }
+                    // The park is over: the next render's answer may ask for
+                    // another (never panics while the thread unwinds).
+                    if let Ok(mut lanes) = self.lanes.try_borrow_mut()
+                        && let Some(lane) = lanes.get_mut(&component)
+                    {
+                        lane.parking = false;
+                    }
+                })
+            }
+            Request::SetViewSelection { view, key } => {
+                if let Some(open) = self.designed_views.borrow().get(&view) {
+                    *open.selected.borrow_mut() = key;
+                }
+                return;
+            }
+            Request::CloseDesignedView { view } => {
                 // Closed at once, for the requests sent after this; its
                 // destructor runs in its instance's turn.
-                let open = self.views.borrow_mut().remove(&view);
+                let open = self.designed_views.borrow_mut().remove(&view);
                 let Some(open) = open else {
                     return;
                 };
-                Box::pin(self.close_view(open))
+                Box::pin(self.close_designed_view(open))
             }
-            Request::ViewCount { reply } => Box::pin(async move {
+            Request::DesignedViewCount { reply } => Box::pin(async move {
                 self.settled().await;
-                let count = self.views.borrow().len();
+                let count = self.designed_views.borrow().len();
                 let _ = reply.send(Ok(count));
             }),
             Request::Running { reply } => Box::pin(async move {
@@ -4056,7 +4130,7 @@ impl Host {
     /// a turn `chain` holds: a call that would wait on itself is refused
     /// rather than waited for.
     async fn turn(&self, path: &Path, chain: u64) -> Option<Turn<'_>> {
-        let turn = self
+        let lane = self
             .lanes
             .borrow_mut()
             .entry(path.to_path_buf())
@@ -4069,7 +4143,23 @@ impl Host {
         let held = {
             self.waiting.borrow_mut().insert(chain, path.to_path_buf());
             let _waiting = Waiting { host: self, chain };
-            turn.lock_owned().await
+            // A call waiting for the turn ends a park that holds it (#243,
+            // see [`Lane::wanted`]): the park gives the turn back, so the
+            // call never waits behind the guest's own work. Noted before
+            // the wait, and read again by the park whenever it is woken, so
+            // neither can miss the other on this one thread; however the
+            // wait ends, the note goes.
+            let (wanted, woken) = {
+                let mut lanes = self.lanes.borrow_mut();
+                let lane = lanes.entry(path.to_path_buf()).or_default();
+                let wanted = lane.wanted.clone();
+                let woken = lane.woken.clone();
+                wanted.store(true, Ordering::SeqCst);
+                (wanted, woken)
+            };
+            woken.notify_waiters();
+            let _wanting = Wanting(wanted);
+            lane.lock_owned().await
         };
         if let Some(lane) = self.lanes.borrow_mut().get_mut(path) {
             lane.holder = Some(chain);
@@ -4139,9 +4229,6 @@ impl Host {
                 .insert(path.to_path_buf(), instance);
         } else {
             drop(instance);
-            self.views
-                .borrow_mut()
-                .retain(|_, view| view.component != path);
         }
         self.returned.notify_waiters();
     }
@@ -4152,7 +4239,7 @@ impl Host {
         if let Some(lane) = self.lanes.borrow_mut().get_mut(path) {
             lane.out = None;
         }
-        self.views
+        self.designed_views
             .borrow_mut()
             .retain(|_, view| view.component != path);
         self.returned.notify_waiters();
@@ -4359,56 +4446,41 @@ impl Host {
             .await
     }
 
-    async fn submit_form(
+    /// The serial of the idle instance of `path`, if it has one.
+    fn serial(&self, path: &Path) -> Option<u64> {
+        self.instances
+            .borrow()
+            .get(path)
+            .map(|instance| instance.serial)
+    }
+
+    /// Opens the designed view of the command `command` in `path`, launched
+    /// as `launch` says (`open-view`), and draws it once: the first render,
+    /// numbered 1. A view whose first drawing fails is closed again.
+    async fn open_designed_view(
         &self,
         path: &Path,
-        item_id: String,
-        values: Vec<FieldValue>,
+        command: String,
+        launch: LaunchRecord,
         data: Option<PackageData>,
-    ) -> Result<String, CallError> {
+    ) -> Result<(ViewId, DesignedRendered), CallError> {
         let chain = self.chain();
         let _turn = self.turn_for(path, &chain).await?;
         self.instance(path, data).await?;
-        let values = values
-            .into_iter()
-            .map(|FieldValue { id, value }| command::FieldValue { id, value })
-            .collect();
+        self.note_command(path, Some(&command));
+        let wit_launch = launch_record(&launch, Some(&command));
         let result = self
             .run_guest(path, &chain, async |instance| {
-                instance.store.data_mut().set_call(CallFor::in_window(None));
-                let command = instance.bindings.pane_extension_command();
+                instance
+                    .store
+                    .data_mut()
+                    .set_call(CallFor::launched(Some(command.clone()), &launch));
+                let exported = instance.bindings.pane_extension_command();
                 instance
                     .store
                     .run_concurrent(async |store| {
-                        command.call_submit_form(store, item_id, values).await
+                        exported.call_open_view(store, command, wit_launch).await
                     })
-                    .await
-            })
-            .await?;
-        self.settle(path, result, |error: command::FormError| {
-            CallError::Form(FormError {
-                field: error.field,
-                message: error.message,
-            })
-        })
-    }
-
-    async fn open_view(
-        &self,
-        path: &Path,
-        item_id: String,
-        data: Option<PackageData>,
-    ) -> Result<(ViewId, Frame), CallError> {
-        let chain = self.chain();
-        let _turn = self.turn_for(path, &chain).await?;
-        self.instance(path, data).await?;
-        let result = self
-            .run_guest(path, &chain, async |instance| {
-                instance.store.data_mut().set_call(CallFor::in_window(None));
-                let command = instance.bindings.pane_extension_command();
-                instance
-                    .store
-                    .run_concurrent(async |store| command.call_open_view(store, item_id).await)
                     .await
             })
             .await?;
@@ -4419,85 +4491,330 @@ impl Host {
             thread: self.number,
             id: self.next_view.fetch_add(1, Ordering::Relaxed),
         };
-        let open = LiveView {
+        let open = LiveDesignedView {
+            id: view,
             component: path.to_path_buf(),
             resource,
             serial,
+            rendered: 1,
+            depth: 1,
+            reported: RefCell::default(),
+            selected: RefCell::default(),
+            canvases: RefCell::default(),
         };
-        self.views.borrow_mut().insert(view, open.clone());
-        match self.render(&open, &chain).await {
-            Ok(frame) => Ok((view, frame)),
+        self.designed_views.borrow_mut().insert(view, open);
+        match self.render_designed(view, 1, &chain, Why::Open).await {
+            Ok(rendered) => Ok((view, rendered)),
             Err(error) => {
-                let closed = self.views.borrow_mut().remove(&view);
+                let closed = self.designed_views.borrow_mut().remove(&view);
                 if let Some(open) = closed {
-                    self.drop_view(&open).await;
+                    self.drop_designed_view(&open).await;
                 }
                 Err(error)
             }
         }
     }
 
-    async fn view_event(&self, open: LiveView, event: ViewEvent) -> Result<Frame, CallError> {
+    /// Has the open designed view `open` handle `event`, then draws what
+    /// the event answered it does next: the view again when the answer
+    /// carried nothing, the view the answer pushed above it or replaced it
+    /// with (now the top of the stack, drawn for the first time), or
+    /// nothing when the view popped itself — dropped, its result answered
+    /// to the launcher. An answer to an event older than another already
+    /// shown is dropped by the caller (the launcher).
+    async fn designed_view_event(
+        &self,
+        open: LiveDesignedView,
+        event: DesignedEvent,
+    ) -> Result<DesignedNext, CallError> {
         let chain = self.chain();
+        let view = open.id;
         let path = open.component.clone();
         let _turn = self.turn_for(&path, &chain).await?;
-        self.live(&open)?;
-        let event = command::ViewEvent::from(event);
+        self.live_designed(&open)?;
+        let wit = command::UiEvent {
+            render: event.render,
+            key: event.key,
+            callback: event.callback,
+            payload: event.payload,
+        };
         let resource = open.resource;
         let result = self
             .run_guest(&path, &chain, async |instance| {
                 instance.store.data_mut().set_call(CallFor::in_window(None));
                 // The handle is bound before the view it lends is taken:
                 // the view borrows it, as the current world's does the
-                // bindings' own.
+                // bindings' own. Only a component built for the current
+                // API holds a designed view (its `open-view` is the one
+                // that opened this), so the previous arm cannot be
+                // reached.
                 let command = instance.bindings.pane_extension_command();
-                let custom_view = command.custom_view();
+                let view = match command {
+                    previous::WorldCommand::Current(command) => command.view(),
+                    previous::WorldCommand::Previous(_) => {
+                        unreachable!("no designed view of the previous world")
+                    }
+                };
                 instance
                     .store
                     .run_concurrent(async |store| {
-                        custom_view.call_handle_event(store, resource, event).await
+                        view.call_handle_event(store, resource, wit).await
                     })
                     .await
             })
             .await?;
-        self.settle(&path, result, CallError::Guest)?;
-        self.render(&open, &chain).await
-    }
-
-    /// Asks the guest to draw the open view `open`, in its instance's turn.
-    async fn render(&self, open: &LiveView, chain: &Chain) -> Result<Frame, CallError> {
-        self.live(open)?;
-        let (path, resource) = (&open.component, open.resource);
-        let result = self
-            .run_guest(path, chain, async |instance| {
-                let command = instance.bindings.pane_extension_command();
-                let custom_view = command.custom_view();
-                instance
-                    .store
-                    .run_concurrent(async |store| custom_view.call_render(store, resource).await)
+        let outcome = self.settle(&path, result, CallError::Guest)?;
+        // What the event does next: at most one field of the outcome is
+        // acted on, a pop first, then a replace, then a push (the SDKs
+        // answer exactly one).
+        if let Some(result) = outcome.pop {
+            // The view is dropped, never used again, and the launcher
+            // drops the stack entry with it, answering the view below.
+            self.designed_views.borrow_mut().remove(&view);
+            self.drop_designed_view(&open).await;
+            return Ok(DesignedNext::Popped { result });
+        }
+        let (resource, depth, replacing) = match (outcome.replace, outcome.push) {
+            // A replace swaps this view, at its own depth; a push adds one
+            // above it, one deeper.
+            (Some(resource), _) => (resource, open.depth, true),
+            (None, Some(resource)) => (resource, open.depth + 1, false),
+            (None, None) => {
+                // The next render's number: taken now, so each render of a
+                // view is numbered however many were asked before it.
+                let render = {
+                    let mut views = self.designed_views.borrow_mut();
+                    match views.get_mut(&view) {
+                        Some(open) => {
+                            open.rendered += 1;
+                            open.rendered
+                        }
+                        None => return Err(CallError::ViewClosed),
+                    }
+                };
+                return self
+                    .render_designed(view, render, &chain, Why::Event)
                     .await
-            })
-            .await?;
-        let frame = self.settle(path, result.map(|frame| frame.map(Ok)), |never| never)?;
-        let frame = Frame::from(frame);
-        match frame.over_limits() {
-            // The view stays open; its next drawing may be within them.
-            Some(problem) => Err(CallError::Guest(problem)),
-            None => Ok(frame),
+                    .map(DesignedNext::Tree);
+            }
+        };
+        // The depth bound: a push that would go beyond it is refused as
+        // the extension's error, the view keeping its last good tree; the
+        // view it would have opened is closed again.
+        if depth > MAX_NAVIGATION_DEPTH {
+            let serial = self.serial(&path).ok_or(CallError::ViewClosed)?;
+            self.drop_designed(&path, serial, resource).await;
+            return Err(CallError::Guest(format!(
+                "the navigation stack already holds {MAX_NAVIGATION_DEPTH} views; \
+                 a further push is refused"
+            )));
+        }
+        let opened = ViewId {
+            thread: self.number,
+            id: self.next_view.fetch_add(1, Ordering::Relaxed),
+        };
+        let serial = self.serial(&path).ok_or(CallError::ViewClosed)?;
+        self.designed_views.borrow_mut().insert(
+            opened,
+            LiveDesignedView {
+                id: opened,
+                component: path.clone(),
+                resource,
+                serial,
+                rendered: 1,
+                depth,
+                reported: RefCell::default(),
+                selected: RefCell::default(),
+                canvases: RefCell::default(),
+            },
+        );
+        match self.render_designed(opened, 1, &chain, Why::Open).await {
+            Ok(rendered) => {
+                if replacing {
+                    // The replaced view's resource goes, now that the view
+                    // replacing it drew; the launcher's stack entry with it.
+                    let replaced = self.designed_views.borrow_mut().remove(&view);
+                    if let Some(replaced) = replaced {
+                        self.drop_designed_view(&replaced).await;
+                    }
+                    Ok(DesignedNext::Replaced(opened, rendered))
+                } else {
+                    Ok(DesignedNext::Pushed(opened, rendered))
+                }
+            }
+            // The view the answer opened could not be drawn: it is closed
+            // again, as a view whose first drawing fails at open is, and
+            // the answering view keeps its last good tree (the error is
+            // shown; a replacing view was not replaced).
+            Err(error) => {
+                let closed = self.designed_views.borrow_mut().remove(&opened);
+                if let Some(closed) = closed {
+                    self.drop_designed_view(&closed).await;
+                }
+                Err(error)
+            }
         }
     }
 
-    /// The serial of the idle instance of `path`, if it has one.
-    fn serial(&self, path: &Path) -> Option<u64> {
-        self.instances
+    /// Draws the open designed view `open` again, with no event: the
+    /// refresh its last render asked for by `refresh-after-ms`, or the
+    /// drawing its own push asked for (#243, `pushed`). The next render
+    /// after the last one asked, numbered as an event's render is, so a
+    /// late answer never replaces a newer tree.
+    async fn draw_designed_view(
+        &self,
+        open: LiveDesignedView,
+        pushed: bool,
+    ) -> Result<DesignedRendered, CallError> {
+        let chain = self.chain();
+        let view = open.id;
+        let path = open.component.clone();
+        let _turn = self.turn_for(&path, &chain).await?;
+        self.live_designed(&open)?;
+        let render = {
+            let mut views = self.designed_views.borrow_mut();
+            match views.get_mut(&view) {
+                Some(open) => {
+                    open.rendered += 1;
+                    open.rendered
+                }
+                None => return Err(CallError::ViewClosed),
+            }
+        };
+        let why = if pushed { Why::Push } else { Why::Refresh };
+        self.render_designed(view, render, &chain, why).await
+    }
+
+    /// Asks the guest to draw the open designed view `view`, in its
+    /// instance's turn, as render number `render`, asked for as `why`
+    /// names.
+    async fn render_designed(
+        &self,
+        view: ViewId,
+        render: u64,
+        chain: &Chain,
+        why: Why,
+    ) -> Result<DesignedRendered, CallError> {
+        // The view as it is now; the map entry holds its resource.
+        let open = self.designed_views.borrow().get(&view).cloned();
+        let Some(open) = open else {
+            return Err(CallError::ViewClosed);
+        };
+        self.live_designed(&open)?;
+        let path = &open.component;
+        let resource = open.resource;
+        let selected = self
+            .designed_views
+            .borrow()
+            .get(&view)
+            .and_then(|open| open.selected.borrow().clone());
+        let canvases = open.canvases.borrow().clone();
+        let context = render_context(view, render, why, selected.as_deref(), &canvases);
+        let result = self
+            .run_guest(path, chain, async |instance| {
+                // The handle is bound before the view it lends is taken:
+                // the view borrows it, as the current world's does the
+                // bindings' own. Only a component built for the current
+                // API holds a designed view (its `open-view` is the one
+                // that opened this), so the previous arm cannot be
+                // reached.
+                let command = instance.bindings.pane_extension_command();
+                let view = match command {
+                    previous::WorldCommand::Current(command) => command.view(),
+                    previous::WorldCommand::Previous(_) => {
+                        unreachable!("no designed view of the previous world")
+                    }
+                };
+                instance
+                    .store
+                    .run_concurrent(async |store| view.call_render(store, resource, context).await)
+                    .await
+            })
+            .await?;
+        let rendered = self.settle(path, result, CallError::Guest)?;
+        let tree = DesignedTree::read(&rendered.tree).map_err(|error| match error {
+            designed::ReadError::Guest(message) => CallError::Guest(message),
+            designed::ReadError::Unreadable(message) => CallError::Unreadable(message),
+        })?;
+        // A tree of a developed package reports its key problems — keys
+        // shared by siblings, stateful nodes without one — once each, in
+        // the extension's log; Pane matches both by position.
+        self.report_key_problems(path, view, &tree);
+        // The guest may still have work this render started — the load a
+        // loading state waits for: keep its instance running between
+        // Pane's calls, so the work can land and ask for another drawing
+        // (#243). A view whose render failed is left as it was; the work
+        // it started waits for the next call, as every guest's did before.
+        if self.designed_views.borrow().contains_key(&view) {
+            self.nudge_park(path);
+        }
+        // `refresh-after-ms` asks for the next drawing: the launcher's
+        // refresh thread (see `launcher/refresh`) schedules it through it.
+        Ok(DesignedRendered {
+            tree,
+            render,
+            refresh_after_ms: rendered.refresh_after_ms,
+        })
+    }
+
+    /// Reports the key problems of the view `view`'s tree that were not
+    /// already reported for it, in the developed package's log — one line
+    /// each, in development only.
+    fn report_key_problems(&self, path: &Path, view: ViewId, tree: &DesignedTree) {
+        let data = self
+            .instances
             .borrow()
             .get(path)
-            .map(|instance| instance.serial)
+            .map(|instance| instance.store.data().data.clone());
+        let Some(Some(data)) = data else {
+            return;
+        };
+        if !self.logs.developed(data.owner()) {
+            return;
+        }
+        let problems = designed::key_problems(tree);
+        if problems.is_empty() {
+            return;
+        }
+        let reported = self
+            .designed_views
+            .borrow()
+            .get(&view)
+            .map(|open| open.reported.clone());
+        let Some(reported) = reported else {
+            return;
+        };
+        for problem in problems {
+            if reported.borrow_mut().insert(problem.clone()) {
+                self.logs.pane(
+                    data.owner(),
+                    data.generation().number(),
+                    LogLevel::Warn,
+                    &problem,
+                );
+            }
+        }
+    }
+
+    /// Asks the runtime thread to keep `path`'s instance running between
+    /// Pane's calls (see [`Host::park_guest`], #243): the request joins the
+    /// others the thread serves at once — a render's answer does not wait
+    /// for the park — and a lane already parking keeps the park it has.
+    fn nudge_park(&self, path: &Path) {
+        let Some(requests) = self.nudge.upgrade() else {
+            return;
+        };
+        let _ = requests.send(Sent {
+            request: Request::Pump {
+                component: path.to_path_buf(),
+            },
+            in_flight: Some(self.watch.call()),
+        });
     }
 
     /// Whether the instance holding `open` still runs, and its code may:
     /// otherwise the view went with it.
-    fn live(&self, open: &LiveView) -> Result<(), CallError> {
+    fn live_designed(&self, open: &LiveDesignedView) -> Result<(), CallError> {
         let live = self
             .instances
             .borrow()
@@ -4508,23 +4825,34 @@ impl Host {
         live.then_some(()).ok_or(CallError::ViewClosed)
     }
 
-    /// Drops the guest's view `open`, running its destructor, in its
-    /// instance's turn.
-    async fn close_view(&self, open: LiveView) {
+    /// Drops the guest's designed view `open`, running its destructor, in
+    /// its instance's turn.
+    async fn close_designed_view(&self, open: LiveDesignedView) {
         let chain = self.chain();
         let Some(_turn) = self.turn(&open.component, chain.id).await else {
             return;
         };
-        self.drop_view(&open).await;
+        self.drop_designed_view(&open).await;
     }
 
-    /// Runs the destructor of the view `open`; the caller holds its
+    /// Runs the destructor of the designed view `open`; the caller holds its
     /// instance's turn.
-    async fn drop_view(&self, open: &LiveView) {
-        if self.live(open).is_err() {
+    async fn drop_designed_view(&self, open: &LiveDesignedView) {
+        self.drop_designed(&open.component, open.serial, open.resource)
+            .await;
+    }
+
+    /// Drops the guest's designed view resource `resource`, of the instance
+    /// of `path` in `serial`, running its destructor; the caller holds the
+    /// instance's turn. A view whose instance has gone (a crash, a reload,
+    /// a generation's end) is already dropped with it.
+    async fn drop_designed(&self, path: &Path, serial: u64, resource: ResourceAny) {
+        let live = self.instances.borrow().get(path).is_some_and(|instance| {
+            instance.serial == serial && instance.store.data().stopped().is_none()
+        });
+        if !live {
             return;
         }
-        let path = &open.component;
         let Some((mut instance, taken)) = self.take_out(path) else {
             return;
         };
@@ -4532,7 +4860,7 @@ impl Host {
         let dropped = deadlines::metered(
             self.watch.clone(),
             self.limits.clone(),
-            open.resource.resource_drop_async(&mut instance.store),
+            resource.resource_drop_async(&mut instance.store),
         )
         .await;
         let health = match dropped {
@@ -4553,12 +4881,14 @@ impl Host {
         }
     }
 
-    /// Drops the idle instance of `path` and forgets the views open in it,
-    /// which went with it.
+    /// Whether the instance holding `open` still runs, and its code may:
+    /// otherwise the view went with it.
+    /// Drops the idle instance of `path` and forgets the designed views open
+    /// in it, which went with it.
     fn drop_instance(&self, path: &Path) {
         let dropped = self.instances.borrow_mut().remove(path);
         drop(dropped);
-        self.views
+        self.designed_views
             .borrow_mut()
             .retain(|_, view| view.component != path);
     }
@@ -4662,6 +4992,57 @@ impl Host {
 
     /// Runs one cycle of the continuing service of the command with
     /// manifest id `command` in `component` (see `Runtime::run_cycle_with`).
+    /// Asks the command in `component`, which supplies root results ahead
+    /// of the query, for all of them; the command reads and saves `data`.
+    async fn indexed_results(
+        &self,
+        path: &Path,
+        data: Option<PackageData>,
+    ) -> Result<Vec<IndexedResult>, CallError> {
+        let chain = self.chain();
+        let _turn = self.turn_for(path, &chain).await?;
+        self.instance(path, data).await?;
+        let indexed = self
+            .instances
+            .borrow()
+            .get(path)
+            .and_then(|instance| instance.indexed_results.as_ref())
+            .map(|provider| provider.pane_extension_indexed_results().clone())
+            .ok_or_else(|| {
+                CallError::Interface(format!("it does not export {INDEXED_RESULTS_INTERFACE}"))
+            })?;
+        let result = self
+            .run_guest(path, &chain, async |instance| {
+                instance
+                    .store
+                    .run_concurrent(async |store| indexed.call_results(store).await)
+                    .await
+            })
+            .await?;
+        let results = self.settle(path, result, CallError::Guest)?;
+        Ok(results
+            .into_iter()
+            .map(|result| IndexedResult {
+                listing: ResultListing {
+                    id: result.id,
+                    title: result.title,
+                    subtitle: result.subtitle,
+                },
+                alternate_titles: result.alternate_titles,
+                keywords: result.keywords,
+                action: match result.action {
+                    indexed_results::IndexedAction::OpenApplication(id) => {
+                        IndexedAction::OpenApplication(id)
+                    }
+                    indexed_results::IndexedAction::Open(target) => IndexedAction::Open {
+                        target: target.target,
+                        application: target.application,
+                    },
+                },
+            })
+            .collect())
+    }
+
     async fn run_cycle(
         &self,
         path: &Path,
@@ -4989,137 +5370,6 @@ impl Host {
         outcome.map(|_: ()| ())
     }
 
-    async fn search(
-        &self,
-        path: &Path,
-        id: String,
-        query: String,
-        data: Option<PackageData>,
-        mut stopped: SearchStopped,
-    ) -> Result<Vec<SearchResult>, CallError> {
-        // Replaced while it waited in the queue, or soon after: it is not
-        // started.
-        #[cfg(any(test, debug_assertions))]
-        let wait = match lock(&self.search_timer).clone() {
-            Some(timer) => timer(SEARCH_DEBOUNCE),
-            None => Box::pin(tokio::time::sleep(SEARCH_DEBOUNCE)),
-        };
-        #[cfg(not(any(test, debug_assertions)))]
-        let wait = tokio::time::sleep(SEARCH_DEBOUNCE);
-        if stopped.stopped() || stopped.stopped_before(wait).await {
-            return Err(CallError::Cancelled);
-        }
-        let chain = self.chain();
-        let waited = unless(self.turn_for(path, &chain), async {
-            let _ = (&mut stopped.0).await;
-        })
-        .await;
-        let _turn = match waited {
-            Ok(turn) => turn?,
-            // Replaced while it waited for its turn.
-            Err(()) => return Err(CallError::Cancelled),
-        };
-        self.instance(path, data).await?;
-        self.note_command(path, Some(&id));
-        let search = self
-            .instances
-            .borrow()
-            .get(path)
-            .and_then(|instance| instance.command_search.as_ref())
-            .map(|provider| provider.pane_extension_command_search().clone())
-            .ok_or_else(|| {
-                CallError::Interface(format!("it does not export {COMMAND_SEARCH_INTERFACE}"))
-            })?;
-        let result = self
-            .run_guest_until(
-                path,
-                &chain,
-                async |instance| {
-                    instance
-                        .store
-                        .data_mut()
-                        .set_call(CallFor::in_window(Some(id.clone())));
-                    instance
-                        .store
-                        .run_concurrent(async |store| search.call_search(store, id, query).await)
-                        .await
-                },
-                // Resolves when the search is stopped: its sender sent or
-                // was dropped.
-                async move {
-                    let _ = stopped.0.await;
-                },
-            )
-            .await?;
-        let results = self.settle(path, result, CallError::Guest)?;
-        Ok(results
-            .into_iter()
-            .map(|result| SearchResult {
-                listing: ResultListing {
-                    id: result.id,
-                    title: result.title,
-                    subtitle: result.subtitle,
-                },
-                file: result.file,
-            })
-            .collect())
-    }
-
-    async fn indexed_results(
-        &self,
-        path: &Path,
-        data: Option<PackageData>,
-    ) -> Result<Vec<IndexedResult>, CallError> {
-        let chain = self.chain();
-        let _turn = self.turn_for(path, &chain).await?;
-        self.instance(path, data).await?;
-        let exported = self
-            .instances
-            .borrow()
-            .get(path)
-            .is_some_and(|instance| instance.indexed_results.is_some());
-        if !exported {
-            return Err(CallError::Interface(format!(
-                "it does not export {INDEXED_RESULTS_INTERFACE}"
-            )));
-        }
-        let result = self
-            .run_guest(path, &chain, async |instance| {
-                let provider = instance
-                    .indexed_results
-                    .as_ref()
-                    .expect("checked above")
-                    .pane_extension_indexed_results();
-                instance
-                    .store
-                    .run_concurrent(async |store| provider.call_results(store).await)
-                    .await
-            })
-            .await?;
-        let results = self.settle(path, result, CallError::Guest)?;
-        Ok(results
-            .into_iter()
-            .map(|result| IndexedResult {
-                listing: ResultListing {
-                    id: result.id,
-                    title: result.title,
-                    subtitle: result.subtitle,
-                },
-                alternate_titles: result.alternate_titles,
-                keywords: result.keywords,
-                action: match result.action {
-                    indexed_results::IndexedAction::OpenApplication(id) => {
-                        IndexedAction::OpenApplication(id)
-                    }
-                    indexed_results::IndexedAction::Open(open) => IndexedAction::Open {
-                        target: open.target,
-                        application: open.application,
-                    },
-                },
-            })
-            .collect())
-    }
-
     /// Runs `call` on the live instance of `path`, in `chain`, serving the
     /// operation calls its guest makes while it runs. Without a live
     /// instance (a view's instance has stopped) it is
@@ -5303,9 +5553,196 @@ impl Host {
         }
     }
 
-    /// Serves one operation call a guest in `chain` made, answering it: a
-    /// call to one target, or a fan-out call to every provider of a
-    /// capability, each with its own answer.
+    /// Keeps the guest's instance of `path` running between Pane's calls
+    /// (#243, the real-push slice of #121): after a designed view's render
+    /// answers, the guest may still have work its answer started — the load
+    /// a loading state waits for, a call it has not awaited — and this frame
+    /// drives the store's event loop, which advances that work, until the
+    /// guest has none left or a call wants the instance ([`Lane::wanted`]).
+    /// So the instance runs between Pane's calls: work that lands there can
+    /// ask Pane, through `pane:extension/view`, to draw the view again. The
+    /// caller holds the instance's turn ([`Host::turn_for`]).
+    ///
+    /// The guest's own computing is bounded as any call's is: metered
+    /// against the compute limit, yielding at every epoch tick, and a
+    /// guest that computes for too long is stopped as unresponsive — its
+    /// instance dropped, its package reported, as a call's is. A trap
+    /// driving its own work is a crash, reported the same way. The
+    /// operation calls the guest makes while it runs are served as a
+    /// call's are, in the same chain, and its generation's end, or Pane
+    /// giving up on this thread, stops the park as it stops a call. A
+    /// call that wants the instance ends the park and the instance is
+    /// lent on whole: the park owns no answer, and nothing of the guest
+    /// is mid-flight inside the frame it leaves behind (its tasks park in
+    /// the store, and the next call's event loop carries on driving
+    /// them), so it is put back rather than dropped, as a cancelled call's
+    /// instance is not.
+    async fn park_guest(&self, path: &Path, chain: &Chain) {
+        /// What happened next while the guest ran between Pane's calls.
+        enum Next {
+            /// The park ended: the guest went idle, or a call wants the
+            /// instance — or it trapped driving its own work.
+            Parked(wasmtime::Result<()>),
+            Stopped(End),
+            /// It computed for too long, as this says.
+            Unresponsive(String),
+            /// Pane gave up on this thread while it was stuck.
+            GivenUp,
+            Called(OperationCall),
+        }
+
+        /// Why the park ended without the guest going idle by itself: the
+        /// guest stopped (its generation ended), computed for too long, or
+        /// Pane gave up on the thread. A trap is not one of these — it
+        /// answers the park as an ordinary result, and is a crash of the
+        /// guest's package.
+        enum Halt {
+            Stopped(End),
+            Unresponsive(String),
+            GivenUp,
+        }
+
+        let Some((mut instance, taken)) = self.take_out(path) else {
+            return;
+        };
+        let own = instance.store.data().generation().cloned();
+        let mut inner = chain.clone();
+        inner.components.push(path.to_path_buf());
+        inner.owners.extend(own.clone());
+        let mut ends = std::pin::pin!(first_end(&inner.owners));
+        // The guest's operation calls, served by this frame only.
+        let mut calls = instance
+            .calls
+            .take()
+            .unwrap_or_else(|| operations::channel().1);
+        instance.store.data_mut().serving = true;
+        // No command and no window: the park runs no call of the user's.
+        instance.store.data_mut().set_call(CallFor::default());
+        let (wanted, woken) = {
+            let mut lanes = self.lanes.borrow_mut();
+            let lane = lanes.entry(path.to_path_buf()).or_default();
+            (lane.wanted.clone(), lane.woken.clone())
+        };
+        let faults = self.faults.clone();
+        let watch = self.watch.clone();
+        let limits = self.limits.clone();
+        let result = {
+            let park = async |instance: &mut Instance| {
+                instance
+                    .store
+                    .run_concurrent(async |accessor| {
+                        // The park itself: the store's event loop runs while
+                        // this pends — it is polled first on every wake —
+                        // advancing whatever the guest left pending. It ends
+                        // when the guest has no task of its own left, or a
+                        // call wants the instance: `wanted` is re-read on
+                        // every wake, so a call noting itself and this going
+                        // to sleep cannot miss each other on this thread.
+                        std::future::poll_fn(|cx| {
+                            if wanted.load(Ordering::SeqCst) {
+                                return Poll::Ready(());
+                            }
+                            let mut woken = std::pin::pin!(woken.notified());
+                            if woken.as_mut().poll(cx).is_ready() {
+                                return Poll::Ready(());
+                            }
+                            accessor.poll_no_interesting_tasks(cx)
+                        })
+                        .await
+                    })
+                    .await
+            };
+            let mut running = std::pin::pin!(deadlines::metered(
+                watch.clone(),
+                limits,
+                park(&mut instance),
+            ));
+            let mut waiting = std::pin::pin!(faults.waiting());
+            loop {
+                let next = std::future::poll_fn(|cx| {
+                    faults.check(waiting.as_mut(), cx);
+                    // Given up on while it was stuck: the guest runs no more.
+                    if watch.given_up() {
+                        return Poll::Ready(Next::GivenUp);
+                    }
+                    if let Poll::Ready(end) = ends.as_mut().poll(cx) {
+                        return Poll::Ready(Next::Stopped(end));
+                    }
+                    {
+                        let _running = watch.doing(Doing::Running);
+                        match running.as_mut().poll(cx) {
+                            Poll::Ready(Ok(parked)) => return Poll::Ready(Next::Parked(parked)),
+                            Poll::Ready(Err(why)) => return Poll::Ready(Next::Unresponsive(why)),
+                            Poll::Pending => {}
+                        }
+                    }
+                    match calls.poll_recv(cx) {
+                        Poll::Ready(Some(call)) => Poll::Ready(Next::Called(call)),
+                        // The instance holds the sender: never closed here.
+                        _ => Poll::Pending,
+                    }
+                })
+                .await;
+                match next {
+                    Next::Parked(parked) => break Ok(parked),
+                    Next::Stopped(end) => break Err(Halt::Stopped(end)),
+                    Next::Unresponsive(why) => break Err(Halt::Unresponsive(why)),
+                    Next::GivenUp => break Err(Halt::GivenUp),
+                    Next::Called(operation_call) => {
+                        Box::pin(self.serve_operation(operation_call, &inner)).await;
+                    }
+                }
+            }
+        };
+        instance.store.data_mut().serving = false;
+        // What the park's guest left running ends with it, as a call's
+        // does: a helper or a program no call waits on.
+        let state = instance.store.data_mut();
+        state.helpers.stop_owned_by(state.owner);
+        state.programs.clear();
+        // A call the guest sent but did not wait for has no frame to serve
+        // it.
+        while let Ok(stranded) = calls.try_recv() {
+            let answer = stranded.unanswered(operations::outside_a_call());
+            let _ = stranded.reply.send(answer);
+        }
+        instance.calls = Some(calls);
+        match result {
+            // The guest went idle, or a call wants the instance: it is put
+            // back whole, for that call or the next.
+            Ok(Ok(())) => self.bring_back(path, taken, instance),
+            outcome => {
+                let data = instance.store.data().data.clone();
+                let out_of_memory = instance.store.data().out_of_memory;
+                // The instance is dropped with its store: the work it left
+                // pending, its host tasks and streams with it.
+                drop(instance);
+                self.gone(path);
+                match outcome {
+                    Ok(Err(trap)) => {
+                        let error = crashed(&trap, out_of_memory);
+                        crate::diagnostic!(
+                            "pane: {} stopped running on its own: {error}",
+                            path.display()
+                        );
+                        self.report(path, data.as_ref(), Health::Crashed(error));
+                    }
+                    Err(Halt::Stopped(end)) => {
+                        let _ = ended(end);
+                    }
+                    Err(Halt::Unresponsive(why)) => {
+                        let error = CallError::Unresponsive(why);
+                        crate::diagnostic!("pane: {} stopped responding: {error}", path.display());
+                        self.report(path, data.as_ref(), Health::Unresponsive(error));
+                    }
+                    Err(Halt::GivenUp) => {}
+                    Ok(Ok(())) => unreachable!("matched above"),
+                }
+            }
+        }
+    }
+
+    /// Serves one operation call a guest in `chain` made, answering it.
     async fn serve_operation(&self, mut call: OperationCall, chain: &Chain) {
         // Its caller gave up on it before it started: it is not started.
         if call.reply.is_closed() {
@@ -5732,6 +6169,8 @@ impl Host {
                 directory: self.directory.clone(),
                 launches: self.launches.clone(),
                 host_functions: self.host_functions.clone(),
+                view_asks: self.view_asks.clone(),
+                text_measures: self.text_measures.clone(),
                 call: CallFor::default(),
                 log_command,
                 owner: self.helpers.new_owner(),
@@ -5841,19 +6280,6 @@ impl Host {
                     .map(previous::WorldOperations::Previous)
             }
         };
-        // Only a command that searches as the user types exports it.
-        let command_search = match which {
-            previous::Which::Current => {
-                search_bindings::CommandSearchProvider::new(&mut store, &instance)
-                    .ok()
-                    .map(previous::WorldCommandSearch::Current)
-            }
-            previous::Which::Previous => {
-                previous::search_bindings::CommandSearchProvider::new(&mut store, &instance)
-                    .ok()
-                    .map(previous::WorldCommandSearch::Previous)
-            }
-        };
         // Only a command that runs a continuing service exports it.
         let service = match which {
             previous::Which::Current => {
@@ -5926,7 +6352,6 @@ impl Host {
                 root_results,
                 indexed_results,
                 operations,
-                command_search,
                 service,
                 events,
                 lifecycle,
@@ -6003,55 +6428,6 @@ impl From<crate::registrations::GuestEvent> for events::Event {
                     },
                 })
             }
-        }
-    }
-}
-
-impl From<command::Frame> for Frame {
-    fn from(frame: command::Frame) -> Frame {
-        let shapes = frame
-            .shapes
-            .into_iter()
-            .map(|shape| match shape {
-                command::Shape::Rect(rect) => Shape::Rect {
-                    x: rect.x,
-                    y: rect.y,
-                    width: rect.width,
-                    height: rect.height,
-                    fill: Rgb(rect.fill),
-                },
-                command::Shape::Text(text) => Shape::Text {
-                    x: text.x,
-                    y: text.y,
-                    content: text.content,
-                    color: Rgb(text.color),
-                },
-            })
-            .collect();
-        Frame {
-            width: frame.width,
-            height: frame.height,
-            shapes,
-            value: frame.value,
-        }
-    }
-}
-
-impl From<ViewEvent> for command::ViewEvent {
-    fn from(event: ViewEvent) -> command::ViewEvent {
-        let point = |Point { x, y }| command::Point { x, y };
-        match event {
-            ViewEvent::Key(key) => command::ViewEvent::Key(match key {
-                Key::Left => command::Key::Left,
-                Key::Right => command::Key::Right,
-                Key::Up => command::Key::Up,
-                Key::Down => command::Key::Down,
-                Key::Home => command::Key::Home,
-                Key::End => command::Key::End,
-            }),
-            ViewEvent::PointerDown(at) => command::ViewEvent::PointerDown(point(at)),
-            ViewEvent::PointerMove(at) => command::ViewEvent::PointerMove(point(at)),
-            ViewEvent::PointerUp(at) => command::ViewEvent::PointerUp(point(at)),
         }
     }
 }
@@ -6158,7 +6534,7 @@ mod tests {
 
     /// Stopping a call releases what its instance holds: a stream open to
     /// the host with the future of its write pending, the clock the call
-    /// awaits and a custom view open in the same instance.
+    /// awaits and a designed view open in the same instance.
     #[test]
     fn stopping_a_call_releases_the_stream_future_and_view_its_instance_holds() {
         use std::time::{Duration, Instant};
@@ -6169,8 +6545,13 @@ mod tests {
         let owned = packages.owned_by(&identity);
         let component = guest("faulty.wasm");
         let runtime = Runtime::start().unwrap();
-        let (view, _) =
-            block_on(runtime.open_view_with(&component, "view", Some(owned.clone()))).unwrap();
+        let (view, _) = block_on(runtime.open_designed_view_with(
+            &component,
+            "counter",
+            &LaunchRecord::default(),
+            Some(owned.clone()),
+        ))
+        .unwrap();
         let holding = {
             let (runtime, component) = (runtime.clone(), component.clone());
             std::thread::spawn(move || {
@@ -6195,20 +6576,21 @@ mod tests {
         assert!(started.elapsed() < Duration::from_secs(6));
         assert!(!saved().contains("finished"));
         assert_eq!(block_on(runtime.running()), Vec::<PathBuf>::new());
-        assert_eq!(block_on(runtime.view_count()), 0);
+        assert_eq!(block_on(runtime.designed_view_count()), 0);
         assert_eq!(
-            block_on(runtime.view_event(view, ViewEvent::Key(Key::Up))),
+            block_on(runtime.designed_view_event(view, designed_key_event())),
             Err(CallError::ViewClosed)
         );
     }
 
-    /// A custom view the window still shows from a crashed runtime thread
+    /// A designed view the window still shows from a crashed runtime thread
     /// names no view of the thread that replaced it: ids are never reused.
     #[test]
     fn a_restarted_runtime_never_reuses_a_view_id_of_the_crashed_one() {
         let component = guest("sample_rust.wasm");
         let runtime = Runtime::start().unwrap();
-        let (old, _) = block_on(runtime.open_view(&component, "color")).unwrap();
+        let (old, _) =
+            block_on(runtime.open_designed_view(&component, "color", &default_launch())).unwrap();
 
         runtime.inject(Fault::Crash);
         let started = std::time::Instant::now();
@@ -6218,14 +6600,15 @@ mod tests {
         }
 
         assert!(matches!(runtime.status(), RuntimeStatus::Restarted { .. }));
-        let (new, _) = block_on(runtime.open_view(&component, "color")).unwrap();
+        let (new, _) =
+            block_on(runtime.open_designed_view(&component, "color", &default_launch())).unwrap();
         assert_ne!(old, new);
         assert_eq!(
-            block_on(runtime.view_event(old, ViewEvent::Key(Key::Up))),
+            block_on(runtime.designed_view_event(old, designed_key_event())),
             Err(CallError::ViewClosed)
         );
-        assert!(block_on(runtime.view_event(new, ViewEvent::Key(Key::Up))).is_ok());
-        assert_eq!(block_on(runtime.view_count()), 1);
+        assert!(block_on(runtime.designed_view_event(new, designed_key_event())).is_ok());
+        assert_eq!(block_on(runtime.designed_view_count()), 1);
     }
 
     /// A settings sample instance of a package in `data`, and its data.
@@ -6327,7 +6710,8 @@ mod tests {
         let (runtime, reported) = watched_runtime();
         // Another command is active meanwhile, and stays so.
         let other = guest("sample_rust.wasm");
-        let (view, _) = block_on(runtime.open_view(&other, "color")).unwrap();
+        let (view, _) =
+            block_on(runtime.open_designed_view(&other, "color", &default_launch())).unwrap();
 
         let busy =
             block_on(runtime.run_item_with(&component, "busy", Some(packages.owned_by(&identity))));
@@ -6347,7 +6731,7 @@ mod tests {
         assert_eq!(block_on(runtime.running()), vec![other.clone()]);
         // The other command's view is still open, and the package runs
         // again from a fresh instance.
-        assert!(block_on(runtime.view_event(view, ViewEvent::Key(Key::Up))).is_ok());
+        assert!(block_on(runtime.designed_view_event(view, designed_key_event())).is_ok());
         assert!(
             block_on(runtime.render_with(&component, Some(packages.owned_by(&identity)))).is_ok()
         );
@@ -6508,14 +6892,14 @@ mod tests {
     fn running_and_view_count_answer_when_the_thread_is_given_up_on() {
         let (runtime, _) = watched_runtime();
         let other = guest("sample_rust.wasm");
-        block_on(runtime.open_view(&other, "color")).unwrap();
+        block_on(runtime.open_designed_view(&other, "color", &default_launch())).unwrap();
 
         runtime.inject(Fault::Hang);
         let (running, views) = {
             let (a, b) = (runtime.clone(), runtime.clone());
             (
                 std::thread::spawn(move || block_on(a.try_running())),
-                std::thread::spawn(move || block_on(b.view_count())),
+                std::thread::spawn(move || block_on(b.designed_view_count())),
             )
         };
 
@@ -6594,13 +6978,35 @@ mod tests {
         let current = packages.owned_by(&identity);
         let component = guest("sample_rust.wasm");
         let runtime = Runtime::start().unwrap();
-        let (view, _) =
-            block_on(runtime.open_view_with(&component, "color", Some(current))).unwrap();
+        let (view, _) = block_on(runtime.open_designed_view_with(
+            &component,
+            "color",
+            &default_launch(),
+            Some(current),
+        ))
+        .unwrap();
 
         let stale = runtime.render_with(&component, Some(old));
 
         assert_eq!(block_on(stale), Err(CallError::Disabled));
-        assert_eq!(block_on(runtime.view_count()), 1);
-        assert!(block_on(runtime.view_event(view, ViewEvent::Key(Key::Right))).is_ok());
+        assert_eq!(block_on(runtime.designed_view_count()), 1);
+        assert!(block_on(runtime.designed_view_event(view, designed_key_event())).is_ok());
+    }
+
+    /// The launch record every designed view of these tests opens with:
+    /// none of them reads it.
+    fn default_launch() -> LaunchRecord {
+        LaunchRecord::default()
+    }
+
+    /// A key event for an open designed view: the canvas's key handler,
+    /// whatever callback id the view's tree named for it.
+    fn designed_key_event() -> DesignedEvent {
+        DesignedEvent {
+            render: 1,
+            key: "canvas".into(),
+            callback: 999,
+            payload: r#"{"key":"up"}"#.into(),
+        }
     }
 }

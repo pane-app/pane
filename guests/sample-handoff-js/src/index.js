@@ -12,6 +12,8 @@
 // the Rust and TypeScript handoff samples.
 // @ts-check
 import { showToast } from "@pane-app/extension/feedback";
+import { Button, Column, Push, TextInput, pop, useState } from "@pane-app/extension/view";
+import { jsxs } from "@pane-app/extension/jsx-runtime";
 import { save, load } from "@pane-app/extension/state";
 
 /**
@@ -35,22 +37,6 @@ function state() {
   }
   return kept;
 }
-
-/**
- * The draft's form: one text field.
- * @type {import("@pane-app/extension").Form}
- */
-const DRAFT_FORM = {
-  title: "Edit the draft",
-  fields: [
-    {
-      id: "draft",
-      label: "Draft",
-      kind: { tag: "text", val: { placeholder: "What a replacement must keep" } },
-    },
-  ],
-  submitLabel: "Save",
-};
 
 /**
  * `text` in quotes, or "nothing" for empty.
@@ -110,20 +96,39 @@ export const command = {
           id: "draft",
           title: `Edit the draft (${draft.split(/\s+/).filter(Boolean).length} words)`,
           subtitle: `The draft is ${quoted(draft)}`,
-          form: DRAFT_FORM,
+          onClick: Push(jsxs(DraftView, { children: [] })),
         },
       ],
     };
   },
-
-  // The draft form's answer: the draft becomes the text typed, and the
-  // screen says so.
-  async submitForm(itemId, values) {
-    if (itemId !== "draft") {
-      throw { message: `unknown form: ${itemId}` };
-    }
-    const text = values.find((field) => field.id === "draft")?.value ?? "";
-    state().draft = text;
-    return `Saved the draft ${quoted(text)}`;
-  },
 };
+
+/**
+ * The draft's form as a designed view (#241): a text field and a Save
+ * button. Saving pops the view, which re-renders the list with the draft
+ * it kept.
+ */
+function DraftView() {
+  const [text, setText] = useState(state().draft);
+  return jsxs(Column, {
+    navigationTitle: "Edit the draft",
+    gap: "m",
+    children: [
+      jsxs(TextInput, {
+        key: "draft",
+        label: "Draft",
+        placeholder: "What a replacement must keep",
+        value: text,
+        onInput: (/** @type {string} */ value) => setText(value),
+        children: [text],
+      }),
+      jsxs(Button, {
+        onClick: () => {
+          state().draft = text;
+          pop(`Saved the draft ${quoted(text)}`);
+        },
+        children: ["Save"],
+      }),
+    ],
+  });
+}

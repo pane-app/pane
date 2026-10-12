@@ -185,6 +185,10 @@ pub(crate) struct Choice {
     /// Why this choice cannot be used here, if it cannot: the row lists
     /// it, cannot be committed, and reads it as its description.
     pub(crate) unavailable_reason: Option<SharedString>,
+    /// The section the choice belongs to, drawn as a group's header above
+    /// the choices of one section (#241); `None` for an unsectioned
+    /// choice, drawn as the choices before the first section are.
+    pub(crate) section: Option<SharedString>,
 }
 
 /// What the consumer supplies the control live, every render: the
@@ -211,6 +215,11 @@ pub(crate) struct Model {
 /// only closes and hands the choice over.
 pub(crate) type Commit = Rc<dyn Fn(&str, &mut Window, &mut App)>;
 
+/// The consumer's query path for a select whose search the extension
+/// handles (#241): the query the user typed into the popup, reported as
+/// it changes, so the consumer's answer can replace the choices.
+pub(crate) type Query = Rc<dyn Fn(&str, &mut Window, &mut App)>;
+
 /// The searchable select control. One entity, embedded by its consumer
 /// as a child (see the module docs); construct with [`Select::new`],
 /// and let the consumer's render simply include it.
@@ -229,6 +238,13 @@ pub(crate) struct Select {
     model: Rc<dyn Fn(&App) -> Model>,
     /// The consumer's commit path (see [`Commit`]).
     on_commit: Commit,
+    /// The consumer's query path, for a select whose search the extension
+    /// handles (see [`Query`]).
+    on_query: Option<Query>,
+    /// Whether the popup filters its choices as the user types: `true`
+    /// for one whose search the extension handles, whose popup shows the
+    /// choices the extension answered with.
+    unfiltered: bool,
     /// Whether the popup is open.
     open: bool,
     /// The popup's search field.
@@ -294,22 +310,28 @@ impl Select {
         // continues traversal), and while it is closed the field is not
         // in the tree at all.
         query.focus_handle(cx).tab_stop(false);
-        let _query_changes = cx.subscribe(&query, |this, _, _: &TextChanged, cx| {
-            // The draft's reset when the popup opens is not a navigation:
-            // the open's own start (the committed choice, else the first
-            // that can be used) stands, and only the user's next keystroke
-            // moves the highlight.
-            if this.opened {
-                this.opened = false;
-                return;
-            }
-            // A new query is a new navigation, as every search of
-            // Pane's treats it: the first enabled match is highlighted.
-            let model = (this.model.clone())(cx);
-            let query = this.query.read(cx).as_str().to_owned();
-            this.active = first_enabled(&model, &query);
-            cx.notify();
-        });
+        let _query_changes =
+            cx.subscribe_in(&query, window, |this, _, _: &TextChanged, window, cx| {
+                // The draft's reset when the popup opens is not a navigation:
+                // the open's own start (the committed choice, else the first
+                // that can be used) stands, and only the user's next keystroke
+                // moves the highlight.
+                if this.opened {
+                    this.opened = false;
+                    return;
+                }
+                // A new query is a new navigation, as every search of
+                // Pane's treats it: the first enabled match is highlighted.
+                let model = (this.model.clone())(cx);
+                let query = this.query.read(cx).as_str().to_owned();
+                this.active = first_enabled(&model, &query);
+                // A select whose search the extension handles tells it the
+                // query as the user types it (#241).
+                if let Some(on_query) = this.on_query.clone() {
+                    on_query(&query, window, cx);
+                }
+                cx.notify();
+            });
         let _deactivation = cx.observe_window_activation(window, |this, window, cx| {
             if !window.is_window_active() && this.open {
                 this.close(window, cx);
@@ -321,6 +343,8 @@ impl Select {
             debug: debug.into(),
             model,
             on_commit,
+            on_query: None,
+            unfiltered: false,
             open: false,
             query,
             _query_changes,
@@ -347,6 +371,21 @@ impl Select {
     /// jumps to the control and focuses it.
     pub(crate) fn trigger_focus(&self) -> FocusHandle {
         self.trigger.clone()
+    }
+
+    /// Tells the consumer the popup's query as the user types it, for a
+    /// select whose search the extension handles (#241, see [`Query`]).
+    pub(crate) fn on_query(mut self, on_query: Query) -> Self {
+        self.on_query = Some(on_query);
+        self
+    }
+
+    /// Makes the popup show every choice the consumer's model holds, not
+    /// the ones matching the query, for a select whose search the
+    /// extension handles (#241).
+    pub(crate) fn unfiltered(mut self) -> Self {
+        self.unfiltered = true;
+        self
     }
 
     /// Test support: the popup's presentation as the last frame drew it
@@ -387,6 +426,12 @@ impl Select {
     /// The choices matching the query as it stands, as indices into the
     /// model's list, in the model's order.
     fn filtered(&self, model: &Model, query: &str) -> Vec<usize> {
+        // A select whose search the extension handles filters nothing
+        // here: its popup shows the choices the extension answered with,
+        // and the query reaches the extension itself (#241).
+        if self.unfiltered {
+            return (0..model.choices.len()).collect();
+        }
         model
             .choices
             .iter()
@@ -650,8 +695,11 @@ impl Select {
     ) {
         self.active = Some(model.choices[index].id.clone());
         // The row's place among the list's children: the filtered
-        // choices are the list's rows, in order.
+        // choices are the list's rows, in order, with a section's label
+        // before the first choice of a section that is not the one
+        // before it.
         let row = filtered.iter().position(|&i| i == index).unwrap_or(0);
+        let row = row + section_breaks(model, filtered, index);
         self.scroll.scroll_to_item(row);
         cx.notify();
     }
@@ -792,10 +840,21 @@ impl Select {
                     .into_any_element(),
             ]
         } else {
-            filtered
-                .iter()
-                .map(|&index| self.choice_row(model, index, active, cx))
-                .collect()
+            // A section's choices are drawn together under its label, as
+            // the launcher's own lists group theirs (#241).
+            let mut rows = Vec::with_capacity(filtered.len());
+            let mut section = None;
+            for &index in filtered {
+                let choice_section = model.choices[index].section.clone();
+                if choice_section != section {
+                    if let Some(label) = choice_section.clone() {
+                        rows.push(section_label(label, theme));
+                    }
+                    section = choice_section;
+                }
+                rows.push(self.choice_row(model, index, active, cx));
+            }
+            rows
         };
         let list = div()
             .id("list")
@@ -1076,6 +1135,43 @@ impl Render for Select {
                     .when_some(popup, |anchor, popup| anchor.child(popup)),
             )
     }
+}
+
+/// A section's label above the choices of one section, as the launcher's
+/// own lists group theirs (#241).
+fn section_label(label: SharedString, theme: &Theme) -> AnyElement {
+    let drawn = label.clone();
+    div()
+        .id(label.clone())
+        .debug_selector(move || format!("{label}-section"))
+        .px(theme.geometry.actions.empty_padding_x)
+        .pt(theme.geometry.actions.list_padding)
+        .pb(theme.geometry.actions.empty_padding_y)
+        .text_size(theme.typography.settings_text_size)
+        .font_weight(theme.typography.medium)
+        .text_color(theme.text_muted)
+        .child(drawn)
+        .into_any_element()
+}
+
+/// How many section labels stand before the choice at `index` among
+/// `filtered` — the rows the list draws before that choice's own.
+fn section_breaks(model: &Model, filtered: &[usize], index: usize) -> usize {
+    let mut breaks = 0;
+    let mut section: Option<SharedString> = None;
+    for &at in filtered {
+        let choice_section = model.choices[at].section.clone();
+        if choice_section != section {
+            if choice_section.is_some() {
+                breaks += 1;
+            }
+            section = choice_section;
+        }
+        if at == index {
+            return breaks;
+        }
+    }
+    breaks
 }
 
 /// The first choice that matches `query` and can be used, as its id.

@@ -403,7 +403,17 @@ fn an_unreadable_cache_is_explained_and_nothing_is_deleted(fixture: &Fixture) {
 fn run_in_copy(launcher: &Launcher, folder: &Path, item: &str) -> Status {
     launcher.back();
     launcher.back();
-    let source = format!("local folder {}", folder.display());
+    // The row's subtitle names the package's source as its identity
+    // spells it — resolved, which on macOS is the temp folder's
+    // `/private/var` path, not the `/var` one it was installed from.
+    let source = format!(
+        "local folder {}",
+        PackageIdentity::local(folder)
+            .unwrap()
+            .local_folder()
+            .unwrap()
+            .display()
+    );
     let greeting = launcher
         .view()
         .rows

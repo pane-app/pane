@@ -27,7 +27,7 @@
 use pane_extension::alloc::{format, string::String, vec::Vec};
 use pane_extension::commands::{self, CommandRef, launch_type_name, source_name};
 use pane_extension::feedback::{Toast, show_toast};
-use pane_extension::{Command, Item, LaunchRecord, LaunchType, List, NoCustomView, settings};
+use pane_extension::{Command, Item, LaunchRecord, LaunchType, List, settings};
 
 /// The settings key holding the last launch record "Report launch" ran
 /// with.
@@ -125,7 +125,7 @@ fn launch(text: Option<&str>) -> Result<String, String> {
 }
 
 impl Command for NoView {
-    type CustomView = NoCustomView;
+    type DesignedView = pane_extension::view::NoDesignedView;
 
     /// "Show launch": its launch record, one line per part.
     async fn render() -> Result<List, String> {

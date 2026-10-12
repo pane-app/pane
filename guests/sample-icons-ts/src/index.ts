@@ -13,7 +13,7 @@
 // icon" has two more actions with icons in the Actions panel, "Copy Name"
 // and "Open Image", and every row's action and each of these tells the
 // user "Chose <title>" in a toast.
-import type { Accessory, Action, Command, CustomView, Icon, Item, List } from "@pane-app/extension";
+import type { Accessory, Action, Command, DesignedView, Icon, Item, List } from "@pane-app/extension";
 import { showToast } from "@pane-app/extension/feedback";
 import { avatar, favicon, fileIcon, progressRing } from "@pane-app/extension/icons";
 import { get } from "pane:extension/settings@0.2.0";
@@ -145,11 +145,7 @@ export const command: Command = {
     };
   },
 
-  async submitForm(itemId: string): Promise<string> {
-    throw new Error(`The icons sample has no forms: ${itemId}`);
-  },
-
-  async openView(itemId: string): Promise<CustomView> {
-    throw new Error(`The icons sample has no custom views: ${itemId}`);
+  async openView(itemId: string): Promise<DesignedView> {
+    throw new Error(`The icons sample opens no designed view: ${itemId}`);
   },
 };

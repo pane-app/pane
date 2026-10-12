@@ -764,32 +764,32 @@ impl Capture {
     /// progress.
     pub fn reconcile(&self) {
         let wanted = self.system.unavailable().is_none() && self.capturing();
-        let stopping = {
-            let mut watching = self.lock();
-            if wanted {
-                if watching.current.is_none() {
-                    let fence = Arc::new(Fence(Mutex::new(true)));
-                    let sink = Arc::new(CaptureSink {
-                        data: self.data.clone(),
-                        fence: fence.clone(),
-                    });
-                    match self.system.watch(sink) {
-                        Ok(watch) => {
-                            watching.current = Some((watch, fence));
-                            watching.problem = None;
-                        }
-                        Err(problem) => watching.problem = Some(problem),
+        let mut watching = self.lock();
+        if wanted {
+            if watching.current.is_none() {
+                let fence = Arc::new(Fence(Mutex::new(true)));
+                let sink = Arc::new(CaptureSink {
+                    data: self.data.clone(),
+                    fence: fence.clone(),
+                });
+                match self.system.watch(sink) {
+                    Ok(watch) => {
+                        watching.current = Some((watch, fence));
+                        watching.problem = None;
                     }
+                    Err(problem) => watching.problem = Some(problem),
                 }
-                None
-            } else {
-                watching.problem = None;
-                watching.current.take()
             }
-        };
-        if let Some((watch, fence)) = stopping {
-            fence.close();
-            drop(watch);
+        } else {
+            watching.problem = None;
+            if let Some((watch, fence)) = watching.current.take() {
+                fence.close();
+                // The watch is dropped while the lock is still held, so a
+                // start that follows at once — a change that stopped and
+                // restarted the watch in one breath — finds the system's
+                // watch released, never two at once.
+                drop(watch);
+            }
         }
     }
 

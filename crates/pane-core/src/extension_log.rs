@@ -260,6 +260,18 @@ impl ExtensionLogs {
         });
     }
 
+    /// Whether the package with identity key `owner` is developed: its
+    /// lines are kept in a file of the development session and reported to
+    /// whoever follows it — the gate of the reports Pane makes only in
+    /// development (a designed view's key problems, a stale event
+    /// dropped).
+    pub fn developed(&self, owner: &str) -> bool {
+        self.lock()
+            .packages
+            .get(owner)
+            .is_some_and(|log| log.development.is_some())
+    }
+
     /// The package with identity key `owner` is developed from now on: its
     /// lines are also appended to the log file at `file`, which is started
     /// afresh (an earlier session's goes), and more of them are kept.

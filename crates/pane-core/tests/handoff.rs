@@ -275,9 +275,8 @@ fn save_draft(launcher: &Launcher, sample: &Sample, text: &str) {
     open(launcher, sample.command);
     select_starting(launcher, "Edit the draft");
     block_on(launcher.activate_selected());
-    assert!(matches!(launcher.view().screen, Screen::Form(_)));
-    launcher.set_field_value("draft", text);
-    block_on(launcher.submit_form());
+    assert!(matches!(launcher.view().screen, Screen::DesignedView(_)));
+    block_on(launcher.submit_pane_form(vec![("draft".to_owned(), text.to_owned())]));
 }
 
 /// Waits until `what` holds, asserting it did within [`PROMPTLY`].
@@ -655,7 +654,7 @@ fn the_open_screen_of_a_package_that_does_not_opt_in_reopens() {
         .map(|row| row.id.clone())
         .unwrap_or_default();
     block_on(launcher.activate_selected());
-    assert!(matches!(launcher.view().screen, Screen::CustomView(_)));
+    assert!(matches!(launcher.view().screen, Screen::DesignedView(_)));
 
     block_on(launcher.reload(&identity));
     assert_eq!(

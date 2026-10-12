@@ -18,7 +18,9 @@
 //! The commands come from
 //! packages of the no-view sample, so invoking one keeps root search on
 //! screen; the applications from a fake [`Applications`], through the
-//! real applications guest.
+//! applications sample's component as the root provider the Applications
+//! default's own package was before its sources left the repository
+//! (#285), its results titled "Launch <name>".
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -193,6 +195,37 @@ impl Pane {
             "{} is missing; run `cargo xtask guests`",
             folder.display()
         );
+        folder
+    }
+
+    /// The applications sample's component as a root provider, as the
+    /// Applications default's own package was: no row of its own, its
+    /// indexed results titled "Launch <name>" for the applications the
+    /// host lists. That extension's own package left the repository with
+    /// its sources (#285); the sample's component answers the same way.
+    fn applications_package(&self) -> PathBuf {
+        let folder = self.sources.path().join("applications");
+        fs::create_dir_all(&folder).unwrap();
+        let manifest = r#"{
+            "manifestVersion": 1,
+            "title": "Applications",
+            "version": "0.1.0",
+            "apiVersion": "0.1",
+            "commands": [{
+                "id": "launch",
+                "title": "Applications",
+                "component": "component.wasm",
+                "mode": "provider",
+                "indexedResults": true
+            }]
+        }"#;
+        fs::write(folder.join("pane.json"), manifest).unwrap();
+        fs::copy(
+            self.built("sample-applications-js")
+                .join("sample_applications_js.wasm"),
+            folder.join("component.wasm"),
+        )
+        .unwrap();
         folder
     }
 
@@ -519,7 +552,7 @@ fn a_use_is_not_recorded_when_the_row_only_explains_why_it_cannot_run() {
 fn a_hotkey_a_computed_answer_a_fallback_and_panes_own_rows_record_nothing() {
     let pane = Pane::new();
     let query_sample = pane.install(&pane.built("sample-query"));
-    pane.install(&pane.built("calculator"));
+    pane.install(&pane.built("sample-rust"));
     let launcher = &pane.launcher;
     let echo = format!("{}#echo", query_sample.key());
 
@@ -548,12 +581,12 @@ fn a_hotkey_a_computed_answer_a_fallback_and_panes_own_rows_record_nothing() {
     // A computed answer: Enter copies it, and nothing is learned of a
     // row without a lasting identity. The fallback row Echo stays below
     // the answer, unselected, as it does below any other result.
-    block_on(launcher.set_query("6*7"));
-    assert_eq!(titles(launcher), ["42", "Echo"]);
+    block_on(launcher.set_query("reverse 42"));
+    assert_eq!(titles(launcher), ["24", "Echo"]);
     block_on(launcher.activate_selected());
     assert_eq!(
         launcher.view().status,
-        Status::Result("Copied 42 to the clipboard".into())
+        Status::Result("Copied 24 to the clipboard".into())
     );
 
     // Pane's own row: activating it does nothing in the launcher.
@@ -884,19 +917,20 @@ fn app(id: &str, name: &str) -> Application {
     }
 }
 
-/// The ids of the rows whose subtitle is "Application", in listed order.
+/// The ids of the rows the applications provider lists, in listed order:
+/// the sample titles its results "Launch <name>".
 fn application_ids(launcher: &Launcher) -> Vec<String> {
     launcher
         .view()
         .rows
         .iter()
-        .filter(|row| row.subtitle.as_deref() == Some("Application"))
+        .filter(|row| row.title.starts_with("Launch "))
         .map(|row| row.id.clone())
         .collect()
 }
 
 /// A pane whose runtime finds `system`'s applications, with the
-/// applications package installed beside `packages` (folders the pane
+/// applications provider installed beside `packages` (folders the pane
 /// writes with `package`).
 fn applications_pane(pane: Pane, system: &Arc<FakeApplications>, packages: &[PathBuf]) -> Pane {
     let runtime = Runtime::start_with_cache(pane.cache.path().to_path_buf()).unwrap();
@@ -910,7 +944,7 @@ fn applications_pane(pane: Pane, system: &Arc<FakeApplications>, packages: &[Pat
     } = pane;
     drop(launcher);
     let pane = Pane::start(sources, data, cache, clock, runtime);
-    pane.install(&pane.built("applications"));
+    pane.install(&pane.applications_package());
     for package in packages {
         pane.install(package);
     }
@@ -934,7 +968,7 @@ fn the_blank_query_lists_the_pins_then_commands_and_applications_by_frecency() {
 
     // Pin Firefox, found by its name.
     block_on(launcher.set_query("fire"));
-    let firefox = ids_titled(launcher, "Firefox")
+    let firefox = ids_titled(launcher, "Launch Firefox")
         .into_iter()
         .find(|id| id.ends_with("/apps/Firefox.app"))
         .expect("Firefox's row");
@@ -963,22 +997,25 @@ fn the_blank_query_lists_the_pins_then_commands_and_applications_by_frecency() {
             .iter()
             .map(|slot| slot.title.as_str())
             .collect::<Vec<_>>(),
-        ["Firefox"],
+        ["Launch Firefox"],
         "the pins, above the results"
     );
     assert_eq!(
         titles(launcher),
         [
-            "Terminal",
+            "Launch Terminal",
             "Python",
-            "Firefox",
+            "Launch Firefox",
+            "Check for Extension Updates",
+            "Create Extension…",
+            "Import Extension…",
             "Install extension from folder…",
             "Install extension from Git…",
             "Install extension from npm…",
             "Manage Extensions",
             "Python",
             "Settings…",
-            "Notes",
+            "Launch Notes",
         ]
     );
     assert!(

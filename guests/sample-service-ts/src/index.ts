@@ -28,7 +28,7 @@
 import { get, set } from "pane:extension/settings@0.2.0";
 import * as content from "pane:extension/content@0.2.0";
 import { waitFor } from "wasi:clocks/monotonic-clock@0.3.0";
-import type { Cycle, Item, List, Service } from "@pane-app/extension";
+import type { Cycle, DesignedView, Item, List, Service } from "@pane-app/extension";
 import type { Lifecycle } from "@pane-app/extension/state";
 import { showToast } from "@pane-app/extension/feedback";
 import { load, save } from "@pane-app/extension/state";
@@ -130,13 +130,8 @@ export const command = {
     };
   },
 
-  async submitForm(itemId: string): Promise<string> {
-    // A rejected submitForm is a message about the whole form.
-    throw new Error(`The service sample has no forms: ${itemId}`);
-  },
-
-  async openView(itemId: string): Promise<never> {
-    throw new Error(`The service sample has no custom views: ${itemId}`);
+  async openView(commandId: string): Promise<never> {
+    throw new Error(`The service sample opens no designed view: ${commandId}`);
   },
 };
 

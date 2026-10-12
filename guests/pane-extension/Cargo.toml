@@ -26,7 +26,17 @@ default-target = "wasm32-wasip2"
 targets = []
 
 [dependencies]
-wit-bindgen = { version = "=0.62.0", default-features = false, features = ["macros", "async"] }
+wit-bindgen = { version = "=0.62.0", default-features = false, features = [
+    "macros",
+    "async",
+    # A loading state's work runs after the render that started it
+    # (#243): `spawn_local` keeps it going between Pane's calls, and
+    # inter-task wakeup is how a task that waits on nothing but its own
+    # futures sleeps. The same crate generates the exports, so the two
+    # share the task list.
+    "async-spawn",
+    "inter-task-wakeup",
+] }
 dlmalloc = { version = "0.2", features = ["global"] }
 # Preferences arrive as JSON, which `preferences::values` deserializes into
 # the command's own type.

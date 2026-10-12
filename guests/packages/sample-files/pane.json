@@ -9,8 +9,7 @@
       "title": "Find files (Rust)",
       "subtitle": "A Rust command that finds the files of your home folder in Pane's file index as you type, with Pane's file actions",
       "component": "sample_files.wasm",
-      "rootResults": true,
-      "search": true
+      "rootResults": true
     }
   ],
   "fileIndex": true

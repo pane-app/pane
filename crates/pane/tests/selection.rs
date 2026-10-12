@@ -94,7 +94,6 @@ fn command(title: &str, guest: &str) -> CommandRegistration {
         subtitle: None,
         component,
         takes_query: false,
-        search: false,
         keywords: Vec::new(),
         when: CommandWhen::Always,
         matches: CommandMatches::Title,
@@ -108,7 +107,16 @@ fn open_launcher(
 ) -> (Entity<LauncherWindow>, &'_ mut VisualTestContext) {
     cx.executor().allow_parking();
     cx.update(pane::bind_keys);
-    cx.add_window_view(|window, cx| LauncherWindow::new(launcher, window, cx))
+    // The window learns what the launcher changed in the background — a
+    // late answer's merge (#201) — as the binary's window does; without it
+    // the last frame stays what the awaited calls left.
+    let (sender, changes) = pane_core::changes::channel();
+    let launcher = launcher.with_changes(sender);
+    cx.add_window_view(|window, cx| {
+        let mut launcher_window = LauncherWindow::new(launcher, window, cx);
+        launcher_window.follow_changes(changes, window, cx);
+        launcher_window
+    })
 }
 
 /// The launcher window over `commands` registered, settled on its first
@@ -135,11 +143,12 @@ fn three_rows(cx: &mut TestAppContext) -> (Entity<LauncherWindow>, &'_ mut Visua
     (window, cx)
 }
 
-/// The launcher with the calculator package from `cargo xtask guests`
-/// installed in `data`.
-fn with_calculator(cx: &mut TestAppContext, data: &std::path::Path) -> Launcher {
+/// The launcher with the Rust sample package from `cargo xtask guests`
+/// installed in `data`: its root provider answers "reverse <text>" with
+/// the text reversed, an answer card that copies it.
+fn with_rust_sample(cx: &mut TestAppContext, data: &std::path::Path) -> Launcher {
     let folder =
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/guests/packages/calculator");
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/guests/packages/sample-rust");
     let launcher = Launcher::with_packages(Runtime::start(), vec![], data.join("extensions"));
     // The install's guest check answers from the runtime thread.
     cx.executor().allow_parking();
@@ -456,13 +465,13 @@ fn root_rows_under_an_open_actions_panel_take_the_hover_wash(cx: &mut TestAppCon
 #[gpui::test]
 fn the_selected_answer_card_shows_the_selection_wash_without_its_ring(cx: &mut TestAppContext) {
     let data = tempfile::tempdir().unwrap();
-    let launcher = with_calculator(cx, data.path());
+    let launcher = with_rust_sample(cx, data.path());
     let (window, cx) = open_launcher(cx, launcher);
-    cx.simulate_input("6*7");
+    cx.simulate_input("reverse 42");
     until(&window, cx, |view| {
-        view.rows.iter().map(|row| row.title.as_str()).eq(["42"])
+        view.rows.iter().map(|row| row.title.as_str()).eq(["24"])
     });
-    let card = bounds_of(cx, "row-42");
+    let card = bounds_of(cx, "row-24");
     assert!(
         cx.debug_bounds("answer-value").is_some(),
         "the answer is drawn as the card"

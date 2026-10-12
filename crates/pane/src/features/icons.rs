@@ -12,7 +12,10 @@
 //! - A tint, an accessory's colour and a tag's are a theme tone (the text
 //!   levels, the accent, or a named colour in the theme's own shade) or the
 //!   author's raw colour, corrected for contrast against the panel: an icon
-//!   to 3:1, text to 4.5:1 (see [`crate::ui::contrast`]).
+//!   to 3:1, text to 4.5:1 (see [`crate::ui::contrast`]). A designed view's
+//!   icons and colours draw through [`drawn_on`] and the token layer
+//!   (`ui::tokens`) at the component set's own ratio, against the surface
+//!   they are drawn on (#237).
 //! - A built-in icon's markup comes from the whole reicon set Pane vendors
 //!   (`pane_core::icons`), decoded once per name.
 //! - An installed command's or package's icon replaces the generic glyph
@@ -69,14 +72,25 @@ pub(crate) fn row_icon_of(launcher: &Launcher, id: &str, theme: &Theme) -> RowIc
     }
 }
 
-/// `icon` as the shared drawing draws it in `theme`.
+/// `icon` as the shared drawing draws it in `theme`: its colour corrected
+/// for contrast against the panel, as Pane's own rows draw an extension's
+/// icons.
 pub(crate) fn drawn(icon: &Icon, theme: &Theme) -> DrawnIcon {
+    drawn_on(icon, theme, contrast::GRAPHIC, theme.panel_solid)
+}
+
+/// `icon` as the shared drawing draws it in `theme`, its tint corrected
+/// for contrast to `needed` against `surface` — the surface the icon is
+/// drawn on. A designed view's icons draw through this with the
+/// component set's own ratio (`contrast::DESIGNED`) and the surface their
+/// node gave them (#237).
+pub(crate) fn drawn_on(icon: &Icon, theme: &Theme, needed: f32, surface: Hsla) -> DrawnIcon {
     let dark = is_dark(theme);
-    let tint = icon.tint.map(|tint| color(tint, theme, contrast::GRAPHIC));
+    let tint = icon.tint.map(|tint| color_on(tint, theme, needed, surface));
     let fallback = icon.fallback.as_deref().map(|fallback| {
         // A glyph that stands in for an icon draws where it does, bare:
         // the neutral command tile is a named glyph's own (ADR 0035).
-        let mut drawn = drawn(fallback, theme);
+        let mut drawn = drawn_on(fallback, theme, needed, surface);
         drawn.tile_color = None;
         Box::new(drawn)
     });
@@ -243,11 +257,17 @@ fn data_image(url: &str) -> Option<Arc<Image>> {
 /// The colour `tint` gives in `theme`, corrected to `needed` contrast
 /// against the panel.
 pub(crate) fn color(tint: Tint, theme: &Theme, needed: f32) -> Hsla {
+    color_on(tint, theme, needed, theme.panel_solid)
+}
+
+/// The colour `tint` gives in `theme`, corrected to `needed` contrast
+/// against `surface`, the surface it is drawn on.
+pub(crate) fn color_on(tint: Tint, theme: &Theme, needed: f32, surface: Hsla) -> Hsla {
     let raw = match tint.for_theme(is_dark(theme)) {
         Color::Tone(tone) => tone_color(tone, theme),
         Color::Rgba(hex) => rgb_to_hsla(rgba(hex)),
     };
-    contrast::corrected(raw, theme.panel_solid, needed)
+    contrast::corrected(raw, surface, needed)
 }
 
 /// What `tone` is in `theme`: the theme's own text levels and accent, or a
@@ -257,9 +277,14 @@ pub(crate) fn tone_color(tone: Tone, theme: &Theme) -> Hsla {
     let shade =
         |on_dark: u32, on_light: u32| rgb_to_hsla(rgba(if dark { on_dark } else { on_light }));
     match tone {
-        Tone::Primary => theme.text_title,
+        // The UI component set's tone token (#237): `neutral` is the
+        // primary ink, and the semantic tones the theme's own colours.
+        Tone::Primary | Tone::Neutral => theme.text_title,
         Tone::Secondary => theme.text_muted,
         Tone::Accent => theme.accent,
+        Tone::Success => theme.success,
+        Tone::Warning => theme.warning,
+        Tone::Danger => theme.danger,
         Tone::Red => shade(0xFF6B6BFF, 0xD6336CFF),
         Tone::Orange => shade(0xFFA94DFF, 0xE8590CFF),
         Tone::Yellow => shade(0xFFD43BFF, 0xB08800FF),

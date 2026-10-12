@@ -113,7 +113,7 @@ impl Timers {
             .name("pane-timers".into())
             .spawn(move || until_stopped(launcher, timers));
         if let Err(error) = started {
-            eprintln!("Pane cannot run extension timers in the background: {error}");
+            crate::diagnostic!("Pane cannot run extension timers in the background: {error}");
         }
     }
 
@@ -338,7 +338,7 @@ fn start_firing(timers: &Arc<Timers>, launcher: &WeakLauncher, run: Run) {
         .name("pane-timer-firing".into())
         .spawn(move || fire_once(weak, launcher, run));
     if let Err(error) = started {
-        eprintln!("Pane could not fire an extension timer: {error}");
+        crate::diagnostic!("Pane could not fire an extension timer: {error}");
         timers.fired(retry);
     }
 }

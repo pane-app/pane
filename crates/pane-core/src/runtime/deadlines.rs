@@ -46,7 +46,9 @@
 //!
 //! The epoch ticker and the watchdog run only while there is something to
 //! time or watch (#190). A runtime thread's guest code runs only inside a
-//! call, and every request is counted in flight from when it is sent until
+//! call — or in a park, which keeps a guest with work going between calls
+//! for a designed view (#243) and is counted in flight as a request is —
+//! and every request is counted in flight from when it is sent until
 //! it has been served ([`Watch::call`]). While none is, the ticker waits
 //! without a timeout; so does the watchdog while the thread is also outside
 //! any poll of its work. A call starting wakes both, the thread entering a

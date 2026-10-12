@@ -122,3 +122,34 @@ fn copy_folder(from: &Path, to: &Path) {
         }
     }
 }
+
+/// A package folder at `folder` with the Rust sample's two commands: the
+/// list one `package` declares, and its color picker as a designed
+/// command the list's "Choose a color" item launches — the canvas flow
+/// the window tests drive (#242).
+pub fn color_package(folder: &Path) -> PathBuf {
+    let guest =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/guests/sample_rust.wasm");
+    assert!(
+        guest.exists(),
+        "{} is missing; run `cargo xtask guests`",
+        guest.display()
+    );
+    fs::create_dir_all(folder).unwrap();
+    fs::write(
+        folder.join("pane.json"),
+        r#"{
+  "manifestVersion": 1,
+  "title": "Hello",
+  "version": "1.0.0",
+  "apiVersion": "0.1",
+  "commands": [
+    { "id": "hello", "title": "Say hello", "component": "hello.wasm" },
+    { "id": "color", "title": "Choose a color", "component": "hello.wasm", "mode": "designed" }
+  ]
+}"#,
+    )
+    .unwrap();
+    fs::copy(guest, folder.join("hello.wasm")).unwrap();
+    folder.to_path_buf()
+}

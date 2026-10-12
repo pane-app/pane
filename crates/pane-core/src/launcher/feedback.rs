@@ -276,6 +276,12 @@ impl Launcher {
                 WindowPresence::Hidden => confirmations::leave_confirmation(&mut state),
             }
         };
+        // Shown again, a designed view's refresh that fell due while the
+        // window was not shown runs at once (see `refresh`); hidden or
+        // collapsed, one that falls due waits for the next showing.
+        if let Some(refresh) = &self.refresh {
+            refresh.poke();
+        }
         if left {
             self.changed();
         }
@@ -560,7 +566,7 @@ impl Launcher {
             if root_query_typed(state) {
                 drop(self.search(state, ""));
             } else if command_search {
-                self.clear_search_in_command(state);
+                self.clear_files_search(state);
             }
         }
         self.changed();
@@ -949,7 +955,6 @@ mod tests {
                 subtitle: Some("Your notes".into()),
                 component: PathBuf::from(COMPONENT),
                 takes_query: false,
-                search: false,
                 keywords: Vec::new(),
                 when: CommandWhen::default(),
                 matches: CommandMatches::default(),

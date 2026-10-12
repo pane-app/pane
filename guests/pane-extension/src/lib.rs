@@ -61,16 +61,22 @@ wit_bindgen::generate!({
     default_bindings_module: "pane_extension",
     // No function names the form and custom-view records any more: the tree
     // carries them as JSON. Authors still build them as these types.
-    generate_unused_types: true,
-});
+    generate_unused_types: true});
 
-pub use exports::pane::extension::command::{
-    Choice, CustomView, CustomViewInfo, CustomViewRole, Field, FieldKind, FieldValue, Form,
-    FormError, Frame, GuestCustomView, Key, Platform, Point, Rect, Shape, Text, TextField,
-    ViewEvent,
-};
+pub use exports::pane::extension::command::Platform;
 pub use list::{Action, Command, Item, List, Modifier, Shortcut, Submenu};
+pub mod form;
+pub use form::{FormValue, FormValues};
+pub mod view;
 pub use pane::extension::commands::{LaunchRecord, LaunchSource, LaunchType};
+/// The designed view type of a command that opens none: `type DesignedView
+/// = view::NoDesignedView;` in its [`Command`] implementation.
+pub use view::NoDesignedView;
+pub use view::{
+    Align, Answer, CanvasBuilder, CanvasEvent, CanvasListener, CanvasRole, Cap, Cx, Draw,
+    IntoAnswer, IntoNode, Join, Justify, Listener, Node, Paint, Pending, Space, TextLevel,
+    TextMeasure, TextStyle, View, button, canvas, choice, column, loading, row, text,
+};
 
 pub mod actions;
 pub mod feedback;
@@ -388,8 +394,7 @@ pub mod publish {
         path: "wit",
         world: "operations-provider",
         pub_export_macro: true,
-        default_bindings_module: "pane_extension::publish",
-    });
+        default_bindings_module: "pane_extension::publish"});
 
     pub use exports::pane::extension::published_operations::Guest;
 }
@@ -414,14 +419,13 @@ pub mod publish {
 /// A command whose only job is this, as the calculator's, also says
 /// `"mode": "provider"` (a root provider): it has no row of its own and
 /// Pane never opens or runs it, so its [`Command`](crate::Command) keeps
-/// the defaults (`type CustomView = NoCustomView;` and nothing else).
+/// the defaults (nothing but its `type DesignedView`).
 pub mod root {
     wit_bindgen::generate!({
         path: "wit",
         world: "root-results-provider",
         pub_export_macro: true,
-        default_bindings_module: "pane_extension::root",
-    });
+        default_bindings_module: "pane_extension::root"});
 
     pub use exports::pane::extension::root_results::{
         AnswerCopy, AnswerDetail, Guest, RootAction, RootResult, WallTime,
@@ -441,8 +445,7 @@ pub mod applications {
     wit_bindgen::generate!({
         path: "wit",
         world: "applications-user",
-        default_bindings_module: "pane_extension::applications",
-    });
+        default_bindings_module: "pane_extension::applications"});
 
     pub use pane::extension::applications::{Application, installed, open};
 }
@@ -581,8 +584,7 @@ pub mod clipboard_history {
     wit_bindgen::generate!({
         path: "wit",
         world: "clipboard-history-user",
-        default_bindings_module: "pane_extension::clipboard_history",
-    });
+        default_bindings_module: "pane_extension::clipboard_history"});
 
     pub use pane::extension::clipboard_history::{
         Capture, Entry, HistoryStatus, clear, copy, delete_items, entries, set_capture,
@@ -656,7 +658,7 @@ pub mod system_commands {
 /// }
 /// ```
 ///
-/// The Switch Windows default extension (guests/switch-windows) is the
+/// The Switch Windows default extension (pane-app/switch-windows) is the
 /// one that lists them (ADR 0040); the windows samples are a Rust, a
 /// JavaScript and a TypeScript command answering the same.
 pub mod windows {
@@ -688,8 +690,7 @@ pub mod helpers {
     wit_bindgen::generate!({
         path: "wit",
         world: "helpers-user",
-        default_bindings_module: "pane_extension::helpers",
-    });
+        default_bindings_module: "pane_extension::helpers"});
 
     pub use pane::extension::helpers::{HelperError, HelperErrorKind, run};
 
@@ -719,8 +720,7 @@ pub mod files {
     wit_bindgen::generate!({
         path: "wit",
         world: "files-user",
-        default_bindings_module: "pane_extension::files",
-    });
+        default_bindings_module: "pane_extension::files"});
 
     pub use pane::extension::files::{
         FolderListing, FolderState, FoundFile, ScanLimits, limits, list_folder,
@@ -743,8 +743,7 @@ pub mod file_index {
     wit_bindgen::generate!({
         path: "wit",
         world: "file-index-user",
-        default_bindings_module: "pane_extension::file_index",
-    });
+        default_bindings_module: "pane_extension::file_index"});
 
     pub use pane::extension::file_index::{
         Category, EntryKind, FileEntry, IndexState, IndexStatus, SearchOptions, Sort, search,
@@ -810,36 +809,11 @@ pub mod indexed {
         path: "wit",
         world: "indexed-results-provider",
         pub_export_macro: true,
-        default_bindings_module: "pane_extension::indexed",
-    });
+        default_bindings_module: "pane_extension::indexed"});
 
     pub use exports::pane::extension::indexed_results::{
         Guest, IndexedAction, IndexedResult, OpenTarget,
     };
-}
-
-/// A command that searches as the user types into its own search field
-/// (`pane:extension/command-search`), such as one searching an online
-/// service. Pane asks it only once the user has opened it, never while they
-/// type in root search. A command whose `pane.json` entry sets
-/// `"search": true` implements [`search::Guest`] too and calls
-/// [`search::export!`](crate::search::export) beside [`export!`]. Choosing
-/// a result calls [`crate::Command::run_search_result`] with its id, so the id
-/// should say which result it is:
-///
-/// ```ignore
-/// pane_extension::export!(Packages);
-/// pane_extension::search::export!(Packages);
-/// ```
-pub mod search {
-    wit_bindgen::generate!({
-        path: "wit",
-        world: "command-search-provider",
-        pub_export_macro: true,
-        default_bindings_module: "pane_extension::search",
-    });
-
-    pub use exports::pane::extension::command_search::{Guest, SearchResult};
 }
 
 /// A continuing service a command runs while its package's code may run
@@ -861,8 +835,7 @@ pub mod service {
         path: "wit",
         world: "service-provider",
         pub_export_macro: true,
-        default_bindings_module: "pane_extension::service",
-    });
+        default_bindings_module: "pane_extension::service"});
 
     pub use exports::pane::extension::service::{Cycle, Guest};
 }
@@ -943,21 +916,6 @@ macro_rules! eprintln {
     ($($arg:tt)*) => {
         $crate::eprint!($($arg)*)
     };
-}
-
-/// The custom view type of a command that has none: `type CustomView =
-/// NoCustomView;` in its [`Command`] implementation, with an `open_view`
-/// that returns `Err`. It has no values, so no view of it can be opened.
-pub enum NoCustomView {}
-
-impl GuestCustomView for NoCustomView {
-    async fn render(&self) -> Frame {
-        match *self {}
-    }
-
-    async fn handle_event(&self, _event: ViewEvent) -> Result<(), alloc::string::String> {
-        match *self {}
-    }
 }
 
 #[global_allocator]

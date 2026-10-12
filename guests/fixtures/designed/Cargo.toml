@@ -1,0 +1,19 @@
+# Test fixture: a designed view whose trees and answers are JSON written
+# by hand against Pane's current contract (`wit/extension.wit`), not by
+# pane-extension, so that Pane's reading of them is checked on its own
+# (see `crates/pane-core/tests/designed_views.rs`).
+[package]
+name = "designed-fixture"
+version = "0.1.0"
+edition.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wit-bindgen = { version = "=0.62.0", default-features = false, features = ["macros", "async"] }
+dlmalloc = { version = "0.2", features = ["global"] }
+# The slow answer a pushed drawing is held back with.
+wasip3 = { version = "=0.9.0", default-features = false }

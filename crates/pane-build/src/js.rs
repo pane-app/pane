@@ -50,11 +50,10 @@ const WORLD: &str = "js-extension";
 pub(crate) const COMPONENTIZER: &str = "componentize-qjs-p3";
 
 /// `"pane"` option -> the interface a command setting it also exports.
-const EXPORT_OPTIONS: [(&str, &str); 8] = [
+const EXPORT_OPTIONS: [(&str, &str); 7] = [
     ("rootResults", "pane:extension/root-results@0.2.0"),
     ("indexedResults", "pane:extension/indexed-results@0.2.0"),
     ("operations", "pane:extension/published-operations@0.2.0"),
-    ("search", "pane:extension/command-search@0.2.0"),
     ("service", "pane:extension/service@0.2.0"),
     ("events", "pane:extension/events@0.2.0"),
     ("activate", "pane:extension/lifecycle@0.2.0"),
@@ -77,11 +76,10 @@ const IMPORT_OPTIONS: [(&str, &str); 6] = [
 /// lifecycle interface is one object of three handlers: `activate` names
 /// it with its activation entry point alone, `snapshot` with the state
 /// handoff's two beside it (ADR 0041).
-const ADAPTED_PROVIDERS: [(&str, &str, &[&str]); 8] = [
+const ADAPTED_PROVIDERS: [(&str, &str, &[&str]); 7] = [
     ("rootResults", "rootResults", &["resultsFor"]),
     ("indexedResults", "indexedResults", &["results"]),
     ("operations", "publishedOperations", &["runOperation"]),
-    ("search", "commandSearch", &["search"]),
     ("service", "service", &["runCycle"]),
     ("events", "events", &["handleEvent"]),
     ("activate", "lifecycle", &["activate"]),

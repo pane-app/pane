@@ -36,25 +36,40 @@
 //! inflated entries and the objects its deltas make together, by one budget
 //! ([`MAX_INFLATED`]).
 //!
+//! Where the server advertises Git's partial-clone filter, a revision that
+//! holds a collection (ADR 0044) is fetched without its file contents
+//! instead: the commit and its trees with `filter blob:none`, then the
+//! blobs — the collection's index, each extension's manifest and icon, to
+//! list the choice, and the files of the extensions chosen from it, one
+//! fetch for every one of them — named by their ids, so installing from a
+//! large repository downloads only what is installed. Every object is
+//! checked against its id in every pack, and the limits bound what is
+//! written across the fetches (each pack on its own). A server that
+//! advertises no filter, and a repository that is one extension, are
+//! fetched whole as above.
+//!
 //! Only `https://` addresses are fetched. SSH (`ssh://`, `git@host:path`) and
 //! scheme-less (`host/path`) addresses name the same repository, fetched
 //! over HTTPS from the same host and path. Tests and development builds may
 //! also fetch `http://` from a loopback address written as one
 //! (`127.x.y.z`, `[::1]`), so that no check reaches the network.
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fmt;
 use std::fs;
 use std::io::Write;
-use std::path::Path;
-use std::rc::Rc;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use sha1_checked::Sha1;
 use sha1_checked::digest::Update;
 
 use crate::downloads::{Download, check_part};
 use crate::http::{Answer, GetError};
-use crate::packages::capitalized;
+use crate::packages::{MANIFEST_FILE, capitalized};
+
+#[cfg(test)]
+use crate::integrity::hex;
 
 /// The largest capability advertisement or reference listing Pane reads.
 pub const MAX_REFS: u64 = 16 << 20;
@@ -209,18 +224,29 @@ fn ignores_case(host: &str, port: Option<u16>) -> bool {
 /// A Git package to install, as the user or a dependency names it: a
 /// repository and optionally a reference after `@` (a branch, a tag, a full
 /// commit id, or `refs/heads/<branch>` or `refs/tags/<tag>`); without one,
-/// the repository's default branch.
+/// the repository's default branch. A `#<id>` after the repository path
+/// names one extension of a collection the repository holds (ADR 0044),
+/// and a reference follows the id as it follows the repository
+/// (`git:github.com/owner/tools#clock@refs/tags/clock/v1.2.0`).
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct GitSpec {
     pub repository: Repository,
     pub reference: Option<String>,
+    /// The id of one extension of a collection the repository holds, when
+    /// the address names one with `#<id>`. The repository is still fetched
+    /// as one revision, whole; the id picks the extension's folder in it.
+    pub extension: Option<String>,
 }
 
 impl fmt::Display for GitSpec {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.repository.name())?;
+        if let Some(extension) = &self.extension {
+            write!(f, "#{extension}")?;
+        }
         match &self.reference {
-            Some(reference) => write!(f, "{}@{reference}", self.repository.name),
-            None => f.write_str(&self.repository.name),
+            Some(reference) => write!(f, "@{reference}"),
+            None => Ok(()),
         }
     }
 }
@@ -239,8 +265,10 @@ impl GitSpec {
     ///
     /// Equivalent forms name one repository: the host is compared in
     /// lowercase, a trailing `.git` or `/` and HTTPS's port are ignored; the
-    /// path keeps its case. Credentials in the address, `?`, `#`, `%` and
-    /// other schemes are refused.
+    /// path keeps its case. Credentials in the address, `?`, `%` and other
+    /// schemes are refused; a `#` after the repository path names one
+    /// extension of a collection the repository may hold (ADR 0044), so it
+    /// is taken as the id rather than refused of the path.
     pub fn parse(text: &str) -> Result<GitSpec, String> {
         let text = text.trim();
         let written = text;
@@ -319,6 +347,33 @@ impl GitSpec {
             Some((path, reference)) => (path, Some(reference)),
             None => (path, None),
         };
+        // A `#` after the repository path names one extension of a
+        // collection the repository may hold (ADR 0044), and a reference
+        // follows the id as it follows the repository. The repository path
+        // itself holds no `#` (the check below refuses one), so the first
+        // begins the id; an id holds no `@`, so a reference after it reads
+        // as one does after the repository.
+        let (path, extension) = match path.split_once('#') {
+            Some((path, extension)) => (path, Some(extension)),
+            None => (path, None),
+        };
+        let extension = match extension {
+            Some("") => {
+                return refused(
+                    "a `#` names one extension of a collection by its id, which is \
+                     missing",
+                );
+            }
+            Some(extension) => {
+                if !crate::collections::is_id(extension) {
+                    return refused(&format!(
+                        "the extension id `{extension}` must be lowercase letters, digits and `-`"
+                    ));
+                }
+                Some(extension.to_owned())
+            }
+            None => None,
+        };
         let path = path.trim_matches('/');
         let folded = ignores_case(&host, port);
         // `.git` as written, kept in the address fetched; in any case where
@@ -367,6 +422,7 @@ impl GitSpec {
                 ssh,
             },
             reference,
+            extension,
         })
     }
 }
@@ -648,6 +704,35 @@ impl GitRevision {
             GitRef::Commit => format!("commit {}", self.short_commit()),
         }
     }
+
+    /// Whether this revision is installed from the release tag of the
+    /// extension `id` of a collection: `<id>/v<semver>`, naming one of its
+    /// releases (ADR 0044), which an update follows to the newest one
+    /// above the version installed, pinning that tag's commit — as a
+    /// default extension's release tag is followed — while any other tag,
+    /// and a commit, pins this revision as ever.
+    pub(crate) fn is_own_release_tag(&self, id: &str) -> bool {
+        self.own_release_version(id).is_some()
+    }
+
+    /// The version the release tag of the extension `id` of a collection
+    /// names: `1.2.0` of `refs/tags/clock/v1.2.0`, read as the version
+    /// installed when a manifest declares none; `None` when this is not
+    /// that tag.
+    pub(crate) fn own_release_version(&self, id: &str) -> Option<String> {
+        let GitRef::Tag(tag) = &self.reference else {
+            return None;
+        };
+        // `<id>/v` and a dotted-number version, the same grammar a
+        // release tag's listing takes: a prerelease's dash, a moving
+        // tag's name, another extension's tag — none names a release.
+        let version = tag
+            .strip_prefix(id)
+            .and_then(|rest| rest.strip_prefix('/'))
+            .and_then(|release| release.strip_prefix('v'))?;
+        release_version(version)?;
+        Some(version.to_owned())
+    }
 }
 
 /// Where a previewed or installed Git package was fetched from.
@@ -696,8 +781,21 @@ pub struct InstalledGit {
 
 /// A revision fetched and written out.
 pub(crate) struct Fetched {
-    pub download: Download,
+    /// The revision's files (all of them, or the chosen extensions'
+    /// folders' and the collection's listing, where the server filters:
+    /// see `partial`), in Pane's downloads folder, removed once the last
+    /// package read from it is dropped. Shared by the partial fetch, which
+    /// writes more of the revision's files into it as they are chosen.
+    pub download: std::sync::Arc<Download>,
     pub origin: GitOrigin,
+    /// Where the revision was fetched without its file contents, because
+    /// the server advertises the partial-clone filter and the revision
+    /// holds a collection (ADR 0044, #311): the blobs of the extensions
+    /// chosen from it — the choice's run, or its own preview of one of
+    /// them — are fetched from this, into the same download, so however
+    /// many are chosen, the revision is fetched once. `None` where the
+    /// whole revision was fetched.
+    pub partial: Option<std::sync::Arc<PartialFetch>>,
 }
 
 /// The User-Agent of Pane's Git requests: Git hosts serve the smart
@@ -725,13 +823,14 @@ pub(crate) fn resolve_reference(
 }
 
 /// One release tag of a repository, as ADR 0044 writes one: `v` followed
-/// by dotted numbers, such as `v1.2.0`, with the commit it points to
-/// (peeled of any tag object, as `ls-refs` peels it). A tag whose name
-/// writes no version — `v1.2.0-beta.1`, `v-` — is not a release tag, as
+/// by dotted numbers, such as `v1.2.0` — or `<id>/v1.2.0`, one extension
+/// of a collection's — with the commit it points to (peeled of any tag
+/// object, as `ls-refs` peels it). A tag whose name writes no version —
+/// `v1.2.0-beta.1`, `v-`, `clock/wip` — is not a release tag, as
 /// [`crate::defaults::parse_pins`] says of a pin's.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ReleaseTag {
-    /// The tag's name, `v1.2.0`.
+    /// The tag's name, `v1.2.0` or `clock/v1.2.0`.
     pub tag: String,
     /// The commit the tag points to, which pins the bytes of the release
     /// it names (ADR 0021).
@@ -739,29 +838,42 @@ pub struct ReleaseTag {
 }
 
 impl ReleaseTag {
-    /// The version the tag's name writes after its `v`.
+    /// The version the tag's name writes after its `v`: `1.2.0` of
+    /// `v1.2.0`, and of `clock/v1.2.0`, one extension of a collection's
+    /// release (ADR 0044).
     pub fn version(&self) -> &str {
-        self.tag.strip_prefix('v').unwrap_or(&self.tag)
+        let name = self
+            .tag
+            .rsplit_once('/')
+            .map_or(&self.tag[..], |(_, release)| release);
+        name.strip_prefix('v').unwrap_or(name)
     }
 }
 
-/// The release tags of `repository`, newest first, with the commit each
-/// points to: the tags a default extension's repository offers as
-/// releases, which the updater of an installed default extension reads to
-/// find the newest one above the version installed
-/// ([`crate::defaults`]). Nothing is fetched. `None` when the listing is
+/// The release tags of `repository` whose names begin with `prefix`, the
+/// part after `refs/tags/` and before the version: `v` for a repository
+/// of one extension, whose releases are tagged `v<semver>`, and `<id>/v`
+/// for the extension `id` of a collection, whose are tagged
+/// `<id>/v<semver>` (ADR 0044) — the listings the updater of an
+/// installed default extension and of one extension of a collection
+/// installed from a release tag read to find the newest release above
+/// the version installed. Nothing is fetched. `None` when the listing is
 /// longer than the [`MAX_REFS`] Pane reads (as for a repository with very
 /// many tags). Blocks on the network.
-pub fn release_tags(repository: &Repository) -> Result<Option<Vec<ReleaseTag>>, String> {
+pub fn release_tags(
+    repository: &Repository,
+    prefix: &str,
+) -> Result<Option<Vec<ReleaseTag>>, String> {
     let remote = Remote::connect(repository)?;
-    let Some(listed) = remote.list_refs(&["refs/tags/v"])? else {
+    let listing = format!("refs/tags/{prefix}");
+    let Some(listed) = remote.list_refs(&[listing.as_str()])? else {
         return Ok(None);
     };
     let mut tags: Vec<(Vec<u64>, ReleaseTag)> = listed
         .into_iter()
         .filter_map(|(name, commit, _)| {
             let tag = name.strip_prefix("refs/tags/")?;
-            let version = release_version(tag.strip_prefix('v')?)?;
+            let version = release_version(tag.strip_prefix(prefix)?)?;
             Some((
                 version,
                 ReleaseTag {
@@ -807,6 +919,22 @@ pub(crate) fn fetch_within(
 ) -> Result<Fetched, String> {
     let remote = Remote::connect(&spec.repository)?;
     let (revision, advertised) = remote.resolve(spec.reference.as_deref())?;
+    // Where the server advertises the partial-clone filter and the
+    // revision holds a collection, it is fetched without its file
+    // contents and the chosen extensions' folders' blobs after (ADR 0044,
+    // #311). The root's tree decides: `fetch_partial` fetches the commit
+    // and its trees with `filter blob:none` and looks for the
+    // collection's index, and answers `None` where the root holds none,
+    // so a repository that is one extension — or no package at all — is
+    // fetched whole below, exactly as a server that advertises no filter
+    // is. The trees that probe fetched are let go: an ordinary package is
+    // never partial-fetched, at the cost of one small extra fetch.
+    if remote.filter
+        && let Some(fetched) =
+            fetch_partial(&remote, spec, &revision, advertised, downloads, limits)?
+    {
+        return Ok(fetched);
+    }
     let pack = remote.fetch(&revision.commit, limits)?;
     let name = spec.repository.name();
     let objects = read_pack(&pack, limits)
@@ -823,6 +951,7 @@ pub(crate) fn fetch_within(
             capitalized(&revision.describe())
         )
     })?;
+    let download = Arc::new(download);
     let (subject, lfs_pointers) = written.expect("written when the download was made");
     Ok(Fetched {
         download,
@@ -833,17 +962,27 @@ pub(crate) fn fetch_within(
             subject,
             lfs_pointers,
         },
+        partial: None,
     })
 }
 
-/// A repository's server, which speaks protocol version 2.
-struct Remote<'a> {
-    repository: &'a Repository,
+/// A repository's server, which speaks protocol version 2. It holds no
+/// connection: each command it runs is a request of its own, so it is
+/// kept by a partial fetch to ask for blobs later (#311).
+#[derive(Clone)]
+struct Remote {
+    repository: Repository,
     /// Whether the server fetches without history (`deepen`).
     shallow: bool,
     /// Whether the server names its object format, which Pane then names
     /// back (always `sha1`).
     object_format: bool,
+    /// Whether the server filters what it sends (`filter` in its `fetch`
+    /// capability): a revision can then be fetched without its file
+    /// contents, and the files fetched after (ADR 0044, #311). Only when
+    /// `uploadpack.allowFilter` is set, as GitHub's and GitLab's servers
+    /// have it; a server without it is fetched whole, as ever.
+    filter: bool,
 }
 
 /// A pkt-line: `len` in four hexadecimal digits, counting itself.
@@ -924,9 +1063,9 @@ impl<'a> PktReader<'a> {
     }
 }
 
-impl<'a> Remote<'a> {
+impl Remote {
     /// Asks the server of `repository` for its capabilities.
-    fn connect(repository: &'a Repository) -> Result<Remote<'a>, String> {
+    fn connect(repository: &Repository) -> Result<Remote, String> {
         let name = repository.name();
         let url = format!("{}/info/refs?service=git-upload-pack", repository.url);
         let answer = get(repository, &url, &[], MAX_REFS)?;
@@ -950,6 +1089,7 @@ impl<'a> Remote<'a> {
         }
         let mut shallow = false;
         let mut object_format = false;
+        let mut filter = false;
         let mut fetch = false;
         let mut ls_refs = false;
         loop {
@@ -963,7 +1103,10 @@ impl<'a> Remote<'a> {
                 "ls-refs" => ls_refs = true,
                 "fetch" => {
                     fetch = true;
+                    // The filter is one of the features the capability's
+                    // value names, space-separated: `fetch=shallow filter …`.
                     shallow = value.split(' ').any(|feature| feature == "shallow");
+                    filter = value.split(' ').any(|feature| feature == "filter");
                 }
                 "object-format" => {
                     if value != "sha1" {
@@ -982,9 +1125,10 @@ impl<'a> Remote<'a> {
             return Err(not_v2());
         }
         Ok(Remote {
-            repository,
+            repository: repository.clone(),
             shallow,
             object_format,
+            filter,
         })
     }
 
@@ -1001,7 +1145,7 @@ impl<'a> Remote<'a> {
         }
         body.extend_from_slice(FLUSH);
         let url = format!("{}/git-upload-pack", self.repository.url);
-        let answer = post(self.repository, &url, body, most)?;
+        let answer = post(&self.repository, &url, body, most)?;
         Ok(answer.body)
     }
 
@@ -1155,15 +1299,62 @@ impl<'a> Remote<'a> {
 
     /// Fetches the one commit `commit`, without its history, as a pack.
     fn fetch(&self, commit: &str, limits: Limits) -> Result<Vec<u8>, String> {
-        let name = self.repository.name();
         let mut arguments = vec![format!("want {commit}")];
         if self.shallow {
             arguments.push("deepen 1".into());
         }
         arguments.push("no-progress".into());
         arguments.push("done".into());
+        self.send_fetch(commit, &arguments, limits)
+    }
+
+    /// Fetches the one commit `commit`, without its history and without
+    /// its file contents (`filter blob:none`), as a pack: its commit and
+    /// its trees, but none of its blobs. Only where the server advertised
+    /// the filter (ADR 0044, #311); the blobs are fetched after, named by
+    /// their ids ([`Remote::fetch_blobs`]), as they are chosen.
+    fn fetch_trees(&self, commit: &str, limits: Limits) -> Result<Vec<u8>, String> {
+        let mut arguments = vec![format!("want {commit}")];
+        if self.shallow {
+            arguments.push("deepen 1".into());
+        }
+        arguments.push("filter blob:none".into());
+        arguments.push("no-progress".into());
+        arguments.push("done".into());
+        self.send_fetch(commit, &arguments, limits)
+    }
+
+    /// Fetches the blobs `blobs` (the file contents a partial fetch left
+    /// out) as one pack. The protocol's `want` names any object id the
+    /// server holds, so this asks for exactly the files chosen, however
+    /// the trees reach them; `deepen` says nothing about blobs and is not
+    /// sent. The ids are sorted, so the one request is the same whatever
+    /// order the trees were walked in. Every object in the pack is checked
+    /// against its id as any pack's are, and one the server does not send
+    /// is refused where it is written.
+    fn fetch_blobs(&self, commit: &str, blobs: &[Id], limits: Limits) -> Result<Vec<u8>, String> {
+        let wants: BTreeSet<&Id> = blobs.iter().collect();
+        let mut arguments: Vec<String> = wants
+            .iter()
+            .map(|id| format!("want {}", hex_of(id)))
+            .collect();
+        arguments.push("no-progress".into());
+        arguments.push("done".into());
+        self.send_fetch(commit, &arguments, limits)
+    }
+
+    /// Sends the `fetch` command `arguments` (begun by its `want` lines,
+    /// naming the commit `commit` for the messages) and returns the pack
+    /// it answered.
+    fn send_fetch(
+        &self,
+        commit: &str,
+        arguments: &[String],
+        limits: Limits,
+    ) -> Result<Vec<u8>, String> {
+        let name = self.repository.name();
         let answer = self
-            .command("fetch", &arguments, limits.pack)
+            .command("fetch", arguments, limits.pack)
             .map_err(|why| match why.as_str() {
                 TOO_LARGE => format!(
                     "Commit {commit} of the Git repository {name} is larger than the {} MiB \
@@ -1342,8 +1533,11 @@ impl Kind {
 /// An object id: 20 bytes.
 type Id = [u8; 20];
 
-#[cfg(test)]
-use crate::integrity::hex;
+/// The object id `id` as the hexadecimal text the protocol names it by
+/// (`want <id>`).
+fn hex_of(id: &Id) -> String {
+    id.iter().map(|byte| format!("{byte:02x}")).collect()
+}
 
 fn parse_hex(text: &str) -> Option<Id> {
     if !is_commit_id(text) {
@@ -1385,8 +1579,10 @@ enum Stored {
     RefDelta(Id, Vec<u8>),
 }
 
-/// The objects of a pack, by id, each checked against its id.
-type Objects = HashMap<Id, (Kind, Rc<Vec<u8>>)>;
+/// The objects of a pack, by id, each checked against its id. The
+/// contents are shared, so a partial fetch can keep the revision's trees
+/// and take them across threads (#311).
+type Objects = HashMap<Id, (Kind, Arc<Vec<u8>>)>;
 
 /// Reads the pack `pack` (version 2 or 3): checks its checksum, inflates
 /// each entry, resolves its deltas and computes each object's id.
@@ -1548,14 +1744,14 @@ fn resolve(
     let mut on_entry: HashMap<usize, Vec<usize>> = HashMap::new();
     let mut on_id: HashMap<Id, Vec<usize>> = HashMap::new();
     // (entry, its kind, its contents, the deltas it took to make it)
-    let mut work: Vec<(usize, Kind, Rc<Vec<u8>>, usize)> = Vec::new();
+    let mut work: Vec<(usize, Kind, Arc<Vec<u8>>, usize)> = Vec::new();
     let mut objects = Objects::new();
     let mut unresolved = 0;
     for (i, (_, entry)) in stored.iter_mut().enumerate() {
         match entry {
             // Moved rather than copied: already counted as inflated.
             Stored::Whole(kind, data) => {
-                work.push((i, *kind, Rc::new(std::mem::take(data)), 0));
+                work.push((i, *kind, Arc::new(std::mem::take(data)), 0));
             }
             Stored::OffsetDelta(offset, _) => {
                 let base = *index.get(offset).ok_or("it has a delta with no base")?;
@@ -1592,7 +1788,7 @@ fn resolve(
             budget.give_back(delta.len() as u64);
             drop(delta);
             unresolved -= 1;
-            work.push((delta_at, kind, Rc::new(made), chain + 1));
+            work.push((delta_at, kind, Arc::new(made), chain + 1));
         }
         objects.insert(id, (kind, data));
     }
@@ -1709,6 +1905,20 @@ fn check_out(
     dest: &Path,
     limits: Limits,
 ) -> Result<(String, Vec<String>), String> {
+    let (subject, tree) = read_commit(objects, commit)?;
+    fs::create_dir(dest).map_err(|error| error.to_string())?;
+    let mut tally = Tally {
+        entries: 0,
+        bytes: 0,
+        lfs_pointers: Vec::new(),
+    };
+    write_tree(objects, &tree, dest, "", 0, limits, &mut tally)?;
+    Ok((subject, tally.lfs_pointers))
+}
+
+/// The tree and the subject (the first line of its message) of the commit
+/// `commit`, read from its object.
+fn read_commit(objects: &Objects, commit: &str) -> Result<(String, Id), String> {
     let id = parse_hex(commit).ok_or("it is not a commit id")?;
     let (kind, data) = objects
         .get(&id)
@@ -1737,14 +1947,7 @@ fn check_out(
             shown_bytes(first.trim_ascii())
         })
         .unwrap_or_default();
-    fs::create_dir(dest).map_err(|error| error.to_string())?;
-    let mut tally = Tally {
-        entries: 0,
-        bytes: 0,
-        lfs_pointers: Vec::new(),
-    };
-    write_tree(objects, &tree, dest, "", 0, limits, &mut tally)?;
-    Ok((subject, tally.lfs_pointers))
+    Ok((subject, tree))
 }
 
 /// Whether a system may read `name` as `.git`: in any case; as `git~1`,
@@ -1775,58 +1978,8 @@ fn write_tree(
     limits: Limits,
     tally: &mut Tally,
 ) -> Result<(), String> {
-    let (kind, data) = objects
-        .get(tree)
-        .ok_or("the server did not send all of its tree")?;
-    if *kind != Kind::Tree {
-        return Err("its tree is damaged".into());
-    }
-    let mut seen: Vec<String> = Vec::new();
-    let mut rest = &data[..];
-    while !rest.is_empty() {
-        let space = rest
-            .iter()
-            .position(|&b| b == b' ')
-            .ok_or("its tree is damaged")?;
-        let mode = std::str::from_utf8(&rest[..space]).map_err(|_| "its tree is damaged")?;
-        rest = &rest[space + 1..];
-        let nul = rest
-            .iter()
-            .position(|&b| b == 0)
-            .ok_or("its tree is damaged")?;
-        let raw_name = &rest[..nul];
-        rest = &rest[nul + 1..];
-        let id: Id = rest
-            .get(..20)
-            .ok_or("its tree is damaged")?
-            .try_into()
-            .expect("twenty bytes");
-        rest = &rest[20..];
-        // Shown from its start only: a name is checked, and a longer one
-        // refused, before any more of it is read.
-        let shown = format!("{prefix}{}", shown_bytes(raw_name));
-        let name = std::str::from_utf8(raw_name)
-            .map_err(|_| format!("its tree contains `{shown}`, whose name is not valid UTF-8"))?;
-        let refuse = |why: &str| {
-            Err(format!(
-                "its tree contains `{shown}`, {why}; Pane takes only files and folders every \
-                 system can write"
-            ))
-        };
-        if let Err(why) = check_part(name) {
-            return refuse(why);
-        }
-        if is_dot_git(name) {
-            return refuse("a `.git` entry, which Git itself refuses to check out");
-        }
-        let folded: String = name.chars().flat_map(char::to_lowercase).collect();
-        if seen.contains(&folded) {
-            return refuse(
-                "whose name differs only in case from another in its folder, which some systems \
-                 cannot hold both of",
-            );
-        }
-        seen.push(folded);
+    for read in parse_tree(objects, tree, prefix)? {
+        let entry = read?;
         tally.entries += 1;
         if tally.entries > limits.entries {
             return Err(format!(
@@ -1834,57 +1987,796 @@ fn write_tree(
                 limits.entries
             ));
         }
-        let path = dest.join(name);
-        match mode {
+        let path = dest.join(entry.name);
+        match entry.mode {
             "40000" | "040000" => {
                 if depth + 1 > limits.depth {
                     return Err(format!(
-                        "its folders nest more than {} deep, at `{shown}`",
-                        limits.depth
+                        "its folders nest more than {} deep, at `{}`",
+                        limits.depth, entry.shown
                     ));
                 }
-                fs::create_dir(&path).map_err(|error| format!("`{shown}`: {error}"))?;
+                fs::create_dir(&path).map_err(|error| format!("`{}`: {error}", entry.shown))?;
                 write_tree(
                     objects,
-                    &id,
+                    &entry.id,
                     &path,
-                    &format!("{shown}/"),
+                    &format!("{}/", entry.shown),
                     depth + 1,
                     limits,
                     tally,
                 )?;
             }
             "100644" | "100755" | "100664" => {
-                let (kind, contents) = objects
-                    .get(&id)
-                    .ok_or_else(|| format!("the server did not send `{shown}`"))?;
-                if *kind != Kind::Blob {
-                    return Err(format!("its tree has a damaged entry `{shown}`"));
-                }
-                tally.bytes += contents.len() as u64;
-                if tally.bytes > limits.unpacked {
-                    return Err(format!(
-                        "its files take more than the {} MiB Pane allows",
-                        limits.unpacked >> 20
-                    ));
-                }
-                if contents.starts_with(LFS_POINTER) {
-                    tally.lfs_pointers.push(shown.clone());
-                }
-                let mut file = fs::OpenOptions::new()
-                    .write(true)
-                    .create_new(true)
-                    .open(&path)
-                    .map_err(|error| format!("`{shown}`: {error}"))?;
-                file.write_all(contents)
-                    .map_err(|error| format!("`{shown}`: {error}"))?;
+                write_file(objects, &entry.id, &entry.shown, &path, limits, tally)?;
             }
-            "120000" => return refuse("a symbolic link"),
-            "160000" => return refuse("a submodule, which Pane does not fetch"),
-            other => return refuse(&format!("an entry of mode {}", self::shown(other))),
+            "120000" => return Err(entry.refuse("a symbolic link")),
+            "160000" => return Err(entry.refuse("a submodule, which Pane does not fetch")),
+            other => {
+                return Err(entry.refuse(&format!("an entry of mode {}", self::shown(other))));
+            }
         }
     }
     Ok(())
+}
+
+/// One entry of a tree, parsed and checked: `write_tree` writes what it
+/// says, and a partial fetch's walks find what they will fetch in them
+/// (#311).
+#[derive(Debug)]
+struct TreeEntry<'a> {
+    /// The entry's mode as the tree writes it: `40000` a folder, `100644`
+    /// and its kin a regular file, `120000` a symbolic link, `160000` a
+    /// submodule, anything else nothing Pane takes.
+    mode: &'a str,
+    /// The entry's name, checked to be one plain name every system can
+    /// write.
+    name: &'a str,
+    /// Its path from the revision's root, as messages name it.
+    shown: String,
+    /// The object it points to.
+    id: Id,
+}
+
+impl TreeEntry<'_> {
+    /// Whether the entry is a regular file.
+    fn is_file(&self) -> bool {
+        matches!(self.mode, "100644" | "100755" | "100664")
+    }
+
+    /// Refuses the tree for this entry, `why` completing the sentence
+    /// "its tree contains `X`, …": the words every system's refusal
+    /// shares, whatever wrote the entry.
+    fn refuse(&self, why: &str) -> String {
+        format!(
+            "its tree contains `{}`, {why}; Pane takes only files and folders every system can \
+             write",
+            self.shown
+        )
+    }
+}
+
+/// The entries of the tree `tree`, one by one, each parsed and checked
+/// as a checkout writes it: a name that is not one plain name every
+/// system can write (npm's unpacking checks, a `.git` entry, two names
+/// that differ only in case) refuses the tree with the same words a
+/// checkout does. The entries and depth limits are checked where the
+/// entries are written, not here: a walk that only looks for folders
+/// reads them without counting what it does not write. An iterator, so
+/// that a tree beyond the limits is refused as its entries are read,
+/// holding no more of it than the entries taken.
+fn parse_tree<'a>(
+    objects: &'a Objects,
+    tree: &Id,
+    prefix: &str,
+) -> Result<TreeEntries<'a>, String> {
+    let (kind, data) = objects
+        .get(tree)
+        .ok_or("the server did not send all of its tree")?;
+    if *kind != Kind::Tree {
+        return Err("its tree is damaged".into());
+    }
+    Ok(TreeEntries {
+        rest: data.as_slice(),
+        prefix: prefix.to_owned(),
+        seen: Vec::new(),
+    })
+}
+
+/// [`parse_tree`]'s entries, read one at a time.
+struct TreeEntries<'a> {
+    /// The tree's contents not read yet.
+    rest: &'a [u8],
+    /// The path of the tree's folder, as its entries' paths begin.
+    prefix: String,
+    /// The names read so far, folded to lowercase: two that differ only
+    /// in case refuse the tree.
+    seen: Vec<String>,
+}
+
+impl<'a> Iterator for TreeEntries<'a> {
+    type Item = Result<TreeEntry<'a>, String>;
+
+    fn next(&mut self) -> Option<Result<TreeEntry<'a>, String>> {
+        let rest = self.rest;
+        if rest.is_empty() {
+            return None;
+        }
+        let read = entry_of(rest, &self.prefix, &mut self.seen);
+        // A tree a damaged entry ends, and an entry a name refuses, is
+        // refused as a whole: nothing more is read of it.
+        self.rest = &[];
+        if let Ok((_, after)) = &read {
+            self.rest = &rest[*after..];
+        }
+        Some(read.map(|(entry, _)| entry))
+    }
+}
+
+/// One tree entry at the start of `rest`, parsed and checked, with where
+/// the next begins: the tree's contents are read no further than the entry
+/// asks for — a name is checked, and a longer one refused, before any more
+/// of it is read.
+fn entry_of<'a>(
+    rest: &'a [u8],
+    prefix: &str,
+    seen: &mut Vec<String>,
+) -> Result<(TreeEntry<'a>, usize), String> {
+    let space = rest
+        .iter()
+        .position(|&b| b == b' ')
+        .ok_or("its tree is damaged")?;
+    let mode = std::str::from_utf8(&rest[..space]).map_err(|_| "its tree is damaged")?;
+    let name_at = space + 1;
+    let nul = rest[name_at..]
+        .iter()
+        .position(|&b| b == 0)
+        .ok_or("its tree is damaged")?
+        + name_at;
+    let raw_name = &rest[name_at..nul];
+    let id_at = nul + 1;
+    let id: Id = rest
+        .get(id_at..id_at + 20)
+        .ok_or("its tree is damaged")?
+        .try_into()
+        .expect("twenty bytes, checked where they were sliced");
+    let shown = format!("{prefix}{}", shown_bytes(raw_name));
+    let name = std::str::from_utf8(raw_name)
+        .map_err(|_| format!("its tree contains `{shown}`, whose name is not valid UTF-8"))?;
+    let entry = TreeEntry {
+        mode,
+        name,
+        shown,
+        id,
+    };
+    if let Err(why) = check_part(entry.name) {
+        return Err(entry.refuse(why));
+    }
+    if is_dot_git(entry.name) {
+        return Err(entry.refuse("a `.git` entry, which Git itself refuses to check out"));
+    }
+    let folded: String = entry.name.chars().flat_map(char::to_lowercase).collect();
+    if seen.contains(&folded) {
+        return Err(entry.refuse(
+            "whose name differs only in case from another in its folder, which some systems \
+                 cannot hold both of",
+        ));
+    }
+    seen.push(folded);
+    Ok((entry, id_at + 20))
+}
+
+/// The entry named `name` among the tree `tree`'s entries, each checked
+/// as a checkout writes it; `None` where the tree holds none by that
+/// name.
+fn find_entry<'a>(
+    objects: &'a Objects,
+    tree: &Id,
+    prefix: &str,
+    name: &str,
+) -> Result<Option<TreeEntry<'a>>, String> {
+    for entry in parse_tree(objects, tree, prefix)? {
+        let entry = entry?;
+        if entry.name == name {
+            return Ok(Some(entry));
+        }
+    }
+    Ok(None)
+}
+
+/// Writes the file the tree entry pointing at `id` names, at `path`, from
+/// its blob in `objects`: without execute permission whatever mode its
+/// tree wrote, counted against the limits, and noted where it is a Git
+/// LFS pointer rather than its contents. A blob the server did not send
+/// — or sent as another kind of object — is a protocol failure: the
+/// partial fetches of #311, which ask for some blobs and not others,
+/// refuse the file they asked for rather than write a wrong one.
+fn write_file(
+    objects: &Objects,
+    id: &Id,
+    shown: &str,
+    path: &Path,
+    limits: Limits,
+    tally: &mut Tally,
+) -> Result<(), String> {
+    let (kind, contents) = objects
+        .get(id)
+        .ok_or_else(|| format!("the server did not send `{shown}`"))?;
+    if *kind != Kind::Blob {
+        return Err(format!("its tree has a damaged entry `{shown}`"));
+    }
+    tally.bytes += contents.len() as u64;
+    if tally.bytes > limits.unpacked {
+        return Err(format!(
+            "its files take more than the {} MiB Pane allows",
+            limits.unpacked >> 20
+        ));
+    }
+    if contents.starts_with(LFS_POINTER) {
+        tally.lfs_pointers.push(shown.to_owned());
+    }
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+        .map_err(|error| format!("`{shown}`: {error}"))?;
+    file.write_all(contents)
+        .map_err(|error| format!("`{shown}`: {error}"))
+}
+
+// ------------------------------------------------- fetching in parts (#311)
+
+/// Fetches the revision of a collection without its file contents, where
+/// the server advertises the partial-clone filter (ADR 0044, #311): the
+/// commit and its trees with `filter blob:none`, then the blobs — the
+/// collection's index, with the root's `pane.json` where the root holds
+/// one so the revision is still refused as holding both, and, where
+/// `spec` names one extension by its id, that extension's whole folder,
+/// or else each extension's manifest and the icons those name, what
+/// listing the choice takes — each round one fetch naming the blobs by
+/// their ids, the next round's ids read from what the last fetched. The
+/// files are written into one download folder, made once complete.
+/// `Ok(None)` where the root holds no `pane-collection.json`: the revision
+/// is no collection, and the caller fetches the whole of it as it does
+/// where the server advertises no filter.
+///
+/// The budgets: every pack is bounded on its own (the trees pack and each
+/// round's, by `Limits::pack`, `objects` and `inflated`), while what is
+/// *written* accumulates across the fetches in one [`Written`] — the files
+/// and folders, each counted once, and their bytes — so the limits bound
+/// what is taken however many fetches took it.
+fn fetch_partial(
+    remote: &Remote,
+    spec: &GitSpec,
+    revision: &GitRevision,
+    advertised: bool,
+    downloads: &Path,
+    limits: Limits,
+) -> Result<Option<Fetched>, String> {
+    let name = remote.repository.name().to_owned();
+    // The revision's commit and its trees, without its file contents.
+    let pack = remote.fetch_trees(&revision.commit, limits)?;
+    let trees = read_pack(&pack, limits)
+        .map_err(|why| format!("The Git repository {name} sent a pack Pane cannot read: {why}"))?;
+    drop(pack);
+    let (subject, root) = read_commit(&trees, &revision.commit)?;
+    // Whether the root holds a collection's index — and a one-extension
+    // manifest too, which is fetched with the index where the root holds
+    // both, so the revision is refused as holding both exactly as it is
+    // where the whole of it was fetched. A bad entry anywhere in the root
+    // refuses the revision, as a checkout's walk of it does.
+    let file = crate::collections::COLLECTION_FILE;
+    let index = find_entry(&trees, &root, "", file)?.filter(|entry| entry.is_file());
+    let Some(index) = index else {
+        return Ok(None);
+    };
+    let manifest = find_entry(&trees, &root, "", MANIFEST_FILE)?.filter(|entry| entry.is_file());
+    let described = capitalized(&format!(
+        "{} (commit {}) of the Git repository {name}",
+        revision.describe(),
+        revision.short_commit()
+    ));
+    let invalid =
+        |why: String| format!("{described} is a collection whose {file} is invalid: {why}");
+    let mut blobs: Vec<(String, Id)> = vec![(file.to_owned(), index.id)];
+    if let Some(manifest) = manifest {
+        blobs.push((MANIFEST_FILE.to_owned(), manifest.id));
+    }
+    let mut objects = fetch_round(remote, &revision.commit, &blobs, limits)?;
+    let text = blob_text(&objects, &index.id, file)?;
+    let collection = crate::collections::parse(&text).map_err(invalid)?;
+    let mut writes = blobs;
+    // Where the address names one extension, its whole folder is fetched
+    // at once and the revision is read straight away; where it names the
+    // collection, the listing the choice shows is fetched (each
+    // extension's manifest, then the icons those name — the ids of each
+    // round read from what the last fetched, so the rounds follow one
+    // another), and the extensions' own files are fetched from
+    // [`PartialFetch`] as they are chosen.
+    let mut written = Written::new(limits);
+    match spec.extension.as_deref() {
+        Some(id) => {
+            // An old id the `renamed` map names resolves to the
+            // extension's current folder, as the read path resolves one
+            // (#310); an id the collection no longer offers resolves to
+            // none, and the read path refuses it as it does on a server
+            // without the filter.
+            if let Some(resolved) = collection.resolve(id) {
+                let extension = resolved.extension;
+                let mut blobs = Vec::new();
+                if let Some(tree) = folder_at(&trees, &root, &extension.path, limits)? {
+                    gather_subtree(
+                        &trees,
+                        &tree,
+                        &format!("{}/", extension.path),
+                        extension.path.split('/').count(),
+                        &written,
+                        &mut blobs,
+                    )?;
+                }
+                objects.extend(fetch_round(remote, &revision.commit, &blobs, limits)?);
+                writes.extend(blobs);
+            }
+        }
+        None => {
+            // Each extension's manifest, fetched together.
+            let mut manifests: Vec<(String, Id)> = Vec::new();
+            for extension in collection.extensions() {
+                let path = format!("{}/{}", extension.path, MANIFEST_FILE);
+                if let Some(entry) = entry_at(&trees, &root, &path, limits)?
+                    && entry.is_file()
+                {
+                    manifests.push((path, entry.id));
+                }
+            }
+            let manifest_objects = fetch_round(remote, &revision.commit, &manifests, limits)?;
+            // The icons those manifests name: read leniently, as the
+            // choice's rows read them, and resolved in the trees, so that
+            // what the rows show — each extension's own icon — is fetched
+            // too (ADR 0044).
+            let mut icons: Vec<(String, Id)> = Vec::new();
+            for extension in collection.extensions() {
+                let path = format!("{}/{}", extension.path, MANIFEST_FILE);
+                let Some(blob) = id_of(&manifests, &path) else {
+                    continue;
+                };
+                let Ok(text) = blob_text(&manifest_objects, &blob, &path) else {
+                    continue;
+                };
+                let Ok(manifest) = serde_json::from_str::<serde_json::Value>(&text) else {
+                    continue;
+                };
+                let Some(icon) = manifest.get("icon").and_then(crate::icons::read) else {
+                    continue;
+                };
+                for file in crate::icons::package_files(&icon) {
+                    let path = format!(
+                        "{}/{}",
+                        extension.path,
+                        file.to_string_lossy().replace('\\', "/")
+                    );
+                    if let Some(entry) = entry_at(&trees, &root, &path, limits)?
+                        && entry.is_file()
+                    {
+                        icons.push((path, entry.id));
+                    }
+                }
+            }
+            let icon_objects = fetch_round(remote, &revision.commit, &icons, limits)?;
+            objects.extend(manifest_objects);
+            objects.extend(icon_objects);
+            writes.extend(manifests);
+            writes.extend(icons);
+        }
+    }
+    // The download folder, written once complete: exactly the blobs
+    // fetched, at the paths the trees name them at, each checked and
+    // counted as a checkout writes it.
+    let download = Download::create(downloads, |folder| {
+        fs::create_dir(folder).map_err(|error| error.to_string())?;
+        for (path, id) in &writes {
+            write_partial(&objects, id, path, folder, &mut written)?;
+        }
+        Ok(())
+    })
+    .map_err(|why| {
+        format!(
+            "{} of the Git repository {name} cannot be installed safely: {why}",
+            capitalized(&revision.describe())
+        )
+    })?;
+    let download = Arc::new(download);
+    let origin = GitOrigin {
+        repository: spec.repository.clone(),
+        revision: revision.clone(),
+        advertised,
+        subject,
+        lfs_pointers: written.lfs_pointers.clone(),
+    };
+    // The choice holds the fetch, to ask for the extensions chosen from
+    // the revision; an install by its id fetched its one extension whole,
+    // so it needs no more.
+    let partial = spec.extension.is_none().then(|| {
+        Arc::new(PartialFetch {
+            remote: remote.clone(),
+            commit: revision.commit.clone(),
+            root,
+            trees,
+            collection,
+            limits,
+            download: download.clone(),
+            origin: origin.clone(),
+            written: Mutex::new(written),
+        })
+    });
+    Ok(Some(Fetched {
+        download,
+        origin,
+        partial,
+    }))
+}
+
+/// A collection's revision fetched without its file contents, where the
+/// server advertises the partial-clone filter (ADR 0044, #311), held while
+/// the choice of its extensions is open: the files of the extensions chosen
+/// from the revision — the run of the choice's ticked ones, or its own
+/// preview of one of them — are fetched from it, into the download the
+/// revision was written into, so however many are chosen, the revision is
+/// fetched once.
+///
+/// The trees the `blob:none` pack held are kept (they are what names every
+/// file the revision holds, by its id), and the server with them: each
+/// command is a request of its own, so a later fetch of blobs is one more,
+/// not a new connection to be re-advertised.
+pub(crate) struct PartialFetch {
+    remote: Remote,
+    /// The commit whose files are fetched (for the messages).
+    commit: String,
+    /// The tree at the revision's root.
+    root: Id,
+    /// The revision's trees (and its commit), as the `blob:none` pack held
+    /// them: no blobs.
+    trees: Objects,
+    /// The collection's index, as it was read: each extension's id names
+    /// the folder its files are fetched from.
+    collection: crate::collections::Collection,
+    limits: Limits,
+    /// The download the revision was written into, kept as long as this is.
+    download: Arc<Download>,
+    /// The origin of the revision, its list of Git LFS pointers growing as
+    /// blobs are written and found to be pointers.
+    origin: GitOrigin,
+    /// What has been written into the download, and what it has counted.
+    written: Mutex<Written>,
+}
+
+impl fmt::Debug for PartialFetch {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PartialFetch")
+            .field("repository", &self.origin.repository.name())
+            .field("commit", &self.commit)
+            .finish()
+    }
+}
+
+impl PartialFetch {
+    fn locked(&self) -> MutexGuard<'_, Written> {
+        self.written
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    /// The origin of the revision as the fetch stands: the Git LFS
+    /// pointers found as blobs were written are in it, so a read of one of
+    /// the extensions refuses its components stored with LFS as a whole
+    /// fetch's read does.
+    fn origin(&self, written: &Written) -> GitOrigin {
+        GitOrigin {
+            lfs_pointers: written.lfs_pointers.clone(),
+            ..self.origin.clone()
+        }
+    }
+
+    /// Fetches the files of the extensions `ids` — the run of the choice's
+    /// ticked ones, which passes them all: one fetch names every blob under
+    /// their folders that is not written yet, so one fetch serves every
+    /// extension chosen from the revision (ADR 0044) — and writes them into
+    /// the download the revision was fetched into.
+    pub(crate) fn fetch_extensions(&self, ids: &[String]) -> Result<(), String> {
+        let wanted: Vec<&str> = ids.iter().map(String::as_str).collect();
+        let mut written = self.locked();
+        self.fetch(&mut written, &wanted)
+    }
+
+    /// The extension `id`'s files fetched — fetching them now where they
+    /// are not, as the choice's own preview of that one extension reads it
+    /// before anything is chosen, and as a run's install finds them already
+    /// there — and the origin as the fetch stands.
+    pub(crate) fn ensure_extension(&self, id: &str) -> Result<GitOrigin, String> {
+        let mut written = self.locked();
+        self.fetch(&mut written, &[id])?;
+        Ok(self.origin(&written))
+    }
+
+    /// Fetches the blobs under the extensions `ids`' folders that are not
+    /// written yet and writes them, with `written` held.
+    fn fetch(&self, written: &mut Written, ids: &[&str]) -> Result<(), String> {
+        let mut blobs: Vec<(String, Id)> = Vec::new();
+        for id in ids {
+            // An id the collection does not list names nothing to fetch;
+            // reading it is refused where the index is read.
+            let Some(extension) = self.collection.find(id) else {
+                continue;
+            };
+            let path = &extension.path;
+            if let Some(tree) = folder_at(&self.trees, &self.root, path, self.limits)? {
+                gather_subtree(
+                    &self.trees,
+                    &tree,
+                    &format!("{path}/"),
+                    path.split('/').count(),
+                    written,
+                    &mut blobs,
+                )?;
+            }
+        }
+        if blobs.is_empty() {
+            return Ok(());
+        }
+        let objects = fetch_round(&self.remote, &self.commit, &blobs, self.limits)?;
+        let folder = self.download.folder();
+        for (path, id) in &blobs {
+            write_partial(&objects, id, path, folder, written)?;
+        }
+        Ok(())
+    }
+}
+
+/// What a partial fetch has written into its download folder, and what it
+/// has counted: the files and the folders by their paths, each counted
+/// once when it is written — so the limits bound what is taken however
+/// many fetches wrote it and however many times the trees are walked —
+/// the files' bytes, and the paths of those that are Git LFS pointers.
+/// One budget across every fetch that wrote the revision's files, where
+/// each pack is bounded on its own (by `Limits::pack`, `objects` and
+/// `inflated`).
+struct Written {
+    /// The limits the writes are counted within.
+    limits: Limits,
+    /// The paths of the files written: a file is counted at its path, so
+    /// two files holding one blob's contents are two files.
+    files: HashSet<String>,
+    /// The paths of the folders made.
+    folders: HashSet<String>,
+    bytes: u64,
+    lfs_pointers: Vec<String>,
+}
+
+impl Written {
+    /// Nothing written yet, to count within `limits`.
+    fn new(limits: Limits) -> Written {
+        Written {
+            limits,
+            files: HashSet::new(),
+            folders: HashSet::new(),
+            bytes: 0,
+            lfs_pointers: Vec::new(),
+        }
+    }
+
+    /// The files and folders written.
+    fn entries(&self) -> usize {
+        self.files.len() + self.folders.len()
+    }
+}
+
+/// Fetches the blobs `blobs` (path and id) in one pack — one fetch naming
+/// them by their ids — and returns its objects, every one checked against
+/// its id. Nothing is written: the writes go into the download folder, once
+/// it is made, or into the one a partial fetch already wrote into.
+fn fetch_round(
+    remote: &Remote,
+    commit: &str,
+    blobs: &[(String, Id)],
+    limits: Limits,
+) -> Result<Objects, String> {
+    if blobs.is_empty() {
+        return Ok(Objects::new());
+    }
+    let wants: Vec<Id> = blobs.iter().map(|(_, id)| *id).collect();
+    let pack = remote.fetch_blobs(commit, &wants, limits)?;
+    read_pack(&pack, limits).map_err(|why| {
+        format!(
+            "The Git repository {} sent a pack Pane cannot read: {why}",
+            remote.repository.name()
+        )
+    })
+}
+
+/// The id of the blob fetched for `path`, among `blobs`.
+fn id_of(blobs: &[(String, Id)], path: &str) -> Option<Id> {
+    blobs
+        .iter()
+        .find(|(named, _)| named == path)
+        .map(|(_, id)| *id)
+}
+
+/// The blob `id` as text — a collection's index, or a manifest — from the
+/// pack that fetched it.
+fn blob_text(objects: &Objects, id: &Id, shown: &str) -> Result<String, String> {
+    let (kind, contents) = objects
+        .get(id)
+        .ok_or_else(|| format!("the server did not send `{shown}`"))?;
+    if *kind != Kind::Blob {
+        return Err(format!("its tree has a damaged entry `{shown}`"));
+    }
+    String::from_utf8(contents.to_vec()).map_err(|_| format!("`{shown}` is not UTF-8"))
+}
+
+/// The entry the relative path `path` (parts separated by `/`, each one a
+/// name a tree was checked to hold) names, walking from the tree `tree`
+/// down through its folders, each tree parsed and each entry checked as a
+/// checkout checks it and each folder level counted against the depth
+/// limit; `None` where the path names nothing, or where a file stands
+/// where a folder is walked through (a path naming no package, an icon
+/// a manifest names that is not there).
+fn entry_at<'a>(
+    objects: &'a Objects,
+    tree: &Id,
+    path: &str,
+    limits: Limits,
+) -> Result<Option<TreeEntry<'a>>, String> {
+    let parts: Vec<&str> = path.split('/').collect();
+    let Some((last, folders)) = parts.split_last() else {
+        return Ok(None);
+    };
+    let mut tree = *tree;
+    let mut prefix = String::new();
+    let mut depth = 0;
+    for part in folders {
+        let Some(entry) = find_entry(objects, &tree, &prefix, part)? else {
+            return Ok(None);
+        };
+        if !matches!(entry.mode, "40000" | "040000") {
+            return Ok(None);
+        }
+        depth += 1;
+        if depth > limits.depth {
+            return Err(format!(
+                "its folders nest more than {} deep, at `{}`",
+                limits.depth, entry.shown
+            ));
+        }
+        prefix = format!("{}/", entry.shown);
+        tree = entry.id;
+    }
+    find_entry(objects, &tree, &prefix, last)
+}
+
+/// The tree the folder path `path` names, walking from `tree` down; `None`
+/// where the path names no folder of the revision.
+fn folder_at(
+    objects: &Objects,
+    tree: &Id,
+    path: &str,
+    limits: Limits,
+) -> Result<Option<Id>, String> {
+    Ok(entry_at(objects, tree, path, limits)?
+        .filter(|entry| matches!(entry.mode, "40000" | "040000"))
+        .map(|entry| entry.id))
+}
+
+/// Walks the tree `tree` (at `prefix`, `depth` levels into the revision)
+/// gathering the blobs it holds that are not written yet, their paths and
+/// ids: what a partial fetch fetches, for the folders of the extensions
+/// chosen from the revision (#311). Every entry is checked as a checkout
+/// writes it — a name some system cannot write, or a symbolic link or a
+/// submodule anywhere in the folder, refuses the tree, as a checkout of
+/// the whole revision refuses it.
+fn gather_subtree(
+    objects: &Objects,
+    tree: &Id,
+    prefix: &str,
+    depth: usize,
+    written: &Written,
+    blobs: &mut Vec<(String, Id)>,
+) -> Result<(), String> {
+    let limits = written.limits;
+    for read in parse_tree(objects, tree, prefix)? {
+        let entry = read?;
+        match entry.mode {
+            "40000" | "040000" => {
+                if depth + 1 > limits.depth {
+                    return Err(format!(
+                        "its folders nest more than {} deep, at `{}`",
+                        limits.depth, entry.shown
+                    ));
+                }
+                gather_subtree(
+                    objects,
+                    &entry.id,
+                    &format!("{}/", entry.shown),
+                    depth + 1,
+                    written,
+                    blobs,
+                )?;
+            }
+            "100644" | "100755" | "100664" => {
+                if !written.files.contains(&entry.shown) {
+                    blobs.push((entry.shown.clone(), entry.id));
+                }
+            }
+            "120000" => return Err(entry.refuse("a symbolic link")),
+            "160000" => return Err(entry.refuse("a submodule, which Pane does not fetch")),
+            other => {
+                return Err(entry.refuse(&format!("an entry of mode {}", self::shown(other))));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Writes the blob `id` at `path` into `folder` — each part of `path`
+/// checked where it was read, from a tree entry or the collection's index —
+/// making the folders it is in where they are not made yet. Every file and
+/// folder is counted once, however many fetches wrote the revision's files,
+/// and the file itself is written as a checkout writes it
+/// ([`write_file`]): checked, counted, without execute permission, and
+/// noted where it is a Git LFS pointer.
+fn write_partial(
+    objects: &Objects,
+    id: &Id,
+    path: &str,
+    folder: &Path,
+    written: &mut Written,
+) -> Result<(), String> {
+    let limits = written.limits;
+    let parts: Vec<&str> = path.split('/').collect();
+    let mut chain = String::new();
+    for part in &parts[..parts.len() - 1] {
+        chain = if chain.is_empty() {
+            (*part).to_owned()
+        } else {
+            format!("{chain}/{part}")
+        };
+        if written.folders.insert(chain.clone()) {
+            if written.entries() > limits.entries {
+                return Err(format!(
+                    "it holds more than {} files and folders",
+                    limits.entries
+                ));
+            }
+            fs::create_dir(joined(folder, &chain))
+                .map_err(|error| format!("`{chain}`: {error}"))?;
+        }
+    }
+    let file = joined(folder, path);
+    let mut tally = Tally {
+        entries: 0,
+        bytes: written.bytes,
+        lfs_pointers: Vec::new(),
+    };
+    write_file(objects, id, path, &file, limits, &mut tally)?;
+    written.bytes = tally.bytes;
+    written.lfs_pointers.extend(tally.lfs_pointers);
+    if written.files.insert(path.to_owned()) && written.entries() > limits.entries {
+        return Err(format!(
+            "it holds more than {} files and folders",
+            limits.entries
+        ));
+    }
+    Ok(())
+}
+
+/// The path `path` (parts separated by `/`, each one plain) inside
+/// `folder`, joined part by part so that nothing in `path` can reach above
+/// `folder` on any system.
+fn joined(folder: &Path, path: &str) -> PathBuf {
+    let mut joined = folder.to_path_buf();
+    for part in path.split('/') {
+        joined = joined.join(part);
+    }
+    joined
 }
 
 #[cfg(test)]
@@ -2040,6 +2932,70 @@ mod tests {
     }
 
     #[test]
+    fn a_hash_names_one_extension_of_a_collection() {
+        let parsed = spec("https://github.com/owner/tools#clock");
+        assert_eq!(parsed.repository.name(), "github.com/owner/tools");
+        assert_eq!(parsed.extension.as_deref(), Some("clock"));
+        assert_eq!(parsed.reference, None);
+        assert_eq!(parsed.to_string(), "github.com/owner/tools#clock");
+        // A reference follows the id as it follows the repository.
+        let parsed = spec("git:github.com/owner/tools#clock@refs/tags/clock/v1.2.0");
+        assert_eq!(parsed.repository.name(), "github.com/owner/tools");
+        assert_eq!(parsed.extension.as_deref(), Some("clock"));
+        assert_eq!(parsed.reference.as_deref(), Some("refs/tags/clock/v1.2.0"));
+        assert_eq!(
+            parsed.to_string(),
+            "github.com/owner/tools#clock@refs/tags/clock/v1.2.0"
+        );
+        // The repository is fetched as written, from its address, the id
+        // naming no part of it.
+        assert_eq!(
+            spec("https://github.com/owner/tools.git#clock@v1")
+                .repository
+                .url(),
+            "https://github.com/owner/tools.git"
+        );
+        // Every address form names the extension, as every one names the
+        // repository.
+        for form in [
+            "https://github.com/Owner/Tools#clock",
+            "git+https://github.com/Owner/Tools.git#clock",
+            "git@github.com:Owner/Tools.git#clock",
+            "ssh://git@github.com/Owner/Tools#clock",
+        ] {
+            let parsed = spec(form);
+            assert_eq!(parsed.extension.as_deref(), Some("clock"), "{form}");
+            assert_eq!(parsed.repository.name(), "github.com/owner/tools", "{form}");
+        }
+        // An id that is not lowercase letters, digits and `-` is refused.
+        for bad in [
+            "github.com/o/r#",
+            "github.com/o/r#Clock",
+            "github.com/o/r#a_b",
+            "github.com/o/r#a b",
+            "github.com/o/r#clock/timer",
+        ] {
+            let error = GitSpec::parse(bad).unwrap_err();
+            assert!(
+                error.contains("is not a Git repository address"),
+                "{bad}: {error}"
+            );
+        }
+        // A reference that names nothing is refused as a reference is,
+        // the id parsed before it.
+        let error = GitSpec::parse("github.com/o/r#clock@").unwrap_err();
+        assert!(
+            error.contains("`` is not a branch, a tag or a full commit id"),
+            "{error}"
+        );
+        // A `#` inside a reference, which Git accepts of a branch or tag
+        // name, still reads as part of the reference.
+        let parsed = spec("github.com/o/r@v1.0#clock");
+        assert_eq!(parsed.extension, None);
+        assert_eq!(parsed.reference.as_deref(), Some("v1.0#clock"));
+    }
+
+    #[test]
     fn only_https_is_fetched_and_plain_http_only_from_this_computer() {
         for refused in [
             "http://github.com/o/r",
@@ -2117,6 +3073,37 @@ mod tests {
             assert!(!is_newer_release(not, "1.0.0"), "{not}");
             assert!(!is_newer_release("2.0.0", not), "{not}");
         }
+    }
+
+    #[test]
+    fn one_extension_of_a_collection_s_own_release_tag_is_named() {
+        // A record's tag `<id>/v<semver>` names one extension's release
+        // (ADR 0044), which its updates follow; no other tag does.
+        let installed_from =
+            |tag: &str| GitRevision::from_record(Some(&format!("refs/tags/{tag}")), "ab", true);
+        let clock = installed_from("clock/v1.2.0");
+        assert!(clock.is_own_release_tag("clock"));
+        assert_eq!(clock.own_release_version("clock").as_deref(), Some("1.2.0"));
+        // Another extension's release, the repository's own tag, another
+        // extension's id spelled at the tag's start, a prerelease, a
+        // moving tag: none is this extension's release.
+        assert!(!clock.is_own_release_tag("timers"));
+        assert!(!installed_from("v1.2.0").is_own_release_tag("clock"));
+        assert!(!installed_from("clocks/v1.2.0").is_own_release_tag("clock"));
+        assert!(!installed_from("clock/v1.2.0-beta.1").is_own_release_tag("clock"));
+        assert!(!installed_from("clock/latest").is_own_release_tag("clock"));
+        // A tracked reference and a commit are no tag at all.
+        let branch = GitRevision::from_record(Some("refs/heads/main"), "ab", false);
+        assert!(!branch.is_own_release_tag("clock"));
+        let commit = GitRevision::from_record(None, "ab", true);
+        assert!(!commit.is_own_release_tag("clock"));
+        // A prefixed tag's version, as `ReleaseTag::version` names it.
+        let tag = ReleaseTag {
+            tag: "clock/v0.2.0".into(),
+            commit: "ab".into(),
+        };
+        assert_eq!(tag.version(), "0.2.0");
+        assert!(is_newer_release(tag.version(), "0.1.0"));
     }
 
     #[test]

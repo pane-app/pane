@@ -10,11 +10,12 @@
 //! the alias or as a fallback), and when a required one is still without a
 //! value Pane shows the form instead of running the command:
 //!
-//! - It is Pane's own form screen (`Screen::Form`), titled with the
-//!   command's title, with one field per argument in declaration order:
-//!   a text field, a concealed field for a password, a choice for a
-//!   dropdown, each showing its placeholder. The window focuses the first
-//!   required field that is empty.
+//! - It is Pane's own form screen (`Screen::PaneForm`, a designed tree
+//!   #241), titled with the command's title, with one field per argument
+//!   in declaration order: a text field, a concealed field for a
+//!   password, a dropdown for a choice, each showing its placeholder. The
+//!   window's renderer is the designed one, and the tree's first required
+//!   empty field asks for the keyboard.
 //! - Submitting it with a required field still empty marks that field and
 //!   says so, which takes focus to it, and runs nothing. Submitting it
 //!   filled launches the command once, with the values, from the screen it
@@ -38,15 +39,15 @@ use std::time::Instant;
 use serde_json::{Map, Value};
 
 use super::choices::{Choices, Record};
+use super::pane_form::{self, PaneFieldKind, PaneForm, PaneFormField};
 use super::{
-    FormField, FormPurpose, FormView, Launcher, LauncherView, OpenForm, Opening, Screen, State,
-    Status, off_thread, owner,
+    FormPurpose, Launcher, OpenForm, Opening, Screen, State, Status, next_form_id, off_thread,
+    owner,
 };
 use crate::arguments::{self, ArgumentKind, ManifestArgument};
 use crate::extension_data::PackageData;
 use crate::launch::LaunchSource;
 use crate::packages::{InstalledPackage, PackageIdentity, paused_reason};
-use crate::runtime::{Choice, FieldKind};
 
 /// What a required field left empty says, next to it and in the status
 /// line after its label.
@@ -151,7 +152,8 @@ pub(super) struct Asking {
     declared: Vec<ManifestArgument>,
 }
 
-/// A launch whose arguments the form gave, for [`Launcher::submit_form`]'s
+/// A launch whose arguments the form gave, for
+/// [`Launcher::submit_pane_form`]'s
 /// future to start ([`Launcher::launch_submitted`]).
 pub(super) struct Submitted {
     opening: Opening,
@@ -332,15 +334,12 @@ impl Launcher {
                 let given = launch.argument(&argument.name);
                 let placeholder = Some(argument.label().to_owned());
                 let (kind, value) = match &argument.kind {
-                    ArgumentKind::Text => (FieldKind::Text { placeholder }, given),
-                    ArgumentKind::Password => (FieldKind::Password { placeholder }, given),
+                    ArgumentKind::Text => (PaneFieldKind::Text, given),
+                    ArgumentKind::Password => (PaneFieldKind::Password, given),
                     ArgumentKind::Dropdown(options) => {
                         let choices = options
                             .iter()
-                            .map(|option| Choice {
-                                id: option.value.clone(),
-                                label: option.title.clone(),
-                            })
+                            .map(|option| (option.value.clone(), option.title.clone()))
                             .collect();
                         let value = given
                             .or_else(|| {
@@ -349,16 +348,16 @@ impl Launcher {
                                     .filter(|value| argument.accepts(value))
                             })
                             .or_else(|| options.first().map(|option| option.value.as_str()));
-                        (FieldKind::Choice(choices), value)
+                        (PaneFieldKind::Choice(choices), value)
                     }
                 };
-                FormField {
-                    id: argument.name.clone(),
-                    label: argument.label().to_owned(),
+                PaneFormField {
+                    key: argument.name.clone(),
                     kind,
+                    title: argument.label().to_owned(),
+                    placeholder,
+                    info: None,
                     value: value.unwrap_or_default().to_owned(),
-                    error: None,
-                    description: None,
                     required: argument.required,
                 }
             })
@@ -368,23 +367,19 @@ impl Launcher {
         } else {
             "Open command"
         };
-        let form = FormView {
-            fields,
-            submit_label: submit_label.into(),
-            setup: None,
-        };
         if asking.opening.launch.source == LaunchSource::Command {
             state.window_wanted = true;
         }
-        let view = LauncherView::new(Screen::Form(form), title);
-        let mut return_to = std::mem::replace(&mut state.view, view);
-        return_to.status = Status::Idle;
-        state.form = Some(OpenForm {
-            purpose: FormPurpose::Arguments(Box::new(asking)),
-            return_to,
-            submitting: false,
-        });
-        state.next_screen();
+        let form = PaneForm::of(next_form_id(), &title, submit_label, fields, None);
+        // The screen the form was asked from returns to rest when the form
+        // leaves, as it did when the form opened over it.
+        state.view.status = Status::Idle;
+        pane_form::open_pane_form(
+            state,
+            FormPurpose::Arguments(Box::new(asking)),
+            form,
+            title.clone(),
+        );
     }
 
     /// Submits the open argument form: with a required field empty, marks
@@ -393,7 +388,11 @@ impl Launcher {
     /// values (the blank ones left out), for [`Launcher::launch_submitted`].
     /// Remembers each dropdown's value for the command. Refused, with the
     /// reason, once the command's package is gone, disabled or paused.
-    pub(super) fn submit_arguments(&self, state: &mut State) -> Option<Submitted> {
+    pub(super) fn submit_arguments(
+        &self,
+        state: &mut State,
+        values: &[(String, String)],
+    ) -> Option<Submitted> {
         let Some(OpenForm {
             purpose: FormPurpose::Arguments(asking),
             ..
@@ -413,29 +412,35 @@ impl Launcher {
             state.view.status = Status::Error(problem);
             return None;
         }
-        let Screen::Form(form) = &mut state.view.screen else {
+        let Screen::PaneForm(shown) = &mut state.view.screen else {
             return None;
         };
-        for field in &mut form.fields {
-            field.error = None;
+        // A required argument left blank is marked on its field and takes
+        // the keyboard to it, and nothing launches.
+        let mut missing = None;
+        for argument in &asking.declared {
+            if !argument.required {
+                continue;
+            }
+            let value = values
+                .iter()
+                .find(|(key, _)| *key == argument.name)
+                .map(|(_, value)| value.as_str());
+            if value.is_none_or(arguments::blank)
+                && pane_form::mark_error(&mut shown.tree, &argument.name, MISSING)
+            {
+                missing = Some(format!("{}: {MISSING}", argument.label()));
+                break;
+            }
         }
-        let missing = form
-            .fields
-            .iter_mut()
-            .find(|field| field.required && arguments::blank(&field.value))
-            .map(|field| {
-                field.error = Some(MISSING.into());
-                format!("{}: {MISSING}", field.label)
-            });
         if let Some(missing) = missing {
             state.view.status = Status::Error(missing);
             return None;
         }
-        let values: Vec<(String, String)> = form
-            .fields
+        let values: Vec<(String, String)> = values
             .iter()
-            .filter(|field| !arguments::blank(&field.value))
-            .map(|field| (field.id.clone(), field.value.clone()))
+            .filter(|(_, value)| !arguments::blank(value))
+            .cloned()
             .collect();
         let open = state.form.take().expect("the argument form is open");
         let FormPurpose::Arguments(asking) = open.purpose else {
@@ -481,13 +486,12 @@ impl Launcher {
 
     /// The command whose arguments the open argument form asks for, by its
     /// id in Pane's records (`<package identity key>#<manifest id>`); `None`
-    /// on any other screen. The window draws the command's icon beside the
-    /// form's title with it.
+    /// on any other screen.
     pub fn arguments_asked_for(&self) -> Option<String> {
         let state = self.lock();
         match (&state.view.screen, &state.form) {
             (
-                Screen::Form(_),
+                Screen::PaneForm(_),
                 Some(OpenForm {
                     purpose: FormPurpose::Arguments(asking),
                     ..

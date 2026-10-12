@@ -10,6 +10,20 @@
       "subtitle": "The same command implemented by a TypeScript extension",
       "component": "sample_ts.wasm",
       "rootResults": true
+    },
+    {
+      "id": "form",
+      "title": "Greet someone",
+      "subtitle": "A form the guest checks, on the designed tree",
+      "component": "sample_ts.wasm",
+      "mode": "designed"
+    },
+    {
+      "id": "color",
+      "title": "TypeScript sample color picker",
+      "subtitle": "Pick a color in a canvas the guest draws",
+      "component": "sample_ts.wasm",
+      "mode": "designed"
     }
   ]
 }

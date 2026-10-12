@@ -12,7 +12,7 @@
 //! not available on this computer: there is no hibernation file").
 //!
 //! The sample calls each host function as it is: no confirmation, no HUD
-//! — the System Commands default extension (guests/system-commands) is the
+//! — the System Commands default extension (pane-app/system-commands) is the
 //! one that composes them with ADR 0037's confirm and HUD host functions,
 //! and a test drives this sample with a fake system, so nothing it runs
 //! ever reaches the real one. Set Volume takes no argument of the
@@ -25,7 +25,7 @@
 use pane_extension::alloc::{format, string::String};
 use pane_extension::feedback::{Toast, show_toast};
 use pane_extension::system_commands::{self, Outcome};
-use pane_extension::{Action, Command, Item, List, NoCustomView};
+use pane_extension::{Action, Command, Item, List};
 
 struct SystemCommandsSample;
 pane_extension::export!(SystemCommandsSample);
@@ -203,7 +203,7 @@ fn answer(title: &str, outcome: Outcome) {
 }
 
 impl Command for SystemCommandsSample {
-    type CustomView = NoCustomView;
+    type DesignedView = pane_extension::view::NoDesignedView;
 
     async fn render() -> Result<List, String> {
         Ok(List::new("System commands").items(STEPS.iter().map(item)))

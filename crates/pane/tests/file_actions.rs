@@ -88,7 +88,7 @@ impl World {
         let package = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../../target/guests/packages/sample-files");
         assert!(
-            package.exists(),
+            package.is_dir(),
             "{} is missing; run `cargo xtask guests`",
             package.display()
         );
@@ -176,14 +176,20 @@ fn search_files<'a>(
         view.status
     );
     cx.simulate_input(query);
-    // The files found, once the search answered: each titled with its
-    // name and its folder below the home folder.
+    // The files the query found, once the search answered: each titled
+    // with its name and its folder below the home folder. The empty
+    // field's listing already carries such rows — the home folder
+    // first, as the most recently modified — so the wait is for a row
+    // the query itself names, not for any of them.
+    let named = query.to_owned();
     until(&window, cx, |view| {
         !matches!(view.status, Status::Running { .. })
             && view.rows.iter().any(|row| {
-                row.subtitle
-                    .as_deref()
-                    .is_some_and(|subtitle| subtitle.starts_with('~'))
+                row.title.contains(&named)
+                    && row
+                        .subtitle
+                        .as_deref()
+                        .is_some_and(|subtitle| subtitle.starts_with('~'))
             })
     });
     settle(&window, cx);

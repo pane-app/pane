@@ -81,10 +81,7 @@ use pane_extension::feedback::{
 };
 use pane_extension::system::{self, Clip, HostSystem, SystemError};
 use pane_extension::window::{PopToRootType, clear_search, close, pop_to_root};
-use pane_extension::{
-    Action, Command, CustomView, FieldValue, FormError, Item, LaunchRecord, List, Modifier,
-    NoCustomView, Shortcut, Submenu,
-};
+use pane_extension::{Action, Command, Item, LaunchRecord, List, Modifier, Shortcut, Submenu};
 
 use Modifier::{Cmd, Ctrl, Shift};
 
@@ -508,7 +505,7 @@ fn paste_item() -> Item {
 }
 
 impl Command for Actions {
-    type CustomView = NoCustomView;
+    type DesignedView = pane_extension::view::NoDesignedView;
 
     async fn render() -> Result<List, String> {
         let alpha = "Alpha note";
@@ -659,16 +656,5 @@ impl Command for Actions {
             }
             other => Err(format!("`{other}` opens a screen")),
         }
-    }
-
-    async fn submit_form(_item_id: String, _values: Vec<FieldValue>) -> Result<String, FormError> {
-        Err(FormError {
-            field: None,
-            message: "The actions sample has no forms".into(),
-        })
-    }
-
-    async fn open_view(_item_id: String) -> Result<CustomView, String> {
-        Err("The actions sample has no custom views".into())
     }
 }
