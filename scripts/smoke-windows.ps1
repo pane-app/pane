@@ -382,10 +382,10 @@ Check "1-root.png" "hint"   # the hint line: text renders
 $index = 0
 foreach ($sample in "Rust sample", "JavaScript sample", "TypeScript sample") {
     Send $sample; Start-Sleep -Seconds 1
-    # The Rust sample also answers the query itself (#285): its answer card
-    # takes the first row, so a Down lands on the command row - and clamps
-    # at the single row of the samples that answer nothing.
-    Send "{DOWN}"; Start-Sleep -Milliseconds 120; Send "{ENTER}"; Start-Sleep -Seconds 3
+    # Typing the command's name leaves its exact-titled row the best match,
+    # selected: Enter opens it. (The samples answer only "reverse <text>"
+    # queries, so no answer card takes the first row.)
+    Send "{ENTER}"; Start-Sleep -Seconds 3
     Capture "$($index + 2)-command-$index.png"
     Send "{DOWN}"; Start-Sleep -Milliseconds 120; Send "{ENTER}"; Start-Sleep -Seconds 2
     Capture "$($index + 2)-result-$index.png"
@@ -403,7 +403,7 @@ if ($LASTEXITCODE -ne 0) { throw "screenshot check failed: result screenshots ar
 # Tab and Down makes the guest answer. The command is opened by typing its
 # name, as the samples above are.
 Send "rust sample"; Start-Sleep -Seconds 1
-Send "{DOWN}"; Start-Sleep -Milliseconds 120; Send "{ENTER}"; Start-Sleep -Seconds 3
+Send "{ENTER}"; Start-Sleep -Seconds 3
 Send "{DOWN}{DOWN}{DOWN}{DOWN}{ENTER}"; Start-Sleep -Seconds 1
 Capture "6-form.png"
 Send "{ENTER}"; Start-Sleep -Seconds 2
@@ -469,7 +469,7 @@ Focus-Pane $process
 # without running. The command is opened by typing its name, as the samples
 # above are.
 Send "rust sample"; Start-Sleep -Seconds 1
-Send "{DOWN}"; Start-Sleep -Milliseconds 120; Send "{ENTER}"; Start-Sleep -Seconds 3
+Send "{ENTER}"; Start-Sleep -Seconds 3
 Send "{DOWN}{DOWN}{DOWN}{DOWN}{DOWN}{DOWN}{ENTER}"; Start-Sleep -Seconds 2
 Capture "13-windows-only.png"
 Check "13-windows-only.png" "success"   # Windows: the guest's answer
@@ -548,7 +548,7 @@ $process = Start-Pane "stderr-color.log"
 # other swatch covers. The command is opened by typing its name, as the
 # samples above are.
 Send "rust sample"; Start-Sleep -Seconds 1
-Send "{DOWN}"; Start-Sleep -Milliseconds 120; Send "{ENTER}"; Start-Sleep -Seconds 3
+Send "{ENTER}"; Start-Sleep -Seconds 3
 Send "{DOWN}{DOWN}{DOWN}{DOWN}{DOWN}{ENTER}"; Start-Sleep -Seconds 2
 Capture "21-color.png"
 Check "21-color.png" "1e88e5" 3000   # blue, chosen when the view opens
@@ -621,7 +621,7 @@ Wait-Shown "Reloaded Dev"
 Capture "34-reloaded.png"
 Close-Settings
 Send "dev sample"; Start-Sleep -Seconds 1   # wherever the blank order places it
-Send "{DOWN}"; Start-Sleep -Milliseconds 120; Send "{ENTER}"; Start-Sleep -Seconds 3   # below the answer card
+Send "{ENTER}"; Start-Sleep -Seconds 3
 Send "{ENTER}"; Start-Sleep -Seconds 2   # "Say hello"
 Capture "35-dev-after.png"
 Check "35-dev-after.png" "success"   # "Hello from the JavaScript guest"
@@ -638,7 +638,7 @@ Wait-Shown "Dev was not reloaded" -Prefix
 Capture "36-not-reloaded.png"
 Close-Settings
 Send "dev sample"; Start-Sleep -Seconds 1
-Send "{DOWN}"; Start-Sleep -Milliseconds 120; Send "{ENTER}"; Start-Sleep -Seconds 3   # below the answer card
+Send "{ENTER}"; Start-Sleep -Seconds 3
 Send "{ENTER}"; Start-Sleep -Seconds 2
 Capture "37-still-running.png"
 python "$PSScriptRoot/check_screenshot.py" --same (Join-Path $OutDir "35-dev-after.png") (Join-Path $OutDir "37-still-running.png")
