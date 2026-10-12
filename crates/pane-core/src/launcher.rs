@@ -3560,6 +3560,36 @@ impl Launcher {
     /// reason as the status error without calling the extension.
     pub fn activate_selected(&self) -> impl Future<Output = ()> + Send + 'static {
         let mut state = self.lock();
+        // [diag-ff6] Diagnostic scaffolding for the smoke's launch stall;
+        // fix-forward-7 removes it with the root fix.
+        {
+            let entry = state
+                .view
+                .selected
+                .and_then(|index| state.entries.get(index));
+            let what = match entry {
+                Some(Entry::Open(_)) => "open",
+                Some(Entry::Send(_)) => "send",
+                Some(Entry::Copy(_)) => "copy",
+                Some(Entry::Install(..)) => "install",
+                Some(Entry::Actions(_)) => "actions",
+                None => "<none>",
+                Some(_) => "other",
+            };
+            let screen = match &state.view.screen {
+                Screen::Root { .. } => "Root",
+                Screen::Command => "Command",
+                Screen::CommandSearch { .. } => "CommandSearch",
+                Screen::DesignedView(_) => "DesignedView",
+                _ => "other",
+            };
+            crate::diagnostic!(
+                "[diag-ff6] launcher activate_selected: screen={} selected={:?} entry={}",
+                screen,
+                state.view.selected,
+                what
+            );
+        }
         // A designed view's List or Grid: Enter presses the selected item
         // (the callback its tree named, on its key), as the rows list's
         // Enter runs the selected row's action (#240).
@@ -5647,6 +5677,9 @@ impl Launcher {
             }
             return;
         }
+        // [diag-ff6] Diagnostic scaffolding for the smoke's launch stall;
+        // fix-forward-7 removes it with the root fix.
+        crate::diagnostic!("[diag-ff6] open_command: render call sent");
         let result = match self.runtime() {
             Ok(runtime) => {
                 runtime
@@ -5655,6 +5688,7 @@ impl Launcher {
             }
             Err(error) => Err(error),
         };
+        crate::diagnostic!("[diag-ff6] open_command: render replied");
         // The launcher is unlocked before the search it opens with runs.
         let searching = {
             let Some(mut state) = self.lock_if_current(epoch) else {

@@ -910,6 +910,24 @@ impl LauncherWindow {
     }
 
     pub(crate) fn confirm(&mut self, _: &Confirm, window: &mut Window, cx: &mut Context<Self>) {
+        // [diag-ff6] Diagnostic scaffolding for the smoke's launch stall;
+        // fix-forward-7 removes it with the root fix.
+        #[cfg(any(test, debug_assertions))]
+        {
+            let screen = match &self.launcher.screen() {
+                pane_core::Screen::Root { .. } => "Root",
+                pane_core::Screen::Command => "Command",
+                pane_core::Screen::CommandSearch { .. } => "CommandSearch",
+                pane_core::Screen::DesignedView(_) => "DesignedView",
+                _ => "other",
+            };
+            pane_core::diagnostic!(
+                "[diag-ff6] confirm: held={:?} published={} screen={}",
+                self.held_keys(),
+                self.launcher.list_published(),
+                screen
+            );
+        }
         // Enter ends the walk through the recent queries (#206), whatever
         // it runs — a held key included.
         self.recall = None;
@@ -949,6 +967,9 @@ impl LauncherWindow {
     /// opens the Actions panel at the submenu an item's primary action
     /// opens (#140), or activates the row.
     fn invoke_selected(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // [diag-ff6] Diagnostic scaffolding for the smoke's launch stall;
+        // fix-forward-7 removes it with the root fix.
+        pane_core::diagnostic!("[diag-ff6] invoke_selected");
         // The Logs screen's lines are its own: the selected one is copied.
         if self.extension_log_open() {
             self.copy_log_line(cx);
@@ -2079,6 +2100,8 @@ impl LauncherWindow {
             cx.write_to_clipboard(ClipboardItem::new_string(text));
         }
         let pending = self.launcher.activate_selected();
+        // [diag-ff6] Diagnostic scaffolding; removed with the root fix.
+        pane_core::diagnostic!("[diag-ff6] window activate_selected dispatched");
         self.show_until_done(pending, window, cx);
     }
 

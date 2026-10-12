@@ -145,16 +145,17 @@ impl LauncherWindow {
         // before any change is seen.
         let entity = cx.entity();
         window.defer(cx, move |window, cx| {
-            entity.update(cx, |this, _cx| {
-                this.held.replaying = true;
-            });
             Self::dispatch_held(entity, keys, window, cx);
         });
     }
 
     /// Dispatches the held `keys`, one deferred step at a time (see
-    /// `replay_held_keys` above), the replay's end — the window no longer
-    /// replaying — in the step after the last.
+    /// `replay_held_keys` above). The replaying mark lasts exactly for
+    /// each key's own dispatch — a key the replay dispatches is never
+    /// held again, whatever the list's state is then — so a key pressed
+    /// between the steps, while a newer query's list is unpublished, is
+    /// held as a pressed key would be: the replay is over for it, and it
+    /// must not act on the rows the user cannot see yet (#203).
     fn dispatch_held(
         entity: gpui::Entity<Self>,
         mut keys: Vec<Keystroke>,
@@ -168,7 +169,13 @@ impl LauncherWindow {
             });
             return;
         }
+        entity.update(cx, |this, _| {
+            this.held.replaying = true;
+        });
         window.dispatch_keystroke(keys.remove(0), cx);
+        entity.update(cx, |this, _| {
+            this.held.replaying = false;
+        });
         window.defer(cx, move |window, cx| {
             Self::dispatch_held(entity, keys, window, cx);
         });

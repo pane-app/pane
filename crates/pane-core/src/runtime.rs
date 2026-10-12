@@ -1636,6 +1636,13 @@ impl Runtime {
         view: ViewId,
         event: DesignedEvent,
     ) -> impl Future<Output = Result<DesignedNext, CallError>> + Send + 'static {
+        // [diag-ff6] Diagnostic scaffolding for the command-search stall;
+        // fix-forward-7 removes it with the root fix.
+        crate::diagnostic!(
+            "[diag-ff6] runtime designed_view_event: view={view:?} render={} callback={}",
+            event.render,
+            event.callback
+        );
         let (reply, response) = oneshot::channel();
         self.call(Request::DesignedViewEvent { view, event, reply }, response)
     }
@@ -4022,7 +4029,11 @@ impl Host {
                     return;
                 };
                 Box::pin(async move {
+                    // [diag-ff6] Diagnostic scaffolding; removed with the
+                    // root fix.
+                    crate::diagnostic!("[diag-ff6] runtime serving designed event");
                     let _ = reply.send(self.designed_view_event(open, event).await);
+                    crate::diagnostic!("[diag-ff6] runtime served designed event");
                 })
             }
             Request::RefreshDesignedView {

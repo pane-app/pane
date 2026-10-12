@@ -495,6 +495,11 @@ impl Launcher {
         // The rows and the snapshot's list reflect the new text at once.
         self.present_designed_list(state);
         let (callback, key, text) = event?;
+        // [diag-ff6] Diagnostic scaffolding for the command-search stall;
+        // fix-forward-7 removes it with the root fix.
+        crate::diagnostic!(
+            "[diag-ff6] designed search-text: text={text:?} key={key:?} callback={callback:?}"
+        );
         let callback = callback?;
         let payload = value_payload(&text);
         let send = self.send_designed_seen(
