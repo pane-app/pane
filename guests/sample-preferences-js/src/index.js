@@ -27,7 +27,7 @@
 // @ts-check
 import { showToast } from "@pane-app/extension/feedback";
 import { getPreferenceValues } from "@pane-app/extension/preferences";
-import { get, set } from "pane:extension/settings@0.1.0";
+import { get, set } from "pane:extension/settings@0.2.0";
 
 /** The settings key holding how many times "Tick" ran. */
 const TICKS = "ticks";

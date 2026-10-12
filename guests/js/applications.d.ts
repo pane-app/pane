@@ -4,8 +4,8 @@
 // the applications installed on the system, which Pane finds and opens for
 // the extension, since a WASI guest cannot.
 
-/** `pane:extension/applications@0.1.0`. */
-declare module "pane:extension/applications@0.1.0" {
+/** `pane:extension/applications@0.2.0`. */
+declare module "pane:extension/applications@0.2.0" {
   /** An installed application. */
   export interface Application {
     /**

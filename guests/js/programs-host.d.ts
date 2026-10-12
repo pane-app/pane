@@ -5,8 +5,8 @@
 // `@pane-app/extension/programs` (programs.d.ts). A command imports the
 // interface only if its bundle uses it.
 
-/** `pane:extension/programs@0.1.0`. */
-declare module "pane:extension/programs@0.1.0" {
+/** `pane:extension/programs@0.2.0`. */
+declare module "pane:extension/programs@0.2.0" {
   export type ProgramErrorKind =
     | "not-found"
     | "unavailable"

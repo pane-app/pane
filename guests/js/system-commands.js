@@ -2,7 +2,7 @@
 //
 // The session and power commands for a JS/TS command
 // (`@pane-app/extension/system-commands`), through
-// `pane:extension/system-commands@0.1.0` (wit/system-commands.wit):
+// `pane:extension/system-commands@0.2.0` (wit/system-commands.wit):
 // locking the screen, logging out, restarting, shutting down, sleeping,
 // hibernating, turning the displays off and starting the screen saver,
 // the audio commands: the volume of the default output device and the
@@ -39,7 +39,7 @@ import {
   turnOffDisplays as doTurnOffDisplays,
   volumeDown as doVolumeDown,
   volumeUp as doVolumeUp,
-} from "pane:extension/system-commands@0.1.0";
+} from "pane:extension/system-commands@0.2.0";
 
 /**
  * What a command ended in: the state the system is in now (`done`, with

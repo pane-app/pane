@@ -82,7 +82,7 @@ fn prepared(name: &str) -> PathBuf {
         .filter(|line| !line.contains("\"@pane-app/cli\":"))
         .collect::<Vec<_>>()
         .join("\n");
-    let sdk_dep = r#""@pane-app/extension": "0.1.0""#;
+    let sdk_dep = r#""@pane-app/extension": "0.2.0""#;
     let package = package.replace(sdk_dep, r#""@pane-app/extension": "file:../js""#);
     fs::write(folder.join("package.json"), package).unwrap();
     let npm = if cfg!(windows) { "npm.cmd" } else { "npm" };

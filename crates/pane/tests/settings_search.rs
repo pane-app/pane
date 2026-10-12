@@ -71,7 +71,7 @@ fn hello_package(folder: &Path) -> PathBuf {
   "manifestVersion": 1,
   "title": "Hello",
   "version": "1.0.0",
-  "apiVersion": "0.1",
+  "apiVersion": "0.2",
   "commands": [{ "id": "hello", "title": "Say hello", "component": "hello.wasm" }]
 }"#,
     )

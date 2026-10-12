@@ -8,8 +8,8 @@
 // restoring it first if it is minimized. Windows only. Only a command
 // whose package.json sets `"pane": { "windows": true }` imports it.
 
-/** `pane:extension/windows@0.1.0`. */
-declare module "pane:extension/windows@0.1.0" {
+/** `pane:extension/windows@0.2.0`. */
+declare module "pane:extension/windows@0.2.0" {
   /**
    * One window Alt+Tab would show, as it is listed.
    */

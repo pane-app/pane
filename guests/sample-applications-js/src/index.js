@@ -10,7 +10,7 @@
 // check this file against Pane's contract; they are optional.
 // @ts-check
 import { showToast } from "@pane-app/extension/feedback";
-import { installed, open } from "pane:extension/applications@0.1.0";
+import { installed, open } from "pane:extension/applications@0.2.0";
 
 const SAMPLE = "JavaScript applications sample";
 
@@ -31,7 +31,7 @@ function host(call) {
 
 /**
  * The installed applications, by name.
- * @returns {import("pane:extension/applications@0.1.0").Application[]}
+ * @returns {import("pane:extension/applications@0.2.0").Application[]}
  */
 function applications() {
   return host(installed).sort((a, b) =>

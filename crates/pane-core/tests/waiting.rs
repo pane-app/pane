@@ -137,7 +137,7 @@ impl Dirs {
             r#"{{
                 "manifestVersion": 1,
                 "title": "Caller",
-                "apiVersion": "0.1",
+                "apiVersion": "0.2",
                 "commands": [
                     {{ "id": "call", "title": "Call from JavaScript",
                        "component": "caller.wasm", "takesQuery": true }}
@@ -166,7 +166,7 @@ impl Dirs {
             r#"{{
                 "manifestVersion": 1,
                 "title": "Package {name}",
-                "apiVersion": "0.1",
+                "apiVersion": "0.2",
                 "commands": [
                     {{ "id": "fixture", "title": "Fixture {name}", "component": "fixture.wasm" }}
                 ],
@@ -900,7 +900,7 @@ fn a_reload_of_the_dependency_that_fails_to_start_leaves_its_dependents_waiting(
         r#"{
             "manifestVersion": 1,
             "title": "Rust operations sample",
-            "apiVersion": "0.1",
+            "apiVersion": "0.2",
             "commands": [
                 { "id": "call", "title": "Call from Rust",
                   "component": "sample_operations.wasm" }

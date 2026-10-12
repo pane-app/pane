@@ -60,7 +60,7 @@ fn echo() -> PathBuf {
 /// title.
 fn manifest(title: &str) -> String {
     format!(
-        r#"{{ "manifestVersion": 1, "title": "{title}", "apiVersion": "0.1",
+        r#"{{ "manifestVersion": 1, "title": "{title}", "apiVersion": "0.2",
   "commands": [{{ "id": "command", "title": "{title}", "component": "command.wasm" }}] }}"#
     )
 }
@@ -69,7 +69,7 @@ fn manifest(title: &str) -> String {
 /// results from the query.
 fn manifest_computing(title: &str) -> String {
     format!(
-        r#"{{ "manifestVersion": 1, "title": "{title}", "apiVersion": "0.1",
+        r#"{{ "manifestVersion": 1, "title": "{title}", "apiVersion": "0.2",
   "commands": [{{ "id": "command", "title": "{title}", "component": "command.wasm",
     "rootResults": true }}] }}"#
     )

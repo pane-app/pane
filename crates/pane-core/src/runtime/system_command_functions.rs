@@ -42,19 +42,19 @@ impl GuestState {
     }
 
     /// What `command` does through the launcher's system commands, off
-    /// the runtime's thread, as the answer the command shows.
-    async fn system_command(&mut self, command: Command) -> system_commands_host::Outcome {
+    /// the runtime's thread, as the answer the command shows: the host
+    /// half of the interface, which the previous world's adapter wires
+    /// into its own outcome the same way (see `runtime::previous`).
+    pub(super) async fn run_system_command(&mut self, command: Command) -> Outcome {
         let commands = match self.system_commands() {
             Ok(commands) => commands,
-            Err(why) => return wire(Outcome::Explained(why)),
+            Err(why) => return Outcome::Explained(why),
         };
-        let answer = self
-            .hosted(off_thread(
-                move || host_commands::run(command, commands.as_ref()),
-                || Outcome::Explained(failed()),
-            ))
-            .await;
-        wire(answer)
+        self.hosted(off_thread(
+            move || host_commands::run(command, commands.as_ref()),
+            || Outcome::Explained(failed()),
+        ))
+        .await
     }
 }
 
@@ -93,86 +93,86 @@ fn failed() -> String {
 
 impl system_commands_host::Host for GuestState {
     async fn lock_screen(&mut self) -> system_commands_host::Outcome {
-        self.system_command(Command::LockScreen).await
+        wire(self.run_system_command(Command::LockScreen).await)
     }
 
     async fn log_out(&mut self) -> system_commands_host::Outcome {
-        self.system_command(Command::LogOut).await
+        wire(self.run_system_command(Command::LogOut).await)
     }
 
     async fn restart(&mut self) -> system_commands_host::Outcome {
-        self.system_command(Command::Restart).await
+        wire(self.run_system_command(Command::Restart).await)
     }
 
     async fn shut_down(&mut self) -> system_commands_host::Outcome {
-        self.system_command(Command::ShutDown).await
+        wire(self.run_system_command(Command::ShutDown).await)
     }
 
     async fn sleep(&mut self) -> system_commands_host::Outcome {
-        self.system_command(Command::Sleep).await
+        wire(self.run_system_command(Command::Sleep).await)
     }
 
     async fn hibernate(&mut self) -> system_commands_host::Outcome {
-        self.system_command(Command::Hibernate).await
+        wire(self.run_system_command(Command::Hibernate).await)
     }
 
     async fn turn_off_displays(&mut self) -> system_commands_host::Outcome {
-        self.system_command(Command::TurnOffDisplays).await
+        wire(self.run_system_command(Command::TurnOffDisplays).await)
     }
 
     async fn start_screen_saver(&mut self) -> system_commands_host::Outcome {
-        self.system_command(Command::StartScreenSaver).await
+        wire(self.run_system_command(Command::StartScreenSaver).await)
     }
 
     async fn volume_up(&mut self) -> system_commands_host::Outcome {
-        self.system_command(Command::VolumeUp).await
+        wire(self.run_system_command(Command::VolumeUp).await)
     }
 
     async fn volume_down(&mut self) -> system_commands_host::Outcome {
-        self.system_command(Command::VolumeDown).await
+        wire(self.run_system_command(Command::VolumeDown).await)
     }
 
     async fn toggle_mute(&mut self) -> system_commands_host::Outcome {
-        self.system_command(Command::ToggleMute).await
+        wire(self.run_system_command(Command::ToggleMute).await)
     }
 
     async fn set_volume(&mut self, level: u8) -> system_commands_host::Outcome {
-        self.system_command(Command::SetVolume(level)).await
+        wire(self.run_system_command(Command::SetVolume(level)).await)
     }
 
     async fn toggle_microphone_mute(&mut self) -> system_commands_host::Outcome {
-        self.system_command(Command::ToggleMicrophoneMute).await
+        wire(self.run_system_command(Command::ToggleMicrophoneMute).await)
     }
 
     async fn open_recycle_bin(&mut self) -> system_commands_host::Outcome {
-        self.system_command(Command::OpenRecycleBin).await
+        wire(self.run_system_command(Command::OpenRecycleBin).await)
     }
 
     async fn empty_recycle_bin(&mut self) -> system_commands_host::Outcome {
-        self.system_command(Command::EmptyRecycleBin).await
+        wire(self.run_system_command(Command::EmptyRecycleBin).await)
     }
 
     async fn toggle_appearance(&mut self) -> system_commands_host::Outcome {
-        self.system_command(Command::ToggleAppearance).await
+        wire(self.run_system_command(Command::ToggleAppearance).await)
     }
 
     async fn toggle_hdr(&mut self) -> system_commands_host::Outcome {
-        self.system_command(Command::ToggleHdr).await
+        wire(self.run_system_command(Command::ToggleHdr).await)
     }
 
     async fn show_desktop(&mut self) -> system_commands_host::Outcome {
-        self.system_command(Command::ShowDesktop).await
+        wire(self.run_system_command(Command::ShowDesktop).await)
     }
 
     async fn toggle_hidden_files(&mut self) -> system_commands_host::Outcome {
-        self.system_command(Command::ToggleHiddenFiles).await
+        wire(self.run_system_command(Command::ToggleHiddenFiles).await)
     }
 
     async fn eject_removable_drives(&mut self) -> system_commands_host::Outcome {
-        self.system_command(Command::EjectRemovableDrives).await
+        wire(self.run_system_command(Command::EjectRemovableDrives).await)
     }
 
     async fn toggle_bluetooth(&mut self) -> system_commands_host::Outcome {
-        self.system_command(Command::ToggleBluetooth).await
+        wire(self.run_system_command(Command::ToggleBluetooth).await)
     }
 }

@@ -25,7 +25,7 @@
 /// <reference path="./run.d.ts" />
 /// <reference path="./windows.d.ts" />
 
-import type { LaunchRecord } from "pane:extension/commands@0.1.0";
+import type { LaunchRecord } from "pane:extension/commands@0.2.0";
 import type { Outcome, Rendered, UiEvent } from "./view.js";
 
 export type {
@@ -34,7 +34,7 @@ export type {
   LaunchRecord,
   LaunchSource,
   LaunchType,
-} from "pane:extension/commands@0.1.0";
+} from "pane:extension/commands@0.2.0";
 
 /**
  * One entry in a command's list.
@@ -430,7 +430,7 @@ export interface WallTime {
 /**
  * What invoking an indexed result does; Pane performs it.
  * `{ tag: "open-application", val: id }` opens the installed application
- * with `id`, as `open` in `pane:extension/applications@0.1.0` does;
+ * with `id`, as `open` in `pane:extension/applications@0.2.0` does;
  * `{ tag: "open", val: { target, application } }` opens `target` (a URL of
  * any scheme, a file, a folder or an application) with the system's
  * handler, or with `application`, as `open` in `@pane-app/extension/system`

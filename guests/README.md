@@ -328,6 +328,11 @@ without building it, install it from its repository:
 - `fixtures/mismatched-api`: negative control whose exports all have the
   names Pane looks for while `form-error` lacks one field, so only the type
   check can refuse it.
+- `fixtures/previous-api`: positive fixture built against the previous
+  extension API version from the shared `wit/previous` tree
+  ([ADR 0046](../docs/adr/0046-every-breaking-change-to-the-extension-api-gets-a-new-version.md)):
+  its package under `packages/previous-api` names the version it was built
+  for, and Pane runs it through the host's adapter while the window lasts.
 - `fixtures/trees`: test fixture whose list tree and answers are JSON
   written by hand, not by `pane-extension`, with fields Pane does not know, a
   newer version, a view Pane cannot show and trees and answers it cannot
@@ -431,7 +436,7 @@ In JavaScript and TypeScript it is a module (typed in
 whose message is the reason, so rethrowing it shows the reason to the user:
 
 ```ts
-import { get, set } from "pane:extension/settings@0.1.0";
+import { get, set } from "pane:extension/settings@0.2.0";
 
 set("greeting-style", "formal");
 const style: string | null = get("greeting-style");
@@ -454,7 +459,7 @@ const style: string | null = get("greeting-style");
   settings: `get` and `set` return an error.
 - A component that does not import `settings` is unaffected; it is built for
   the `extension` world as before. `extension-with-data` adds the imports
-  within extension API 0.1, so a component that uses settings needs a Pane
+  within extension API 0.2, so a component that uses settings needs a Pane
   with this change. JavaScript and TypeScript commands are built against a
   world that includes it, so the prebuilt JS/TS components list the import
   whether or not they use it.
@@ -467,11 +472,11 @@ interfaces with the same `get` and `set`, one per other kind of
 durable records, `cache` for values it can make again, and `credentials` for
 secrets kept on this computer. The settings sample uses all three. In Rust
 they are `pane_extension::{content, cache, credentials}`; in JavaScript and
-TypeScript the modules `pane:extension/content@0.1.0`,
-`pane:extension/cache@0.1.0` and `pane:extension/credentials@0.1.0`:
+TypeScript the modules `pane:extension/content@0.2.0`,
+`pane:extension/cache@0.2.0` and `pane:extension/credentials@0.2.0`:
 
 ```ts
-import * as cache from "pane:extension/cache@0.1.0";
+import * as cache from "pane:extension/cache@0.2.0";
 
 const greeting = cache.get("last-greeting") ?? makeGreeting();
 cache.set("last-greeting", greeting);
@@ -954,7 +959,7 @@ reason; WIT's `u64` numbers are `bigint`; declarations in
 [`js/file-index.d.ts`](js/file-index.d.ts)):
 
 ```ts
-import { search } from "pane:extension/file-index@0.1.0";
+import { search } from "pane:extension/file-index@0.2.0";
 
 return search(query, { sort: "relevance", limit: 20, offset: 0 }).map((entry) => ({
   id: entry.path,
@@ -1030,7 +1035,7 @@ does not), and import it (`listFolder` throws an object whose `payload` is
 the reason; declarations in [`js/files.d.ts`](js/files.d.ts)):
 
 ```ts
-import { listFolder } from "pane:extension/files@0.1.0";
+import { listFolder } from "pane:extension/files@0.2.0";
 
 const state = listFolder();
 if (state.tag !== "ready") return [];
@@ -1102,7 +1107,7 @@ does not), and import it (`listEntries` throws an object whose `payload` is the
 reason; declarations in [`js/typed-folder.d.ts`](js/typed-folder.d.ts)):
 
 ```ts
-import { listEntries } from "pane:extension/typed-folder@0.1.0";
+import { listEntries } from "pane:extension/typed-folder@0.2.0";
 
 if (!query.endsWith("/") && !query.endsWith("\\")) return [];
 try {
@@ -1186,12 +1191,12 @@ application ([applications](../docs/applications.md#icons)).
 
 JavaScript or TypeScript: add `"pane": { "indexedResults": true }` to
 `package.json`, so the build exports the interface, import the host's
-functions from `"pane:extension/applications@0.1.0"` (they throw an object
+functions from `"pane:extension/applications@0.2.0"` (they throw an object
 whose `payload` is the reason) and export `indexedResults`:
 
 ```ts
 import type { IndexedResults } from "@pane-app/extension";
-import { installed } from "pane:extension/applications@0.1.0";
+import { installed } from "pane:extension/applications@0.2.0";
 
 export const indexedResults: IndexedResults = {
   async results() {
@@ -1417,7 +1422,7 @@ does not import it. Each function throws, on failure, an object whose
 `payload` is the reason:
 
 ```ts
-import * as history from "pane:extension/clipboard-history@0.1.0";
+import * as history from "pane:extension/clipboard-history@0.2.0";
 
 history.setCapture("on");
 history.setRetention(86400); // keep each item for a day
@@ -1513,7 +1518,7 @@ export const command: Command = {
 
 A command **launches another** with `pane:extension/commands`'s `launch`
 (`pane_extension::commands::launch` in Rust, an import of
-`pane:extension/commands@0.1.0` in JavaScript and TypeScript): one of its
+`pane:extension/commands@0.2.0` in JavaScript and TypeScript): one of its
 own package by its id in `pane.json`, or one of another installed package
 by that package's identity (`local:` and the absolute folder Pane shows,
 `npm:` and its name, `git:` and its repository), passing JSON context and
@@ -2244,7 +2249,7 @@ let result = call(source.into(), "greet".into(), 1, input) // "local:/…/sample
 ```
 
 ```ts
-import { call, type CallError } from "pane:extension/operations@0.1.0";
+import { call, type CallError } from "pane:extension/operations@0.2.0";
 
 try {
   const result = await call(source, "greet", 1, JSON.stringify({ name })); // "local:/…"
@@ -2656,12 +2661,12 @@ are a [Rust](sample-helper/src/lib.rs), a
    40 seconds), and other extensions' calls are served meanwhile.
 
    In JavaScript or TypeScript, import `run` from
-   `pane:extension/helpers@0.1.0` (declared in
+   `pane:extension/helpers@0.2.0` (declared in
    [`js/helpers.d.ts`](js/helpers.d.ts)); a failed run rejects with the
    error as `payload`:
 
    ```ts
-   import { run, type HelperError } from "pane:extension/helpers@0.1.0";
+   import { run, type HelperError } from "pane:extension/helpers@0.2.0";
 
    try {
      return await run("echo", [], "hello");
@@ -2839,7 +2844,7 @@ for window in windows::list_windows()? {
 ```
 
 ```ts
-import { activate, listWindows } from "pane:extension/windows@0.1.0";
+import { activate, listWindows } from "pane:extension/windows@0.2.0";
 
 for (const window of listWindows()) {
   if (window.title.includes("todo")) activate(window.id);
@@ -2867,7 +2872,7 @@ and TypeScript: Pane sees only components.
   "manifestVersion": 1,
   "title": "Hello",
   "version": "1.0.0",
-  "apiVersion": "0.1",
+  "apiVersion": "0.2",
   "commands": [
     {
       "id": "hello",
@@ -2898,7 +2903,8 @@ and TypeScript: Pane sees only components.
   images live under the package's `assets` folder, which Pane copies with
   the package.
 - `apiVersion` (required): the `pane:extension` contract the components are
-  built against, `MAJOR.MINOR` (this Pane provides `0.1`, from
+  built against, `MAJOR.MINOR` (this Pane provides `0.2`, and runs `0.1`
+  through the host's adapter until its next release, from
   [`wit/extension.wit`](../wit/extension.wit)). Before 1.0 the minor version
   must match; from 1.0, any minor version up to Pane's in the same major.
 - `platforms` (optional): the operating systems the package supports, from
@@ -2948,12 +2954,12 @@ missing path. Pane then checks each component without running it: it must
 compile, import only WASI 0.3 and export the extension interface, each
 function Pane calls with the types it calls it with, and for a command with
 `rootResults` the root results interface too.
-A component built against an older shape of the same `apiVersion` (the
-pre-release API 0.1 changes between slices) is therefore refused at install,
-naming the first mismatch ("it was built for an older extension API shape:
-rebuild it against Pane's current extension API 0.1 (it has no function
-`render`)");
-rebuild it against the current [`wit/extension.wit`](../wit/extension.wit).
+A component built against an older shape of the version it names is
+therefore refused at install, naming the first mismatch ("it was built for an
+older extension API shape: rebuild it against Pane's extension API 0.1 (it
+has no function `render`)");
+rebuild it against the current [`wit/extension.wit`](../wit/extension.wit)
+(or, for a component built for `0.1`, the version this Pane still runs).
 
 Where the component comes from is up to your build. A standalone Rust crate
 can point `component` at `target/wasm32-wasip2/release/<name>.wasm` inside

@@ -1,0 +1,14 @@
+{
+  "manifestVersion": 1,
+  "title": "Previous API",
+  "version": "0.1.0",
+  "apiVersion": "0.1",
+  "commands": [
+    {
+      "id": "previous",
+      "title": "Previous API",
+      "subtitle": "Built for extension API 0.1, run through the adapter",
+      "component": "previous_api.wasm"
+    }
+  ]
+}

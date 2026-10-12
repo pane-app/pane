@@ -16,8 +16,8 @@ import { showToast } from "@pane-app/extension/feedback";
 import * as registrations from "@pane-app/extension/registrations";
 import type { Handle, Item, RootItem } from "@pane-app/extension/registrations";
 import type { Command } from "@pane-app/extension";
-import { get } from "pane:extension/settings@0.1.0";
-import * as content from "pane:extension/content@0.1.0";
+import { get } from "pane:extension/settings@0.2.0";
+import * as content from "pane:extension/content@0.2.0";
 
 /** The command's id in `pane.json`, which the dynamic root item is under. */
 const COMMAND = "registrations";

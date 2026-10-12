@@ -10,8 +10,8 @@
 // was copied from a program the user excluded; nothing is sent anywhere.
 // Every function throws, on failure, an object whose `payload` is the reason.
 
-/** `pane:extension/clipboard-history@0.1.0`. */
-declare module "pane:extension/clipboard-history@0.1.0" {
+/** `pane:extension/clipboard-history@0.2.0`. */
+declare module "pane:extension/clipboard-history@0.2.0" {
   /**
    * Whether Pane keeps what is copied for this package: `off` (every
    * package starts so), `on`, or `paused` (turned on, then paused).

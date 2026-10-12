@@ -15,7 +15,7 @@
 import { showToast } from "@pane-app/extension/feedback";
 import { EmptyState, List, createView } from "@pane-app/extension/view";
 import { jsxs } from "@pane-app/extension/jsx-runtime";
-import { activate, listWindows } from "pane:extension/windows@0.1.0";
+import { activate, listWindows } from "pane:extension/windows@0.2.0";
 
 /**
  * Calls a host function, turning its error into a plain message.
@@ -48,7 +48,7 @@ function message(error) {
 /**
  * The second line of a listed window: its application's name, saying
  * "on another desktop" of a window on one.
- * @param {import("pane:extension/windows@0.1.0").Window} window
+ * @param {import("pane:extension/windows@0.2.0").Window} window
  * @returns {string}
  */
 const subtitle = (window) =>
@@ -60,7 +60,7 @@ const subtitle = (window) =>
  * One listed window as an item: its title, its application's name (as
  * the keywords the List's host filtering matches besides the title) and
  * icon. Choosing it switches to the window and says what that answered.
- * @param {import("pane:extension/windows@0.1.0").Window} window
+ * @param {import("pane:extension/windows@0.2.0").Window} window
  */
 const item = (window) =>
   jsxs(List.Item, {

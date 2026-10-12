@@ -68,7 +68,7 @@ fn slow_package(sources: &Path) -> PathBuf {
     std::fs::create_dir_all(&folder).unwrap();
     std::fs::write(
         folder.join("pane.json"),
-        r#"{ "manifestVersion": 1, "title": "Slow", "apiVersion": "0.1",
+        r#"{ "manifestVersion": 1, "title": "Slow", "apiVersion": "0.2",
   "commands": [{ "id": "command", "title": "Slow answers",
     "component": "command.wasm", "rootResults": true }] }"#,
     )

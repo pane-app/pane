@@ -3,8 +3,8 @@
 // Declarations for `pane:extension/commands` in wit/commands.wit: the
 // launch record every command receives, and launching another command.
 
-/** `pane:extension/commands@0.1.0`. */
-declare module "pane:extension/commands@0.1.0" {
+/** `pane:extension/commands@0.2.0`. */
+declare module "pane:extension/commands@0.2.0" {
   /**
    * Whether the user launched the command, or Pane did in the background (a
    * schedule, or another command's background launch), without a window.

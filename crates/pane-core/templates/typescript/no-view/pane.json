@@ -4,7 +4,7 @@
   "title": "__TITLE__",
   "description": "A command that runs without a screen and answers in a toast.",
   "version": "0.1.0",
-  "apiVersion": "0.1",
+  "apiVersion": "0.2",
   "icon": "icon.png",
   "commands": [
     {

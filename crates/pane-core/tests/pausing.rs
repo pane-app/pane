@@ -460,7 +460,7 @@ fn a_root_result_provider_that_keeps_crashing_is_paused_and_asked_no_more() {
         r#"{
   "manifestVersion": 1,
   "title": "Faulty",
-  "apiVersion": "0.1",
+  "apiVersion": "0.2",
   "commands": [{ "id": "faulty", "title": "Faulty", "component": "faulty.wasm", "rootResults": true }]
 }"#,
     )

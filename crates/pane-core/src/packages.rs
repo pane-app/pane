@@ -40,7 +40,17 @@ pub const MANIFEST_VERSION: u64 = 1;
 
 /// The extension API this Pane provides, as (major, minor): the
 /// `pane:extension` WIT package version.
-pub const EXTENSION_API: (u64, u64) = (0, 1);
+pub const EXTENSION_API: (u64, u64) = (0, 2);
+
+/// The extension API this Pane still runs besides [`EXTENSION_API`]: the
+/// previous version, whose world lives under `wit/previous/` (ADR 0046),
+/// held there by `cargo xtask ci-lints` at the version those files
+/// declare. A component built for it is instantiated against that world:
+/// every interface it imports is served through the host's adapter (see
+/// `runtime::previous`), and every command it exports is called through
+/// it. The window ends with the first Pane release after this one, and
+/// then the world and the adapter are deleted together.
+pub const EXTENSION_API_PREVIOUS: Option<(u64, u64)> = Some((0, 1));
 
 const REGISTRY_FILE: &str = "installed.json";
 const REGISTRY_VERSION: u64 = 1;
@@ -1234,27 +1244,62 @@ impl Manifest {
         files
     }
 
-    /// Reads a managed copy: like [`Manifest::read`], but a copy for other
-    /// systems is read, so that its commands can be listed as unavailable.
-    fn read_installed(folder: &Path) -> Result<Manifest, PackageError> {
-        let (manifest, _) = Manifest::read_parsed(folder)?;
-        manifest.check_components(folder)?;
-        Ok(manifest)
+    /// Reads a managed copy as the installed listing does: like
+    /// [`Manifest::read`], a copy for another system is read, so that its
+    /// commands can be listed as unavailable. A manifest whose `apiVersion`
+    /// names a version this Pane cannot run is refused as ever — the
+    /// manifest half of what is returned is `Err`, so none of the package's
+    /// code runs, exactly as for a copy that cannot be read — while the
+    /// manifest, parsed beside the refusal, is returned with it: the
+    /// extension stays listed with its title, description and commands'
+    /// names, and its page says the refusal (#318, ADR 0046). A copy broken
+    /// any other way, or one for a version this Pane runs, has nothing
+    /// beside it.
+    fn read_installed(folder: &Path) -> (Result<Manifest, PackageError>, Option<Unsupported>) {
+        let text = match Manifest::read_file(folder) {
+            Ok(text) => text,
+            Err(error) => return (Err(error), None),
+        };
+        let (manifest, unsupported_api) = match Manifest::parse_installed(&text) {
+            Ok(parsed) => parsed,
+            Err(error) => return (Err(error), None),
+        };
+        // The version is decided before anything else of the copy is, as
+        // every read of a package decides it: a copy whose components are
+        // missing beside an unsupported version is refused for the version
+        // — none of its code runs either way.
+        match unsupported_api {
+            Some(refusal) => (
+                Err(PackageError::IncompatibleApi(refusal.clone())),
+                Some(Unsupported { refusal, manifest }),
+            ),
+            None => match manifest.check_components(folder) {
+                Ok(()) => (Ok(manifest), None),
+                Err(error) => (Err(error), None),
+            },
+        }
     }
 
     /// Reads and parses `pane.json` in `folder`, without checking that its
     /// components exist (a development build is about to make them).
     pub(crate) fn read_parsed(folder: &Path) -> Result<(Manifest, String), PackageError> {
-        let path = folder.join(MANIFEST_FILE);
-        let text = match fs::read_to_string(&path) {
-            Ok(text) => text,
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {
-                return Err(PackageError::NoManifest(folder.to_path_buf()));
-            }
-            Err(error) => return Err(PackageError::InvalidManifest(error.to_string())),
-        };
+        let text = Manifest::read_file(folder)?;
         let manifest = Manifest::parse(&text)?;
         Ok((manifest, text))
+    }
+
+    /// Reads `pane.json` in `folder` as text: a missing file says the
+    /// folder is not a package; any other read failure is an invalid
+    /// manifest.
+    fn read_file(folder: &Path) -> Result<String, PackageError> {
+        let path = folder.join(MANIFEST_FILE);
+        match fs::read_to_string(&path) {
+            Ok(text) => Ok(text),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                Err(PackageError::NoManifest(folder.to_path_buf()))
+            }
+            Err(error) => Err(PackageError::InvalidManifest(error.to_string())),
+        }
     }
 
     /// Checks that every component the manifest names is in `folder`, and
@@ -1342,7 +1387,37 @@ impl Manifest {
         }
     }
 
+    /// Parses `pane.json`, refusing a package built for a version of the
+    /// extension API this Pane cannot run (ADR 0046): every read of a
+    /// package being installed, previewed, checked or updated goes through
+    /// this, so such a package is refused before any of its code runs.
     fn parse(text: &str) -> Result<Manifest, PackageError> {
+        Manifest::parse_text(text, false).map(|(manifest, _)| manifest)
+    }
+
+    /// Parses `pane.json` as the installed listing reads it (#318, ADR
+    /// 0046): like [`Manifest::parse`], but a manifest whose `apiVersion`
+    /// names a version this Pane cannot run is parsed anyway — the
+    /// extension stays listed — and the refusal is returned beside the
+    /// manifest, so the caller runs none of it while showing all of it.
+    /// Every other rule of [`Manifest::parse`] applies, with the same
+    /// words.
+    fn parse_installed(text: &str) -> Result<(Manifest, Option<UnsupportedApi>), PackageError> {
+        Manifest::parse_text(text, true)
+    }
+
+    /// Parses `pane.json` — the one implementation behind
+    /// [`Manifest::parse`] and [`Manifest::parse_installed`].
+    /// `tolerate_unsupported_api` is whether a manifest whose `apiVersion`
+    /// names a version this Pane cannot run is parsed anyway, the refusal
+    /// returned beside the manifest (the installed listing's read, #318),
+    /// rather than refused outright (every other read, ADR 0046); the
+    /// version is checked where it always was, and every other rule is
+    /// the same either way.
+    fn parse_text(
+        text: &str,
+        tolerate_unsupported_api: bool,
+    ) -> Result<(Manifest, Option<UnsupportedApi>), PackageError> {
         let invalid = |message: String| PackageError::InvalidManifest(message);
         let value: serde_json::Value =
             serde_json::from_str(text).map_err(|error| invalid(error.to_string()))?;
@@ -1358,8 +1433,16 @@ impl Manifest {
         }
         let json: ManifestJson =
             serde_json::from_value(value).map_err(|error| invalid(error.to_string()))?;
-        if !api_compatible(&json.api_version)? {
-            return Err(PackageError::IncompatibleApi(json.api_version));
+        // The extension API version is decided before any field of the
+        // manifest is validated: an unparseable one is an invalid manifest,
+        // and a version this Pane cannot run is the refusal — which fails
+        // this parse unless the listing reads it, keeping the manifest
+        // beside the refusal instead (ADR 0046, #318).
+        let unsupported_api = extension_api_refusal(&json.api_version)?;
+        if let Some(refusal) = &unsupported_api
+            && !tolerate_unsupported_api
+        {
+            return Err(PackageError::IncompatibleApi(refusal.clone()));
         }
         if json.title.trim().is_empty() {
             return Err(invalid("`title` is empty".into()));
@@ -1571,30 +1654,33 @@ impl Manifest {
             .filter(|component| !component.trim().is_empty())
             .map(|component| inside_package(component, "activate"))
             .transpose()?;
-        Ok(Manifest {
-            title: json.title,
-            description: trimmed(json.description),
-            author: trimmed(json.author),
-            homepage: trimmed(json.homepage),
-            repository: trimmed(json.repository),
-            issues: trimmed(json.issues),
-            license: trimmed(json.license),
-            keywords,
-            version: json.version,
-            icon,
-            api_version: json.api_version,
-            platforms,
-            commands,
-            operations,
-            helpers,
-            dependencies,
-            folder_access: json.folder_access,
-            file_index: json.file_index,
-            preferences: package_preferences,
-            provides,
-            uses,
-            activate,
-        })
+        Ok((
+            Manifest {
+                title: json.title,
+                description: trimmed(json.description),
+                author: trimmed(json.author),
+                homepage: trimmed(json.homepage),
+                repository: trimmed(json.repository),
+                issues: trimmed(json.issues),
+                license: trimmed(json.license),
+                keywords,
+                version: json.version,
+                icon,
+                api_version: json.api_version,
+                platforms,
+                commands,
+                operations,
+                helpers,
+                dependencies,
+                folder_access: json.folder_access,
+                file_index: json.file_index,
+                preferences: package_preferences,
+                provides,
+                uses,
+                activate,
+            },
+            unsupported_api,
+        ))
     }
 
     /// The dependency the package's code calls `id`.
@@ -2105,25 +2191,133 @@ fn parse_platforms(
     .transpose()
 }
 
-/// Whether a package needing extension API `required` (`MAJOR.MINOR`, with
-/// an optional `.PATCH`) runs on this Pane. Before 1.0 each minor version is
-/// its own API; from 1.0 an older minor version of the same major is served.
-fn api_compatible(required: &str) -> Result<bool, PackageError> {
-    let parts: Vec<Option<u64>> = required.split('.').map(|part| part.parse().ok()).collect();
-    let (major, minor) = match parts.as_slice() {
-        [Some(major), Some(minor)] | [Some(major), Some(minor), Some(_)] => (*major, *minor),
-        _ => {
-            return Err(PackageError::InvalidManifest(format!(
-                "apiVersion `{required}` is not a version such as `0.1`"
-            )));
+/// The extension API version `text` names, `MAJOR.MINOR` with an optional
+/// patch: the patch is not part of the version (ADR 0046). `None` when
+/// `text` names no version a manifest may.
+fn api_version(text: &str) -> Option<(u64, u64)> {
+    let mut parts = text.split('.');
+    let major = parts.next()?.parse().ok()?;
+    let minor = parts.next()?.parse().ok()?;
+    match parts.next() {
+        None => Some((major, minor)),
+        Some(patch) => {
+            (patch.parse::<u64>().is_ok() && parts.next().is_none()).then_some((major, minor))
         }
+    }
+}
+
+/// The refusal for a package needing extension API `required`
+/// (`MAJOR.MINOR`, with an optional `.PATCH`): `None` when this Pane runs
+/// it — an extension built for the current version, and for the previous
+/// one while its window lasts (ADR 0046) — and otherwise which version it
+/// needs, in which direction it misses: newer than any version this Pane
+/// runs, or older than every one it runs (#318). Before 1.0 each minor
+/// version is its own API and the previous one is the previous minor; from
+/// 1.0 an older minor version of the same major is served, and the previous
+/// major during its window.
+fn extension_api_refusal(required: &str) -> Result<Option<UnsupportedApi>, PackageError> {
+    let Some(needed) = api_version(required) else {
+        return Err(PackageError::InvalidManifest(format!(
+            "apiVersion `{required}` is not a version such as `0.1`"
+        )));
     };
-    let (host_major, host_minor) = EXTENSION_API;
-    Ok(if major == 0 {
-        host_major == 0 && minor == host_minor
+    // A version this Pane cannot run is the refusal, with the direction it
+    // misses in: newer than any version this Pane runs — a newer Pane runs
+    // it — or older than every one it runs — a newer version of the
+    // extension does (#318, ADR 0046).
+    let refused = !runs_extension_api(EXTENSION_API, EXTENSION_API_PREVIOUS, needed);
+    Ok(refused.then(|| UnsupportedApi {
+        required: required.to_owned(),
+        newer: needed > EXTENSION_API,
+    }))
+}
+
+/// A package's need for an extension API version this Pane cannot run
+/// (ADR 0046, #318): which version it needs, and whether that version is
+/// newer than any this Pane runs — a newer Pane runs it — or older than
+/// every one it runs — a newer version of the extension does. The refusal
+/// is one text everywhere ([`UnsupportedApi::fmt`]): an install's, a
+/// preview's, `pane-ext check`'s, an update check's skip, and the
+/// installed listing's page and rows.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UnsupportedApi {
+    /// The version the package's manifest names, as it names it.
+    pub required: String,
+    /// Whether that version is newer than any this Pane runs.
+    pub newer: bool,
+}
+
+impl UnsupportedApi {
+    /// What needs updating, as the extension's row in the extension list
+    /// and in root search says it: the direction of the refusal is the
+    /// remedy.
+    pub fn needs(&self) -> &'static str {
+        if self.newer {
+            "Needs a newer Pane"
+        } else {
+            "Needs a newer version of the extension"
+        }
+    }
+}
+
+impl fmt::Display for UnsupportedApi {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&refused_api_text(
+            EXTENSION_API,
+            EXTENSION_API_PREVIOUS,
+            self,
+        ))
+    }
+}
+
+/// What a refusal of the extension API says to a Pane whose extension API
+/// is `host`, still running `previous` while its window lasts: which
+/// version the extension needs, which versions this Pane runs, and what
+/// to update (ADR 0046, #318) — the direction of the refusal is the
+/// remedy. Parameterized like [`runs_extension_api`] so a future window is
+/// worded by the same code.
+fn refused_api_text(
+    host: (u64, u64),
+    previous: Option<(u64, u64)>,
+    refusal: &UnsupportedApi,
+) -> String {
+    let mut text = format!(
+        "it needs Pane extension API {}, but this Pane provides {}.{}",
+        refusal.required, host.0, host.1
+    );
+    if let Some((major, minor)) = previous {
+        text.push_str(&format!(" and {major}.{minor}"));
+    }
+    text.push_str(if refusal.newer {
+        ". Update Pane to run it"
     } else {
-        major == host_major && minor <= host_minor
-    })
+        ". Update the extension to a newer version"
+    });
+    text
+}
+
+/// Whether a Pane whose extension API is `host`, still running the previous
+/// version `previous` while its window lasts, runs an extension built for
+/// `required` (ADR 0046): the current version; an older minor of the same
+/// major from 1.0, where an addition needs no new version; and the
+/// previous version, the previous minor before 1.0. A version older than
+/// that or newer than the host is refused and explained, never run.
+fn runs_extension_api(
+    host: (u64, u64),
+    previous: Option<(u64, u64)>,
+    required: (u64, u64),
+) -> bool {
+    if required == host {
+        return true;
+    }
+    // From 1.0 an older minor of the same major runs: only a breaking
+    // change gets a new major, so the host serves every minor before it.
+    if host.0 >= 1 && required.0 == host.0 && required.1 <= host.1 {
+        return true;
+    }
+    // The previous version, while its world lives under `wit/previous/`:
+    // before 1.0 that is the previous minor, from 1.0 the previous major.
+    previous == Some(required)
 }
 
 /// Why a package cannot be previewed, installed or updated.
@@ -2139,8 +2333,10 @@ pub enum PackageError {
     InvalidManifest(String),
     /// `pane.json` uses a newer manifest format than this Pane reads.
     NewerManifest(u64),
-    /// The package needs an extension API this Pane does not provide.
-    IncompatibleApi(String),
+    /// The package needs an extension API this Pane does not provide
+    /// (ADR 0046, #318): which version it needs, and in which direction it
+    /// misses — the direction is what to update.
+    IncompatibleApi(UnsupportedApi),
     /// The package does not support this operating system; the reason says
     /// which ones it supports.
     UnsupportedPlatform(String),
@@ -2210,11 +2406,9 @@ impl fmt::Display for PackageError {
                 f,
                 "Incompatible package: its {MANIFEST_FILE} uses manifest version {found}, but this Pane reads version {MANIFEST_VERSION}; a newer Pane is needed"
             ),
-            PackageError::IncompatibleApi(required) => write!(
-                f,
-                "Incompatible package: it needs Pane extension API {required}, but this Pane provides {}.{}",
-                EXTENSION_API.0, EXTENSION_API.1
-            ),
+            PackageError::IncompatibleApi(refusal) => {
+                write!(f, "Incompatible package: {refusal}")
+            }
             PackageError::UnsupportedPlatform(reason) => f.write_str(reason),
             PackageError::MissingComponent { command, component } => write!(
                 f,
@@ -2795,6 +2989,36 @@ impl SourcePackage {
     }
 }
 
+/// An installed extension built for a version of Pane's extension API
+/// this Pane cannot run (ADR 0046, #318). The package's `manifest` is
+/// `Err(IncompatibleApi)` — exactly as for a copy that cannot be read, so
+/// none of its code runs and nothing counts it towards pausing — while
+/// the manifest, parsed with the version tolerated, is kept here beside
+/// the refusal: the extension stays listed in Settings with its title,
+/// description, icon and commands' names, and its page carries the
+/// refusal in full. It resolves by itself when a version this Pane can run
+/// arrives — the extension is updated, or Pane is updated and restarted
+/// — and never survives the copy that has it.
+#[derive(Clone, Debug)]
+pub(crate) struct Unsupported {
+    /// Which version the extension needs, and the direction of the
+    /// refusal: what to update.
+    pub(crate) refusal: UnsupportedApi,
+    /// The manifest, parsed with the `apiVersion` tolerated: what the
+    /// listing shows of the extension.
+    pub(crate) manifest: Manifest,
+}
+
+impl Unsupported {
+    /// The refusal as the error about the package, the one text every
+    /// surface shows of it: an install's, a preview's, `pane-ext check`'s,
+    /// an update check's skip, and the installed listing's page and rows
+    /// (#318, ADR 0046).
+    pub(crate) fn package_error(&self) -> PackageError {
+        PackageError::IncompatibleApi(self.refusal.clone())
+    }
+}
+
 /// One extension of a collection as the choice lists it (ADR 0044, #308):
 /// what its own manifest says of it — the index holds none of that — read
 /// leniently, without checking what the manifest names. An extension whose
@@ -2932,13 +3156,16 @@ pub(crate) fn collection_extension(
     }
     Ok((identity, root, subfolder))
 }
-
 /// An installed package, as read from its managed copy.
 #[derive(Clone, Debug)]
 pub struct InstalledPackage {
     pub identity: PackageIdentity,
     /// The manifest of the managed copy, or why it could not be read.
     pub manifest: Result<Manifest, PackageError>,
+    /// The version refusal and manifest beside it, for an extension built
+    /// for a version this Pane cannot run (see [`Unsupported`]): `manifest`
+    /// refuses it, and this keeps it listed. `None` for every other copy.
+    pub(crate) unsupported: Option<Unsupported>,
     /// Where Pane keeps this package's files.
     pub location: PathBuf,
     /// Whether the user has left the package enabled. A disabled package
@@ -3013,6 +3240,18 @@ impl PackageIcons {
 }
 
 impl InstalledPackage {
+    /// The extension API version this extension was built for, when it is
+    /// the previous one this Pane still runs through its adapter (ADR
+    /// 0046): the version its manifest names, as it names it, for the
+    /// mark its page shows. `None` for an extension built for the current
+    /// version — and for one whose manifest this Pane refuses, whose page
+    /// says the refusal instead.
+    pub fn previous_api(&self) -> Option<String> {
+        let manifest = self.manifest.as_ref().ok()?;
+        let version = api_version(&manifest.api_version)?;
+        (EXTENSION_API_PREVIOUS == Some(version)).then(|| manifest.api_version.clone())
+    }
+
     /// The package `record` in `installed.json` says is installed, whose
     /// managed copy is at `location` — its source, its enabled state,
     /// what it was installed from — with the identities its dependencies
@@ -3020,7 +3259,7 @@ impl InstalledPackage {
     /// before Pane recorded them) is resolved now.
     fn load(record: &RecordJson, location: PathBuf) -> InstalledPackage {
         let identity = PackageIdentity(record.source.clone());
-        let manifest = Manifest::read_installed(&location);
+        let (manifest, unsupported) = Manifest::read_installed(&location);
         let dependencies = match &manifest {
             Ok(manifest) => manifest
                 .dependencies
@@ -3047,6 +3286,7 @@ impl InstalledPackage {
             .and_then(|git| git.installed_default(record.default_version.as_deref(), &identity));
         let mut package = InstalledPackage {
             manifest,
+            unsupported,
             identity,
             location,
             enabled: !record.disabled,
@@ -3062,12 +3302,29 @@ impl InstalledPackage {
             },
             disabled_commands: record.disabled_commands.iter().cloned().collect(),
         };
-        package.icons = PackageIcons::of(
-            package.manifest.as_ref().ok(),
-            &package.title(),
-            &package.location,
-        );
+        package.icons = PackageIcons::of(package.listed(), &package.title(), &package.location);
         package
+    }
+
+    /// The manifest to read the extension's own facts from: its managed
+    /// copy's when this Pane can run it, or the one parsed beside a
+    /// version refusal when it cannot, so the listing shows the same
+    /// title, description, icon and version either way (#318, ADR 0046).
+    /// `None` only for a copy broken another way, whose facts cannot be
+    /// known.
+    fn listed(&self) -> Option<&Manifest> {
+        match &self.unsupported {
+            Some(unsupported) => Some(&unsupported.manifest),
+            None => self.manifest.as_ref().ok(),
+        }
+    }
+
+    /// The extension API version refusal when this Pane cannot run the
+    /// extension (see [`Unsupported`]): `None` when it can.
+    pub fn unsupported_api(&self) -> Option<&UnsupportedApi> {
+        self.unsupported
+            .as_ref()
+            .map(|unsupported| &unsupported.refusal)
     }
 
     /// The identity of the package this one's code calls by the dependency
@@ -3082,9 +3339,9 @@ impl InstalledPackage {
 
     /// The package's display title.
     pub fn title(&self) -> String {
-        match &self.manifest {
-            Ok(manifest) => manifest.title.clone(),
-            Err(_) => match (
+        match self.listed() {
+            Some(manifest) => manifest.title.clone(),
+            None => match (
                 self.identity.local_folder(),
                 self.identity.npm_name(),
                 self.identity.git_repository(),
@@ -3098,7 +3355,7 @@ impl InstalledPackage {
     }
 
     pub fn version(&self) -> Option<String> {
-        self.manifest.as_ref().ok()?.version.clone()
+        self.listed().and_then(|manifest| manifest.version.clone())
     }
 
     /// The package's icon as Pane draws it (#139): its manifest's, or a
@@ -3188,7 +3445,28 @@ impl InstalledPackage {
 
     /// The description its manifest gives (#168), if it gives one.
     pub fn description(&self) -> Option<&str> {
-        self.manifest.as_ref().ok()?.description.as_deref()
+        self.listed()
+            .and_then(|manifest| manifest.description.as_deref())
+    }
+
+    /// What the extension's page in Settings says under its title
+    /// (#224): the description its manifest gives, or, for an extension of
+    /// one command that gives none, that command's subtitle. Read from the
+    /// manifest the listing keeps, so an extension built for a version
+    /// this Pane cannot run says it still (#318) — its commands are
+    /// offered nowhere, but its page stays.
+    pub fn page_description(&self) -> Option<String> {
+        let manifest = self.listed()?;
+        if let Some(description) = &manifest.description {
+            return Some(description.clone());
+        }
+        match manifest.commands.as_slice() {
+            [only] => only
+                .subtitle
+                .clone()
+                .filter(|subtitle| *subtitle != manifest.title),
+            _ => None,
+        }
     }
 
     /// Every command of this package's manifest, in its order, whether
@@ -4455,7 +4733,7 @@ mod tests {
         fs::write(folder.join("command.wasm"), b"not checked here").unwrap();
         fs::write(folder.join(&file), helper).unwrap();
         let manifest = format!(
-            r#"{{ "manifestVersion": 1, "title": "Tool", "apiVersion": "0.1",
+            r#"{{ "manifestVersion": 1, "title": "Tool", "apiVersion": "0.2",
                  "commands": [{{ "id": "c", "title": "C", "component": "command.wasm" }}],
                  "helpers": [{{ "id": "tool", "targets": {{ "{}": "{file}" }} }}] }}"#,
             target.id()
@@ -4680,5 +4958,178 @@ mod tests {
                 Target::current().unwrap()
             )
         );
+    }
+
+    #[test]
+    fn an_api_version_is_parsed_with_or_without_a_patch() {
+        // The manifest may say `0.1` or `0.1.0`: the patch is not part of
+        // the API version. Anything else is a malformed manifest. Both
+        // versions this Pane runs parse: the current one, and the previous
+        // one the window holds (ADR 0046).
+        let runs = |required| extension_api_refusal(required).map(|refusal| refusal.is_none());
+        assert_eq!(runs("0.2"), Ok(true));
+        assert_eq!(runs("0.2.0"), Ok(true));
+        assert_eq!(runs("0.1"), Ok(true));
+        assert_eq!(runs("0.3"), Ok(false));
+        assert_eq!(runs("0.0"), Ok(false));
+        assert_eq!(
+            extension_api_refusal("one"),
+            Err(PackageError::InvalidManifest(
+                "apiVersion `one` is not a version such as `0.1`".into()
+            ))
+        );
+    }
+
+    #[test]
+    fn a_refused_api_version_names_the_direction_it_misses() {
+        // A refusal names which version the extension needs, which
+        // versions this Pane runs, and what to update (#318, ADR 0046):
+        // a version newer than any this Pane runs needs a newer Pane, one
+        // older than every version it runs a newer version of the
+        // extension.
+        let newer = extension_api_refusal("0.3").unwrap().expect("refused");
+        assert_eq!(
+            newer,
+            UnsupportedApi {
+                required: "0.3".into(),
+                newer: true
+            }
+        );
+        assert_eq!(newer.needs(), "Needs a newer Pane");
+        assert_eq!(
+            newer.to_string(),
+            "it needs Pane extension API 0.3, but this Pane provides 0.2 and 0.1. \
+             Update Pane to run it"
+        );
+        let older = extension_api_refusal("0.0").unwrap().expect("refused");
+        assert_eq!(
+            older,
+            UnsupportedApi {
+                required: "0.0".into(),
+                newer: false
+            }
+        );
+        assert_eq!(older.needs(), "Needs a newer version of the extension");
+        assert_eq!(
+            older.to_string(),
+            "it needs Pane extension API 0.0, but this Pane provides 0.2 and 0.1. Update the \
+             extension to a newer version"
+        );
+        // As a package error it says the package is incompatible, with the
+        // same words every refusal uses — an install's, a preview's,
+        // `pane-ext check`'s, an update check's skip and the installed
+        // listing's page.
+        assert_eq!(
+            PackageError::IncompatibleApi(newer).to_string(),
+            "Incompatible package: it needs Pane extension API 0.3, but this Pane provides \
+             0.2 and 0.1. Update Pane to run it"
+        );
+        // A previous version this Pane still runs is named beside its
+        // current one, so a refusal says every version it runs — the
+        // wording above, and the parameterized shape below for a window
+        // that is not this Pane's own.
+        let host = UnsupportedApi {
+            required: "0.4".into(),
+            newer: true,
+        };
+        assert_eq!(
+            refused_api_text((0, 3), Some((0, 2)), &host),
+            "it needs Pane extension API 0.4, but this Pane provides 0.3 and 0.2. \
+             Update Pane to run it"
+        );
+    }
+
+    #[test]
+    fn the_listing_reads_a_manifest_whose_api_version_is_refused() {
+        // The installed listing parses a manifest naming a version this
+        // Pane cannot run and keeps it beside the refusal (#318, ADR
+        // 0046): a strict read refuses the same manifest, as every read
+        // of a package being installed, previewed, checked or updated
+        // does.
+        let refused = r#"{
+  "manifestVersion": 1,
+  "title": "Hello",
+  "version": "1.0.0",
+  "apiVersion": "0.3",
+  "commands": [
+    { "id": "hello", "title": "Say hello", "subtitle": "Greets you", "component": "hello.wasm" }
+  ]
+}"#;
+        assert_eq!(
+            Manifest::parse(refused),
+            Err(PackageError::IncompatibleApi(UnsupportedApi {
+                required: "0.3".into(),
+                newer: true
+            }))
+        );
+        let (manifest, refusal) = Manifest::parse_installed(refused).unwrap();
+        assert_eq!(manifest.title, "Hello");
+        assert_eq!(manifest.commands[0].subtitle.as_deref(), Some("Greets you"));
+        assert_eq!(
+            refusal,
+            Some(UnsupportedApi {
+                required: "0.3".into(),
+                newer: true
+            })
+        );
+        // A manifest this Pane runs parses the same either way — the
+        // current version, and the previous one the window holds — and a
+        // broken one is broken for both.
+        let runs = refused.replace("0.3", "0.2");
+        assert_eq!(Manifest::parse(&runs).unwrap().title, "Hello");
+        let (manifest, refusal) = Manifest::parse_installed(&runs).unwrap();
+        assert_eq!(manifest.title, "Hello");
+        assert_eq!(refusal, None);
+        let previous = refused.replace("0.3", "0.1");
+        assert_eq!(Manifest::parse(&previous).unwrap().title, "Hello");
+        let broken = "{ not json";
+        assert_eq!(
+            Manifest::parse_installed(broken).unwrap_err().to_string(),
+            Manifest::parse(broken).unwrap_err().to_string()
+        );
+    }
+
+    #[test]
+    fn while_the_previous_world_s_window_lasts_both_versions_run() {
+        // The window this Pane holds: 0.2 is the current version and 0.1
+        // the previous one, run through the host's adapter (ADR 0046) —
+        // and every other version is refused, as it always has been.
+        let (host, previous) = (EXTENSION_API, EXTENSION_API_PREVIOUS);
+        assert_eq!(previous, Some((0, 1)));
+        assert!(runs_extension_api(host, previous, host));
+        assert!(runs_extension_api(host, previous, (0, 1)));
+        for required in [(0, 0), (0, 3), (1, 0), (1, 1), (2, 0)] {
+            assert!(!runs_extension_api(host, previous, required));
+        }
+    }
+
+    #[test]
+    fn before_1_0_the_previous_minor_alone_is_still_run() {
+        // ADR 0046 before 1.0: every minor is its own API, so a host at
+        // 0.3 runs 0.3 and the previous minor, 0.2, while its window
+        // lasts — nothing older and nothing newer.
+        let (host, previous) = ((0, 3), Some((0, 2)));
+        assert!(runs_extension_api(host, previous, (0, 3)));
+        assert!(runs_extension_api(host, previous, (0, 2)));
+        assert!(!runs_extension_api(host, previous, (0, 1)));
+        assert!(!runs_extension_api(host, previous, (0, 4)));
+        assert!(!runs_extension_api(host, previous, (1, 0)));
+    }
+
+    #[test]
+    fn from_1_0_every_minor_of_the_major_is_run() {
+        // ADR 0046 from 1.0: an addition needs no new version, so a host
+        // at 1.3 runs every minor from 1.0, and the previous major, 0.9,
+        // while its window lasts — nothing older and nothing newer.
+        let (host, previous) = ((1, 3), Some((0, 9)));
+        for minor in 0..=3 {
+            assert!(runs_extension_api(host, previous, (1, minor)));
+        }
+        assert!(runs_extension_api(host, previous, (0, 9)));
+        assert!(!runs_extension_api(host, previous, (0, 8)));
+        assert!(!runs_extension_api(host, previous, (1, 4)));
+        assert!(!runs_extension_api(host, previous, (2, 0)));
+        // The previous major runs only while the window lasts.
+        assert!(!runs_extension_api(host, None, (0, 9)));
     }
 }

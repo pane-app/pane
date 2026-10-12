@@ -28,7 +28,9 @@ use crate::system::{
 impl GuestState {
     /// The launcher's system, unless the instance's code is stopped (then
     /// why).
-    fn system(&self) -> Result<Arc<dyn System>, String> {
+    // pub(super): the previous world's adapter calls it too (see
+    // `runtime::previous`).
+    pub(super) fn system(&self) -> Result<Arc<dyn System>, String> {
         let _host = self.host();
         if let Some(end) = self.stopped() {
             return Err(stopped_code(end));
@@ -42,7 +44,7 @@ impl GuestState {
     /// Closes the window for a paste, as `window.close` does: in a call a
     /// window was shown for, with the next showing as the user's Launcher
     /// setting says. Why not, if the code was stopped meanwhile.
-    fn close_for_paste(&self) -> Result<(), SystemError> {
+    pub(super) fn close_for_paste(&self) -> Result<(), SystemError> {
         let _host = self.host();
         if let Some(end) = self.stopped() {
             return Err(SystemError::Failed(stopped_code(end)));
@@ -73,14 +75,14 @@ fn clip_from(content: system_host::Clip) -> Result<Clip, String> {
 
 /// What the system's thread failing is, for the functions answering a
 /// [`SystemError`].
-fn failed_error() -> SystemError {
+pub(super) fn failed_error() -> SystemError {
     SystemError::Failed(failed())
 }
 
 /// Runs `work` on a thread of its own, since the system may block (a
 /// handler starting, the clipboard held open), and answers what it
 /// answered.
-async fn off_thread<T: Send + 'static>(
+pub(super) async fn off_thread<T: Send + 'static>(
     work: impl FnOnce() -> T + Send + 'static,
     gone: impl FnOnce() -> T,
 ) -> T {
@@ -98,7 +100,7 @@ async fn off_thread<T: Send + 'static>(
 
 /// What a command is told when the system's thread could not start or
 /// failed.
-fn failed() -> String {
+pub(super) fn failed() -> String {
     "Pane could not reach the system for this (its thread failed)".into()
 }
 

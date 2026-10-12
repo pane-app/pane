@@ -15,8 +15,8 @@ import type { Command } from "@pane-app/extension";
 import { showToast } from "@pane-app/extension/feedback";
 import { EmptyState, List, createView } from "@pane-app/extension/view";
 import { jsxs } from "@pane-app/extension/jsx-runtime";
-import { activate, listWindows } from "pane:extension/windows@0.1.0";
-import type { Window } from "pane:extension/windows@0.1.0";
+import { activate, listWindows } from "pane:extension/windows@0.2.0";
+import type { Window } from "pane:extension/windows@0.2.0";
 
 /** The command's id in `pane.json`. */
 const SWITCH = "switch-windows";

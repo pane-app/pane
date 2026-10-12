@@ -2158,7 +2158,7 @@ mod tests {
         fs::write(
             folder.join("pane.json"),
             format!(
-                r#"{{ "manifestVersion": 1, "title": "Package {name}", "apiVersion": "0.1",
+                r#"{{ "manifestVersion": 1, "title": "Package {name}", "apiVersion": "0.2",
                      "operations": [{{ "id": "echo", "version": 1, "component": "c.wasm" }}] }}"#
             ),
         )
@@ -2257,7 +2257,7 @@ mod tests {
         fs::write(
             folder.join("pane.json"),
             format!(
-                r#"{{ "manifestVersion": 1, "title": "Package {name}", "apiVersion": "0.1",
+                r#"{{ "manifestVersion": 1, "title": "Package {name}", "apiVersion": "0.2",
                      "operations": [{{ "id": "echo", "version": 1, "component": "c.wasm" }}],
                      "uses": [{uses}] }}"#
             ),
@@ -2275,7 +2275,7 @@ mod tests {
         fs::write(
             folder.join("pane.json"),
             format!(
-                r#"{{ "manifestVersion": 1, "title": "Package {name}", "apiVersion": "0.1",
+                r#"{{ "manifestVersion": 1, "title": "Package {name}", "apiVersion": "0.2",
                      "provides": [{{ "capability": "test:greet@1", "component": "c.wasm",
                                     "operations": ["greet"] }}] }}"#
             ),
@@ -2350,7 +2350,7 @@ mod tests {
         fs::write(
             folder.join("pane.json"),
             format!(
-                r#"{{ "manifestVersion": 1, "title": "Package {name}", "apiVersion": "0.1",
+                r#"{{ "manifestVersion": 1, "title": "Package {name}", "apiVersion": "0.2",
                      "operations": [{{ "id": "echo", "version": 1, "component": "c.wasm" }}],
                      "dependencies": [{dependencies}] }}"#
             ),

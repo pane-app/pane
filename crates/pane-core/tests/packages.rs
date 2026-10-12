@@ -9,8 +9,8 @@ use std::path::{Path, PathBuf};
 
 use futures::executor::block_on;
 use pane_core::{
-    CallError, CommandRegistration, Launcher, PackageIdentity, Platform, Runtime, Screen, Status,
-    Unavailable,
+    CallError, CommandRegistration, ExtensionMark, Launcher, PackageIdentity, Platform, Runtime,
+    Screen, Status, Unavailable,
 };
 use tempfile::TempDir;
 
@@ -26,7 +26,7 @@ mod rows;
 
 use feedback::shown;
 use guests::guest;
-use rows::{select_title, titles};
+use rows::{manage, select_title, titles};
 
 /// A package manifest for one command backed by `component`.
 fn manifest(title: &str, version: &str, component: &str) -> String {
@@ -35,7 +35,7 @@ fn manifest(title: &str, version: &str, component: &str) -> String {
   "manifestVersion": 1,
   "title": "{title}",
   "version": "{version}",
-  "apiVersion": "0.1",
+  "apiVersion": "0.2",
   "commands": [
     {{ "id": "hello", "title": "Say hello", "subtitle": "Greets you", "component": "{component}" }}
   ]
@@ -476,10 +476,24 @@ fn with_manifest(folder: &Path, manifest: &str) {
 }
 
 /// (case, how to build it, what the explanation must say)
-/// Explains a component built for another shape of extension API 0.1.
-const OLDER_SHAPE: &str = "it was built for an older extension API shape: rebuild it against Pane's current extension API 0.1";
+/// Explains a component built for another shape of the previous extension
+/// API version, which this Pane still runs (ADR 0046): the refusal names
+/// the version a rebuild targets.
+const OLDER_SHAPE: &str =
+    "it was built for an older extension API shape: rebuild it against Pane's extension API 0.1";
 
-const UNSUPPORTED: [(&str, Unsupported, &str); 11] = [
+/// Writes one package folder at `folder` whose component is `guest_name`
+/// (a negative control built for the previous version) with a manifest
+/// naming that version: one a version-gate read would run, refused by the
+/// shape check against the world the component's exports name.
+fn built_for_previous(folder: &Path, guest_name: &str) -> PathBuf {
+    let folder = package(folder, "Hello", "1.0.0", guest_name);
+    let manifest = manifest("Hello", "1.0.0", "hello.wasm").replace("0.2", "0.1");
+    with_manifest(&folder, &manifest);
+    folder
+}
+
+const UNSUPPORTED: [(&str, Unsupported, &str); 12] = [
     ("no folder", |_| {}, "Cannot open"),
     (
         "no manifest",
@@ -500,10 +514,23 @@ const UNSUPPORTED: [(&str, Unsupported, &str); 11] = [
         "unsupported extension API",
         |folder| {
             package(folder, "Hello", "1.0.0", "sample_rust");
-            let manifest = manifest("Hello", "1.0.0", "hello.wasm").replace("0.1", "0.2");
+            let manifest = manifest("Hello", "1.0.0", "hello.wasm").replace("0.2", "0.3");
             with_manifest(folder, &manifest);
         },
-        "it needs Pane extension API 0.2, but this Pane provides 0.1",
+        "it needs Pane extension API 0.3, but this Pane provides 0.2 and 0.1. Update Pane to \
+         run it",
+    ),
+    (
+        // An extension older than every version this Pane runs: the
+        // remedy is the extension's own update, not Pane's.
+        "unsupported older extension API",
+        |folder| {
+            package(folder, "Hello", "1.0.0", "sample_rust");
+            let manifest = manifest("Hello", "1.0.0", "hello.wasm").replace("0.2", "0.0");
+            with_manifest(folder, &manifest);
+        },
+        "it needs Pane extension API 0.0, but this Pane provides 0.2 and 0.1. \
+         Update the extension to a newer version",
     ),
     (
         "source-only package",
@@ -523,18 +550,21 @@ const UNSUPPORTED: [(&str, Unsupported, &str); 11] = [
         "Pane supports only WASI 0.3, but it imports wasi:io/poll@0.2",
     ),
     (
-        // From before #19 and #21: exports are missing.
+        // From before #19 and #21: exports are missing. Its manifest names
+        // the previous version, which this Pane runs, so the refusal is
+        // the previous world's shape check (ADR 0046).
         "older API shape",
         |folder| {
-            package(folder, "Hello", "1.0.0", "old_api");
+            built_for_previous(folder, "old_api");
         },
         OLDER_SHAPE,
     ),
     (
-        // Every export is there by name, but a record differs in type.
+        // Every export is there by name, but a record differs in type,
+        // against the previous world the same way.
         "mismatched API shape",
         |folder| {
-            package(folder, "Hello", "1.0.0", "mismatched_api");
+            built_for_previous(folder, "mismatched_api");
         },
         OLDER_SHAPE,
     ),
@@ -670,6 +700,208 @@ fn spellings_follow_the_file_system(first: &str, second: &str) {
         block_on(launcher.install_package(&other));
         assert_eq!(launcher.packages().len(), 2);
     }
+}
+
+/// The sample package's manifest asking for extension API `api`, with a
+/// description its page keeps — as a copy built for that version of the
+/// API would read. A real transition cannot occur yet (0.1 is the first
+/// version), so the tests seed the copy this way (#318, ADR 0046).
+fn versioned_manifest(api: &str) -> String {
+    format!(
+        r#"{{
+  "manifestVersion": 1,
+  "title": "Hello",
+  "version": "1.0.0",
+  "description": "Greets you from the sample",
+  "apiVersion": "{api}",
+  "commands": [
+    {{ "id": "hello", "title": "Say hello", "subtitle": "Greets you", "component": "hello.wasm" }}
+  ]
+}}"#
+    )
+}
+
+#[test]
+fn an_installed_extension_too_new_for_this_pane_stays_listed_with_its_refusal() {
+    let dirs = Dirs::new();
+    let folder = package(&dirs.source("hello"), "Hello", "1.0.0", "sample_rust");
+    let launcher = dirs.launcher();
+    block_on(launcher.install_package(&folder));
+    // The code that arrived is built for an API newer than this Pane runs.
+    let location = launcher.packages()[0].location.clone();
+    fs::write(location.join("pane.json"), versioned_manifest("0.3")).unwrap();
+
+    let restarted = dirs.launcher();
+
+    // It stays listed with its page: the title and description its
+    // manifest gives, not the identity's fallback, and its commands are
+    // offered nowhere — nothing of it runs.
+    let identity = restarted.packages()[0].identity.clone();
+    assert_eq!(restarted.packages()[0].title(), "Hello");
+    assert_eq!(
+        restarted.packages()[0].description(),
+        Some("Greets you from the sample")
+    );
+    assert!(!titles(&restarted).contains(&"Say hello".to_owned()));
+    assert_eq!(
+        restarted.extension_mark(&identity),
+        Some(ExtensionMark::UnsupportedApi(
+            "Incompatible package: it needs Pane extension API 0.3, but this Pane provides 0.2 and \
+             0.1. Update Pane to run it"
+                .into(),
+        ))
+    );
+
+    // Root search keeps one row for the package, saying what it needs;
+    // activating it shows the refusal in full.
+    let row = restarted
+        .view()
+        .rows
+        .iter()
+        .position(|row| row.title == "Hello")
+        .expect("the package's row");
+    assert_eq!(
+        restarted.view().rows[row].subtitle.as_deref(),
+        Some("Needs a newer Pane")
+    );
+    restarted.select(row);
+    block_on(restarted.activate_selected());
+    assert_eq!(
+        error(&restarted),
+        "Incompatible package: it needs Pane extension API 0.3, but this Pane provides 0.2 and \
+         0.1. Update Pane to run it"
+    );
+
+    // The extension list says the state, never a pause: no Retry, no
+    // details row, nothing counted towards pausing.
+    manage(&restarted);
+    let subtitle = restarted
+        .view()
+        .rows
+        .iter()
+        .find(|row| row.title == "Hello")
+        .and_then(|row| row.subtitle.clone())
+        .expect("the package's row");
+    assert!(
+        subtitle.starts_with("Enabled · Needs a newer Pane"),
+        "{subtitle}"
+    );
+    assert!(!titles(&restarted).contains(&"Retry Hello".to_owned()));
+    assert!(!titles(&restarted).contains(&"Why Hello is paused".to_owned()));
+
+    // A restart reads the same copy and says the same thing.
+    let again = dirs.launcher();
+    assert_eq!(
+        again.extension_mark(&identity),
+        Some(ExtensionMark::UnsupportedApi(
+            "Incompatible package: it needs Pane extension API 0.3, but this Pane provides 0.2 and \
+             0.1. Update Pane to run it"
+                .into(),
+        ))
+    );
+    assert!(!titles(&again).contains(&"Say hello".to_owned()));
+
+    // A version this Pane runs resolves it by itself: the copy replaced,
+    // the commands are offered and run again.
+    fs::write(location.join("pane.json"), versioned_manifest("0.2")).unwrap();
+    let resolved = dirs.launcher();
+    assert_eq!(resolved.extension_mark(&identity), None);
+    assert!(titles(&resolved).contains(&"Say hello".to_owned()));
+    select_title(&resolved, "Say hello");
+    block_on(resolved.activate_selected());
+    block_on(resolved.activate_selected());
+    assert_eq!(
+        shown(&resolved),
+        Status::Result("Hello from the Rust guest".into())
+    );
+}
+
+#[test]
+fn an_installed_extension_older_than_this_pane_runs_stays_listed_with_its_refusal() {
+    let dirs = Dirs::new();
+    let folder = package(&dirs.source("hello"), "Hello", "1.0.0", "sample_rust");
+    let launcher = dirs.launcher();
+    block_on(launcher.install_package(&folder));
+    // The copy is built for an API older than every version this Pane
+    // runs, as a Pane that moved on past it would leave it.
+    let location = launcher.packages()[0].location.clone();
+    fs::write(location.join("pane.json"), versioned_manifest("0.0")).unwrap();
+
+    let restarted = dirs.launcher();
+    let identity = restarted.packages()[0].identity.clone();
+
+    // It stays listed and refused, the remedy being the extension's own
+    // update, and its commands are offered nowhere.
+    assert_eq!(restarted.packages()[0].title(), "Hello");
+    assert_eq!(
+        restarted.extension_mark(&identity),
+        Some(ExtensionMark::UnsupportedApi(
+            "Incompatible package: it needs Pane extension API 0.0, but this Pane provides 0.2 and \
+             0.1. Update the extension to a newer version"
+                .into(),
+        ))
+    );
+    assert!(!titles(&restarted).contains(&"Say hello".to_owned()));
+    let row = restarted
+        .view()
+        .rows
+        .iter()
+        .position(|row| row.title == "Hello")
+        .expect("the package's row");
+    assert_eq!(
+        restarted.view().rows[row].subtitle.as_deref(),
+        Some("Needs a newer version of the extension")
+    );
+    manage(&restarted);
+    let subtitle = restarted
+        .view()
+        .rows
+        .iter()
+        .find(|row| row.title == "Hello")
+        .and_then(|row| row.subtitle.clone())
+        .expect("the package's row");
+    assert!(
+        subtitle.starts_with("Enabled · Needs a newer version of the extension"),
+        "{subtitle}"
+    );
+}
+
+#[test]
+fn a_package_paused_before_the_window_closed_is_listed_as_unsupported_not_paused() {
+    let dirs = Dirs::new();
+    let folder = package(&dirs.source("hello"), "Hello", "1.0.0", "sample_rust");
+    let launcher = dirs.launcher();
+    block_on(launcher.install_package(&folder));
+    let location = launcher.packages()[0].location.clone();
+    drop(launcher);
+    // Pane paused it under an older Pane, and this Pane's window has
+    // closed past the version it was built for (#318, ADR 0046): the
+    // listing explains the version, and the pause is neither shown nor
+    // counted — an unsupported extension is never a paused one.
+    let manifest = fs::read_to_string(location.join("pane.json"))
+        .unwrap()
+        .replace(r#""apiVersion": "0.2""#, r#""apiVersion": "0.0""#);
+    assert!(manifest.contains("0.0"), "the manifest was seeded");
+    fs::write(location.join("pane.json"), manifest).unwrap();
+    let registry = dirs.data.path().join("extensions/installed.json");
+    let mut record: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&registry).unwrap()).unwrap();
+    let dir = record["packages"][0]["dir"].clone();
+    record["packages"][0]["paused"] = serde_json::json!({
+        "after": "crashes", "why": "it crashed", "version": "0.1.0", "code": dir
+    });
+    fs::write(&registry, record.to_string()).unwrap();
+
+    let restarted = dirs.launcher();
+    let identity = restarted.packages()[0].identity.clone();
+    assert!(matches!(
+        restarted.extension_mark(&identity),
+        Some(ExtensionMark::UnsupportedApi(_))
+    ));
+    assert!(!titles(&restarted).contains(&"Say hello".to_owned()));
+    // The pause is gone: no Retry row, nothing counted towards pausing.
+    assert!(!titles(&restarted).contains(&"Retry Hello".to_owned()));
+    assert!(!titles(&restarted).contains(&"Why Hello is paused".to_owned()));
 }
 
 #[test]
@@ -970,8 +1202,8 @@ fn a_sample_package_source_without_its_built_component_is_explained() {
 fn package_for(folder: &Path, platforms: &str) -> PathBuf {
     package(folder, "Hello", "1.0.0", "sample_rust");
     let manifest = manifest("Hello", "1.0.0", "hello.wasm").replace(
-        r#""apiVersion": "0.1","#,
-        &format!(r#""apiVersion": "0.1", "platforms": {platforms},"#),
+        r#""apiVersion": "0.2","#,
+        &format!(r#""apiVersion": "0.2", "platforms": {platforms},"#),
     );
     with_manifest(folder, &manifest);
     folder.to_path_buf()
@@ -1138,7 +1370,7 @@ fn package_with_command_platforms(folder: &Path) -> PathBuf {
         r#"{{
   "manifestVersion": 1,
   "title": "Hello",
-  "apiVersion": "0.1",
+  "apiVersion": "0.2",
   "commands": [
     {{ "id": "there", "title": "Elsewhere", "platforms": {there}, "component": "hello.wasm" }},
     {{ "id": "here", "title": "Here", "platforms": {here}, "component": "hello.wasm" }},

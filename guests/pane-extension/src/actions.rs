@@ -31,7 +31,7 @@ use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
 
-use crate::feedback::{Toast, ToastStyle, show_hud, show_toast};
+use crate::feedback::{HudStyle, Toast, show_hud, show_toast};
 use crate::list::{Action, Submenu};
 use crate::system::{self, Clip, SystemError};
 use crate::window::{PopToRootType, close};
@@ -276,6 +276,6 @@ fn finish(keep_open: bool, said: &str, hud: bool) {
     }
     close(false, PopToRootType::Default);
     if hud {
-        show_hud(said, ToastStyle::Success);
+        show_hud(said, HudStyle::Success);
     }
 }

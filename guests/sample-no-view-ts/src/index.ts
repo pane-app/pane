@@ -25,8 +25,8 @@
 //
 // A command launched in the background (a schedule's run, or one another
 // command launched so) does its work but shows no toast.
-import { launch } from "pane:extension/commands@0.1.0";
-import { get, set } from "pane:extension/settings@0.1.0";
+import { launch } from "pane:extension/commands@0.2.0";
+import { get, set } from "pane:extension/settings@0.2.0";
 import type { Command, CommandRef, LaunchRecord, List } from "@pane-app/extension";
 import { showToast } from "@pane-app/extension/feedback";
 

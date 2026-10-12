@@ -12,8 +12,8 @@
 // `@pane-app/extension/system-commands`
 // (system-commands.d.ts).
 
-/** `pane:extension/system-commands@0.1.0`. */
-declare module "pane:extension/system-commands@0.1.0" {
+/** `pane:extension/system-commands@0.2.0`. */
+declare module "pane:extension/system-commands@0.2.0" {
   /**
    * What a command ended in: the state the system is in now (`done`), or
    * why nothing changed (`explained`). Its text is what the command shows

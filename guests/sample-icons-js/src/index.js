@@ -16,7 +16,7 @@
 // @ts-check
 import { showToast } from "@pane-app/extension/feedback";
 import { avatar, favicon, fileIcon, progressRing } from "@pane-app/extension/icons";
-import { get } from "pane:extension/settings@0.1.0";
+import { get } from "pane:extension/settings@0.2.0";
 
 /** The setting naming the server the web images come from. */
 const IMAGE_SERVER = "imageServer";

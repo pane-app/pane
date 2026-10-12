@@ -95,7 +95,7 @@ impl Dirs {
             r#"{{
                 "manifestVersion": 1,
                 "title": "Package {name}",
-                "apiVersion": "0.1",
+                "apiVersion": "0.2",
                 "commands": [
                     {{ "id": "fixture", "title": "Fixture {name}", "component": "fixture.wasm" }}
                 ],
@@ -123,7 +123,7 @@ impl Dirs {
             r#"{{
                 "manifestVersion": 1,
                 "title": "Package {name}",
-                "apiVersion": "0.1",
+                "apiVersion": "0.2",
                 "commands": [{commands}]{members}
             }}"#
         );
@@ -182,7 +182,7 @@ fn caller(dirs: &Dirs, dependencies: &str) -> PathBuf {
         r#"{{
             "manifestVersion": 1,
             "title": "Caller",
-            "apiVersion": "0.1",
+            "apiVersion": "0.2",
             "commands": [
                 {{ "id": "call", "title": "Call from JavaScript",
                    "component": "caller.wasm", "takesQuery": true }}

@@ -51,25 +51,25 @@ pub(crate) const COMPONENTIZER: &str = "componentize-qjs-p3";
 
 /// `"pane"` option -> the interface a command setting it also exports.
 const EXPORT_OPTIONS: [(&str, &str); 7] = [
-    ("rootResults", "pane:extension/root-results@0.1.0"),
-    ("indexedResults", "pane:extension/indexed-results@0.1.0"),
-    ("operations", "pane:extension/published-operations@0.1.0"),
-    ("service", "pane:extension/service@0.1.0"),
-    ("events", "pane:extension/events@0.1.0"),
-    ("activate", "pane:extension/lifecycle@0.1.0"),
-    ("snapshot", "pane:extension/lifecycle@0.1.0"),
+    ("rootResults", "pane:extension/root-results@0.2.0"),
+    ("indexedResults", "pane:extension/indexed-results@0.2.0"),
+    ("operations", "pane:extension/published-operations@0.2.0"),
+    ("service", "pane:extension/service@0.2.0"),
+    ("events", "pane:extension/events@0.2.0"),
+    ("activate", "pane:extension/lifecycle@0.2.0"),
+    ("snapshot", "pane:extension/lifecycle@0.2.0"),
 ];
 /// `"pane"` option -> the interface a command setting it also imports,
 /// beyond what every command may import (`js-extension`). `run` and
 /// `windows` are Windows-only capabilities: a command importing them
 /// elsewhere has every call answer not-available, which is not a failure.
 const IMPORT_OPTIONS: [(&str, &str); 6] = [
-    ("files", "pane:extension/files@0.1.0"),
-    ("fileIndex", "pane:extension/file-index@0.1.0"),
-    ("typedFolder", "pane:extension/typed-folder@0.1.0"),
-    ("clipboardHistory", "pane:extension/clipboard-history@0.1.0"),
-    ("run", "pane:extension/run@0.1.0"),
-    ("windows", "pane:extension/windows@0.1.0"),
+    ("files", "pane:extension/files@0.2.0"),
+    ("fileIndex", "pane:extension/file-index@0.2.0"),
+    ("typedFolder", "pane:extension/typed-folder@0.2.0"),
+    ("clipboardHistory", "pane:extension/clipboard-history@0.2.0"),
+    ("run", "pane:extension/run@0.2.0"),
+    ("windows", "pane:extension/windows@0.2.0"),
 ];
 /// The exports the adapter wraps, by `pane` option, each with the
 /// handlers that answer errors as text (see `guests/js/adapt.js`). The
@@ -98,13 +98,13 @@ const HTTP_IMPORT: &str = "wasi:http/client@0.3.0";
 /// Pane's session and power commands (wit/system-commands.wit), which a
 /// command imports only if its bundle uses them (itself, or through
 /// `@pane-app/extension/system-commands`), the same way.
-const SYSTEM_COMMANDS_IMPORT: &str = "pane:extension/system-commands@0.1.0";
+const SYSTEM_COMMANDS_IMPORT: &str = "pane:extension/system-commands@0.2.0";
 /// Pane's system programs (`wit/programs.wit`), which a command imports only
 /// if its bundle uses them (itself, or through
 /// `@pane-app/extension/programs`), as a Rust command's component imports
 /// only what its code calls: Pane lists a package whose component imports
 /// them as one that runs system programs.
-const PROGRAMS_IMPORT: &str = "pane:extension/programs@0.1.0";
+const PROGRAMS_IMPORT: &str = "pane:extension/programs@0.2.0";
 
 /// Builds the command package in `package`, writing its component to `out`:
 /// the steps the module's documentation lists, run by pane-build's `Build` of
@@ -610,7 +610,7 @@ fn command_world(
         exports.push_str(&format!("  export {interface};\n"));
     }
     Ok(format!(
-        "package pane:js-guest@0.1.0;\n\nworld {COMMAND_WORLD} {{\n  include {WORLD};\n{imports}{exports}}}\n"
+        "package pane:js-guest@0.2.0;\n\nworld {COMMAND_WORLD} {{\n  include {WORLD};\n{imports}{exports}}}\n"
     ))
 }
 
@@ -782,8 +782,8 @@ mod tests {
         options.insert("files".into(), Value::Bool(true));
         assert_eq!(
             command_world(&options, false, false, false).unwrap(),
-            "package pane:js-guest@0.1.0;\n\nworld js-command {\n  include js-extension;\n  \
-             import pane:extension/files@0.1.0;\n  export pane:extension/root-results@0.1.0;\n}\n"
+            "package pane:js-guest@0.2.0;\n\nworld js-command {\n  include js-extension;\n  \
+             import pane:extension/files@0.2.0;\n  export pane:extension/root-results@0.2.0;\n}\n"
         );
         let world = command_world(&Map::new(), true, true, true).unwrap();
         assert!(
@@ -791,11 +791,11 @@ mod tests {
             "{world}"
         );
         assert!(
-            world.contains("  import pane:extension/programs@0.1.0;\n"),
+            world.contains("  import pane:extension/programs@0.2.0;\n"),
             "{world}"
         );
         assert!(
-            world.contains("  import pane:extension/system-commands@0.1.0;\n"),
+            world.contains("  import pane:extension/system-commands@0.2.0;\n"),
             "{world}"
         );
         let mut unknown = Map::new();
@@ -816,7 +816,7 @@ mod tests {
             r#"const m = await import ("wasi:http/types@0.3.0");"#
         ));
         assert!(uses_programs(
-            r#"import { run } from "pane:extension/programs@0.1.0";"#
+            r#"import { run } from "pane:extension/programs@0.2.0";"#
         ));
         assert!(!uses_http("import { send } from \"pane:extension/http\";"));
         // A mention without an import is not a use.
@@ -825,7 +825,7 @@ mod tests {
             "import { run } from \"pane:extension/other\";"
         ));
         assert!(uses_system_commands(
-            r#"import { lock } from "pane:extension/system-commands@0.1.0";"#
+            r#"import { lock } from "pane:extension/system-commands@0.2.0";"#
         ));
         assert!(!uses_system_commands(
             "import { lock } from \"pane:extension/other\";"

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 //
 // System programs for JS/TS commands (`@pane-app/extension/programs`), through
-// `pane:extension/programs@0.1.0` (wit/programs.wit): programs installed on
+// `pane:extension/programs@0.2.0` (wit/programs.wit): programs installed on
 // the system, such as PowerShell, winget, git or any executable, which Pane
 // runs for the command. Bundled into the command that imports it, like any
 // npm module; only a command whose bundle uses it imports the interface,
@@ -30,7 +30,7 @@ import {
   spawn as spawnProgram,
   wait as waitFor,
   writeInput,
-} from "pane:extension/programs@0.1.0";
+} from "pane:extension/programs@0.2.0";
 
 /**
  * Why a program did not run or answer: `kind` tells the cases apart

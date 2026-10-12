@@ -210,6 +210,10 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          # The WIT guard in `ci-lints` walks the repository's history
+          # to find the released extension API (#319).
+          fetch-depth: 0
       # On main, `tests` installs the cargo-nextest the cache build uses.
       - uses: ./.github/actions/setup
         with:

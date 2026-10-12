@@ -19,9 +19,9 @@
 // `{"waited": true}`. Disabling or reloading either package meanwhile stops
 // it; the "wait" item calls it.
 // @ts-check
-import { call } from "pane:extension/operations@0.1.0";
-import { launch } from "pane:extension/commands@0.1.0";
-import { set } from "pane:extension/settings@0.1.0";
+import { call } from "pane:extension/operations@0.2.0";
+import { launch } from "pane:extension/commands@0.2.0";
+import { set } from "pane:extension/settings@0.2.0";
 import { jsxs } from "@pane-app/extension/jsx-runtime";
 import { Column, Form, Text, createView, useState } from "@pane-app/extension/view";
 import { waitFor } from "wasi:clocks/monotonic-clock@0.3.0";
@@ -38,7 +38,7 @@ async function greet(source, name) {
   try {
     result = await call(source, "greet", 1, JSON.stringify({ name }));
   } catch (error) {
-    /** @type {import("pane:extension/operations@0.1.0").CallError} */
+    /** @type {import("pane:extension/operations@0.2.0").CallError} */
     const { kind, message } = /** @type {any} */ (error).payload;
     throw new Error(`${kind}: ${message}`);
   }

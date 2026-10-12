@@ -139,7 +139,7 @@ recorded in [ADR 0025](adr/0025-a-continuing-service-cycles-at-its-own-cadence.m
   restart is not served after it.
 - **Expected errors before anything is installed.** A manifest whose
   command declares `"service": true` but whose component does not export
-  `pane:extension/service@0.1.0` with the functions Pane calls is refused
+  `pane:extension/service@0.2.0` with the functions Pane calls is refused
   when the package is previewed or installed, with the reason, and
   nothing is installed or run.
 

@@ -509,13 +509,16 @@ fn a_crash_in_a_view_closes_it_and_the_command_keeps_working() {
     assert_eq!(view_value(launcher), "0 events");
 }
 
-/// The pre-release extension API 0.1 changes shape between slices without a
-/// version bump: `item` gained `platforms` in #19, the command gained custom
-/// views in #21, and its list moved into ADR 0036's envelope (`render` and
-/// `handle-event`) in #135. A component built against an older shape
-/// declares the same API version; its exports' types are checked when it
-/// loads, here for a command built into Pane (installing checks the same,
-/// see `packages.rs`), and the first mismatch is named.
+/// The extension API's shape check, against the world a component's
+/// exports name (ADR 0046): before the version rule, `item` gained
+/// `platforms` in #19, the command gained custom views in #21, and its list
+/// moved into ADR 0036's envelope (`render` and `handle-event`) in #135 —
+/// all under 0.1. A component built against the older shape declares that
+/// version, which this Pane still runs, so it is routed to the previous
+/// world and its exports' types are checked there, when it loads, here for
+/// a command built into Pane (installing checks the same, see
+/// `packages.rs`), and the first mismatch is named with the version a
+/// rebuild targets.
 #[test]
 fn a_component_of_an_older_api_shape_is_refused_when_it_loads() {
     let launcher = launcher(vec![command("old", guest("old_api"))]);
@@ -531,7 +534,7 @@ fn a_component_of_an_older_api_shape_is_refused_when_it_loads() {
     assert!(
         message.starts_with(
             "Incompatible extension: it was built for an older extension API shape: \
-             rebuild it against Pane's current extension API 0.1"
+             rebuild it against Pane's extension API 0.1"
         ),
         "{message}"
     );

@@ -22,7 +22,7 @@ edition = "2024"
 crate-type = ["cdylib"]
 
 [dependencies]
-pane-extension = "0.1"
+pane-extension = "0.2"
 ```
 
 ```rust
@@ -63,7 +63,7 @@ component in the package's `pane.json`:
   "manifestVersion": 1,
   "title": "Hello Rust",
   "version": "0.1.0",
-  "apiVersion": "0.1",
+  "apiVersion": "0.2",
   "commands": [
     {
       "id": "hello",
@@ -76,9 +76,9 @@ component in the package's `pane.json`:
 
 ## Versions
 
-The crate's version follows the extension API it targets: 0.1.x builds
-components for API 0.1 (`"apiVersion": "0.1"`, the WIT package
-`pane:extension@0.1.0`), writing version 1 of the list tree. A new API
+The crate's version follows the extension API it targets: 0.2.x builds
+components for API 0.2 (`"apiVersion": "0.2"`, the WIT package
+`pane:extension@0.2.0`), writing version 1 of the list tree. A new API
 version is a new minor version of the crate before 1.0, and a new major
 version from 1.0.
 

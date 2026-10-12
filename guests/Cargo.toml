@@ -42,6 +42,7 @@ members = [
     "fixtures/handoff",
     "fixtures/old-api",
     "fixtures/mismatched-api",
+    "fixtures/previous-api",
     "fixtures/designed",
     "fixtures/failing-start",
     "fixtures/refusing-view",

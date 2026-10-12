@@ -148,7 +148,7 @@ impl Pane {
                 "manifestVersion": 1,
                 "title": "{name}",
                 "version": "0.1.0",
-                "apiVersion": "0.1",
+                "apiVersion": "0.2",
                 "commands": [{}]
             }}"#,
             commands.join(", ")
@@ -170,7 +170,7 @@ impl Pane {
                 "manifestVersion": 1,
                 "title": "Elsewhere",
                 "version": "0.1.0",
-                "apiVersion": "0.1",
+                "apiVersion": "0.2",
                 "commands": [{{
                     "id": "away",
                     "title": "{title}",

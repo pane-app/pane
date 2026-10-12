@@ -4,7 +4,7 @@
 // the clipboard, opening anything, revealing a path in the file manager
 // and moving paths to the Recycle Bin, pasting into the application that
 // was in front before Pane, that application and the text selected in it,
-// through `pane:extension/system@0.1.0` (wit/system.wit); and the standard
+// through `pane:extension/system@0.2.0` (wit/system.wit); and the standard
 // actions built from them, as Raycast's built-in ones behave (Copy, Paste,
 // Open, Open With…, Show in Explorer, Move to Recycle Bin), which close the
 // window after they act. Bundled into the command that imports it, like
@@ -15,7 +15,7 @@
 // part of Pane's contract (ADR 0037): an author can compose the steps
 // differently.
 
-import { installed } from "pane:extension/applications@0.1.0";
+import { installed } from "pane:extension/applications@0.2.0";
 import {
   copy as put,
   frontApplication as front,
@@ -26,7 +26,7 @@ import {
   runningOn as running,
   selectedText as selected,
   trash as recycle,
-} from "pane:extension/system@0.1.0";
+} from "pane:extension/system@0.2.0";
 import { closeMainWindow, showHUD, showToast } from "./feedback.js";
 
 /** Runs a host function, turning a refusal's `payload` text into an `Error`. */

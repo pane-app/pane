@@ -1,4 +1,4 @@
-package pane:extension@0.1.0;
+package pane:extension@0.2.0;
 
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 //
@@ -9,7 +9,7 @@ package pane:extension@0.1.0;
 // (wit/extension.wit). Rust commands use them through pane-extension
 // (`pane_extension::system`, and the standard actions of
 // `pane_extension::actions`), JavaScript and TypeScript ones through
-// `@pane-app/extension/system` or the module "pane:extension/system@0.1.0"
+// `@pane-app/extension/system` or the module "pane:extension/system@0.2.0"
 // (guests/js/system.d.ts). Each does only what it names: none closes the
 // window or tells the user anything, but `paste`, which closes it by
 // nature. The SDKs' standard actions (Copy, Paste, Open, Open With…, Show

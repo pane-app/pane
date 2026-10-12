@@ -82,7 +82,7 @@ fn map_of(source: &str) -> Option<PathBuf> {
 const VIEW: &str = r#"{
   "manifestVersion": 1,
   "title": "Dev",
-  "apiVersion": "0.1",
+  "apiVersion": "0.2",
   "commands": [{ "id": "open", "title": "Open Dev", "component": "command.wasm" }]
 }"#;
 
@@ -91,7 +91,7 @@ const VIEW: &str = r#"{
 const NO_VIEW: &str = r#"{
   "manifestVersion": 1,
   "title": "Dev",
-  "apiVersion": "0.1",
+  "apiVersion": "0.2",
   "commands": [{
     "id": "report",
     "title": "Report launch",

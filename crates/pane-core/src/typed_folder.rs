@@ -329,7 +329,7 @@ fn describe(path: &Path, home: Option<&Path>) -> (String, String) {
 /// Runs `work` on a thread of its own, since a folder may block (a network
 /// mount the host could not tell apart), and answers what it answered;
 /// what a thread that could not start answers instead.
-async fn off_thread<T: Send + 'static>(
+pub(crate) async fn off_thread<T: Send + 'static>(
     work: impl FnOnce() -> T + Send + 'static,
     gone: impl FnOnce() -> T,
 ) -> T {
@@ -346,14 +346,14 @@ async fn off_thread<T: Send + 'static>(
 }
 
 /// What a command is told when the listing's thread could not start.
-fn failed() -> String {
+pub(crate) fn failed() -> String {
     "Pane could not list the folder (its thread failed)".into()
 }
 
 /// The home folder `~` in a typed path resolves to: the one the file index
 /// is configured with — the same folder the launcher resolves `~` to —
 /// else the environment's.
-fn home(access: &crate::files::FileAccess) -> Option<PathBuf> {
+pub(crate) fn home(access: &crate::files::FileAccess) -> Option<PathBuf> {
     access
         .indexer()
         .base_rules()

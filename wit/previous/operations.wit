@@ -1,0 +1,141 @@
+package pane:extension@0.1.0;
+
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+//
+// Operations: named, versioned functions an installed package publishes for
+// other extensions to call through Pane. Any command may call one through
+// `operations`, imported by the world Pane hosts: Rust commands through
+// pane-extension, JS/TS commands as the module "pane:extension/operations@0.1.0"
+// (guests/js/operations.d.ts). A package publishes an operation by listing
+// it under `operations` in its pane.json; the component named there exports
+// `published-operations` beside `command` (`pane_extension::publish::export!`
+// in Rust, `"pane": { "operations": true }` in a JS/TS package.json), and a
+// component that publishes none is unchanged.
+//
+// Capabilities (ADR 0041) are a second way to address the same calls: a
+// package declares under `provides` that it provides a named, versioned
+// capability, such as `acme:translate@1`, made of operations served through
+// the same `published-operations` export, with each operation qualified by
+// its capability; another declares under `uses` the capabilities it calls
+// and calls them by name with `call-capability`, without naming the package
+// that serves. `call-every` calls every provider of a use that says
+// `"use": "all"`, answering each one's result or error, and `providers`
+// asks which installed packages can serve one now. The header follows
+// `package`: comments above it would document the package, which
+// extension.wit already does.
+
+/// Calls an operation another installed package publishes, through Pane.
+interface operations {
+  /// Why a call did not produce the operation's result. `message` explains
+  /// it for people; `kind` tells lifecycle failures from the operation's own
+  /// error.
+  record call-error {
+    kind: call-error-kind,
+    message: string,
+  }
+
+  enum call-error-kind {
+    /// No installed package has that source, or it does not publish that
+    /// operation.
+    not-found,
+    /// The package is disabled. Pane does not enable it for the call.
+    disabled,
+    /// The package publishes the operation at another version, or Pane
+    /// cannot run its component.
+    incompatible,
+    /// The package cannot run here: it does not support this system, or the
+    /// extension runtime is not running.
+    unavailable,
+    /// The operation ran and reported an error; `message` is its own.
+    failed,
+    /// The package crashed while serving the call. The next call starts it
+    /// afresh.
+    crashed,
+    /// Pane refused the call: it would reach a package already serving a
+    /// call in the same chain, the chain is too deep, or the input or result
+    /// is not JSON within Pane's limits.
+    refused,
+  }
+
+  /// Calls `operation` at `version` of the installed package with source
+  /// `source`, and waits for its result. The package is started for the
+  /// call if it is not running. `source` is `local:` followed by the
+  /// package folder's path: absolute, as Pane shows it, or relative to the
+  /// calling package's own source folder, such as `local:../other`. `input`
+  /// and the result are JSON text.
+  call: async func(source: string, operation: string, version: u32, input: string) -> result<string, call-error>;
+
+  /// An installed package that provides a capability, as `providers`
+  /// answers it: the package's `source`, as a call names it by, and its
+  /// title.
+  record provider {
+    source: string,
+    title: string,
+  }
+
+  /// Calls `operation` of the capability `capability`, such as
+  /// "acme:translate@1", and waits for its result. Any installed package
+  /// may provide the capability: Pane routes the call to the provider that
+  /// can serve it — the first one installed, until the user chooses one in
+  /// Settings — and starts it if it is not running, never the calling
+  /// package itself: a package never serves its own use. The caller's
+  /// pane.json declares the capability and the operation under `uses`; a
+  /// call to one it does not declare is `refused`, with the message saying
+  /// to declare it. The provider serves the call through the entry point
+  /// that serves its published operations, with the operation qualified by
+  /// its capability ("acme:translate@1/translate"), so it can tell a
+  /// capability call from a call by identity to an operation of the same
+  /// name. `input` and the result are JSON text, and the call is as a call
+  /// by identity is: the same limits, chain rules and generation ownership.
+  call-capability: async func(capability: string, operation: string, input: string) -> result<string, call-error>;
+
+  /// One provider's answer to `call-every`: the provider's `source`, as a
+  /// call names it by, its title, and what serving the call answered.
+  record provider-answer {
+    provider: string,
+    title: string,
+    answer: result<string, call-error>,
+  }
+
+  /// Calls `operation` of the capability `capability` on every provider
+  /// that can serve it now — enabled, not paused, not waiting for what it
+  /// needs, and built for this system — and answers each one's result or
+  /// error with its source and title, so the caller can merge them. Each
+  /// provider is its own call in the chain, with the same limits, chain
+  /// rules and generation ownership as any call, and the same input. The
+  /// caller's pane.json must declare the capability under `uses` with
+  /// "use": "all": fanning out a "use": "one" capability is `refused`, as
+  /// is one the caller does not declare. Providers that cannot serve are
+  /// skipped, and with none available the answer is an empty list, not an
+  /// error: a use of every provider never makes a command wait for it.
+  call-every: async func(capability: string, operation: string, input: string) -> result<list<provider-answer>, call-error>;
+
+  /// The installed packages that provide the capability `capability` and
+  /// can serve a call to it now — enabled, not paused, not waiting for what
+  /// they need, and built for this system — in the order Pane calls them
+  /// (the first one installed first, until the user chooses one). The
+  /// calling package is never among them. With no such provider the list is
+  /// empty: a call to the capability answers `not-found`, `disabled` or
+  /// `unavailable`, each naming the capability.
+  providers: func(capability: string) -> list<provider>;
+}
+
+/// The operations a package publishes, and the capabilities it provides,
+/// serve through: the component its pane.json names for them.
+interface published-operations {
+  /// Serve a call to `operation`, which the package's pane.json publishes
+  /// or names in a capability it provides, on behalf of another extension.
+  /// Pane calls it only for one of those, naming it: a capability's
+  /// operation arrives qualified by its capability
+  /// ("acme:translate@1/translate"), so one component can tell it from a
+  /// call by identity to an operation of the same name. `input` and the
+  /// returned text are JSON; an error is passed to the caller as the
+  /// operation's own.
+  run-operation: async func(operation: string, input: string) -> result<string, string>;
+}
+
+/// The published operations export alone: a component that serves
+/// operations exports it besides the `extension` world's `command`.
+world operations-provider {
+  export published-operations;
+}

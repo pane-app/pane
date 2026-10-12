@@ -8,8 +8,8 @@
 // saying so. No folder is granted: the user named it. Only a command whose
 // package.json sets `"pane": { "typedFolder": true }` imports it.
 
-/** `pane:extension/typed-folder@0.1.0`. */
-declare module "pane:extension/typed-folder@0.1.0" {
+/** `pane:extension/typed-folder@0.2.0`. */
+declare module "pane:extension/typed-folder@0.2.0" {
   /** One direct entry of the typed folder. */
   export interface FolderEntry {
     /**

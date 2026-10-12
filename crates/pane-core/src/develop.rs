@@ -132,7 +132,7 @@ mod tests {
         std::fs::write(
             folder.join("pane.json"),
             format!(
-                r#"{{ "manifestVersion": 1, "title": "Hello", "apiVersion": "0.1",
+                r#"{{ "manifestVersion": 1, "title": "Hello", "apiVersion": "0.2",
                      "commands": [{{ "id": "hello", "title": "Hello", "component": "{component}" }}] }}"#
             ),
         )
@@ -434,7 +434,7 @@ mod tests {
         std::fs::write(
             folder.join("pane.json"),
             format!(
-                r#"{{ "manifestVersion": 1, "title": "Tool", "apiVersion": "0.1",
+                r#"{{ "manifestVersion": 1, "title": "Tool", "apiVersion": "0.2",
                      "commands": [{{ "id": "c", "title": "C", "component": "command.wasm" }}],
                      "helpers": [{{ "id": "tool", "targets": {{ "{}": "{file}", "{other}": "helpers/other" }} }}] }}"#,
                 target.id()

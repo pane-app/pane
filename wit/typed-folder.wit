@@ -1,4 +1,4 @@
-package pane:extension@0.1.0;
+package pane:extension@0.2.0;
 
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 //
@@ -12,7 +12,7 @@ package pane:extension@0.1.0;
 // one folder: the direct entries only, folders first and each in name
 // order, at most 500 entries, with a partial listing saying so. Rust
 // commands use it through pane-extension (`pane_extension::typed_folder`),
-// JS/TS commands as the module "pane:extension/typed-folder@0.1.0"
+// JS/TS commands as the module "pane:extension/typed-folder@0.2.0"
 // (guests/js/typed-folder.d.ts), imported only by a command whose
 // package.json sets `"pane": { "typedFolder": true }`. Kept apart from the
 // other files so a command that lists none is unchanged. The header follows

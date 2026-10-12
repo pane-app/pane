@@ -1,4 +1,4 @@
-package pane:extension@0.1.0;
+package pane:extension@0.2.0;
 
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 //
@@ -12,7 +12,7 @@ package pane:extension@0.1.0;
 // (wit/root-results.wit) with the ids Pane gave the files, which Pane opens
 // with the system's handler once it has checked them again. Rust commands
 // use it through pane-extension (`pane_extension::files`), JS/TS commands as the
-// module "pane:extension/files@0.1.0" (guests/js/files.d.ts), imported only
+// module "pane:extension/files@0.2.0" (guests/js/files.d.ts), imported only
 // by a command whose package.json sets `"pane": { "files": true }`. Kept
 // apart from the other files so a command that lists none is unchanged.
 // The header follows `package`: comments above it would document the package,

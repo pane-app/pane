@@ -369,7 +369,7 @@ impl Dirs {
             r#"{{
                 "manifestVersion": 1,
                 "title": "Package {name}",
-                "apiVersion": "0.1",
+                "apiVersion": "0.2",
                 "commands": [{commands}]{members}
             }}"#
         );
@@ -951,7 +951,7 @@ fn a_component_without_the_operations_export_is_refused() {
             r#"{{
                 "manifestVersion": 1,
                 "title": "Package a",
-                "apiVersion": "0.1",
+                "apiVersion": "0.2",
                 "commands": [{COMMAND}],
                 "provides": [
                     {{ "capability": "fixture:greet@1", "component": "fixture.wasm",
@@ -1036,7 +1036,7 @@ fn a_default_a_published_package_cannot_name_is_refused() {
     let pane_json = r#"{
         "manifestVersion": 1,
         "title": "Capability user",
-        "apiVersion": "0.1",
+        "apiVersion": "0.2",
         "commands": [
             { "id": "greet", "title": "Greet through a capability",
               "component": "sample_npm_js.wasm" }
@@ -1483,7 +1483,7 @@ fn the_choice_is_kept_across_an_update_of_the_chosen_provider() {
                 "manifestVersion": 1,
                 "title": "npm greet provider",
                 "version": "{version}",
-                "apiVersion": "0.1",
+                "apiVersion": "0.2",
                 "commands": [
                     {{ "id": "greet", "title": "npm greet provider",
                        "component": "sample_greet_js.wasm" }}

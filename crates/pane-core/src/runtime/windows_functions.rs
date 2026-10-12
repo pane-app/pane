@@ -20,7 +20,9 @@ use crate::switch_windows::{self as host_windows, SwitchWindows, Window, Windows
 impl GuestState {
     /// The launcher's windows adapter, unless the instance's code is
     /// stopped (then why).
-    fn windows_adapter(&self) -> Result<Arc<dyn SwitchWindows>, String> {
+    // pub(super): the previous world's adapter calls it too (see
+    // `runtime::previous`).
+    pub(super) fn windows_adapter(&self) -> Result<Arc<dyn SwitchWindows>, String> {
         let _host = self.host();
         if let Some(end) = self.stopped() {
             return Err(stopped_code(end));
@@ -56,14 +58,14 @@ fn wire_error(error: WindowsError) -> windows_host::WindowsError {
 
 /// What a command is told when the adapter's thread could not start or
 /// failed.
-fn failed() -> WindowsError {
+pub(super) fn failed() -> WindowsError {
     WindowsError::Failed("Pane could not reach the open windows (its thread failed)".into())
 }
 
 /// Runs `work` on a thread of its own, since the system may block (the
 /// windows' processes, the foreground coming back), and answers what it
 /// answered; `gone` answers when the thread could not start or failed.
-async fn off_thread<T: Send + 'static>(
+pub(super) async fn off_thread<T: Send + 'static>(
     work: impl FnOnce() -> T + Send + 'static,
     gone: impl FnOnce() -> T,
 ) -> T {

@@ -280,7 +280,7 @@ fn hello_package(folder: &Path) -> PathBuf {
   "manifestVersion": 1,
   "title": "Hello",
   "version": "1.0.0",
-  "apiVersion": "0.1",
+  "apiVersion": "0.2",
   "commands": [{ "id": "hello", "title": "Say hello", "component": "hello.wasm" }]
 }"#,
     )
@@ -289,6 +289,33 @@ fn hello_package(folder: &Path) -> PathBuf {
     // The source the fake development builder reads: the guest it copies
     // on a successful save, or an error it fails on.
     fs::write(folder.join("source.txt"), "sample_rust").unwrap();
+    folder.to_path_buf()
+}
+
+/// Writes a package folder whose one command is the previous API
+/// fixture's guest (`cargo xtask guests` builds it from `wit/previous`),
+/// with a manifest naming the version it was built for.
+fn previous_package(folder: &Path) -> PathBuf {
+    let guest =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/guests/previous_api.wasm");
+    assert!(
+        guest.exists(),
+        "{} is missing; run `cargo xtask guests`",
+        guest.display()
+    );
+    fs::create_dir_all(folder).unwrap();
+    fs::write(
+        folder.join("pane.json"),
+        r#"{
+  "manifestVersion": 1,
+  "title": "Previous API",
+  "version": "0.1.0",
+  "apiVersion": "0.1",
+  "commands": [{ "id": "previous", "title": "Previous API", "component": "previous_api.wasm" }]
+}"#,
+    )
+    .unwrap();
+    fs::copy(guest, folder.join("previous_api.wasm")).unwrap();
     folder.to_path_buf()
 }
 
@@ -318,7 +345,7 @@ fn operations_package(folder: &Path, title: &str, dependencies: &str) -> PathBuf
         r#"{{
             "manifestVersion": 1,
             "title": "{title}",
-            "apiVersion": "0.1",
+            "apiVersion": "0.2",
             "operations": [{{ "id": "echo", "version": 1, "component": "fixture.wasm" }}],
             "dependencies": [{dependencies}]
         }}"#
@@ -2071,6 +2098,108 @@ fn a_paused_extension_is_marked_in_the_sidebar_and_on_its_page(cx: &mut TestAppC
     assert!(
         settings_cx.debug_bounds("extension-page-mark").is_some(),
         "the page says why"
+    );
+}
+
+#[gpui::test]
+fn an_extension_built_for_a_version_this_pane_cannot_run_keeps_its_page_and_says_why(
+    cx: &mut TestAppContext,
+) {
+    let (sources, data) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let folder = described_package(&sources.path().join("described"));
+    // Install, then let the copy's code be replaced by a build for an
+    // extension API newer than this Pane runs (#318, ADR 0046): a restart
+    // — the next window over the same data — reads it.
+    let installing =
+        Launcher::with_packages(Runtime::start(), vec![], data.path().join("extensions"));
+    install(&installing, &folder);
+    let location = installing.packages()[0].location.clone();
+    drop(installing);
+    let manifest = fs::read_to_string(location.join("pane.json"))
+        .unwrap()
+        .replace(r#""apiVersion": "0.2""#, r#""apiVersion": "0.3""#);
+    assert!(manifest.contains("0.3"), "the manifest was seeded");
+    fs::write(location.join("pane.json"), manifest).unwrap();
+
+    let launcher =
+        Launcher::with_packages(Runtime::start(), vec![], data.path().join("extensions"));
+    cx.executor().allow_parking();
+    cx.update(pane::bind_keys);
+    let (_window, cx) = cx.add_window_view(|window, cx| LauncherWindow::new(launcher, window, cx));
+    let (_settings, mut settings_cx) = open_extensions(cx);
+
+    // It stays listed with its page: the sidebar marks it in a word, the
+    // group lists it, and the page keeps its title, what it does, where it
+    // comes from and the refusal in full — never a generic broken load.
+    assert!(has_node(
+        &mut settings_cx,
+        "ListBoxOption",
+        "Described sample, Unsupported"
+    ));
+    assert!(
+        settings_cx
+            .debug_bounds("extension-item-Described sample")
+            .is_some(),
+        "the extension is listed"
+    );
+    open_page(&mut settings_cx, "Described sample");
+    assert!(has_node(&mut settings_cx, "Heading", "Described sample"));
+    assert!(
+        settings_cx
+            .debug_bounds("extension-page-description")
+            .is_some(),
+        "what it does stays"
+    );
+    assert!(
+        settings_cx.debug_bounds("extension-page-source").is_some(),
+        "where it comes from stays"
+    );
+    assert!(
+        has_node(
+            &mut settings_cx,
+            "Status",
+            "Incompatible package: it needs Pane extension API 0.3, but this Pane provides 0.2 \
+             and 0.1. Update Pane to run it"
+        ),
+        "the page says the refusal in full"
+    );
+    // Its commands are offered nowhere: the page says that rather than
+    // "It has no commands."
+    assert!(
+        settings_cx
+            .debug_bounds("extension-commands-refused")
+            .is_some(),
+        "the Commands section says they are not offered"
+    );
+}
+
+#[gpui::test]
+fn a_previous_version_extension_s_page_says_what_runs_it(cx: &mut TestAppContext) {
+    let (sources, data) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let folder = previous_package(&sources.path().join("previous"));
+    let (_launcher, cx) = open_installed(cx, &data, &folder);
+    let (_settings, mut settings_cx) = open_extensions(cx);
+
+    // The page carries the window's line (ADR 0046) beside its source:
+    // the mark of a working extension, not a warning — no sidebar word,
+    // and nothing else about it differs, its commands and data included.
+    open_page(&mut settings_cx, "Previous API");
+    assert!(
+        settings_cx
+            .debug_bounds("extension-page-previous-api")
+            .is_some(),
+        "the page says what runs it"
+    );
+    let (_, json) = accessibility(&mut settings_cx);
+    assert!(
+        json.contains("Built for extension API 0.1; Pane 0.2 runs it until its next release"),
+        "the line says the extension's version and this Pane's: {json}"
+    );
+    assert!(
+        settings_cx
+            .debug_bounds("extension-entry-mark-Previous API")
+            .is_none(),
+        "a working extension carries no sidebar mark"
     );
 }
 
@@ -5370,7 +5499,7 @@ fn waiting_package(folder: &Path, title: &str, dependencies: &str) -> PathBuf {
             "manifestVersion": 1,
             "title": "{title}",
             "version": "0.1.0",
-            "apiVersion": "0.1",
+            "apiVersion": "0.2",
             "commands": [{{ "id": "call", "title": "Call", "component": "fixture.wasm" }}],
             "operations": [{{ "id": "echo", "version": 1, "component": "fixture.wasm" }}],
             "dependencies": [{dependencies}]

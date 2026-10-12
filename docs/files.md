@@ -711,7 +711,7 @@ JavaScript and TypeScript) ([author guide](../guests/README.md#panes-file-index)
 
 Rust: `pane_extension::file_index::{search, status}` and
 `RootAction::OpenFile(entry.id)`; JavaScript and TypeScript: `search` and
-`status` from `"pane:extension/file-index@0.1.0"`
+`status` from `"pane:extension/file-index@0.2.0"`
 ([`guests/js/file-index.d.ts`](../guests/js/file-index.d.ts); WIT's `u64`
 numbers are `bigint`), whose `package.json` sets
 `"pane": { "fileIndex": true }` so that only such a component imports the
@@ -878,7 +878,7 @@ packages that ask for a folder the user chooses.
 
 Rust commands use it through pane-extension
 (`pane_extension::typed_folder`), JavaScript and TypeScript ones as the
-module "pane:extension/typed-folder@0.1.0"
+module "pane:extension/typed-folder@0.2.0"
 ([`guests/js/typed-folder.d.ts`](../guests/js/typed-folder.d.ts)), which
 only a command whose package.json sets `"pane": { "typedFolder": true }`
 imports.

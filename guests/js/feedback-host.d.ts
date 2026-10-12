@@ -5,8 +5,8 @@
 // commands use them through `@pane-app/extension/feedback` (feedback.d.ts),
 // whose toast actions are functions.
 
-/** `pane:extension/window@0.1.0`. */
-declare module "pane:extension/window@0.1.0" {
+/** `pane:extension/window@0.2.0`. */
+declare module "pane:extension/window@0.2.0" {
   export type PopToRootType = "default" | "immediate" | "suspended";
   /** Hides the launcher; whether a window was shown for the call. */
   export function close(clearRootSearch: boolean, pop: PopToRootType): boolean;
@@ -16,8 +16,9 @@ declare module "pane:extension/window@0.1.0" {
   export function clearSearch(): boolean;
 }
 
-/** `pane:extension/feedback@0.1.0`. */
-declare module "pane:extension/feedback@0.1.0" {
+/** `pane:extension/feedback@0.2.0`. */
+declare module "pane:extension/feedback@0.2.0" {
+  /** How a toast is drawn. */
   export type ToastStyle = "animated" | "success" | "failure";
   export interface ToastAction {
     title: string;
@@ -36,7 +37,10 @@ declare module "pane:extension/feedback@0.1.0" {
   export function showToast(toast: Toast): bigint;
   export function updateToast(id: bigint, toast: Toast): void;
   export function hideToast(id: bigint): void;
-  export function showHud(title: string, style: ToastStyle): void;
+  /** How a HUD is drawn: it has no actions, never queues, and hides by
+   * itself sooner than a toast does. */
+  export type HudStyle = "animated" | "success" | "failure";
+  export function showHud(title: string, style: HudStyle): void;
   export interface Confirmation {
     title: string;
     message?: string | null;

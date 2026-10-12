@@ -2,7 +2,7 @@
 //
 // Declarations for `@pane-app/extension/programs` (programs.js): programs
 // installed on the system, which Pane runs for the command, through
-// `pane:extension/programs@0.1.0` (programs-host.d.ts, wit/programs.wit).
+// `pane:extension/programs@0.2.0` (programs-host.d.ts, wit/programs.wit).
 
 /**
  * Why a program did not run or answer. `kind` tells the cases apart:

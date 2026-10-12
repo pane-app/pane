@@ -15,7 +15,7 @@ import type {
   List,
 } from "@pane-app/extension";
 import { showToast } from "@pane-app/extension/feedback";
-import { installed, open, type Application } from "pane:extension/applications@0.1.0";
+import { installed, open, type Application } from "pane:extension/applications@0.2.0";
 
 const SAMPLE = "TypeScript applications sample";
 

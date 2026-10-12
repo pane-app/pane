@@ -21,7 +21,9 @@ use crate::run::{self as host_run, Run, RunError};
 impl GuestState {
     /// The launcher's run adapter, unless the instance's code is stopped
     /// (then why).
-    fn run_adapter(&self) -> Result<Arc<dyn Run>, String> {
+    // pub(super): the previous world's adapter calls it too
+    // (see `runtime::previous`).
+    pub(super) fn run_adapter(&self) -> Result<Arc<dyn Run>, String> {
         let _host = self.host();
         if let Some(end) = self.stopped() {
             return Err(stopped_code(end));
@@ -60,14 +62,14 @@ fn wire_completion(completion: host_run::Completion) -> run_host::Completion {
 
 /// What a command is told when the adapter's thread could not start or
 /// failed.
-fn failed() -> RunError {
+pub(super) fn failed() -> RunError {
     RunError::Failed("Pane could not reach the Run dialog's work (its thread failed)".into())
 }
 
 /// Runs `work` on a thread of its own, since the shell and the registry
 /// may block (a handler starting, the elevation prompt waiting for the
 /// user), and answers what it answered.
-async fn off_thread<T: Send + 'static>(
+pub(super) async fn off_thread<T: Send + 'static>(
     work: impl FnOnce() -> T + Send + 'static,
     gone: impl FnOnce() -> T,
 ) -> T {

@@ -135,7 +135,7 @@ impl OperationError {
             CallError::Load(_)
             | CallError::Incompatible(_)
             | CallError::Interface(_)
-            | CallError::OlderApiShape(_) => (Incompatible, format!("{title}: {error}")),
+            | CallError::OlderApiShape { .. } => (Incompatible, format!("{title}: {error}")),
             // A live instance (started just before the call) is never
             // missing, only root search's own calls are cancelled, and
             // only a command's tree and event answers are read.
@@ -1011,7 +1011,7 @@ impl<T> operations::HostWithStore<T> for Calls {
 /// Sends `call` — by identity, by capability, or to every provider of one —
 /// to the runtime, which serves it while the calling guest waits, and
 /// awaits its answer, in the shape the call was sent with.
-async fn send<T>(
+pub(crate) async fn send<T>(
     accessor: &Accessor<T, Calls>,
     addressed: Addressed,
     operation: String,
