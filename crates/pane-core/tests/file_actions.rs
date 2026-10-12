@@ -29,7 +29,7 @@ use futures::executor::block_on;
 use pane_core::file_index::{IndexerConfig, WalkOptions};
 use pane_core::system::Clip;
 use pane_core::{
-    ConfirmAnswer, DefaultExtension, Launcher, LinkOpener, PackageIdentity, Runtime, Screen,
+    ConfirmAnswer, Launcher, LinkOpener, PackageIdentity, Runtime, Screen,
     Status, SubmenuState, WindowPresence,
 };
 use tempfile::TempDir;
@@ -357,17 +357,6 @@ impl Pane {
             .map(|hud| hud.title)
             .collect()
     }
-}
-
-/// The documents of the fixture folder `query` finds, and their own
-/// folders as Pane names them.
-fn listed(pane: &Pane) -> Vec<(String, Option<String>)> {
-    pane.launcher
-        .view()
-        .rows
-        .into_iter()
-        .map(|row| (row.title, row.subtitle))
-        .collect()
 }
 
 fn a_documents_actions_act_through_the_system_and_close_the_window(fixture: &'static Package) {

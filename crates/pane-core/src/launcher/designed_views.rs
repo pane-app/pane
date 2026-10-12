@@ -538,15 +538,7 @@ impl Launcher {
         let launcher = self.clone();
         async move {
             if let Some(event) = sent {
-                // [diag-ff6] Diagnostic scaffolding; removed with the root
-                // fix.
-                crate::diagnostic!(
-                    "[diag-ff6] designed event sent: view={:?} number={}",
-                    event.view,
-                    event.number
-                );
                 let result = event.reply.await;
-                crate::diagnostic!("[diag-ff6] designed event replied");
                 launcher.show_designed_answer(epoch, event.view, event.number, result);
             }
         }

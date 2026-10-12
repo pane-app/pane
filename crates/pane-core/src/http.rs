@@ -200,13 +200,6 @@ impl WasiHttpHooks for Sender {
         // nothing here needs it.
         _received: Box<dyn Future<Output = Result<(), Error>> + Send>,
     ) -> Sent {
-        // [diag-ff6] Diagnostic scaffolding for the command-search stall;
-        // fix-forward-7 removes it with the root fix.
-        crate::diagnostic!(
-            "[diag-ff6] http request: {} {}",
-            request.method(),
-            request.uri()
-        );
         if self.stopped() {
             // Stopped code starts no more work.
             return Box::new(async { Err(Error::HttpRequestDenied) });
@@ -240,11 +233,9 @@ impl WasiHttpHooks for Sender {
                 let ceilings = Ceilings::new(limits, options);
                 let sending = send(request, target, ceilings, permit, watch);
                 let Some(sent) = unless_aborted(sending, aborted.as_mut()).await else {
-                    crate::diagnostic!("[diag-ff6] http request aborted by the generation");
                     return Err(Error::HttpRequestDenied);
                 };
                 let (response, receiving) = sent?;
-                crate::diagnostic!("[diag-ff6] http replied: {}", response.status());
                 let receiving: Receiving = Box::new(async move {
                     let _undo = undo;
                     unless_aborted(Box::into_pin(receiving), aborted.as_mut())

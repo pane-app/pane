@@ -310,28 +310,6 @@ fn is_text(form: &pane_core::PaneForm, key: &str) -> bool {
     )
 }
 
-/// Whether the field `key` of the argument form's tree is a password
-/// field.
-fn is_password(form: &pane_core::PaneForm, key: &str) -> bool {
-    matches!(
-        field_node(form, key).kind,
-        pane_core::NodeKind::PasswordInput(_)
-    )
-}
-
-/// The labels of the options the dropdown `key` of the argument form's
-/// tree offers.
-fn choices_of(form: &pane_core::PaneForm, key: &str) -> Vec<String> {
-    match &field_node(form, key).kind {
-        pane_core::NodeKind::Select(select) => select
-            .options
-            .iter()
-            .map(|option| option.label.clone().unwrap_or_else(|| option.value.clone()))
-            .collect(),
-        _ => Vec::new(),
-    }
-}
-
 /// The title a field of the argument form's tree carries.
 fn title_of<'a>(form: &'a pane_core::PaneForm, key: &str) -> &'a str {
     match &field_node(form, key).kind {
@@ -340,17 +318,6 @@ fn title_of<'a>(form: &'a pane_core::PaneForm, key: &str) -> &'a str {
         }
         pane_core::NodeKind::Select(select) => select.field.title.as_deref().unwrap_or_default(),
         other => panic!("the field carries no title: {other:?}"),
-    }
-}
-
-/// The error a field of the argument form's tree carries, if one was set.
-fn error_of(form: &pane_core::PaneForm, key: &str) -> Option<String> {
-    match &field_node(form, key).kind {
-        pane_core::NodeKind::TextInput(input) | pane_core::NodeKind::PasswordInput(input) => {
-            input.field.error.clone()
-        }
-        pane_core::NodeKind::Select(select) => select.field.error.clone(),
-        _ => None,
     }
 }
 

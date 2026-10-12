@@ -21,8 +21,7 @@ mod unreachable;
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Condvar, Mutex};
-use std::task::{Poll, Waker};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use feedback::shown;
@@ -41,26 +40,20 @@ struct Fixture {
     package: &'static str,
     /// Its title.
     title: &'static str,
-    /// An assembled package in the same language that makes no web
-    /// requests.
-    offline: &'static str,
 }
 
 const RUST: Fixture = Fixture {
     package: "sample-search",
     title: "Search sample",
-    offline: "sample-query",
 };
 
 const JAVASCRIPT: Fixture = Fixture {
     package: "sample-search-js",
     title: "JavaScript search sample",
-    offline: "sample-query-js",
 };
 const TYPESCRIPT: Fixture = Fixture {
     package: "sample-search-ts",
     title: "TypeScript search sample",
-    offline: "sample-query-ts",
 };
 
 const ALL: [Fixture; 3] = [RUST, JAVASCRIPT, TYPESCRIPT];
