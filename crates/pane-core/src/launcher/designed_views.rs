@@ -301,9 +301,7 @@ impl Launcher {
         if current.is_none() {
             crate::diagnostics::report(
                 "[diag-ff8d] designed open dropped",
-                &format!(
-                    "[diag-ff8d] designed open dropped: the screen moved (command={command})"
-                ),
+                &format!("[diag-ff8d] designed open dropped: the screen moved (command={command})"),
             );
         }
         let stopped = current
