@@ -984,9 +984,9 @@ mod extension {
             select_title(&self.launcher, "Switch Windows sample");
             block_on(self.launcher.activate_selected());
             assert!(matches!(
-            self.launcher.view().screen,
-            Screen::DesignedView(_)
-        ));
+                self.launcher.view().screen,
+                Screen::DesignedView(_)
+            ));
         }
     }
 
