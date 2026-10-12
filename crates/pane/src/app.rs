@@ -299,6 +299,19 @@ impl LauncherWindow {
             if window.window_handle() != gate_window {
                 return;
             }
+            // [diag-ff8] Diagnostic scaffolding for the smoke's key stall:
+            // the earliest point inside the app a keystroke reaches,
+            // before the keymap and every listener. The site names the
+            // key, so the log's rate limit cannot starve the line the
+            // next round needs. fix-forward-9 removes it with the root
+            // fix.
+            pane_core::diagnostics::report(
+                &format!("[diag-ff8i] keystroke {}", event.keystroke.key),
+                &format!(
+                    "[diag-ff8i] keystroke {} (char {:?})",
+                    event.keystroke.key, event.keystroke.key_char
+                ),
+            );
             let Ok(pressed) = crate::keyboard::binding_of(&event.keystroke) else {
                 return;
             };
@@ -357,8 +370,30 @@ impl LauncherWindow {
         // release would go to another window. So does the toast, an
         // animated one too (#141), and a confirmation it showed is
         // answered as not confirmed (#146).
+        // [diag-ff8] Diagnostic scaffolding for the smoke's key stall:
+        // fires once a keystroke's action and event mechanisms have
+        // resolved, naming the action a binding dispatched (and staying
+        // silent for a key whose propagation was stopped) — the split
+        // between a binding-consumed Enter and one that never arrived.
+        // fix-forward-9 removes it with the root fix.
+        cx.observe_keystrokes(move |_this, event, _window, _cx| {
+            pane_core::diagnostics::report(
+                &format!("[diag-ff8o] resolved {}", event.keystroke.key),
+                &format!(
+                    "[diag-ff8o] resolved {} (action {:?})",
+                    event.keystroke.key,
+                    event.action.as_ref().map(|action| action.name())
+                ),
+            );
+        })
+        .detach();
         cx.observe_window_activation(window, |this, window, cx| {
             let active = window.is_window_active();
+            // [diag-ff8] Diagnostic scaffolding; removed with the root fix.
+            pane_core::diagnostics::report(
+                "[diag-ff8a] window activation",
+                &format!("[diag-ff8a] window active={active}"),
+            );
             // A pending HUD's work is done once the launcher is active
             // again (#250).
             if active {
