@@ -102,9 +102,11 @@ impl Greeting {
         .child(
             form::dropdown("greeting")
                 .title("Greeting")
-                .options(GREETINGS.iter().map(|&(value, label)| {
-                    choice(value).label(label)
-                }))
+                .options(
+                    GREETINGS
+                        .iter()
+                        .map(|&(value, label)| choice(value).label(label)),
+                )
                 .default_value("hello")
                 .into_node(),
         )

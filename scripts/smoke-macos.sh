@@ -354,10 +354,10 @@ check 1-root.png hint   # the hint line: text renders
 index=0
 for sample in "Rust sample" "JavaScript sample" "TypeScript sample"; do
   type_text "$sample"; sleep 1
-  # The Rust sample also answers the query itself (#285): its answer card
-  # takes the first row, so a Down lands on the command row — and clamps
-  # at the single row of the samples that answer nothing.
-  key 125; key 36; sleep 3
+  # Typing the command's name leaves its exact-titled row the best match,
+  # selected: Enter opens it. (The samples answer only "reverse <text>"
+  # queries, so no answer card takes the first row.)
+  key 36; sleep 3
   capture "$((index + 2))-command-$index.png"
   key 125; key 36; sleep 2
   capture "$((index + 2))-result-$index.png"
@@ -374,7 +374,7 @@ python3 "$(dirname "$0")/check_screenshot.py" --distinct "$out"/{2,3,4}-result-*
 # Tab and Down makes the guest answer. The command is opened by typing its
 # name, as the samples above are.
 type_text "rust sample"; sleep 1
-key 125; key 36; sleep 3
+key 36; sleep 3
 for _ in 1 2 3 4; do key 125; done
 key 36; sleep 1
 capture 6-form.png
@@ -439,7 +439,7 @@ focus_pane
 # the second runs. The command is opened by typing its name, as the samples
 # above are.
 type_text 'rust sample'; sleep 1
-key 125; key 36; sleep 3
+key 36; sleep 3
 for _ in 1 2 3 4 5 6; do key 125; done
 key 36; sleep 2
 capture 13-windows-only.png
@@ -518,7 +518,7 @@ focus_pane
 # other swatch covers. The command is opened by typing its name, as the
 # samples above are.
 type_text 'rust sample'; sleep 1
-key 125; key 36; sleep 3
+key 36; sleep 3
 for _ in 1 2 3 4 5; do key 125; done
 key 36; sleep 2
 capture 21-color.png
@@ -585,7 +585,7 @@ a11y shown "Reloaded Dev"
 capture 34-reloaded.png
 close_settings
 type_text 'dev sample'; sleep 1   # wherever the blank order places it
-key 125; key 36; sleep 3   # below the answer card
+key 36; sleep 3
 key 36; sleep 2   # "Say hello"
 capture 35-dev-after.png
 check 35-dev-after.png success   # "Hello from the JavaScript guest"
@@ -601,7 +601,7 @@ a11y shown "Dev was not reloaded" prefix
 capture 36-not-reloaded.png
 close_settings
 type_text 'dev sample'; sleep 1
-key 125; key 36; sleep 3   # below the answer card
+key 36; sleep 3
 key 36; sleep 2
 capture 37-still-running.png
 python3 "$(dirname "$0")/check_screenshot.py" --same "$out/35-dev-after.png" "$out/37-still-running.png"
