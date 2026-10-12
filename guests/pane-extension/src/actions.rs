@@ -31,7 +31,7 @@ use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
 
-use crate::feedback::{HudStyle, Toast, ToastStyle, show_hud, show_toast};
+use crate::feedback::{HudStyle, Toast, show_hud, show_toast};
 use crate::list::{Action, Submenu};
 use crate::system::{self, Clip, SystemError};
 use crate::window::{PopToRootType, close};
