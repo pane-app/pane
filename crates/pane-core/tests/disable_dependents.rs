@@ -82,7 +82,7 @@ impl Dirs {
             r#"{{
                 "manifestVersion": 1,
                 "title": "Package {name}",
-                "apiVersion": "0.1",
+                "apiVersion": "0.2",
                 "operations": [{{ "id": "echo", "version": 1, "component": "fixture.wasm" }}],
                 "dependencies": [{dependencies}]
             }}"#
@@ -106,7 +106,7 @@ impl Dirs {
             r#"{{
                 "manifestVersion": 1,
                 "title": "{title}",
-                "apiVersion": "0.1",
+                "apiVersion": "0.2",
                 "commands": [
                     {{ "id": "greeting", "title": "Greeting", "component": "sample_settings.wasm" }}
                 ],
@@ -640,7 +640,7 @@ impl Dirs {
             r#"{{
                 "manifestVersion": 1,
                 "title": "Package {name}",
-                "apiVersion": "0.1",
+                "apiVersion": "0.2",
                 "commands": [
                     {{ "id": "fixture", "title": "{command}", "component": "fixture.wasm" }}
                 ]{members}

@@ -76,7 +76,8 @@ use pane_extension::actions;
 use pane_extension::alloc::{format, string::String, vec::Vec};
 use pane_extension::commands::{CommandRef, LaunchType, launch, set_subtitle};
 use pane_extension::feedback::{
-    Confirmation, ShownToast, Toast, ToastAction, ToastStyle, confirm, show_hud, show_toast,
+    Confirmation, HudStyle, ShownToast, Toast, ToastAction, ToastStyle, confirm, show_hud,
+    show_toast,
 };
 use pane_extension::system::{self, Clip, HostSystem, SystemError};
 use pane_extension::window::{PopToRootType, clear_search, close, pop_to_root};
@@ -570,11 +571,11 @@ impl Command for Actions {
                 .subtitle("A HUD, toasts and this command's subtitle")
                 .actions([
                     Action::new("Show HUD", || async {
-                        show_hud("Copied to Clipboard", ToastStyle::Success);
+                        show_hud("Copied to Clipboard", HudStyle::Success);
                         Ok(())
                     }),
                     Action::new("Show Failure HUD", || async {
-                        show_hud("Could not copy", ToastStyle::Failure);
+                        show_hud("Could not copy", HudStyle::Failure);
                         Ok(())
                     }),
                     Action::new("Start Upload", || async {

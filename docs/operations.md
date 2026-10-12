@@ -101,7 +101,7 @@ call: async func(source: string, operation: string, version: u32, input: string)
 In Rust, `pane_extension::operations::call(source, operation, version, input)`
 is an `async fn` returning `Result<String, CallError>`; `CallError::explain()`
 gives `<kind>: <message>`. In JavaScript and TypeScript,
-`call` from `"pane:extension/operations@0.1.0"` returns a `Promise<string>`
+`call` from `"pane:extension/operations@0.2.0"` returns a `Promise<string>`
 that rejects with an object whose `payload` is `{ kind, message }`
 ([`operations.d.ts`](../guests/js/operations.d.ts)).
 
@@ -306,7 +306,7 @@ uses and uses of every provider never make a command wait.
 In Rust, `pane_extension::capabilities::{call, call_every, providers,
 available}`; in JavaScript and TypeScript,
 `@pane-app/extension/capabilities` (or the module
-`"pane:extension/operations@0.1.0"`).
+`"pane:extension/operations@0.2.0"`).
 
 ### Choosing a provider
 

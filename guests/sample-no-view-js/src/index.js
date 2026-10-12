@@ -27,8 +27,8 @@
 // command launched so) does its work but shows no toast.
 // @ts-check
 import { showToast } from "@pane-app/extension/feedback";
-import { launch } from "pane:extension/commands@0.1.0";
-import { get, set } from "pane:extension/settings@0.1.0";
+import { launch } from "pane:extension/commands@0.2.0";
+import { get, set } from "pane:extension/settings@0.2.0";
 
 /** The settings key holding the last launch record "Report launch" ran with. */
 const REPORT = "report";

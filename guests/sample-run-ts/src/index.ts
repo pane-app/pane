@@ -11,14 +11,14 @@ import { getPreferenceValues } from "@pane-app/extension/preferences";
 import { run as runProgram } from "@pane-app/extension/programs";
 import { List as DesignedList, createView, useState } from "@pane-app/extension/view";
 import { jsxs } from "@pane-app/extension/jsx-runtime";
-import type { CompletionSource } from "pane:extension/run@0.1.0";
+import type { CompletionSource } from "pane:extension/run@0.2.0";
 import {
   completions,
   deleteFromHistory,
   history,
   run,
   terminal,
-} from "pane:extension/run@0.1.0";
+} from "pane:extension/run@0.2.0";
 
 /** What the no-view commands say when they are sent no command line. */
 const NOTHING =

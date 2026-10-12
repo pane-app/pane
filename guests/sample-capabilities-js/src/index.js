@@ -38,7 +38,7 @@ async function callName(capability, operation) {
   try {
     result = await call(capability, operation, JSON.stringify({ name: "Pane" }));
   } catch (error) {
-    /** @type {import("pane:extension/operations@0.1.0").CallError} */
+    /** @type {import("pane:extension/operations@0.2.0").CallError} */
     const { kind, message } = /** @type {any} */ (error).payload;
     throw new Error(`${kind}: ${message}`);
   }
@@ -69,7 +69,7 @@ async function outcome(itemId) {
       try {
         answers = await callEvery(GREET, "greet", JSON.stringify({ name: "Pane" }));
       } catch (error) {
-        /** @type {import("pane:extension/operations@0.1.0").CallError} */
+        /** @type {import("pane:extension/operations@0.2.0").CallError} */
         const { kind, message } = /** @type {any} */ (error).payload;
         throw new Error(`${kind}: ${message}`);
       }

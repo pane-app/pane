@@ -603,7 +603,7 @@ cat >"$package/pane.json" <<'JSON'
 {
   "manifestVersion": 1,
   "title": "Measure",
-  "apiVersion": "0.1",
+  "apiVersion": "0.2",
   "commands": [{ "id": "sample", "title": "Measure sample", "component": "command.wasm" }]
 }
 JSON

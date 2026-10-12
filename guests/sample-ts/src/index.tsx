@@ -15,7 +15,7 @@ import type {
   RootResult,
   RootResults,
 } from "@pane-app/extension";
-import { launch } from "pane:extension/commands@0.1.0";
+import { launch } from "pane:extension/commands@0.2.0";
 import { jsxs } from "@pane-app/extension/jsx-runtime";
 import {
   Canvas,

@@ -80,9 +80,10 @@ use gpui::{
 use gpui_elements::editable_text::{EditableTextState, StringStorage, TextChanged, text_input};
 use pane_core::clipboard::{Clock as _, SystemClock};
 use pane_core::{
-    ExtensionDetails, ExtensionMark, ExtensionOperation, InstalledPackage, Launcher, LauncherView,
-    OperationKind, PackageIdentity, PackagePreferences, PreferenceField, PreferenceKind,
-    ProvidedCapability, RequirementCycle, RequirementFix, Screen, ShortcutCommand, Status,
+    EXTENSION_API, ExtensionDetails, ExtensionMark, ExtensionOperation, InstalledPackage, Launcher,
+    LauncherView, OperationKind, PackageIdentity, PackagePreferences, PreferenceField,
+    PreferenceKind, ProvidedCapability, RequirementCycle, RequirementFix, Screen, ShortcutCommand,
+    Status,
 };
 
 use super::{Page, SettingsWindow, search};
@@ -549,21 +550,26 @@ pub(crate) fn source_line(package: &InstalledPackage) -> String {
     }
 }
 
+/// The window's line for an extension built for the previous extension
+/// API version, which this Pane still runs (ADR 0046): the version from
+/// its `apiVersion`, this Pane from its own. `None` for an extension of
+/// the current version.
+pub(crate) fn previous_api_line(package: &InstalledPackage) -> Option<String> {
+    package.previous_api().map(|api| {
+        format!(
+            "Built for extension API {api}; Pane {}.{} runs it until its next release",
+            EXTENSION_API.0, EXTENSION_API.1
+        )
+    })
+}
+
 /// What an extension's page says under its title: its manifest's
 /// description, or, for an extension of one command that gives none, that
-/// command's subtitle.
+/// command's subtitle — read from the manifest the listing keeps, so an
+/// extension built for a version this Pane cannot run says it still
+/// (#318).
 fn description_of(package: &InstalledPackage) -> Option<String> {
-    if let Some(description) = package.description() {
-        return Some(description.to_owned());
-    }
-    match package.listed_commands().as_slice() {
-        [only] => only
-            .registration
-            .subtitle
-            .clone()
-            .filter(|subtitle| *subtitle != package.title()),
-        _ => None,
-    }
+    package.page_description()
 }
 
 // ------------------------------------------------------------- the sidebar
@@ -2281,6 +2287,18 @@ fn header(
                         .debug_selector(|| "extension-page-source".into())
                         .truncate(),
                 )
+                // A previous-version extension's page carries the window's
+                // line (ADR 0046): the mark of a working extension, not a
+                // warning — commands, aliases, hotkeys and data are all
+                // unchanged, and nothing else on the page differs.
+                .children(previous_api_line(package).map(|line| {
+                    controls::field_description(line.clone(), theme.text_muted, theme)
+                        .id("extension-page-previous-api")
+                        .debug_selector(|| "extension-page-previous-api".into())
+                        .truncate()
+                        .role(Role::Note)
+                        .aria_label(line)
+                }))
                 .children(mark),
         )
         .into_any_element()
@@ -2439,6 +2457,26 @@ fn commands_section(
         .find(|group| group.identity.as_ref() == Some(&package.identity))
         .map(|group| group.commands)
         .unwrap_or_default();
+    // An extension built for a version of the extension API this Pane
+    // cannot run is listed with its commands offered nowhere (#318, ADR
+    // 0046): the page says that rather than "It has no commands.", since
+    // its manifest has them — the mark at the top carries the refusal in
+    // full.
+    if package.unsupported_api().is_some() {
+        let body = controls::field_description(
+            "Its commands are not offered: it was built for an extension API version this Pane \
+             cannot run.",
+            theme.text_muted,
+            theme,
+        )
+        .id("extension-commands-refused")
+        .debug_selector(|| "extension-commands-refused".into())
+        .px(theme.geometry.settings.section_label_inset)
+        .into_any_element();
+        return controls::section(Some("Commands".into()), body, theme)
+            .debug_selector(|| "extension-commands".into())
+            .into_any_element();
+    }
     let commands = package.listed_commands();
     let count = commands.len();
     // A long Commands section draws only the commands near the page's

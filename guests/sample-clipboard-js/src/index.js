@@ -16,7 +16,7 @@
 // @ts-check
 import { closeMainWindow, showHUD, showToast } from "@pane-app/extension/feedback";
 import { NotAvailableError, PASTE_FALLBACK, paste } from "@pane-app/extension/system";
-import * as history from "pane:extension/clipboard-history@0.1.0";
+import * as history from "pane:extension/clipboard-history@0.2.0";
 
 /** The longest title of a kept item, in characters. */
 const TITLE_CHARS = 80;

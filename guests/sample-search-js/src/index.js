@@ -26,7 +26,7 @@ import {
   useRef,
   useState,
 } from "@pane-app/extension/view";
-import { get, set } from "pane:extension/settings@0.1.0";
+import { get, set } from "pane:extension/settings@0.2.0";
 import { jsxs } from "@pane-app/extension/jsx-runtime";
 
 /** The address used until the user sets another. */

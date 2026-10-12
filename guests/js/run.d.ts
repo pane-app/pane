@@ -13,8 +13,8 @@
 // variables, each matching the typed text. Windows only. Only a command
 // whose package.json sets `"pane": { "run": true }` imports it.
 
-/** `pane:extension/run@0.1.0`. */
-declare module "pane:extension/run@0.1.0" {
+/** `pane:extension/run@0.2.0`. */
+declare module "pane:extension/run@0.2.0" {
   /**
    * Why a run or a history call did not answer, as the call throws it
    * (an object whose `payload` is one of these): `tag` tells the cases

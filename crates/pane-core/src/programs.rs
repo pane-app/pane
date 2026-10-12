@@ -61,13 +61,13 @@ pub(crate) struct Processes {
 }
 
 impl Processes {
-    fn insert(&mut self, spawned: Spawned) -> u64 {
+    pub(crate) fn insert(&mut self, spawned: Spawned) -> u64 {
         self.last += 1;
         self.spawned.insert(self.last, Arc::new(spawned));
         self.last
     }
 
-    fn get(&self, id: u64) -> Result<Arc<Spawned>, ProgramError> {
+    pub(crate) fn get(&self, id: u64) -> Result<Arc<Spawned>, ProgramError> {
         self.spawned.get(&id).cloned().ok_or_else(|| {
             ProgramError::new(
                 ErrorKind::Refused,
@@ -86,8 +86,10 @@ impl Processes {
     }
 }
 
-/// `program`, `args` and `options` as Pane runs them.
-fn request(program: String, args: Vec<String>, options: wit::Options) -> Request {
+/// `program`, `args` and `options` as Pane runs them, in the current
+/// world's bindings. The previous world's adapter builds the same `Request`
+/// from its own (see `runtime::previous`).
+pub(crate) fn request(program: String, args: Vec<String>, options: wit::Options) -> Request {
     Request {
         program,
         args,
@@ -107,7 +109,11 @@ fn request(program: String, args: Vec<String>, options: wit::Options) -> Request
 
 /// Whose a program `state`'s guest asks for is, once `request` and `input`
 /// pass Pane's checks and the guest's code may still run.
-fn owner_for(state: &GuestState, request: &Request, input: &[u8]) -> Result<Owner, ProgramError> {
+pub(crate) fn owner_for(
+    state: &GuestState,
+    request: &Request,
+    input: &[u8],
+) -> Result<Owner, ProgramError> {
     // Stopped code starts no more work.
     if let Some(end) = state.stopped() {
         return Err(runner::stopped_code(end));
@@ -212,14 +218,18 @@ impl<T> wit::HostWithStore<T> for Calls {
         accessor: &Accessor<T, Self>,
         process: u64,
     ) -> Result<Option<Vec<u8>>, wit::ProgramError> {
-        read(accessor, process, Stream::Output).await
+        read(accessor, process, Stream::Output)
+            .await
+            .map_err(wit::ProgramError::from)
     }
 
     async fn read_error(
         accessor: &Accessor<T, Self>,
         process: u64,
     ) -> Result<Option<Vec<u8>>, wit::ProgramError> {
-        read(accessor, process, Stream::Errors).await
+        read(accessor, process, Stream::Errors)
+            .await
+            .map_err(wit::ProgramError::from)
     }
 
     async fn wait(
@@ -251,11 +261,11 @@ impl<T> wit::HostWithStore<T> for Calls {
 }
 
 /// The next bytes the program `process` wrote to `stream`.
-async fn read<T>(
+pub(crate) async fn read<T>(
     accessor: &Accessor<T, Calls>,
     process: u64,
     stream: Stream,
-) -> Result<Option<Vec<u8>>, wit::ProgramError> {
+) -> Result<Option<Vec<u8>>, ProgramError> {
     let (reading, watch) = accessor.with(|mut view| {
         let state = view.get();
         (

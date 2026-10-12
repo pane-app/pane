@@ -868,7 +868,7 @@ fn sums(sources: &Path) -> PathBuf {
     package_of(
         sources,
         "sums",
-        r#"{ "manifestVersion": 1, "title": "Sums", "apiVersion": "0.1",
+        r#"{ "manifestVersion": 1, "title": "Sums", "apiVersion": "0.2",
   "commands": [{ "id": "greet", "title": "Sum 0 + 0",
     "component": "command.wasm", "mode": "no-view",
     "arguments": [{ "name": "name", "type": "text", "placeholder": "Name", "required": true }] }] }"#,
@@ -883,7 +883,7 @@ fn slow(sources: &Path) -> PathBuf {
     package_of(
         sources,
         "slow",
-        r#"{ "manifestVersion": 1, "title": "Slow", "apiVersion": "0.1",
+        r#"{ "manifestVersion": 1, "title": "Slow", "apiVersion": "0.2",
   "commands": [{ "id": "command", "title": "Slow answers",
     "component": "command.wasm", "rootResults": true }] }"#,
         &built("faulty.wasm"),

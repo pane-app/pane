@@ -11,8 +11,8 @@
 // modified time; a root result or a search result names it by its id, and
 // Pane checks it again before acting on it.
 
-/** `pane:extension/file-index@0.1.0`. */
-declare module "pane:extension/file-index@0.1.0" {
+/** `pane:extension/file-index@0.2.0`. */
+declare module "pane:extension/file-index@0.2.0" {
   /** What kind of entry it is; a link is listed, never followed. */
   export type EntryKind = "file" | "folder" | "link";
 

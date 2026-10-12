@@ -21,8 +21,8 @@
 //   the background. Sent `last`, it shows what "Stamp" last kept.
 //
 // A command launched in the background does its work but shows no toast.
-import { launch } from "pane:extension/commands@0.1.0";
-import { get, set } from "pane:extension/settings@0.1.0";
+import { launch } from "pane:extension/commands@0.2.0";
+import { get, set } from "pane:extension/settings@0.2.0";
 import type { ArgumentValue, Command, LaunchRecord } from "@pane-app/extension";
 import { showToast } from "@pane-app/extension/feedback";
 

@@ -21,10 +21,10 @@
 // error and logs with its stack.
 // @ts-check
 import { showToast } from "@pane-app/extension/feedback";
-import { get, set } from "pane:extension/settings@0.1.0";
-import * as cache from "pane:extension/cache@0.1.0";
-import * as content from "pane:extension/content@0.1.0";
-import * as credentials from "pane:extension/credentials@0.1.0";
+import { get, set } from "pane:extension/settings@0.2.0";
+import * as cache from "pane:extension/cache@0.2.0";
+import * as content from "pane:extension/content@0.2.0";
+import * as credentials from "pane:extension/credentials@0.2.0";
 import { waitFor } from "wasi:clocks/monotonic-clock@0.3.0";
 
 /** The settings key holding the chosen greeting style. */

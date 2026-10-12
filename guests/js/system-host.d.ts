@@ -7,8 +7,8 @@
 // `@pane-app/extension/system` (system.d.ts), which also has the standard
 // actions built from them.
 
-/** `pane:extension/system@0.1.0`. */
-declare module "pane:extension/system@0.1.0" {
+/** `pane:extension/system@0.2.0`. */
+declare module "pane:extension/system@0.2.0" {
   /** The system Pane runs on. */
   export type HostSystem = "windows" | "macos" | "linux" | "other";
 

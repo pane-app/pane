@@ -18,8 +18,8 @@
 // its file actions (Open, Show in Explorer, Open With…, Copy Path, Copy
 // File, Move to Recycle Bin; for a program, Enter shows it and only Run
 // runs it), which it performs itself.
-import { type FileEntry, search, status } from "pane:extension/file-index@0.1.0";
-import { type FolderEntry, listEntries } from "pane:extension/typed-folder@0.1.0";
+import { type FileEntry, search, status } from "pane:extension/file-index@0.2.0";
+import { type FolderEntry, listEntries } from "pane:extension/typed-folder@0.2.0";
 import type {
   Command,
   DesignedView,

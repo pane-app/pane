@@ -316,8 +316,9 @@ never a choice of the user's. The same controls govern it: the global
 "Update extensions automatically" choice, and the per-extension switch on
 its page in Settings and in the extension list ("a newer release of its
 repository replaces it once no command of it runs"). A payload whose
-`apiVersion` this Pane cannot run is skipped with "needs a newer Pane"
-(ADR 0046), the row saying so too when Pane's own application update
+`apiVersion` this Pane cannot run is skipped with the refusal naming the
+extension's version, the versions this Pane runs and the remedy — a newer
+Pane (ADR 0046), the row pointing at Pane's own update too when one
 exists; a release that passes its checks but fails to start pauses the
 extension with Retry and is recorded under Failed, not rolled back; an
 update that installs required dependencies installs them all or changes

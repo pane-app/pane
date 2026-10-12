@@ -25,9 +25,9 @@ import type {
   List,
   PublishedOperations,
 } from "@pane-app/extension";
-import { launch } from "pane:extension/commands@0.1.0";
-import { call, type CallError } from "pane:extension/operations@0.1.0";
-import { set } from "pane:extension/settings@0.1.0";
+import { launch } from "pane:extension/commands@0.2.0";
+import { call, type CallError } from "pane:extension/operations@0.2.0";
+import { set } from "pane:extension/settings@0.2.0";
 import { Column, Form, Text, createView, useState } from "@pane-app/extension/view";
 import type { Element, FormSubmittedValues } from "@pane-app/extension/view";
 import { waitFor } from "wasi:clocks/monotonic-clock@0.3.0";

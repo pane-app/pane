@@ -1,0 +1,19 @@
+# Test fixture: a guest built against the previous version of the
+# extension API, `wit/previous` (ADR 0046): the 0.1 contract this Pane
+# still runs through the host's adapter, checked end to end. It cannot use
+# `pane-extension`, which binds the current contract, so it supplies the
+# allocator, panic handler and `cabi_realloc` itself, as the other
+# hand-written fixtures do.
+[package]
+name = "previous-api"
+version = "0.1.0"
+edition.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wit-bindgen = { version = "=0.62.0", default-features = false, features = ["macros", "async"] }
+dlmalloc = { version = "0.2", features = ["global"] }

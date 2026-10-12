@@ -3,8 +3,8 @@
 // What a JS/TS command does after it acts (`@pane-app/extension/feedback`):
 // tell the user what happened with a toast or a HUD, ask them to confirm
 // first, close Pane's window, pop back to root search, clear the search
-// field, and set its row's subtitle, through `pane:extension/feedback@0.1.0`,
-// `pane:extension/window@0.1.0` and `pane:extension/commands@0.1.0`
+// field, and set its row's subtitle, through `pane:extension/feedback@0.2.0`,
+// `pane:extension/window@0.2.0` and `pane:extension/commands@0.2.0`
 // (wit/feedback.wit, wit/commands.wit). Bundled into the command that
 // imports it, like any npm module.
 //
@@ -21,9 +21,9 @@ import {
   showHud,
   showToast as show,
   updateToast,
-} from "pane:extension/feedback@0.1.0";
-import { clearSearch, close, popToRoot as pop } from "pane:extension/window@0.1.0";
-import { setSubtitle as set } from "pane:extension/commands@0.1.0";
+} from "pane:extension/feedback@0.2.0";
+import { clearSearch, close, popToRoot as pop } from "pane:extension/window@0.2.0";
+import { setSubtitle as set } from "pane:extension/commands@0.2.0";
 
 /** Where the newest toast's actions are kept, by callback id. */
 const ACTIONS = Symbol.for("pane.extension.toastActions");

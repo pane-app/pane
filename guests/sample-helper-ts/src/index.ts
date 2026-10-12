@@ -13,8 +13,8 @@
 // returns.
 import type { Command, DesignedView, Item, List } from "@pane-app/extension";
 import { showToast } from "@pane-app/extension/feedback";
-import { run, type HelperError } from "pane:extension/helpers@0.1.0";
-import { set } from "pane:extension/settings@0.1.0";
+import { run, type HelperError } from "pane:extension/helpers@0.2.0";
+import { set } from "pane:extension/settings@0.2.0";
 import { waitFor } from "wasi:clocks/monotonic-clock@0.3.0";
 
 /** The helper's name in the package's pane.json. */

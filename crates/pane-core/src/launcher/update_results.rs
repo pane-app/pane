@@ -1063,7 +1063,7 @@ mod tests {
         pass.refused(
             PackageIdentity::npm("@pane-tests/settings"),
             "Settings from npm".into(),
-            "Incompatible package: it needs Pane extension API 0.2, but this Pane provides 0.1",
+            "Incompatible package: it needs Pane extension API 0.3, but this Pane provides 0.2 and 0.1",
         );
         assert!(pass.found_new, "the pass found something new");
         assert!(record.record(&pass));

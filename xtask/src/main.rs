@@ -35,10 +35,17 @@
 //!   on a push and uploads it as an artifact, as it does the JS/TS samples.
 //! - `ci`: the lints of `ci-lints`, then the tests of `ci-tests`.
 //! - `ci-lints`: check formatting, the committed `pane.json` schema, the
-//!   prebuilt JS/TS samples, the SDKs' packages (`sdks`) and clippy: the
-//!   half of `ci` that runs no tests and builds no guest but the Rust SDK.
-//!   The prebuilt-samples check needs no toolchain at all (#218): it
-//!   verifies digests and staleness in `js_guests`.
+//!   one extension API number (`api_versions`: every place that names the
+//!   extension API says the version the `pane:extension` WIT package
+//!   declares, #317), the WIT guard (`wit_guard`: a breaking change to
+//!   `wit/` fails unless the extension API version moved, #319, ADR
+//!   0046), the release notes' breaking-changes record (`release_notes`:
+//!   the extension API version `wit/` declares must have its section in
+//!   docs/breaking-changes.md once a previous world exists, #321, ADR
+//!   0046), the prebuilt JS/TS samples, the SDKs' packages (`sdks`) and
+//!   clippy: the half of `ci` that runs no tests and builds no guest but
+//!   the Rust SDK. The prebuilt-samples check needs no toolchain at all
+//!   (#218): it verifies digests and staleness in `js_guests`.
 //! - `sdks`: check that the SDKs and the CLI packages as they would be
 //!   published, publishing nothing: the Rust SDK's copy of the WIT is
 //!   `wit/`, `cargo publish --dry-run` packages `pane-extension` and builds
@@ -76,9 +83,12 @@
 //!   fails when a measure is over its generous ceiling. `ci-branch.yml`'s
 //!   Linux tests run it in one shard, after the tests.
 
+mod api_versions;
 mod cli_packages;
 mod js_guests;
 mod package;
+mod release_notes;
+mod wit_guard;
 mod zip;
 
 use std::collections::BTreeMap;
@@ -255,6 +265,7 @@ fn guests() -> Result<(), String> {
                 "handoff_fixture",
                 "old_api",
                 "mismatched_api",
+                "previous_api",
                 "failing_start",
                 "refusing_view",
                 "designed_fixture",
@@ -515,11 +526,12 @@ fn git_sample(root: &Path, out: &Path) -> Result<(), String> {
 
 /// (package folder in `guests/packages`, component) of each sample package,
 /// and of the extension-UI samples and the designed fixture the extension
-/// UI work added.
+/// UI work added, and of the previous-API fixture the version window runs
+/// through its adapter (ADR 0046).
 /// The default extensions' packages are not here: their sources left this
 /// repository for their own (#285), and a Pane release installs them from
 /// the commits its pins name (`crates/pane/defaults.json`).
-const SAMPLE_PACKAGES: [(&str, &str); 91] = [
+const SAMPLE_PACKAGES: [(&str, &str); 92] = [
     ("sample-rust", "sample_rust"),
     ("sample-settings", "sample_settings"),
     ("sample-js", "sample_js"),
@@ -552,6 +564,7 @@ const SAMPLE_PACKAGES: [(&str, &str); 91] = [
     ("sample-keywords-js", "sample_keywords_js"),
     ("sample-keywords-ts", "sample_keywords_ts"),
     ("sample-matches", "sample_matches"),
+    ("previous-api", "previous_api"),
     ("sample-matches-js", "sample_matches_js"),
     ("sample-matches-ts", "sample_matches_ts"),
     ("sample-no-view", "sample_no_view"),
@@ -665,11 +678,13 @@ fn schema(write: bool) -> Result<(), String> {
 /// inside the `@pane-app/extension` package (`npm pack` carries the folder).
 const SCHEMA: &str = "guests/js/schema/pane.schema.json";
 
-/// The lints half of `ci`: the formatting checks, the prebuilt-samples
-/// check, the SDKs' packages and clippy — everything that runs no tests
-/// and builds no guest but the Rust SDK, which `sdks` builds from its
-/// package. `ci-branch.yml` runs this as a job beside `ci-tests`, so the
-/// lints and the tests of a push finish in the time of the slower one.
+/// The lints half of `ci`: the formatting checks, the one extension API
+/// number, the WIT's breaking-change guard, the release notes' record,
+/// the prebuilt-samples check, the SDKs' packages and clippy — everything
+/// that runs no tests and builds no guest but the Rust SDK, which `sdks`
+/// builds from its package. `ci-branch.yml` runs this as a job beside
+/// `ci-tests`, so the lints and the tests of a push finish in the time of
+/// the slower one.
 fn ci_lints() -> Result<(), String> {
     // Formatting first: it is free, so a formatting error is seen at once
     // instead of after the guests and the checks have been built.
@@ -712,6 +727,17 @@ fn ci_lints() -> Result<(), String> {
     // The committed pane.json schema is the one Pane's manifest types
     // generate, before anything slower runs.
     schema(false)?;
+    // The extension API number is the WIT package's version, and every
+    // other place that names it agrees with it.
+    api_versions::check()?;
+    // The WIT may change incompatibly only with its version moved: the
+    // guard fails a breaking change under a version that has already
+    // shipped (#319, ADR 0046).
+    wit_guard::check()?;
+    // A version that moved must announce its breaking changes: the
+    // guard's sibling, failing a version whose section the release
+    // notes' record does not hold (#321, ADR 0046).
+    release_notes::check()?;
     // The prebuilt JS/TS samples must match their sources and pins.
     js_guests::check()?;
     sdks()?;
@@ -742,7 +768,15 @@ fn ci_lints() -> Result<(), String> {
 /// a person's step, never CI's (#128).
 fn sdks() -> Result<(), String> {
     let root = root();
-    same_files(&root.join("wit"), &root.join("guests/pane-extension/wit"))?;
+    // The previous world (wit/previous/, ADR 0046) is the host's alone:
+    // the SDK builds components for the current API, so the comparison
+    // skips it rather than demanding the SDK ship the world it cannot
+    // target — `same_files` takes it as the folder to leave out.
+    same_files(
+        &root.join("wit"),
+        &root.join("guests/pane-extension/wit"),
+        &root.join("wit/previous"),
+    )?;
     let guests = root.join("guests");
     run(cargo().current_dir(&guests).args([
         "publish",
@@ -769,9 +803,10 @@ fn sdks() -> Result<(), String> {
 }
 
 /// Checks that the folder `copy` holds the files `original` holds, with the
-/// same contents, and nothing else.
-fn same_files(original: &Path, copy: &Path) -> Result<(), String> {
-    if files_under(original)? == files_under(copy)? {
+/// same contents, and nothing else — besides `skip`, a folder under
+/// `original` the copy does not carry.
+fn same_files(original: &Path, copy: &Path, skip: &Path) -> Result<(), String> {
+    if files_under(original, skip)? == files_under(copy, skip)? {
         Ok(())
     } else {
         Err(format!(
@@ -782,8 +817,10 @@ fn same_files(original: &Path, copy: &Path) -> Result<(), String> {
     }
 }
 
-/// Every file under `dir`, by its path relative to `dir`, with its contents.
-fn files_under(dir: &Path) -> Result<BTreeMap<PathBuf, Vec<u8>>, String> {
+/// Every file under `dir` except those under `skip` — a folder the caller
+/// named as not the copy's to carry — by its path relative to `dir`, with
+/// its contents.
+fn files_under(dir: &Path, skip: &Path) -> Result<BTreeMap<PathBuf, Vec<u8>>, String> {
     let mut files = BTreeMap::new();
     let mut folders = vec![dir.to_path_buf()];
     while let Some(folder) = folders.pop() {
@@ -792,7 +829,11 @@ fn files_under(dir: &Path) -> Result<BTreeMap<PathBuf, Vec<u8>>, String> {
         for entry in entries {
             let path = entry.map_err(|error| error.to_string())?.path();
             if path.is_dir() {
-                folders.push(path);
+                // The skipped folder is never walked: a copy that carries
+                // nothing of it is the copy the caller asked to check.
+                if path != skip {
+                    folders.push(path);
+                }
             } else {
                 let contents = std::fs::read(&path)
                     .map_err(|error| format!("read {} failed: {error}", path.display()))?;

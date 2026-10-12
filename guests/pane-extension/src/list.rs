@@ -467,7 +467,7 @@ impl Item {
 ///     type DesignedView = pane_extension::view::NoDesignedView;
 ///
 ///     async fn run(command: String, launch: LaunchRecord) -> Result<(), String> {
-///         pane_extension::feedback::show_hud("Toggled", ToastStyle::Success);
+///         pane_extension::feedback::show_hud("Toggled", HudStyle::Success);
 ///         Ok(())
 ///     }
 /// }

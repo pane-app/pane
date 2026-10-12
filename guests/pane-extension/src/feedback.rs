@@ -35,7 +35,7 @@ use core::future::Future;
 use crate::list::{Answer, Shortcut, write_shortcut};
 use crate::pane::extension::feedback as wit;
 
-pub use wit::ToastStyle;
+pub use wit::{HudStyle, ToastStyle};
 
 /// What a toast's action runs: each time the user chooses it.
 type Run = Rc<dyn Fn() -> Answer>;
@@ -166,7 +166,9 @@ pub fn show_toast(toast: Toast) -> ShownToast {
 
 /// Closes the launcher, then shows `title` in a small window of its own
 /// over other applications: for 1.2 seconds, or 3 for the failure style.
-pub fn show_hud(title: &str, style: ToastStyle) {
+/// `style` is a [`HudStyle`]: how a HUD is drawn, which hides by itself
+/// sooner than a toast does and never queues or takes actions.
+pub fn show_hud(title: &str, style: HudStyle) {
     wit::show_hud(title, style);
 }
 

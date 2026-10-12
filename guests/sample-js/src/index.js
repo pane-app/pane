@@ -9,7 +9,7 @@
 // contract; they are optional.
 // @ts-check
 /** @typedef {import("@pane-app/extension/view").CanvasEvent} CanvasEvent */
-import { launch } from "pane:extension/commands@0.1.0";
+import { launch } from "pane:extension/commands@0.2.0";
 import { jsxs } from "@pane-app/extension/jsx-runtime";
 import {
   Canvas,
