@@ -124,7 +124,7 @@ fn sample_component() -> Vec<u8> {
 /// builds it from `wit/previous`): a real 0.1-built component, what an
 /// update for a version this Pane still runs is made of (ADR 0046).
 fn previous_component() -> Vec<u8> {
-    fs::read(guest("previous_api")).unwrap()
+    fs::read(guest("previous_api.wasm")).unwrap()
 }
 
 /// The files of the sample at `version` built for the previous extension

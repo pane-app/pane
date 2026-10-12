@@ -2040,6 +2040,7 @@ fn header(
                         .id("extension-page-previous-api")
                         .debug_selector(|| "extension-page-previous-api".into())
                         .truncate()
+                        .role(Role::Note)
                         .aria_label(line)
                 }))
                 .children(mark),

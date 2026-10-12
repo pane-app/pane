@@ -65,6 +65,7 @@ mod packages;
 mod paste;
 mod pausing;
 mod preferences;
+mod previous_api;
 mod programs;
 mod publishing;
 mod quick_slots;
