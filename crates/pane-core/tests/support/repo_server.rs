@@ -272,7 +272,11 @@ pub fn extension_collection_files(
                 }
             })
             .collect();
-        let icon = (at == 0).then(|| r#", "icon": "icon.svg""#).unwrap_or("");
+        let icon = if at == 0 {
+            r#", "icon": "icon.svg""#
+        } else {
+            ""
+        };
         let manifest = format!(
             r#"{{ "manifestVersion": 1, "title": "{title} from Git",
                  "description": "The {id} extension of the tools collection",

@@ -495,22 +495,25 @@ impl Launcher {
         // The rows and the snapshot's list reflect the new text at once.
         self.present_designed_list(state);
         let (callback, key, text) = event?;
-        // [diag-ff6] Diagnostic scaffolding for the command-search stall;
-        // fix-forward-7 removes it with the root fix.
-        crate::diagnostic!(
-            "[diag-ff6] designed search-text: text={text:?} key={key:?} callback={callback:?}"
-        );
         let callback = callback?;
         let payload = value_payload(&text);
-        let send = self.send_designed_seen(
-            DesignedHandler::Input,
-            callback,
-            (!key.is_empty()).then_some(key.as_str()),
-            None,
-            payload,
-        );
+        // The send happens when the returned future is first polled, not
+        // here: this runs with the caller's state lock held (it is
+        // `set_query`'s), and the send takes that lock itself to name the
+        // view the event is raised on — sending here would deadlock the
+        // two. The caller drops the state before it polls the future, as
+        // `set_designed_dropdown`'s send does inside its own.
+        let launcher = self.clone();
         Some(Box::pin(async move {
-            send.await;
+            launcher
+                .send_designed_seen(
+                    DesignedHandler::Input,
+                    callback,
+                    (!key.is_empty()).then_some(key.as_str()),
+                    None,
+                    payload,
+                )
+                .await;
         }))
     }
 

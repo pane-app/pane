@@ -3561,7 +3561,7 @@ impl Launcher {
     pub fn activate_selected(&self) -> impl Future<Output = ()> + Send + 'static {
         let mut state = self.lock();
         // [diag-ff6] Diagnostic scaffolding for the smoke's launch stall;
-        // fix-forward-7 removes it with the root fix.
+        // fix-forward-8 removes it with the root fix.
         {
             let entry = state
                 .view
@@ -5678,7 +5678,7 @@ impl Launcher {
             return;
         }
         // [diag-ff6] Diagnostic scaffolding for the smoke's launch stall;
-        // fix-forward-7 removes it with the root fix.
+        // fix-forward-8 removes it with the root fix.
         crate::diagnostic!("[diag-ff6] open_command: render call sent");
         let result = match self.runtime() {
             Ok(runtime) => {

@@ -911,7 +911,7 @@ impl LauncherWindow {
 
     pub(crate) fn confirm(&mut self, _: &Confirm, window: &mut Window, cx: &mut Context<Self>) {
         // [diag-ff6] Diagnostic scaffolding for the smoke's launch stall;
-        // fix-forward-7 removes it with the root fix.
+        // fix-forward-8 removes it with the root fix.
         #[cfg(any(test, debug_assertions))]
         {
             let screen = match &self.launcher.screen() {
@@ -968,7 +968,7 @@ impl LauncherWindow {
     /// opens (#140), or activates the row.
     fn invoke_selected(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         // [diag-ff6] Diagnostic scaffolding for the smoke's launch stall;
-        // fix-forward-7 removes it with the root fix.
+        // fix-forward-8 removes it with the root fix.
         pane_core::diagnostic!("[diag-ff6] invoke_selected");
         // The Logs screen's lines are its own: the selected one is copied.
         if self.extension_log_open() {

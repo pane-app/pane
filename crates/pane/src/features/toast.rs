@@ -618,6 +618,15 @@ impl LauncherWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // [diag-ff7] Diagnostic scaffolding for the smoke's launch stall:
+        // the first point inside the app a key event reaches, before any
+        // listener or the keymap — whether the drive phase's Return even
+        // arrives. fix-forward-8 removes it with the root fix.
+        pane_core::diagnostic!(
+            "[diag-ff7] key: {} (char {:?})",
+            event.keystroke.key,
+            event.keystroke.key_char
+        );
         // A confirmation over the launcher takes the keys first (#146).
         if self.actions.is_some() || self.menu.is_some() || self.launcher.confirmation().is_some() {
             return;
