@@ -18,6 +18,10 @@ use std::path::Path;
 
 use serde_json::Value;
 
+/// A WIT package's version as the checks read it, `MAJOR.MINOR.PATCH`
+/// (the extension API's patch is always 0).
+type WitVersion = (u64, u64, u64);
+
 /// The previous world's positive fixtures under `guests/packages`, by
 /// folder name: components built from `wit/previous` (ADR 0046), whose
 /// manifests name the version they were built for, which this Pane runs
@@ -336,7 +340,7 @@ fn json(path: &str, text: &str, problems: &mut Vec<String>) -> Option<Value> {
 /// The extension API version the `.wit` files directly under `dir`
 /// declare in their `package pane:extension@…` lines, reported as the
 /// files of `label`: every file must declare one version, its patch 0.
-fn wit_versions(dir: &Path, label: &str, problems: &mut Vec<String>) -> Option<(u64, u64, u64)> {
+fn wit_versions(dir: &Path, label: &str, problems: &mut Vec<String>) -> Option<WitVersion> {
     let entries = match std::fs::read_dir(dir) {
         Ok(entries) => entries,
         Err(error) => {
@@ -382,10 +386,10 @@ fn wit_versions(dir: &Path, label: &str, problems: &mut Vec<String>) -> Option<(
 /// compares with, so a bump that misses files is reported against the
 /// new version, not drowned in every file's disagreement.
 fn wit_agreement(
-    files: Vec<(String, Option<(u64, u64, u64)>)>,
+    files: Vec<(String, Option<WitVersion>)>,
     label: &str,
     problems: &mut Vec<String>,
-) -> Option<(u64, u64, u64)> {
+) -> Option<WitVersion> {
     let mut declared = Vec::new();
     for (name, version) in files {
         match version {
@@ -429,7 +433,7 @@ fn wit_agreement(
 /// The version a WIT file's `package pane:extension@X.Y.Z;` line
 /// declares, or None when it declares none: the one number's source.
 /// `release_notes` reads the current version with it, too.
-pub(crate) fn wit_package_version(text: &str) -> Option<(u64, u64, u64)> {
+pub(crate) fn wit_package_version(text: &str) -> Option<WitVersion> {
     for line in text.lines() {
         // A package declaration is one line, its version ending at the
         // semicolon.
@@ -512,7 +516,7 @@ fn name_char(c: char) -> bool {
 
 /// The `X.Y.Z` a version text names, if it is one. `wit_guard` reads
 /// release tags with it, too.
-pub(crate) fn parse_version(text: &str) -> Option<(u64, u64, u64)> {
+pub(crate) fn parse_version(text: &str) -> Option<WitVersion> {
     let mut parts = text.split('.');
     let major = parts.next()?.parse::<u64>().ok()?;
     let minor = parts.next()?.parse::<u64>().ok()?;

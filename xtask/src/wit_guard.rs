@@ -71,7 +71,7 @@ fn guard(root: &Path, scratch: &Path) -> Result<(), String> {
     let baseline = baseline(root, scratch)?;
     let mut current = Resolve::new();
     current
-        .push_dir(&root.join("wit"))
+        .push_dir(root.join("wit"))
         .map_err(|error| format!("wit/ does not parse: {}", current.render_error(&error)))?;
     let current = snapshot_of(&current)?;
     let old = baseline_snapshot(root, scratch, &baseline)?;
