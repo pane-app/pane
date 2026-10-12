@@ -1969,14 +1969,16 @@ fn rich_row(wire: &WireNode) -> Result<RichRow, ReadError> {
     })
 }
 
-/// The keycap a keycap node shows.
+/// The keycap a keycap node shows: the `key` the document names — the
+/// one field every node's identity is read from too (a keycap's shown
+/// key IS its node's `key` in the document, which gives it no other), so
+/// the key is the node's own, not a property the kind reads among the
+/// rest.
 fn keycap(wire: &WireNode) -> Result<Keycap, ReadError> {
-    let rest = &wire.rest;
-    let key = match rest.get("key") {
-        Some(Value::String(key)) => key.clone(),
-        Some(_) => return Err(unreadable("its key is not a string")),
-        None => return Err(unreadable("a keycap node has no key")),
-    };
+    let key = wire
+        .key
+        .clone()
+        .ok_or_else(|| unreadable("a keycap node has no key"))?;
     Ok(Keycap { key })
 }
 
@@ -3433,7 +3435,7 @@ mod tests {
                 "aspectRatio":1.5,
                 "background":"danger","border":{"width":"2px","color":"#0f0"},
                 "radius":"full","opacity":0.8,
-                "hover":{"background":{"raw":"#ff0000"}},"pressed":{"opacity":1}"##,
+                "hover":{"background":{"raw":"#ff0000"}},"pressed":{"opacity":1}}"##,
         )
         .unwrap();
         let style = &read.root.style;

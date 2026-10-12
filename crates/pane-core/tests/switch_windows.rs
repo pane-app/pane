@@ -482,14 +482,17 @@ impl Pane {
         block_on(self.launcher.set_query(query));
     }
 
-    /// Opens the sample's command from root search.
+    /// Opens the sample's command from root search. The command's list
+    /// is a designed List now (#240, the package's manifest says `"mode":
+    /// "designed"`), whose search and selection Pane presents as the
+    /// launcher's own rows.
     fn open(&self, sample: &Sample) {
         self.search(sample.title);
         select_title(&self.launcher, sample.title);
         block_on(self.launcher.activate_selected());
         assert!(matches!(
             self.launcher.view().screen,
-            Screen::CommandSearch { .. }
+            Screen::DesignedView(_)
         ));
     }
 
@@ -973,14 +976,16 @@ mod extension {
             block_on(self.launcher.set_query(query));
         }
 
-        /// Opens the Switch Windows command from root search.
+        /// Opens the Switch Windows command from root search. The
+        /// default's package is the sample's, so its list is a designed
+        /// List too (#240), presented as the launcher's own rows.
         fn open(&self) {
             self.search("Switch Windows");
             select_title(&self.launcher, "Switch Windows sample");
             block_on(self.launcher.activate_selected());
             assert!(matches!(
                 self.launcher.view().screen,
-                Screen::CommandSearch { .. }
+                Screen::DesignedView(_)
             ));
         }
     }

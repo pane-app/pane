@@ -259,7 +259,9 @@ fn open_command_list(cx: &mut TestAppContext) -> (Entity<LauncherWindow>, &mut V
 }
 
 /// The window over the search sample installed and its command opened:
-/// the command's own search field, empty, with focus.
+/// its list is a designed List now (#240, the package's manifest says
+/// `"mode": "designed"`), whose search field is the window's own and
+/// starts empty, with focus.
 fn open_command_search<'a>(
     cx: &'a mut TestAppContext,
     data: &Path,
@@ -269,11 +271,10 @@ fn open_command_search<'a>(
     settle(&window, cx);
     cx.simulate_keystrokes("enter");
     let view = settle(&window, cx);
-    assert_eq!(
-        view.screen,
-        Screen::CommandSearch {
-            query: String::new()
-        }
+    assert!(
+        matches!(view.screen, Screen::DesignedView(_)),
+        "{:?}",
+        view.screen
     );
     assert_eq!(field_text(&window, cx), "");
     (window, cx)

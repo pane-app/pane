@@ -14,10 +14,10 @@
 
 // pane-ext new command adds a command's module here.
 
-use pane_extension::alloc::{format, string::String, vec::Vec};
+use pane_extension::alloc::{format, string::String};
 use pane_extension::feedback::{Toast, show_toast};
 use pane_extension::system::{Clip, copy};
-use pane_extension::{Command, FieldValue, FormError, Item, List, NoCustomView};
+use pane_extension::{Command, Item, List, NoDesignedView};
 
 /// The package's own type, whose command the SDK exports.
 struct __STRUCT__;
@@ -30,7 +30,7 @@ const NOTHING: &str = "Nothing yet: give this command an alias, or make it a fal
                        type into root search";
 
 impl Command for __STRUCT__ {
-    type CustomView = NoCustomView;
+    type DesignedView = NoDesignedView;
 
     /// The command's detail: the text it was sent, its measures, and a
     /// copy action. `commands::current()` is the launch record of the
@@ -61,18 +61,6 @@ impl Command for __STRUCT__ {
             other => Err(format!(
                 "`{other}` opens a screen; it has no run entry point"
             )),
-        }
-    }
-
-    /// A command whose items open forms would answer them here; the `form`
-    /// template starts from one.
-    async fn submit_form(item_id: String, _values: Vec<FieldValue>) -> Result<String, FormError> {
-        match pane_extension::commands::current().command.as_str() {
-            // pane-ext new command adds a form command's arm here.
-            other => Err(FormError {
-                field: None,
-                message: format!("`{other}` has no forms: {item_id}"),
-            }),
         }
     }
 }

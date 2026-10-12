@@ -1144,7 +1144,27 @@ fn window_local_actions_stay_in_their_windows(cx: &mut TestAppContext) {
 #[gpui::test]
 fn a_form_still_submits_with_the_rebound_key_and_the_footer_button(cx: &mut TestAppContext) {
     let data = tempfile::tempdir().unwrap();
-    let (window, cx) = open_sample(cx, Some(data.path()));
+    // The form opens as its own command, which the sample's list item
+    // launches through the host (#241): only an installed extension's
+    // command can do that, so the sample is installed rather than
+    // registered as one of Pane's own.
+    let assembled =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/guests/packages/sample-rust");
+    assert!(
+        assembled.exists(),
+        "{} is missing; run `cargo xtask guests`",
+        assembled.display()
+    );
+    let source = data.path().join("sample-rust");
+    fs::create_dir_all(&source).unwrap();
+    for entry in fs::read_dir(&assembled).unwrap() {
+        let entry = entry.unwrap();
+        fs::copy(entry.path(), source.join(entry.file_name())).unwrap();
+    }
+    let launcher =
+        Launcher::with_packages(Runtime::start(), Vec::new(), data.path().join("extensions"));
+    futures::executor::block_on(launcher.install_package(&source));
+    let (window, cx) = open_launcher(cx, launcher, Some(data.path()));
 
     // Open the form. The blank query's order (#199) collates Pane's own
     // rows among the commands, so the Rust sample's row is reached by

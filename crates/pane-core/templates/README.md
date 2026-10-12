@@ -46,10 +46,12 @@ case.
 One component serves every command a package declares (`render` and `run`
 receive the command's id), so each template's entry file matches on the
 command id, with a comment marking where `pane-ext new command` adds an
-arm — a view command's in `render`, a no-view command's in `run`, a
-form's in `submit_form`/`submitForm` — and where it adds the module
-itself. The parameters the dispatchers keep for those arms are named with
-a leading underscore, so they do not warn while unused.
+arm — a view command's in `render`, a no-view command's in `run` — and
+where it adds the module itself. The parameters the dispatchers keep for
+those arms are named with a leading underscore, so they do not warn while
+unused. A form command is a designed view, which one package's entry file
+names as its single designed view: `pane-ext new command` cannot add one,
+and refuses the kind pointing at the `form` template instead.
 
 ## Keeping the templates checked
 
