@@ -29,8 +29,8 @@ use futures::executor::block_on;
 use pane_core::file_index::{IndexerConfig, WalkOptions};
 use pane_core::system::Clip;
 use pane_core::{
-    ConfirmAnswer, Launcher, LinkOpener, PackageIdentity, Runtime, Screen,
-    Status, SubmenuState, WindowPresence,
+    ConfirmAnswer, Launcher, LinkOpener, PackageIdentity, Runtime, Screen, Status, SubmenuState,
+    WindowPresence,
 };
 use tempfile::TempDir;
 
