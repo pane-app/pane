@@ -1637,8 +1637,7 @@ impl Runtime {
         event: DesignedEvent,
     ) -> impl Future<Output = Result<DesignedNext, CallError>> + Send + 'static {
         let (reply, response) = oneshot::channel();
-        let called = self.call(Request::DesignedViewEvent { view, event, reply }, response);
-        async move { called.await }
+        self.call(Request::DesignedViewEvent { view, event, reply }, response)
     }
 
     /// Draws the open designed view `view` again, with no event: the
@@ -2469,7 +2468,16 @@ fn preference_values_of(state: &GuestState, command: Option<String>) -> Result<S
         .map(|data| data.preference_values(&package.identity))
         .unwrap_or_default();
     let declared = crate::preferences::declared(manifest, &command);
-    Ok(crate::preferences::values_json(&declared, &stored))
+    let json = crate::preferences::values_json(&declared, &stored);
+    // [diag-ff18] Diagnostic scaffolding for the search samples' address
+    // read: the JSON the preference read answers, with the owner and the
+    // stored map it was built from. fix-forward-19 removes it with the
+    // root fix.
+    crate::diagnostic!(
+        "[diag-ff18] preferences read: owner={owner} command={command} \
+         stored={stored:?} json={json}"
+    );
+    Ok(json)
 }
 
 impl launching::Host for GuestState {

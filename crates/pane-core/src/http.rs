@@ -200,6 +200,14 @@ impl WasiHttpHooks for Sender {
         // nothing here needs it.
         _received: Box<dyn Future<Output = Result<(), Error>> + Send>,
     ) -> Sent {
+        // [diag-ff18] Diagnostic scaffolding for the search samples'
+        // address read: the URI every guest fetch crosses with. Removed
+        // with the root fix, fix-forward-19.
+        crate::diagnostic!(
+            "[diag-ff18] http called: {} {}",
+            request.method(),
+            request.uri()
+        );
         if self.stopped() {
             // Stopped code starts no more work.
             return Box::new(async { Err(Error::HttpRequestDenied) });
