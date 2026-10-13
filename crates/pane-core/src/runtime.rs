@@ -1638,7 +1638,7 @@ impl Runtime {
     ) -> impl Future<Output = Result<DesignedNext, CallError>> + Send + 'static {
         // [diag-ff13] Diagnostic scaffolding for the designed events the
         // guests never answer: the event's arrival and its answer, around
-        // the whole call, and how long the guest took. fix-forward-16
+        // the whole call, and how long the guest took. fix-forward-17
         // removes it with the root fix.
         crate::diagnostic!(
             "[diag-ff13] event arrives: view={:?} render={} callback={} key={:?}",
@@ -1647,6 +1647,12 @@ impl Runtime {
             event.callback,
             event.key
         );
+        // [diag-ff16] The identity the duration line pairs with.
+        let identity = (
+            event.render,
+            event.callback,
+            event.key.clone(),
+        );
         let (reply, response) = oneshot::channel();
         let called = self.call(Request::DesignedViewEvent { view, event, reply }, response);
         async move {
@@ -1654,13 +1660,17 @@ impl Runtime {
             // guest's own duration, which separates a listener that ran
             // from one the dispatch skipped — the samples whose listeners
             // await their work take as long as the work; the samples whose
-            // listeners only store take microseconds. fix-forward-16
-            // removes it with the root fix.
+            // listeners only store take microseconds. The identity pairs the
+            // duration with its event. fix-forward-17 removes it with the
+            // root fix.
             let started = std::time::Instant::now();
             let answer = called.await;
             crate::diagnostic!(
-                "[diag-ff15] event took: {}ms",
-                started.elapsed().as_millis()
+                "[diag-ff15] event took: {}ms (render={} callback={} key={:?})",
+                started.elapsed().as_millis(),
+                identity.0,
+                identity.1,
+                identity.2
             );
             match &answer {
                 Ok(_) => crate::diagnostic!("[diag-ff13] event answered: ok"),
