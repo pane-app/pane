@@ -200,8 +200,18 @@ impl WasiHttpHooks for Sender {
         // nothing here needs it.
         _received: Box<dyn Future<Output = Result<(), Error>> + Send>,
     ) -> Sent {
+        // [diag-ff16] Diagnostic scaffolding for the pending work that
+        // never runs: the wasi:http call's arrival at the host — whether
+        // the guest's spawned fetch even started. fix-forward-17 removes
+        // it with the root fix.
+        crate::diagnostic!(
+            "[diag-ff16] http called: {} {}",
+            request.method(),
+            request.uri()
+        );
         if self.stopped() {
             // Stopped code starts no more work.
+            crate::diagnostic!("[diag-ff16] http refused: stopped");
             return Box::new(async { Err(Error::HttpRequestDenied) });
         }
         let owner = self
@@ -233,9 +243,18 @@ impl WasiHttpHooks for Sender {
                 let ceilings = Ceilings::new(limits, options);
                 let sending = send(request, target, ceilings, permit, watch);
                 let Some(sent) = unless_aborted(sending, aborted.as_mut()).await else {
+                    crate::diagnostic!("[diag-ff16] http aborted: generation");
                     return Err(Error::HttpRequestDenied);
                 };
-                let (response, receiving) = sent?;
+                let (response, receiving) = match sent {
+                    Ok(sent) => sent,
+                    Err(error) => {
+                        // [diag-ff16] Diagnostic scaffolding; removed with
+                        // the root fix.
+                        crate::diagnostic!("[diag-ff16] http failed: {error:?}");
+                        return Err(error);
+                    }
+                };
                 let receiving: Receiving = Box::new(async move {
                     let _undo = undo;
                     unless_aborted(Box::into_pin(receiving), aborted.as_mut())
