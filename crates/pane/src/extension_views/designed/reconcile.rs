@@ -319,8 +319,16 @@ impl DesignedControls {
             && !self.state.get(path).is_some_and(|entry| entry.asked)
             && let Some(handle) = self.state.get(path).and_then(|entry| entry.focus_handle())
         {
+            // [diag-ff11] Diagnostic scaffolding for the form that opens
+            // with no field focused: the ask, at the path it honours.
+            // fix-forward-12 removes it with the root fix.
+            pane_core::diagnostic!("[diag-ff11] focus ask honoured: path={path}");
             window.focus(&handle, cx);
             walk.asked = true;
+        } else if asked && self.state.get(path).is_some_and(|entry| entry.asked) {
+            // [diag-ff11] Diagnostic scaffolding; removed with the root
+            // fix.
+            pane_core::diagnostic!("[diag-ff11] focus ask unchanged: path={path}");
         }
         if let Some(entry) = self.state.get_mut(path) {
             entry.asked = asked;

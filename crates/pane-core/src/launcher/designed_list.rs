@@ -497,6 +497,11 @@ impl Launcher {
         let (callback, key, text) = event?;
         let callback = callback?;
         let payload = value_payload(&text);
+        // [diag-ff11] Diagnostic scaffolding for the designed search the
+        // service never sees: the thread's start, its send's outcome, and
+        // the spawn's own result. fix-forward-12 removes it with the root
+        // fix.
+        crate::diagnostic!("[diag-ff11] search event built: callback={callback} key={key:?}");
         // The send happens on a thread of its own, started now: a caller
         // can hold the returned future un-polled while it waits for what
         // the search does (the crash tests hold theirs until after), so
@@ -511,6 +516,9 @@ impl Launcher {
         let started = std::thread::Builder::new()
             .name("pane-designed-search".into())
             .spawn(move || {
+                // [diag-ff11] Diagnostic scaffolding; removed with the root
+                // fix.
+                crate::diagnostic!("[diag-ff11] search thread started");
                 let sent = launcher.send_designed_seen(
                     DesignedHandler::Input,
                     callback,
@@ -519,8 +527,14 @@ impl Launcher {
                     payload,
                 );
                 futures::executor::block_on(sent);
+                crate::diagnostic!("[diag-ff11] search thread send done");
                 launcher.changed();
             });
+        if started.is_err() {
+            // [diag-ff11] Diagnostic scaffolding; removed with the root
+            // fix.
+            crate::diagnostic!("[diag-ff11] search thread failed to start");
+        }
         // The future the caller holds completes when the search's answer
         // has landed: the thread's end.
         Some(Box::pin(async move {
