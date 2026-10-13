@@ -364,7 +364,13 @@ impl LauncherWindow {
         // keyboard back, as the Settings window does for its sidebar
         // when a control that had it is gone.
         cx.on_focus_lost(window, |this, window, cx| {
-            if this.launcher.screen().search_field().is_some() {
+            // [diag-ff11] Diagnostic scaffolding for the form that opens
+            // with no field focused: when the window's keyboard is left
+            // nowhere, and whether a search field takes it back.
+            // fix-forward-12 removes it with the root fix.
+            let field = this.launcher.screen().search_field().is_some();
+            pane_core::diagnostic!("[diag-ff11] focus lost: search_field={field}");
+            if field {
                 this.query.focus(window, cx);
             }
         })
