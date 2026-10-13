@@ -299,33 +299,6 @@ impl LauncherWindow {
             if window.window_handle() != gate_window {
                 return;
             }
-            // [diag-ff9] Diagnostic scaffolding for the smoke's key
-            // stall: the earliest point inside the app a keystroke
-            // reaches, before the keymap and every listener, with the
-            // context stack the keymap will match against and whether
-            // the query field holds the window's focus — the split
-            // between a stack that cannot match and a focus that moved.
-            // The site names the key, so the log's rate limit cannot
-            // starve the line the next round needs. fix-forward-10
-            // removes it with the root fix.
-            let stack = event
-                .context_stack
-                .iter()
-                .map(|context| format!("{context:?}"))
-                .collect::<Vec<_>>()
-                .join(" > ");
-            let field = gated
-                .update(cx, |this, cx| {
-                    this.query_field().focus_handle(cx).is_focused(window)
-                })
-                .unwrap_or(false);
-            pane_core::diagnostics::report(
-                &format!("[diag-ff9] key {}", event.keystroke.key),
-                &format!(
-                    "[diag-ff9] key {} (char {:?}) stack [{}] field_focus={}",
-                    event.keystroke.key, event.keystroke.key_char, stack, field
-                ),
-            );
             let Ok(pressed) = crate::keyboard::binding_of(&event.keystroke) else {
                 return;
             };
@@ -384,30 +357,20 @@ impl LauncherWindow {
         // release would go to another window. So does the toast, an
         // animated one too (#141), and a confirmation it showed is
         // answered as not confirmed (#146).
-        // [diag-ff8] Diagnostic scaffolding for the smoke's key stall:
-        // fires once a keystroke's action and event mechanisms have
-        // resolved, naming the action a binding dispatched (and staying
-        // silent for a key whose propagation was stopped) — the split
-        // between a binding-consumed Enter and one that never arrived.
-        // fix-forward-10 removes it with the root fix.
-        cx.observe_keystrokes(move |_this, event, _window, _cx| {
-            pane_core::diagnostics::report(
-                &format!("[diag-ff8o] resolved {}", event.keystroke.key),
-                &format!(
-                    "[diag-ff8o] resolved {} (action {:?})",
-                    event.keystroke.key,
-                    event.action.as_ref().map(|action| action.name())
-                ),
-            );
+        // The keyboard can be left nowhere while a search field is on
+        // screen: the publication's re-render drops the node that held
+        // it, and a window whose focus resolves to no node matches no
+        // binding at all — every key falls through. The field takes the
+        // keyboard back, as the Settings window does for its sidebar
+        // when a control that had it is gone.
+        cx.on_focus_lost(window, |this, window, cx| {
+            if this.launcher.screen().search_field().is_some() {
+                this.query.focus(window, cx);
+            }
         })
         .detach();
         cx.observe_window_activation(window, |this, window, cx| {
             let active = window.is_window_active();
-            // [diag-ff8] Diagnostic scaffolding; removed with the root fix.
-            pane_core::diagnostics::report(
-                "[diag-ff8a] window activation",
-                &format!("[diag-ff8a] window active={active}"),
-            );
             // A pending HUD's work is done once the launcher is active
             // again (#250).
             if active {
@@ -959,24 +922,6 @@ impl LauncherWindow {
     }
 
     pub(crate) fn confirm(&mut self, _: &Confirm, window: &mut Window, cx: &mut Context<Self>) {
-        // [diag-ff6] Diagnostic scaffolding for the smoke's launch stall;
-        // fix-forward-10 removes it with the root fix.
-        #[cfg(any(test, debug_assertions))]
-        {
-            let screen = match &self.launcher.screen() {
-                pane_core::Screen::Root { .. } => "Root",
-                pane_core::Screen::Command => "Command",
-                pane_core::Screen::CommandSearch { .. } => "CommandSearch",
-                pane_core::Screen::DesignedView(_) => "DesignedView",
-                _ => "other",
-            };
-            pane_core::diagnostic!(
-                "[diag-ff6] confirm: held={:?} published={} screen={}",
-                self.held_keys(),
-                self.launcher.list_published(),
-                screen
-            );
-        }
         // Enter ends the walk through the recent queries (#206), whatever
         // it runs — a held key included.
         self.recall = None;
@@ -1016,9 +961,6 @@ impl LauncherWindow {
     /// opens the Actions panel at the submenu an item's primary action
     /// opens (#140), or activates the row.
     fn invoke_selected(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        // [diag-ff6] Diagnostic scaffolding for the smoke's launch stall;
-        // fix-forward-10 removes it with the root fix.
-        pane_core::diagnostic!("[diag-ff6] invoke_selected");
         // The Logs screen's lines are its own: the selected one is copied.
         if self.extension_log_open() {
             self.copy_log_line(cx);
@@ -2149,8 +2091,6 @@ impl LauncherWindow {
             cx.write_to_clipboard(ClipboardItem::new_string(text));
         }
         let pending = self.launcher.activate_selected();
-        // [diag-ff6] Diagnostic scaffolding; removed with the root fix.
-        pane_core::diagnostic!("[diag-ff6] window activate_selected dispatched");
         self.show_until_done(pending, window, cx);
     }
 

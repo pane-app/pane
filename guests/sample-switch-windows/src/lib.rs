@@ -25,7 +25,7 @@ use pane_extension::alloc::{
 use pane_extension::feedback::{Toast, show_toast};
 use pane_extension::view::{Cx, IntoNode, item, list};
 use pane_extension::windows::{self, Window};
-use pane_extension::{Command, Icon};
+use pane_extension::{Command, Icon, LaunchRecord};
 
 /// The command's id in `pane.json`.
 const SWITCH: &str = "switch-windows";
@@ -120,5 +120,19 @@ impl Command for SwitchWindowsSample {
 
     async fn render() -> Result<pane_extension::List, String> {
         Err(format!("`{SWITCH}` opens a designed view; it has no list"))
+    }
+
+    /// The view the command opens: the windows Alt+Tab would show, listed
+    /// anew each render. Without this the trait's default refuses the
+    /// open, and the command's screen never shows.
+    async fn open_designed_view(
+        command: String,
+        _launch: LaunchRecord,
+    ) -> Result<Windows, String> {
+        if command == SWITCH {
+            Ok(Windows)
+        } else {
+            Err(format!("unknown command: {command}"))
+        }
     }
 }

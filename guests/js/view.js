@@ -493,6 +493,14 @@ function builtinNode(name, props, path, callbacks, cells, used) {
     case "spacer": {
       return node;
     }
+    case "span": {
+      // A Span outside a text: the text of one span it is, its listener
+      // and styling carried — the same node the text's own span children
+      // build.
+      node.type = "text";
+      node.spans = [spanNode({ type: Span, props: given }, path, callbacks)];
+      return node;
+    }
     case "text": {
       // The children spell the text, or its spans: a Span element among
       // them makes the text one of spans.

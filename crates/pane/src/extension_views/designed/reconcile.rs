@@ -65,14 +65,16 @@ pub(crate) struct DesignedControls {
 impl DesignedControls {
     /// The controls of a view opening with `tree`, drawn as `render`: the
     /// state its tree asks for, and the keyboard on the first focusable
-    /// control — or the one that asks for it.
+    /// control — or the one that asks for it. Whether a node of the tree
+    /// asked for the keyboard is returned with them, so a caller can
+    /// place it somewhere else when nothing did.
     pub(super) fn new(
         view: ViewId,
         tree: &DesignedTree,
         render: u64,
         window: &mut Window,
         cx: &mut Context<LauncherWindow>,
-    ) -> DesignedControls {
+    ) -> (DesignedControls, bool) {
         let mut controls = DesignedControls {
             view,
             state: HashMap::new(),
@@ -80,7 +82,8 @@ impl DesignedControls {
             keys: None,
         };
         let opened = controls.reconcile(tree, render, window, cx);
-        if !opened.asked
+        let asked = opened.asked;
+        if !asked
             && let Some(first) = opened.first
             && let Some(handle) = controls
                 .state
@@ -89,7 +92,7 @@ impl DesignedControls {
         {
             window.focus(&handle, cx);
         }
-        controls
+        (controls, asked)
     }
 
     /// Reconciles the keyed state with `tree`, drawn as `render`: the
