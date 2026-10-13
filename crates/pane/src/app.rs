@@ -379,8 +379,7 @@ impl LauncherWindow {
             pane_core::diagnostic!(
                 "[diag-ff13] focus restore: search_field={} asked={}",
                 this.launcher.screen().search_field().is_some(),
-                this
-                    .designed
+                this.designed
                     .as_ref()
                     .and_then(|controls| controls.focus_ask.clone())
                     .is_some()

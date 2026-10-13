@@ -527,24 +527,29 @@ impl Launcher {
                 .map(|(event, _)| (event.key.as_str(), event.render));
             self.note_dropped_event(&mut state, handler, dropped, why);
         }
+        // [diag-ff13] Diagnostic scaffolding for the designed events the
+        // guests never answer: the send's silent exit — no event built,
+        // or the event dropped, or no runtime. fix-forward-14 removes it
+        // with the root fix.
+        let silent = !matches!((&held, self.runtime()), (Some((_, None)), Ok(_)));
+        if silent {
+            let held_built = held.is_some();
+            let dropped = held
+                .as_ref()
+                .and_then(|(_, dropped)| dropped.map(str::to_owned))
+                .unwrap_or_default();
+            let runtime = self.runtime().is_ok();
+            crate::diagnostic!(
+                "[diag-ff13] send silent: held={held_built} dropped={dropped:?} \
+                 runtime={runtime}"
+            );
+        }
         let sent = match (held, self.runtime()) {
             (Some((event, None)), Ok(runtime)) => {
                 let stack = state.designed_view.as_mut().expect("a view is open");
                 Some(stack.top_mut().send(runtime, event))
             }
-            _ => {
-                // [diag-ff13] Diagnostic scaffolding for the designed
-                // events the guests never answer: the send's silent exit —
-                // no event built, or the event dropped, or no runtime.
-                // fix-forward-14 removes it with the root fix.
-                crate::diagnostic!(
-                    "[diag-ff13] send silent: held={} dropped={} runtime={}",
-                    held.is_some(),
-                    held.as_ref().is_some_and(|(_, dropped)| dropped.is_some()),
-                    self.runtime().is_ok()
-                );
-                None
-            }
+            _ => None,
         };
         drop(state);
         let launcher = self.clone();

@@ -1652,9 +1652,9 @@ impl Runtime {
             let answer = called.await;
             match &answer {
                 Ok(_) => crate::diagnostic!("[diag-ff13] event answered: ok"),
-                Err(error) => crate::diagnostic!(
-                    "[diag-ff13] event answered: error: {error}"
-                ),
+                Err(error) => {
+                    crate::diagnostic!("[diag-ff13] event answered: error: {error}")
+                }
             }
             answer
         }
@@ -4559,12 +4559,16 @@ impl Host {
         let _turn = turn?;
         // [diag-ff13] Diagnostic scaffolding; removed with the root fix.
         {
-            let live = self.instances.borrow().get(&open.component).map(|instance| {
-                (
-                    instance.serial == open.serial,
-                    instance.store.data().stopped().is_none(),
-                )
-            });
+            let live = self
+                .instances
+                .borrow()
+                .get(&open.component)
+                .map(|instance| {
+                    (
+                        instance.serial == open.serial,
+                        instance.store.data().stopped().is_none(),
+                    )
+                });
             match live {
                 Some((serial, running)) => crate::diagnostic!(
                     "[diag-ff13] event live: serial_match={serial} running={running}"
