@@ -1648,11 +1648,7 @@ impl Runtime {
             event.key
         );
         // [diag-ff16] The identity the duration line pairs with.
-        let identity = (
-            event.render,
-            event.callback,
-            event.key.clone(),
-        );
+        let identity = (event.render, event.callback, event.key.clone());
         let (reply, response) = oneshot::channel();
         let called = self.call(Request::DesignedViewEvent { view, event, reply }, response);
         async move {
