@@ -1036,12 +1036,6 @@ export function createView(component, props = {}) {
       // control's) or `key` (a key pressed) — which the listeners that
       // take none ignore.
       const run = tables.get(event.render)?.get(event.callback);
-      // [diag-ff12] Diagnostic scaffolding for the search event the
-      // service never sees: the dispatch's own decision, after it is
-      // made. fix-forward-13 removes it with the root fix.
-      console.error(
-        `[diag-ff12] event dispatch: render=${event.render} callback=${event.callback} tables=[${[...tables.keys()].join(",")}] found=${run !== undefined}`,
-      );
       let navigation = null;
       if (run !== undefined) {
         // The listener is told the event's payload as it is: a text

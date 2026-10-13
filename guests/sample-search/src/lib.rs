@@ -30,7 +30,7 @@ use pane_extension::http;
 use pane_extension::view::{
     Cx, IntoAnswer, Pending, Space, View, button, column, empty_state, item, list, text_input,
 };
-use pane_extension::{Command, LaunchRecord, settings};
+use pane_extension::{Command, LaunchRecord, preferences, settings};
 use serde::Deserialize;
 
 /// The address used until the user sets another.
@@ -67,9 +67,23 @@ struct Problem {
     error: String,
 }
 
-/// The service address: the saved one, or the default.
+/// The package's `service` preference, as the user set it (Setup, or the
+/// extension's card in Settings › Extensions) or else its declared default.
+#[derive(Deserialize)]
+struct ServicePreference {
+    #[serde(default, rename = "service")]
+    address: Option<String>,
+}
+
+/// The service address: the one the user set as the command's `service`
+/// preference, the one this command saved on its Service address view, or
+/// the default.
 fn service() -> Result<String, String> {
-    Ok(settings::get(SERVICE)?.unwrap_or_else(|| DEFAULT_SERVICE.into()))
+    let user = preferences::values::<ServicePreference>()?.address;
+    let saved = settings::get(SERVICE)?;
+    Ok(user
+        .or(saved)
+        .unwrap_or_else(|| DEFAULT_SERVICE.into()))
 }
 
 /// Fetches `path` from the service and reads its JSON answer as `T`.

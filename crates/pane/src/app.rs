@@ -373,17 +373,6 @@ impl LauncherWindow {
             // whose tree asked for the keyboard gets its asked node back
             // the same way: its re-renders can drop the focus just as the
             // publication's did.
-            // [diag-ff13] Diagnostic scaffolding for the focus that
-            // never lands: what the restore had to work with.
-            // fix-forward-14 removes it with the root fix.
-            pane_core::diagnostic!(
-                "[diag-ff13] focus restore: search_field={} asked={}",
-                this.launcher.screen().search_field().is_some(),
-                this.designed
-                    .as_ref()
-                    .and_then(|controls| controls.focus_ask.clone())
-                    .is_some()
-            );
             if this.launcher.screen().search_field().is_some() {
                 this.query.focus(window, cx);
             } else if let Some(asked) = this

@@ -4000,29 +4000,6 @@ impl<V: View> GuestView for Open<V> {
         let id = usize::try_from(callback.saturating_sub(1)).ok();
         let taken = {
             let mut tables = self.tables.borrow_mut();
-            // [diag-ff12] Diagnostic scaffolding for the search event the
-            // service never sees: the dispatch's own decision, after it
-            // is made. fix-forward-13 removes it with the root fix.
-            {
-                let numbers: Vec<u64> = tables.iter().map(|(number, _)| *number).collect();
-                let found = match (
-                    tables
-                        .iter()
-                        .find(|(number, _)| *number == render)
-                        .map(|(_, listeners)| listeners),
-                    id,
-                ) {
-                    (Some(listeners), Some(id)) if id < listeners.len() => true,
-                    _ => false,
-                };
-                crate::eprintln!(
-                    "[diag-ff12] event dispatch: render={} callback={} tables={:?} found={}",
-                    render,
-                    callback,
-                    numbers,
-                    found
-                );
-            }
             match (
                 tables
                     .iter_mut()
