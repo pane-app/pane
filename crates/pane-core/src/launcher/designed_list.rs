@@ -497,15 +497,36 @@ impl Launcher {
         let (callback, key, text) = event?;
         let callback = callback?;
         let payload = value_payload(&text);
-        let send = self.send_designed_seen(
-            DesignedHandler::Input,
-            callback,
-            (!key.is_empty()).then_some(key.as_str()),
-            None,
-            payload,
-        );
+        // The send happens on a thread of its own, started now: a caller
+        // can hold the returned future un-polled while it waits for what
+        // the search does (the crash tests hold theirs until after), so
+        // the send cannot wait for the future's first poll. The thread
+        // also escapes this function's caller's state lock — it is
+        // `set_query`'s, still held here — which the send takes itself to
+        // name the view the event is raised on: the thread waits the lock
+        // out instead of deadlocking with it, as the selection's and the
+        // back-out's sends do on threads of their own.
+        let key = (!key.is_empty()).then_some(key);
+        let launcher = self.clone();
+        let started = std::thread::Builder::new()
+            .name("pane-designed-search".into())
+            .spawn(move || {
+                let sent = launcher.send_designed_seen(
+                    DesignedHandler::Input,
+                    callback,
+                    key.as_deref(),
+                    None,
+                    payload,
+                );
+                futures::executor::block_on(sent);
+                launcher.changed();
+            });
+        // The future the caller holds completes when the search's answer
+        // has landed: the thread's end.
         Some(Box::pin(async move {
-            send.await;
+            if let Ok(finished) = started {
+                let _ = finished.join();
+            }
         }))
     }
 

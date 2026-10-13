@@ -129,7 +129,7 @@ fn an_invalid_manifest_fails_with_panes_message() {
         (
             "unknown mode",
             manifest(r#", "mode": "sometimes""#),
-            "a command's `mode` is \"view\" (it opens a screen, the default), \"no-view\"",
+            "a command's `mode` is \"view\" (it opens a screen of items, the default), \"no-view\"",
         ),
         (
             "newer manifest",

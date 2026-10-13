@@ -357,6 +357,18 @@ impl LauncherWindow {
         // release would go to another window. So does the toast, an
         // animated one too (#141), and a confirmation it showed is
         // answered as not confirmed (#146).
+        // The keyboard can be left nowhere while a search field is on
+        // screen: the publication's re-render drops the node that held
+        // it, and a window whose focus resolves to no node matches no
+        // binding at all — every key falls through. The field takes the
+        // keyboard back, as the Settings window does for its sidebar
+        // when a control that had it is gone.
+        cx.on_focus_lost(window, |this, window, cx| {
+            if this.launcher.screen().search_field().is_some() {
+                this.query.focus(window, cx);
+            }
+        })
+        .detach();
         cx.observe_window_activation(window, |this, window, cx| {
             let active = window.is_window_active();
             // A pending HUD's work is done once the launcher is active

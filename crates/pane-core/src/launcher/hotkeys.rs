@@ -633,7 +633,10 @@ impl Launcher {
             });
         match (&opening, &action) {
             (Some(opening), _) if !opening.no_view => {
-                self.show_root(&mut state, Some(opening.component.clone()));
+                self.show_root(
+                    &mut state,
+                    Some((opening.component.clone(), opening.command.clone())),
+                );
                 state.view.status = Status::Running {
                     since: Instant::now(),
                 };

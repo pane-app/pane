@@ -32,12 +32,35 @@ pub fn enter_flow(window: &Entity<LauncherWindow>, cx: &mut VisualTestContext) -
     })
 }
 
-/// Runs the window until the launcher is no longer running an action and
-/// the window has drawn what it shows.
+/// Runs the window until the launcher is no longer running an action,
+/// the keys the window held for the query's list have been applied, and
+/// the window has drawn what it shows: a settle that returns while keys
+/// are still held reports the list before the publication they wait for,
+/// and the keys the test presses next are swallowed by the hold (#203).
 pub fn settle(window: &Entity<LauncherWindow>, cx: &mut VisualTestContext) -> LauncherView {
-    until(window, cx, |view| {
-        !matches!(view.status, Status::Running { .. })
-    })
+    let deadline = Instant::now() + Duration::from_secs(60);
+    loop {
+        cx.run_until_parked();
+        let (view, drawn, held) = cx.read_entity(window, |window, _| {
+            (
+                window.launcher().view(),
+                window.drawn_view().cloned(),
+                window.held_keys(),
+            )
+        });
+        if !matches!(view.status, Status::Running { .. })
+            && held.is_empty()
+            && drawn.as_ref() == Some(&view)
+        {
+            return view;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "timed out: the launcher shows {view:?}, the window last drew {drawn:?} \
+             (keys still held: {held:?})"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
 }
 
 /// Runs the window, as [`settle`] does, until its last frame also drew

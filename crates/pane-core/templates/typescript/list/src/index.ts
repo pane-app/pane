@@ -9,14 +9,10 @@
 // One component (the WebAssembly file pane.json names) serves every
 // command the package declares: render and run receive the command's id,
 // so this file matches on it. `pane-ext new command .` adds one.
-import type { Command, FieldValue, LaunchRecord, List } from "@pane-app/extension";
+import type { Command, LaunchRecord, List } from "@pane-app/extension";
 import { showToast } from "@pane-app/extension/feedback";
 
 // pane-ext new command adds a command's file here.
-
-/** The command whose screen is open, so `submitForm` reaches the command
- *  whose form was filled in. */
-let opened = "__NAME__";
 
 /** What the "Say hello" item shows in a toast. */
 const GREETING = "Hello from __TITLE__";
@@ -46,7 +42,6 @@ async function theList(): Promise<List> {
 
 export const command: Command = {
   async render(launch: LaunchRecord): Promise<List> {
-    opened = launch.command;
     switch (launch.command) {
       case "__NAME__":
         return theList();
@@ -61,14 +56,6 @@ export const command: Command = {
       // pane-ext new command adds a no-view command's arm here.
       default:
         throw new Error(`\`${id}\` opens a screen; it has no run entry point`);
-    }
-  },
-
-  async submitForm(itemId: string, _values: FieldValue[]): Promise<string> {
-    switch (opened) {
-      // pane-ext new command adds a form command's arm here.
-      default:
-        throw { message: `\`${opened}\` has no forms: ${itemId}` };
     }
   },
 };

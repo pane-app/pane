@@ -209,6 +209,7 @@ impl LauncherWindow {
         let heading = (!title.is_empty()).then(|| {
             div()
                 .id("designed-title")
+                .debug_selector(|| "designed-title".into())
                 .flex_none()
                 .h(px(28.))
                 .flex()
@@ -361,8 +362,23 @@ impl LauncherWindow {
             return;
         }
         let closed = shown.is_none();
-        self.designed = shown
+        // A view whose List searches as the user types opens on its
+        // search field: the field the header shows is the window's own,
+        // and typing into it is the view's first act — a tree that asks
+        // for the keyboard keeps it, and one with no search of its own
+        // falls to its first focusable control as before.
+        let searches = matches!(
+            &self.launcher.screen(),
+            pane_core::Screen::DesignedView(view)
+                if view.list.as_ref().is_some_and(|list| list.searching)
+        );
+        let opened = shown
             .map(|(view, render, tree)| DesignedControls::new(view, &tree, render, window, cx));
+        let asked = opened.as_ref().is_some_and(|(_, asked)| *asked);
+        self.designed = opened.map(|(controls, _)| controls);
+        if searches && !asked {
+            self.query.focus(window, cx);
+        }
         if closed {
             window.focus(&self.focus_handle, cx);
         }

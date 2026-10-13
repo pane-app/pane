@@ -292,6 +292,10 @@ impl ColorPicker {
                     .key("grid")
                     .width(Length::Px((COLUMNS * STEP + 88) as f32))
                     .height(Length::Px((ROWS * STEP) as f32))
+                    // The grid's keys move the choice, so it asks for the
+                    // keyboard: without the ask the view's opening focus
+                    // lands nowhere, and the arrows reach no handler.
+                    .focus()
                     .role(CanvasRole::ColorWell)
                     .label("Color")
                     .value(format!("{name}, {}", hex(chosen)))
