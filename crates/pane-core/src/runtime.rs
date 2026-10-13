@@ -4073,6 +4073,12 @@ impl Host {
                     .entry(component.clone())
                     .or_default()
                     .parking;
+                // [diag-ff14] Diagnostic scaffolding; removed with the root
+                // fix.
+                crate::diagnostic!(
+                    "[diag-ff14] pump served: already={already} path={}",
+                    component.display()
+                );
                 if already {
                     return;
                 }
@@ -4863,8 +4869,14 @@ impl Host {
     /// for the park — and a lane already parking keeps the park it has.
     fn nudge_park(&self, path: &Path) {
         let Some(requests) = self.nudge.upgrade() else {
+            // [diag-ff14] Diagnostic scaffolding for the pending work that
+            // never runs: the pump's queue when the channel is gone.
+            // fix-forward-15 removes it with the root fix.
+            crate::diagnostic!("[diag-ff14] pump queued: channel gone");
             return;
         };
+        // [diag-ff14] Diagnostic scaffolding; removed with the root fix.
+        crate::diagnostic!("[diag-ff14] pump queued: path={}", path.display());
         let _ = requests.send(Sent {
             request: Request::Pump {
                 component: path.to_path_buf(),
@@ -5589,11 +5601,17 @@ impl Host {
         instance.calls = Some(calls);
         match result {
             Ok(result) => {
+                // [diag-ff14] Diagnostic scaffolding; removed with the root
+                // fix.
+                crate::diagnostic!("[diag-ff14] park ended: parked");
                 self.bring_back(path, taken, instance);
                 Ok(result)
             }
             Err(halt) => {
                 let data = instance.store.data().data.clone();
+                // [diag-ff14] Diagnostic scaffolding; removed with the root
+                // fix.
+                crate::diagnostic!("[diag-ff14] park ended: halted");
                 // The instance is dropped with its store: the abandoned
                 // task, its host tasks (web requests too), streams, futures
                 // and views.
@@ -5639,6 +5657,8 @@ impl Host {
     /// them), so it is put back rather than dropped, as a cancelled call's
     /// instance is not.
     async fn park_guest(&self, path: &Path, chain: &Chain) {
+        // [diag-ff14] Diagnostic scaffolding; removed with the root fix.
+        crate::diagnostic!("[diag-ff14] park started: path={}", path.display());
         /// What happened next while the guest ran between Pane's calls.
         enum Next {
             /// The park ended: the guest went idle, or a call wants the

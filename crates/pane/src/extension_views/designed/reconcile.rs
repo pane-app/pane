@@ -328,6 +328,10 @@ impl DesignedControls {
             && !self.state.get(path).is_some_and(|entry| entry.asked)
             && let Some(handle) = self.state.get(path).and_then(|entry| entry.focus_handle())
         {
+            // [diag-ff14] Diagnostic scaffolding for the focus that never
+            // lands: the ask recorded, at the path it honours.
+            // fix-forward-15 removes it with the root fix.
+            pane_core::diagnostic!("[diag-ff14] focus ask recorded: path={path}");
             self.focus_ask = Some(handle.clone());
             window.focus(&handle, cx);
             walk.asked = true;
