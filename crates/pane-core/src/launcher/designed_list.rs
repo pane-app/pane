@@ -494,55 +494,39 @@ impl Launcher {
         };
         // The rows and the snapshot's list reflect the new text at once.
         self.present_designed_list(state);
-        // [diag-ff9] Diagnostic scaffolding for the designed search that
-        // never asks its service: what the screen held as the text
-        // arrived, and what the event built. fix-forward-10 removes it
-        // with the root fix.
-        {
-            let screen = match &state.view.screen {
-                Screen::DesignedView(snapshot) => format!(
-                    "designed, list={} searching={}",
-                    snapshot.list.is_some(),
-                    snapshot.list.as_ref().is_some_and(|list| list.searching)
-                ),
-                other => format!("{other:?}"),
-            };
-            let built = match &event {
-                Some((Some(callback), key, _)) => {
-                    format!("callback={callback}, key={key:?}")
-                }
-                Some((None, key, _)) => format!("no callback, key={key:?}"),
-                None => "no event".to_owned(),
-            };
-            crate::diagnostics::report(
-                "[diag-ff9] search-text arrived",
-                &format!(
-                    "[diag-ff9] search-text {text:?} arrived: screen={screen} stack={} \
-                     event: {built}",
-                    state.designed_view.is_some()
-                ),
-            );
-        }
         let (callback, key, text) = event?;
         let callback = callback?;
         let payload = value_payload(&text);
-        // The send happens when the returned future is first polled, not
-        // here: this runs with the caller's state lock held (it is
-        // `set_query`'s), and the send takes that lock itself to name the
-        // view the event is raised on — sending here would deadlock the
-        // two. The caller drops the state before it polls the future, as
-        // `set_designed_dropdown`'s send does inside its own.
+        // The send happens on a thread of its own, started now: a caller
+        // can hold the returned future un-polled while it waits for what
+        // the search does (the crash tests hold theirs until after), so
+        // the send cannot wait for the future's first poll. The thread
+        // also escapes this function's caller's state lock — it is
+        // `set_query`'s, still held here — which the send takes itself to
+        // name the view the event is raised on: the thread waits the lock
+        // out instead of deadlocking with it, as the selection's and the
+        // back-out's sends do on threads of their own.
+        let key = (!key.is_empty()).then_some(key);
         let launcher = self.clone();
-        Some(Box::pin(async move {
-            launcher
-                .send_designed_seen(
+        let started = std::thread::Builder::new()
+            .name("pane-designed-search".into())
+            .spawn(move || {
+                let sent = launcher.send_designed_seen(
                     DesignedHandler::Input,
                     callback,
-                    (!key.is_empty()).then_some(key.as_str()),
+                    key.as_deref(),
                     None,
                     payload,
-                )
-                .await;
+                );
+                futures::executor::block_on(sent);
+                launcher.changed();
+            });
+        // The future the caller holds completes when the search's answer
+        // has landed: the thread's end.
+        Some(Box::pin(async move {
+            if let Ok(finished) = started {
+                let _ = finished.join();
+            }
         }))
     }
 
