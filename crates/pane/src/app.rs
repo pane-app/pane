@@ -364,14 +364,23 @@ impl LauncherWindow {
         // keyboard back, as the Settings window does for its sidebar
         // when a control that had it is gone.
         cx.on_focus_lost(window, |this, window, cx| {
-            // [diag-ff11] Diagnostic scaffolding for the form that opens
-            // with no field focused: when the window's keyboard is left
-            // nowhere, and whether a search field takes it back.
-            // fix-forward-12 removes it with the root fix.
-            let field = this.launcher.screen().search_field().is_some();
-            pane_core::diagnostic!("[diag-ff11] focus lost: search_field={field}");
-            if field {
+            // The keyboard can be left nowhere while a search field is on
+            // screen: the publication's re-render drops the node that held
+            // it, and a window whose focus resolves to no node matches no
+            // binding at all — every key falls through. The field takes
+            // the keyboard back, as the Settings window does for its
+            // sidebar when a control that had it is gone. A designed view
+            // whose tree asked for the keyboard gets its asked node back
+            // the same way: its re-renders can drop the focus just as the
+            // publication's did.
+            if this.launcher.screen().search_field().is_some() {
                 this.query.focus(window, cx);
+            } else if let Some(asked) = this
+                .designed
+                .as_ref()
+                .and_then(|controls| controls.focus_ask.clone())
+            {
+                window.focus(&asked, cx);
             }
         })
         .detach();
