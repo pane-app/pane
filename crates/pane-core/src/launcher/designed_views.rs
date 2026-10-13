@@ -330,9 +330,7 @@ impl Launcher {
                 // fix.
                 crate::diagnostics::report(
                     "[diag-ff9] designed open stopped",
-                    &format!(
-                        "[diag-ff9] designed open stopped: command={command} {problem}"
-                    ),
+                    &format!("[diag-ff9] designed open stopped: command={command} {problem}"),
                 );
                 // Stopped while it was opening.
                 self.lock().view.status = Status::Error(problem);
