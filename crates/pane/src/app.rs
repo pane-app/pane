@@ -299,17 +299,31 @@ impl LauncherWindow {
             if window.window_handle() != gate_window {
                 return;
             }
-            // [diag-ff8] Diagnostic scaffolding for the smoke's key stall:
-            // the earliest point inside the app a keystroke reaches,
-            // before the keymap and every listener. The site names the
-            // key, so the log's rate limit cannot starve the line the
-            // next round needs. fix-forward-9 removes it with the root
-            // fix.
+            // [diag-ff9] Diagnostic scaffolding for the smoke's key
+            // stall: the earliest point inside the app a keystroke
+            // reaches, before the keymap and every listener, with the
+            // context stack the keymap will match against and whether
+            // the query field holds the window's focus — the split
+            // between a stack that cannot match and a focus that moved.
+            // The site names the key, so the log's rate limit cannot
+            // starve the line the next round needs. fix-forward-10
+            // removes it with the root fix.
+            let stack = event
+                .context_stack
+                .iter()
+                .map(|context| format!("{context:?}"))
+                .collect::<Vec<_>>()
+                .join(" > ");
+            let field = gated
+                .update(cx, |this, cx| {
+                    this.query_field().focus_handle(cx).is_focused(window)
+                })
+                .unwrap_or(false);
             pane_core::diagnostics::report(
-                &format!("[diag-ff8i] keystroke {}", event.keystroke.key),
+                &format!("[diag-ff9] key {}", event.keystroke.key),
                 &format!(
-                    "[diag-ff8i] keystroke {} (char {:?})",
-                    event.keystroke.key, event.keystroke.key_char
+                    "[diag-ff9] key {} (char {:?}) stack [{}] field_focus={}",
+                    event.keystroke.key, event.keystroke.key_char, stack, field
                 ),
             );
             let Ok(pressed) = crate::keyboard::binding_of(&event.keystroke) else {
@@ -375,7 +389,7 @@ impl LauncherWindow {
         // resolved, naming the action a binding dispatched (and staying
         // silent for a key whose propagation was stopped) — the split
         // between a binding-consumed Enter and one that never arrived.
-        // fix-forward-9 removes it with the root fix.
+        // fix-forward-10 removes it with the root fix.
         cx.observe_keystrokes(move |_this, event, _window, _cx| {
             pane_core::diagnostics::report(
                 &format!("[diag-ff8o] resolved {}", event.keystroke.key),
@@ -946,7 +960,7 @@ impl LauncherWindow {
 
     pub(crate) fn confirm(&mut self, _: &Confirm, window: &mut Window, cx: &mut Context<Self>) {
         // [diag-ff6] Diagnostic scaffolding for the smoke's launch stall;
-        // fix-forward-8 removes it with the root fix.
+        // fix-forward-10 removes it with the root fix.
         #[cfg(any(test, debug_assertions))]
         {
             let screen = match &self.launcher.screen() {
@@ -1003,7 +1017,7 @@ impl LauncherWindow {
     /// opens (#140), or activates the row.
     fn invoke_selected(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         // [diag-ff6] Diagnostic scaffolding for the smoke's launch stall;
-        // fix-forward-8 removes it with the root fix.
+        // fix-forward-10 removes it with the root fix.
         pane_core::diagnostic!("[diag-ff6] invoke_selected");
         // The Logs screen's lines are its own: the selected one is copied.
         if self.extension_log_open() {

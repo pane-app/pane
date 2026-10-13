@@ -621,7 +621,7 @@ impl LauncherWindow {
         // [diag-ff7] Diagnostic scaffolding for the smoke's launch stall:
         // the first point inside the app a key event reaches, before any
         // listener or the keymap — whether the drive phase's Return even
-        // arrives. fix-forward-8 removes it with the root fix.
+        // arrives. fix-forward-10 removes it with the root fix.
         pane_core::diagnostic!(
             "[diag-ff7] key: {} (char {:?})",
             event.keystroke.key,

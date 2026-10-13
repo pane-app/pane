@@ -183,6 +183,8 @@ function ColorPicker() {
         key: "grid",
         width: COLUMNS * STEP + 88,
         height: ROWS * STEP,
+        // The grid's keys move the choice, so it asks for the keyboard.
+        focus: true,
         role: "color-well",
         label: "Color",
         value: `${shade ? `${shade} ${hue.toLowerCase()}` : hue}, ${code}`,
