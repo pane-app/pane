@@ -81,9 +81,7 @@ struct ServicePreference {
 fn service() -> Result<String, String> {
     let user = preferences::values::<ServicePreference>()?.address;
     let saved = settings::get(SERVICE)?;
-    Ok(user
-        .or(saved)
-        .unwrap_or_else(|| DEFAULT_SERVICE.into()))
+    Ok(user.or(saved).unwrap_or_else(|| DEFAULT_SERVICE.into()))
 }
 
 /// Fetches `path` from the service and reads its JSON answer as `T`.
