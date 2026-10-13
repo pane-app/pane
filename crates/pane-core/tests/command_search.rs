@@ -377,6 +377,9 @@ fn a_newer_search_stops_the_one_the_service_is_still_answering() {
         let service = Service::start();
         let pane = Pane::with(fixture);
         pane.use_service(&service.url());
+        // The search happens in the open command's own field, so the
+        // command is opened before the query is typed into it.
+        pane.open();
 
         // The service holds this one for ten seconds.
         let slow = pane.launcher.set_query("slow");
@@ -410,6 +413,8 @@ fn an_answer_to_an_older_search_is_not_shown() {
         let service = Service::start();
         let pane = Pane::with(fixture);
         pane.use_service(&service.url());
+        // The search happens in the open command's own field.
+        pane.open();
 
         let older = pane.launcher.set_query("aurora");
         let newer = pane.launcher.set_query("ember");
@@ -432,6 +437,8 @@ fn leaving_the_command_stops_its_search() {
         let service = Service::start();
         let pane = Pane::with(fixture);
         pane.use_service(&service.url());
+        // The search happens in the open command's own field.
+        pane.open();
 
         let slow = pane.launcher.set_query("slow");
         wait_for_request(&service, "/search?q=slow");
@@ -896,6 +903,8 @@ fn a_generation_s_undo_list_holds_every_subsystem_and_is_empty_after_its_end() {
 
     // A search waits on the service.
     pane.use_service(&service.url());
+    // The search happens in the open command's own field.
+    pane.open();
     let slow = pane.launcher.set_query("slow");
     wait_for_request(&service, "/search?q=slow");
     let listed = pane.launcher.undo_list(&identity);
@@ -958,6 +967,8 @@ fn a_crash_of_the_runtime_ends_a_search_with_an_error_not_its_results() {
         let service = Service::start();
         let pane = Pane::with(fixture);
         pane.use_service(&service.url());
+        // The search happens in the open command's own field.
+        pane.open();
         let slow = pane.launcher.set_query("slow");
         wait_for_request(&service, "/search?q=slow");
 

@@ -100,7 +100,7 @@ impl Launcher {
         data: Option<PackageData>,
     ) {
         // [diag-ff6] Diagnostic scaffolding for the smoke's launch stall;
-        // fix-forward-8 removes it with the root fix.
+        // fix-forward-10 removes it with the root fix.
         crate::diagnostic!(
             "[diag-ff6] launch_opening: command={} designed={} no_view={}",
             opening.command,

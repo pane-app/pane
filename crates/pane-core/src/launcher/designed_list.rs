@@ -494,6 +494,35 @@ impl Launcher {
         };
         // The rows and the snapshot's list reflect the new text at once.
         self.present_designed_list(state);
+        // [diag-ff9] Diagnostic scaffolding for the designed search that
+        // never asks its service: what the screen held as the text
+        // arrived, and what the event built. fix-forward-10 removes it
+        // with the root fix.
+        {
+            let screen = match &state.view.screen {
+                Screen::DesignedView(snapshot) => format!(
+                    "designed, list={} searching={}",
+                    snapshot.list.is_some(),
+                    snapshot.list.as_ref().is_some_and(|list| list.searching)
+                ),
+                other => format!("{other:?}"),
+            };
+            let built = match &event {
+                Some((Some(callback), key, _)) => {
+                    format!("callback={callback}, key={key:?}")
+                }
+                Some((None, key, _)) => format!("no callback, key={key:?}"),
+                None => "no event".to_owned(),
+            };
+            crate::diagnostics::report(
+                "[diag-ff9] search-text arrived",
+                &format!(
+                    "[diag-ff9] search-text {text:?} arrived: screen={screen} stack={} \
+                     event: {built}",
+                    state.designed_view.is_some()
+                ),
+            );
+        }
         let (callback, key, text) = event?;
         let callback = callback?;
         let payload = value_payload(&text);

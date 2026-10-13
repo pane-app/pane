@@ -205,6 +205,16 @@ pub(super) struct SentDesignedEvent {
 impl OpenDesignedView {
     /// Sends `event` to the view, numbering it for ordering.
     fn send(&mut self, runtime: &Runtime, event: DesignedEvent) -> SentDesignedEvent {
+        // [diag-ff9] Diagnostic scaffolding for the designed search that
+        // never asks its service: the event reaching the send itself.
+        // fix-forward-10 removes it with the root fix.
+        crate::diagnostics::report(
+            "[diag-ff9] designed event send",
+            &format!(
+                "[diag-ff9] designed event send: render={} callback={}",
+                event.render, event.callback
+            ),
+        );
         self.sent += 1;
         SentDesignedEvent {
             view: self.id,
@@ -280,8 +290,9 @@ impl Launcher {
             return;
         }
         // [diag-ff8] Diagnostic scaffolding for the guest-launched form
-        // that opens no view: the open's reply and whether the epoch still
-        // holds. fix-forward-9 removes it with the root fix.
+        // that opens no view: the open's reply, what an error says, and
+        // whether the epoch still holds. fix-forward-10 removes it with
+        // the root fix.
         let result = match self.runtime() {
             Ok(runtime) => {
                 runtime
@@ -290,13 +301,16 @@ impl Launcher {
             }
             Err(error) => Err(error),
         };
-        crate::diagnostics::report(
-            "[diag-ff8d] designed open replied",
-            &format!(
-                "[diag-ff8d] designed open replied: command={command} {}",
-                if result.is_ok() { "ok" } else { "error" }
-            ),
-        );
+        {
+            let why = match &result {
+                Ok(_) => "ok".to_owned(),
+                Err(error) => format!("error: {error}"),
+            };
+            crate::diagnostics::report(
+                "[diag-ff8d] designed open replied",
+                &format!("[diag-ff8d] designed open replied: command={command} {why}"),
+            );
+        }
         let current = self.lock_if_current(epoch);
         if current.is_none() {
             crate::diagnostics::report(
@@ -312,6 +326,12 @@ impl Launcher {
                 runtime.close_designed_view(id);
             }
             if let Some(problem) = stopped {
+                // [diag-ff9] Diagnostic scaffolding; removed with the root
+                // fix.
+                crate::diagnostics::report(
+                    "[diag-ff9] designed open stopped",
+                    &format!("[diag-ff9] designed open stopped: command={command} {problem}"),
+                );
                 // Stopped while it was opening.
                 self.lock().view.status = Status::Error(problem);
             }
@@ -541,7 +561,7 @@ impl Launcher {
             // [diag-ff8] Diagnostic scaffolding for the designed search's
             // never-firing fetch: the drop is silent for packages that are
             // not developed, so the tests never learn their event went.
-            // fix-forward-9 removes it with the root fix.
+            // fix-forward-10 removes it with the root fix.
             crate::diagnostics::report(
                 "[diag-ff8s] designed event dropped",
                 &format!("[diag-ff8s] designed event dropped: {why}"),

@@ -444,7 +444,9 @@ fn a_disabled_package_is_not_reloaded() {
 /// Right, which chooses the next color.
 fn open_color(launcher: &Launcher, command: &str) {
     open(launcher, command);
-    select_title(launcher, "color picker");
+    // The item that launches the color view is titled as the sample's
+    // list names it, "Choose a color".
+    select_title(launcher, "Choose a color");
     block_on(launcher.activate_selected());
     assert!(matches!(launcher.view().screen, Screen::DesignedView(_)));
     send_right(launcher);
