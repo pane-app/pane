@@ -53,7 +53,7 @@ pub(crate) struct DesignedControls {
     /// The handle the tree last asked the keyboard for, when it asked:
     /// where the window returns it when the focus is lost, as a search
     /// field takes it back on the screens that have one.
-    pub(super) focus_ask: Option<gpui::FocusHandle>,
+    pub(crate) focus_ask: Option<gpui::FocusHandle>,
     /// The keyed state of every stateful and focusable node the last tree
     /// named, by its path.
     pub(super) state: HashMap<String, KeyedState>,
