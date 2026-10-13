@@ -532,7 +532,19 @@ impl Launcher {
                 let stack = state.designed_view.as_mut().expect("a view is open");
                 Some(stack.top_mut().send(runtime, event))
             }
-            _ => None,
+            _ => {
+                // [diag-ff13] Diagnostic scaffolding for the designed
+                // events the guests never answer: the send's silent exit —
+                // no event built, or the event dropped, or no runtime.
+                // fix-forward-14 removes it with the root fix.
+                crate::diagnostic!(
+                    "[diag-ff13] send silent: held={} dropped={} runtime={}",
+                    held.is_some(),
+                    held.as_ref().is_some_and(|(_, dropped)| dropped.is_some()),
+                    self.runtime().is_ok()
+                );
+                None
+            }
         };
         drop(state);
         let launcher = self.clone();

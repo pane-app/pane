@@ -1636,8 +1636,28 @@ impl Runtime {
         view: ViewId,
         event: DesignedEvent,
     ) -> impl Future<Output = Result<DesignedNext, CallError>> + Send + 'static {
+        // [diag-ff13] Diagnostic scaffolding for the designed events the
+        // guests never answer: the event's arrival and its answer, around
+        // the whole call. fix-forward-14 removes it with the root fix.
+        crate::diagnostic!(
+            "[diag-ff13] event arrives: view={:?} render={} callback={} key={:?}",
+            view,
+            event.render,
+            event.callback,
+            event.key
+        );
         let (reply, response) = oneshot::channel();
-        self.call(Request::DesignedViewEvent { view, event, reply }, response)
+        let called = self.call(Request::DesignedViewEvent { view, event, reply }, response);
+        async move {
+            let answer = called.await;
+            match &answer {
+                Ok(_) => crate::diagnostic!("[diag-ff13] event answered: ok"),
+                Err(error) => crate::diagnostic!(
+                    "[diag-ff13] event answered: error: {error}"
+                ),
+            }
+            answer
+        }
     }
 
     /// Draws the open designed view `view` again, with no event: the
@@ -4530,7 +4550,28 @@ impl Host {
         let chain = self.chain();
         let view = open.id;
         let path = open.component.clone();
-        let _turn = self.turn_for(&path, &chain).await?;
+        // [diag-ff13] Diagnostic scaffolding; removed with the root fix.
+        let turn = self.turn_for(&path, &chain).await;
+        match &turn {
+            Ok(_) => crate::diagnostic!("[diag-ff13] event turn: taken"),
+            Err(error) => crate::diagnostic!("[diag-ff13] event turn: error: {error}"),
+        }
+        let _turn = turn?;
+        // [diag-ff13] Diagnostic scaffolding; removed with the root fix.
+        {
+            let live = self.instances.borrow().get(&open.component).map(|instance| {
+                (
+                    instance.serial == open.serial,
+                    instance.store.data().stopped().is_none(),
+                )
+            });
+            match live {
+                Some((serial, running)) => crate::diagnostic!(
+                    "[diag-ff13] event live: serial_match={serial} running={running}"
+                ),
+                None => crate::diagnostic!("[diag-ff13] event live: no instance"),
+            }
+        }
         self.live_designed(&open)?;
         let wit = command::UiEvent {
             render: event.render,
@@ -4539,6 +4580,8 @@ impl Host {
             payload: event.payload,
         };
         let resource = open.resource;
+        // [diag-ff13] Diagnostic scaffolding; removed with the root fix.
+        crate::diagnostic!("[diag-ff13] event guest: entered");
         let result = self
             .run_guest(&path, &chain, async |instance| {
                 instance.store.data_mut().set_call(CallFor::in_window(None));
@@ -4563,7 +4606,21 @@ impl Host {
                     .await
             })
             .await?;
-        let outcome = self.settle(&path, result, CallError::Guest)?;
+        // [diag-ff13] Diagnostic scaffolding; removed with the root fix.
+        match &result {
+            Ok(_) => crate::diagnostic!("[diag-ff13] event guest: call answered"),
+            Err(error) => crate::diagnostic!("[diag-ff13] event guest: call error: {error}"),
+        }
+        let outcome = match self.settle(&path, result, CallError::Guest) {
+            Ok(settled) => {
+                crate::diagnostic!("[diag-ff13] event settle: ok");
+                settled
+            }
+            Err(error) => {
+                crate::diagnostic!("[diag-ff13] event settle: error: {error}");
+                return Err(error);
+            }
+        };
         // What the event does next: at most one field of the outcome is
         // acted on, a pop first, then a replace, then a push (the SDKs
         // answer exactly one).
