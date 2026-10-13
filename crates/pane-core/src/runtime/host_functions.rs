@@ -161,6 +161,10 @@ impl window_host::Host for GuestState {
 impl view_host::Host for GuestState {
     fn ask_to_render(&mut self, view: u64) {
         let _host = self.host();
+        // [diag-ff19] Diagnostic scaffolding for the answer's return: the
+        // guest's own work answered and asked for its drawing — the push
+        // channel's arrival. fix-forward-20 removes it with the root fix.
+        crate::diagnostic!("[diag-ff19] ask arrived: view={view}");
         if let Some(asks) = lock(&self.view_asks).clone() {
             asks(view);
         }
