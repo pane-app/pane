@@ -501,9 +501,7 @@ impl Launcher {
         // service never sees: the thread's start, its send's outcome, and
         // the spawn's own result. fix-forward-12 removes it with the root
         // fix.
-        crate::diagnostic!(
-            "[diag-ff11] search event built: callback={callback} key={key:?}"
-        );
+        crate::diagnostic!("[diag-ff11] search event built: callback={callback} key={key:?}");
         // The send happens on a thread of its own, started now: a caller
         // can hold the returned future un-polled while it waits for what
         // the search does (the crash tests hold theirs until after), so
