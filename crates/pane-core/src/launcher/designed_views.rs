@@ -661,10 +661,7 @@ impl Launcher {
         // [diag-ff19] Diagnostic scaffolding for the answer's return: the
         // drawing a pushed ask is served with. fix-forward-20 removes it
         // with the root fix.
-        crate::diagnostic!(
-            "[diag-ff19] push drawing: view={:?}",
-            stack.top().id
-        );
+        crate::diagnostic!("[diag-ff19] push drawing: view={:?}", stack.top().id);
         Some((epoch, stack.top_mut().send_push(runtime)))
     }
 
