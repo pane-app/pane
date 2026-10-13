@@ -26,6 +26,7 @@ import {
   useRef,
   useState,
 } from "@pane-app/extension/view";
+import { getPreferenceValues } from "@pane-app/extension/preferences";
 import { get, set } from "pane:extension/settings@0.2.0";
 import { jsxs } from "@pane-app/extension/jsx-runtime";
 
@@ -51,9 +52,17 @@ function host(call) {
   }
 }
 
-/** The service address: the saved one, or the default. */
+/** The service address: the one the user set as the command's `service`
+ * preference (Setup, or the extension's card in Settings), the one this
+ * command saved on its Service address view, or the default. */
 function service() {
-  return host(() => get(SERVICE)) ?? DEFAULT_SERVICE;
+  let user;
+  try {
+    user = getPreferenceValues().service;
+  } catch {
+    // Pane refused (the code is stopped): the saved address stands.
+  }
+  return user ?? host(() => get(SERVICE)) ?? DEFAULT_SERVICE;
 }
 
 /**
