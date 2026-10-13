@@ -658,6 +658,13 @@ impl Launcher {
         let epoch = state.screen_epoch;
         let stack = state.designed_view.as_mut()?;
         let runtime = self.runtime().ok()?;
+        // [diag-ff19] Diagnostic scaffolding for the answer's return: the
+        // drawing a pushed ask is served with. fix-forward-20 removes it
+        // with the root fix.
+        crate::diagnostic!(
+            "[diag-ff19] push drawing: view={:?}",
+            stack.top().id
+        );
         Some((epoch, stack.top_mut().send_push(runtime)))
     }
 
@@ -691,6 +698,21 @@ impl Launcher {
         number: u64,
         result: Result<DesignedNext, CallError>,
     ) {
+        // [diag-ff19] Diagnostic scaffolding for the answer's return: what
+        // the drawing's answer carries — a tree, a navigation, or the
+        // error. fix-forward-20 removes it with the root fix.
+        crate::diagnostic!(
+            "[diag-ff19] answer shown: view={:?} number={} {}",
+            view,
+            number,
+            match &result {
+                Ok(DesignedNext::Tree(_)) => "tree",
+                Ok(DesignedNext::Pushed(..)) => "pushed",
+                Ok(DesignedNext::Replaced(..)) => "replaced",
+                Ok(DesignedNext::Popped { .. }) => "popped",
+                Err(error) => "error",
+            }
+        );
         // What the answer opened, when it pushed or replaced a view in:
         // stacked only if the answer is applied.
         let opened = match &result {

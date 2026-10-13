@@ -4391,7 +4391,7 @@ fn write_node(tree: &mut String, node: &Node) -> Result<(), String> {
                 }
             }
             write_text_props(tree, text)?;
-        },
+        }
         NodeKind::Button {
             label,
             tone,
