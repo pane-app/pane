@@ -1636,8 +1636,23 @@ impl Runtime {
         view: ViewId,
         event: DesignedEvent,
     ) -> impl Future<Output = Result<DesignedNext, CallError>> + Send + 'static {
+        // [diag-ff22] Diagnostic scaffolding for the query changes that
+        // never re-render: the event's arrival at the runtime and its
+        // answer. fix-forward-23 removes it with the root fix.
+        crate::diagnostic!(
+            "[diag-ff22] event arrives: view={:?} render={} callback={} key={:?}",
+            view,
+            event.render,
+            event.callback,
+            event.key
+        );
         let (reply, response) = oneshot::channel();
-        self.call(Request::DesignedViewEvent { view, event, reply }, response)
+        let called = self.call(Request::DesignedViewEvent { view, event, reply }, response);
+        async move {
+            let answer = called.await;
+            crate::diagnostic!("[diag-ff22] event answered: {}", answer.is_ok());
+            answer
+        }
     }
 
     /// Draws the open designed view `view` again, with no event: the

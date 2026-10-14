@@ -522,6 +522,9 @@ impl Launcher {
         // A dropped event never reaches the view: its node went (or its
         // handler), or the view rendered twice since the user saw it.
         if let Some((_, Some(why))) = &held {
+            // [diag-ff22] Diagnostic scaffolding; removed with the root
+            // fix.
+            crate::diagnostic!("[diag-ff22] search dropped: {why}");
             let dropped = held
                 .as_ref()
                 .map(|(event, _)| (event.key.as_str(), event.render));

@@ -338,8 +338,19 @@ fn the_service_results_are_listed_and_open_their_details() {
         );
         assert_eq!(view.selected, Some(0));
 
-        // Enter asks the service for the package's details.
+        // Enter asks the service for the package's details: the action's
+        // answer draws asynchronously, like a search's, so it is waited
+        // for.
         pane.activate("aurora-cli");
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let shown = shown(&pane.launcher);
+            if matches!(&shown, Status::Result(_)) {
+                break;
+            }
+            assert!(Instant::now() < deadline, "{}: {shown:?}", fixture.package);
+            std::thread::sleep(Duration::from_millis(10));
+        }
         assert_eq!(
             shown(&pane.launcher),
             Status::Result(
@@ -416,10 +427,21 @@ fn a_newer_search_stops_the_one_the_service_is_still_answering() {
         // command is opened before the query is typed into it.
         pane.open();
 
-        // The service holds this one for ten seconds.
+        // The service holds this one for ten seconds. The old module
+        // named an in-flight search on the status line; a designed view
+        // names it on its own loading bar, so the search's flight is read
+        // there — once the loading bar's tree has drawn, which the
+        // query's own future does not wait for.
         let slow = pane.launcher.set_query("slow");
         wait_for_request(&service, "/search?q=slow");
-        assert!(matches!(pane.view().status, Status::Running { .. }));
+        let _ = wait_for_view(
+            &pane,
+            |view| {
+                matches!(&view.screen, Screen::DesignedView(view)
+                    if view.list.as_ref().is_some_and(|list| list.loading.is_some()))
+            },
+            "the slow search's loading bar never drew",
+        );
 
         let started = Instant::now();
         pane.search("basalt");
@@ -801,6 +823,9 @@ fn stopped_while_it_waits(fixture: &Fixture, happen: impl FnOnce(&Pane)) -> (Pan
 /// command waits on it.
 fn waiting_on_the_service(pane: &Pane, service: &Service) -> std::thread::JoinHandle<()> {
     pane.use_service(&service.url());
+    // The search happens in the open command's own field, as every
+    // designed search does: the field exists only once the view is open.
+    pane.open();
     pane.search("misbehaving");
     // The rows the activation chooses from are the search's answer, which
     // a designed view draws asynchronously: waited for, not read at once.
