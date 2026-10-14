@@ -183,6 +183,11 @@ impl view_host::Host for GuestState {
 impl feedback_host::Host for GuestState {
     fn show_toast(&mut self, toast: feedback_host::Toast) -> feedback_host::ToastId {
         let _host = self.host();
+        // [diag-ff25] Diagnostic scaffolding for the first-drive failure's
+        // next layer: the guest's own answer arriving as a toast — the
+        // answer card the smoke's checks look for. fix-forward-26 removes
+        // it with the root fix.
+        crate::diagnostic!("[diag-ff25] toast arrived: {}", toast.title);
         let Some(host) = self.host_functions() else {
             return 0;
         };
