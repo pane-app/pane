@@ -937,6 +937,11 @@ impl LauncherWindow {
     }
 
     pub(crate) fn confirm(&mut self, _: &Confirm, window: &mut Window, cx: &mut Context<Self>) {
+        // [diag-ff29] Diagnostic scaffolding for the drive whose Enter
+        // never dispatches: the confirm is the Enter's own action, so its
+        // arrival is the line between a key lost on the platform and one
+        // a binding refused. fix-forward-30 removes it with the root fix.
+        pane_core::diagnostic!("[diag-ff29] confirm entered");
         // Enter ends the walk through the recent queries (#206), whatever
         // it runs — a held key included.
         self.recall = None;

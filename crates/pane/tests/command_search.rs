@@ -123,10 +123,17 @@ fn the_commands_own_search_field_lists_the_service_results(cx: &mut TestAppConte
     );
 
     // Down moves the selection to the second row, and Enter shows the
-    // selected package's details in a toast: the press's answer draws
-    // asynchronously, as the search's did, so the toast is waited for —
-    // and the selection's move settles before the press, whose row it
-    // chooses.
+    // selected package's details in a toast. The rows are waited for
+    // before the Down chooses among them — the window's last draw can
+    // still be the loading one while the launcher already holds the
+    // results, and a settle on that consistent state chooses nothing —
+    // and the toast, drawn asynchronously as the search's answer was,
+    // is waited for after.
+    let _ = until(&window, cx, |view| {
+        view.rows
+            .first()
+            .is_some_and(|row| row.title == "aurora-charts")
+    });
     cx.simulate_keystrokes("down");
     settle(&window, cx);
     cx.simulate_keystrokes("enter");
