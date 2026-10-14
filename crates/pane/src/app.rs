@@ -1874,9 +1874,7 @@ impl LauncherWindow {
             "[diag-ff27] key down: {:?}{} focused={}",
             event.keystroke.modifiers,
             event.keystroke.key,
-            window.focused(cx).map_or(String::new(), |focused| {
-                format!("{:?}", focused.entity_id())
-            })
+            window.focused(cx).is_some()
         );
         // Backspace pops the open designed view's stack, as it pops a view
         // whose search field is empty (the List's, #240): a designed view
