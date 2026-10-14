@@ -10,6 +10,8 @@
 #[path = "../../pane-core/tests/support/service.rs"]
 mod service;
 
+use std::time::Duration;
+
 use gpui::{Entity, TestAppContext, VisualTestContext, prelude::*};
 use pane::LauncherWindow;
 use pane_core::{Launcher, LauncherView, Runtime, Screen, Status};
@@ -98,8 +100,11 @@ fn the_commands_own_search_field_lists_the_service_results(cx: &mut TestAppConte
     // Typing searches the service; its results are the rows, and the
     // field holds the text typed. A designed view answers its searches
     // asynchronously — the answer asks for its own drawing — so the rows
-    // are waited for, not read at once.
+    // are waited for, not read at once. The view throttles what it is
+    // told: the typing's text waits out the throttle's time on the
+    // executor's clock, which this platform's parked runs never move.
     cx.simulate_input("aurora");
+    cx.executor().advance_clock(Duration::from_millis(300));
     let view = until(&window, cx, |view| {
         view.rows
             .first()

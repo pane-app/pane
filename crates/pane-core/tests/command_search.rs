@@ -57,7 +57,10 @@ const TYPESCRIPT: Fixture = Fixture {
     title: "TypeScript search sample",
 };
 
-const ALL: [Fixture; 3] = [RUST, JAVASCRIPT, TYPESCRIPT];
+// The JavaScript and TypeScript fixtures run first this round: the
+// cleared-search family's root is being split between the guests, and
+// which of them fails (or none) names the side it lives on.
+const ALL: [Fixture; 3] = [JAVASCRIPT, TYPESCRIPT, RUST];
 
 const COMMAND: &str = "Package search";
 
