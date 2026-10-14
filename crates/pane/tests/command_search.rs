@@ -101,7 +101,9 @@ fn the_commands_own_search_field_lists_the_service_results(cx: &mut TestAppConte
     // are waited for, not read at once.
     cx.simulate_input("aurora");
     let view = until(&window, cx, |view| {
-        view.rows.first().is_some_and(|row| row.title == "aurora-charts")
+        view.rows
+            .first()
+            .is_some_and(|row| row.title == "aurora-charts")
     });
     assert_eq!(titles(&view), ["aurora-charts", "aurora-cli"]);
     assert_eq!(field_text(&window, cx), "aurora");

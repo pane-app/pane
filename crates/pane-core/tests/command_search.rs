@@ -310,9 +310,7 @@ fn the_service_results_are_listed_and_open_their_details() {
         pane.search("aurora");
         let view = wait_for_view(
             &pane,
-            |view| {
-                view.rows.len() == 2 && view.rows.iter().any(|row| row.title == "aurora-charts")
-            },
+            |view| view.rows.len() == 2 && view.rows.iter().any(|row| row.title == "aurora-charts"),
             "the aurora search's answer never drew",
         );
         assert!(
@@ -1056,11 +1054,7 @@ fn a_crash_of_the_runtime_ends_a_search_with_an_error_not_its_results() {
         block_on(slow);
         let deadline = Instant::now() + Duration::from_secs(5);
         while !matches!(pane.runtime.status(), RuntimeStatus::Restarted { .. }) {
-            assert!(
-                Instant::now() < deadline,
-                "{:?}",
-                pane.runtime.status()
-            );
+            assert!(Instant::now() < deadline, "{:?}", pane.runtime.status());
             std::thread::sleep(Duration::from_millis(10));
         }
         assert!(service.wait_for_abandoned(Duration::from_secs(5)));
