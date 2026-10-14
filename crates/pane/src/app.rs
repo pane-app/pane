@@ -1866,7 +1866,7 @@ impl LauncherWindow {
         // receives, at the window's own entry. fix-forward-28 removes it
         // with the root fix.
         pane_core::diagnostic!(
-            "[diag-ff27] key down: {}{}",
+            "[diag-ff27] key down: {:?}{}",
             event.keystroke.modifiers,
             event.keystroke.key
         );

@@ -454,8 +454,9 @@ fn a_newer_search_stops_the_one_the_service_is_still_answering() {
         assert!(service.wait_for_abandoned(Duration::from_secs(5)));
         assert_eq!(service.abandoned(), ["/search?q=slow"]);
 
-        // Its answer, stopped, never replaces the newer one's.
-        block_on(slow);
+        // Its answer, stopped, never replaces the newer one's: the slow
+        // search's own event was waited out above, and its answer —
+        // stopped by the newer one — never shows.
         assert_eq!(pane.titles(), ["basalt"]);
         assert_eq!(pane.view().status, Status::Idle);
 
