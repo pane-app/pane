@@ -259,7 +259,10 @@ impl View for Search {
                     .is_loading(running)
                     .on_search_text(cx.value_listener(|this: &mut Self, text: &str| {
                         if let Search::Rows {
-                            query, results, failed, ..
+                            query,
+                            results,
+                            failed,
+                            ..
                         } = this
                         {
                             *query = text.to_owned();
