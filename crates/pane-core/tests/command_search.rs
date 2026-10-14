@@ -403,11 +403,18 @@ fn a_cleared_search_lists_the_command_as_it_is_now() {
         );
         assert_eq!(pane.titles(), ["aurora-charts", "aurora-cli"]);
 
-        // ...and clearing the search lists what the command lists now.
+        // ...and clearing the search lists what the command lists now:
+        // the cleared view's own rows, waited for as its answer draws.
         pane.search("");
         let view = wait_for_view(
             &pane,
-            |view| view.rows.iter().any(|row| row.title == "Service address"),
+            |view| {
+                view.rows
+                    .iter()
+                    .map(|row| row.title.as_str())
+                    .collect::<Vec<_>>()
+                    == ["Type to search the package registry", "Service address"]
+            },
             "the cleared search's list never drew",
         );
         assert_eq!(view.status, Status::Idle, "{}", fixture.package);
@@ -532,7 +539,13 @@ fn leaving_the_command_stops_its_search() {
         block_on(slow);
         let _ = wait_for_view(
             &pane,
-            |view| view.rows.iter().any(|row| row.title == "Service address"),
+            |view| {
+                view.rows
+                    .iter()
+                    .map(|row| row.title.as_str())
+                    .collect::<Vec<_>>()
+                    == ["Type to search the package registry", "Service address"]
+            },
             "the cleared search's list never drew",
         );
         assert_eq!(

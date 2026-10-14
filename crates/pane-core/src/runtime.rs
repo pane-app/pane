@@ -2483,7 +2483,12 @@ fn preference_values_of(state: &GuestState, command: Option<String>) -> Result<S
         .map(|data| data.preference_values(&package.identity))
         .unwrap_or_default();
     let declared = crate::preferences::declared(manifest, &command);
-    Ok(crate::preferences::values_json(&declared, &stored))
+    let json = crate::preferences::values_json(&declared, &stored);
+    // [diag-ff25] Diagnostic scaffolding for the pane twin's address read:
+    // the JSON the preference read answers, with the owner it was read
+    // for. fix-forward-26 removes it with the root fix.
+    crate::diagnostic!("[diag-ff25] preferences read: owner={owner} json={json}");
+    Ok(json)
 }
 
 impl launching::Host for GuestState {

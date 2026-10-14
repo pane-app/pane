@@ -191,7 +191,10 @@ fn enter_pressed_at_once_with_typing_runs_the_published_first_row(cx: &mut TestA
     wait_for_rows(&window, cx, &["24"]);
 
     // Typing on and pressing Enter at once: the previous list's row ("24")
-    // is not what the user means — Enter waits for the query's list.
+    // is not what the user means — Enter waits for the query's list. The
+    // view's throttle and the key's hold both wait out their times on the
+    // executor's clock, which this platform's parked runs never move, so
+    // the typing's wait moves it past both.
     cx.simulate_input("+1");
     cx.simulate_keystrokes("enter");
     assert_eq!(
@@ -199,6 +202,7 @@ fn enter_pressed_at_once_with_typing_runs_the_published_first_row(cx: &mut TestA
         Status::Idle,
         "nothing ran while the list is held"
     );
+    cx.executor().advance_clock(Duration::from_millis(350));
 
     // The sample answers within the budget: the published list takes
     // "1+24", and the held Enter runs it — not the previous list's "24".
