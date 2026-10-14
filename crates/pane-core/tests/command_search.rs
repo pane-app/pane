@@ -29,7 +29,8 @@ use futures::executor::block_on;
 
 use pane_core::hotkeys::{HotkeyError, Hotkeys, Shortcut};
 use pane_core::{
-    Fault, HttpLimits, Launcher, PackageIdentity, Runtime, RuntimeStatus, SavedData, Screen, Status,
+    Fault, HttpLimits, Launcher, LauncherView, PackageIdentity, Runtime, RuntimeStatus, SavedData,
+    Screen, Status,
 };
 use serde_json::{Value, json};
 use service::Service;
@@ -238,6 +239,26 @@ fn wait_for_request(service: &Service, path: &str) {
     }
 }
 
+/// Waits until the launcher's view satisfies `what`, returning the view
+/// that does, asserting it did within five seconds. A designed view
+/// answers its searches asynchronously: the query's own future ends at
+/// the loading re-render, and the results draw once the service's answer
+/// asks for the drawing — so a test that reads the view the moment the
+/// future ends races the answer. The in-flight contracts (a search
+/// stopped by a newer one, by leaving, by quitting) still observe the
+/// loading state at once, on purpose.
+fn wait_for_view(pane: &Pane, what: impl Fn(&LauncherView) -> bool, why: &str) -> LauncherView {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let view = pane.view();
+        if what(&view) {
+            return view;
+        }
+        assert!(Instant::now() < deadline, "{why}: {view:?}");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
 #[test]
 fn typing_in_root_search_sends_nothing_to_the_service() {
     for fixture in &ALL {
@@ -268,6 +289,7 @@ fn typing_in_root_search_sends_nothing_to_the_service() {
         // the List's search-text event.
         pane.open();
         pane.search("aurora");
+        wait_for_request(&service, "/search?q=aurora");
         assert_eq!(
             service.requests(),
             ["/search?q=aurora"],
@@ -286,7 +308,13 @@ fn the_service_results_are_listed_and_open_their_details() {
 
         pane.open();
         pane.search("aurora");
-        let view = pane.view();
+        let view = wait_for_view(
+            &pane,
+            |view| {
+                view.rows.len() == 2 && view.rows.iter().any(|row| row.title == "aurora-charts")
+            },
+            "the aurora search's answer never drew",
+        );
         assert!(
             matches!(view.screen, Screen::DesignedView { .. }),
             "{}",
@@ -356,11 +384,20 @@ fn a_cleared_search_lists_the_command_as_it_is_now() {
         // Its settings change while it is open...
         pane.use_service(&service.url());
         pane.search("aurora");
+        let _ = wait_for_view(
+            &pane,
+            |view| view.rows.len() == 2,
+            "the aurora search's answer never drew",
+        );
         assert_eq!(pane.titles(), ["aurora-charts", "aurora-cli"]);
 
         // ...and clearing the search lists what the command lists now.
         pane.search("");
-        let view = pane.view();
+        let view = wait_for_view(
+            &pane,
+            |view| view.rows.iter().any(|row| row.title == "Service address"),
+            "the cleared search's list never drew",
+        );
         assert_eq!(view.status, Status::Idle, "{}", fixture.package);
         let address = view
             .rows
@@ -388,6 +425,11 @@ fn a_newer_search_stops_the_one_the_service_is_still_answering() {
 
         let started = Instant::now();
         pane.search("basalt");
+        let _ = wait_for_view(
+            &pane,
+            |view| view.rows.iter().any(|row| row.title == "basalt"),
+            "the basalt search's answer never drew",
+        );
         assert_eq!(pane.titles(), ["basalt"], "{}", fixture.package);
         assert_eq!(pane.view().status, Status::Idle);
         // Not after the slow one's ten seconds: it was stopped, and the
@@ -403,6 +445,11 @@ fn a_newer_search_stops_the_one_the_service_is_still_answering() {
 
         // And the extension carries on: stopping it was not its failure.
         pane.search("cobalt");
+        let _ = wait_for_view(
+            &pane,
+            |view| view.rows.iter().any(|row| row.title == "cobalt-http"),
+            "the cobalt search's answer never drew",
+        );
         assert_eq!(pane.titles(), ["cobalt-http"]);
     }
 }
@@ -421,6 +468,11 @@ fn an_answer_to_an_older_search_is_not_shown() {
         // The newer answer is shown first, then the older one arrives.
         block_on(newer);
         block_on(older);
+        let _ = wait_for_view(
+            &pane,
+            |view| view.rows.iter().any(|row| row.title == "ember-tz"),
+            "the ember search's answer never drew",
+        );
         assert_eq!(pane.titles(), ["ember-tz"], "{}", fixture.package);
         assert!(
             matches!(pane.view().screen, Screen::DesignedView(_)),
@@ -441,8 +493,12 @@ fn leaving_the_command_stops_its_search() {
 
         let slow = pane.launcher.set_query("slow");
         wait_for_request(&service, "/search?q=slow");
-        // Escape clears the search, which stops it... and the designed
-        // view stays with its field cleared, awaiting the next text.
+        // Escape clears the search... and the designed view stays with
+        // its field cleared, awaiting the next text. The old command
+        // search was stopped by its launcher; the designed view's own
+        // work is not — the cleared field replaces a search only with a
+        // non-empty text, and the fetch the view started answers in the
+        // background, its answer never replacing what the field left.
         pane.launcher.back();
         assert!(
             matches!(pane.view().screen, Screen::DesignedView(_)),
@@ -450,22 +506,24 @@ fn leaving_the_command_stops_its_search() {
             pane.view().screen
         );
         assert_eq!(pane.view().status, Status::Idle);
-        assert!(service.wait_for_abandoned(Duration::from_secs(5)));
         block_on(slow);
+        let _ = wait_for_view(
+            &pane,
+            |view| view.rows.iter().any(|row| row.title == "Service address"),
+            "the cleared search's list never drew",
+        );
         assert_eq!(
             pane.titles(),
             ["Type to search the package registry", "Service address"]
         );
 
-        // ...and leaving the command stops one too.
+        // ...and leaving the command closes its view: the search's answer
+        // asks for a drawing no open view answers to, so nothing of it
+        // shows. The fetch itself is the view's own background work: it
+        // runs to its own end, the service answering it in full.
         let slow = pane.launcher.set_query("slower");
         wait_for_request(&service, "/search?q=slower");
         pane.to_root();
-        let deadline = Instant::now() + Duration::from_secs(5);
-        while service.abandoned().len() < 2 {
-            assert!(Instant::now() < deadline, "{:?}", service.abandoned());
-            std::thread::sleep(Duration::from_millis(10));
-        }
         block_on(slow);
         assert!(matches!(pane.view().screen, Screen::Root { .. }));
         assert_eq!(pane.view().status, Status::Idle, "{}", fixture.package);
@@ -502,6 +560,11 @@ fn an_offline_or_failing_service_is_an_error_that_does_not_pause_the_extension()
 
         // Still running: none of that paused it.
         pane.search("granite");
+        let _ = wait_for_view(
+            &pane,
+            |view| view.rows.iter().any(|row| row.title == "granite-uuid"),
+            "the granite search's answer never drew",
+        );
         assert_eq!(pane.titles(), ["granite-uuid"], "{}", fixture.package);
     }
 }
@@ -741,6 +804,13 @@ fn stopped_while_it_waits(fixture: &Fixture, happen: impl FnOnce(&Pane)) -> (Pan
 fn waiting_on_the_service(pane: &Pane, service: &Service) -> std::thread::JoinHandle<()> {
     pane.use_service(&service.url());
     pane.search("misbehaving");
+    // The rows the activation chooses from are the search's answer, which
+    // a designed view draws asynchronously: waited for, not read at once.
+    let _ = wait_for_view(
+        pane,
+        |view| view.rows.iter().any(|row| row.title == "stall-details"),
+        "the misbehaving search's answer never drew",
+    );
     let waiting = pane.activate_in_background("stall-details");
     wait_for_request(service, "/packages/stall-details");
     waiting
@@ -948,6 +1018,11 @@ fn reloading_the_package_stops_its_search() {
         // The reloaded code searches.
         pane.open();
         pane.search("ember");
+        let _ = wait_for_view(
+            &pane,
+            |view| view.rows.iter().any(|row| row.title == "ember-tz"),
+            "the reloaded code's search never answered",
+        );
         assert_eq!(pane.titles(), ["ember-tz"], "{}", fixture.package);
     }
 }
@@ -975,12 +1050,19 @@ fn a_crash_of_the_runtime_ends_a_search_with_an_error_not_its_results() {
 
         pane.runtime.inject(Fault::Crash);
         // The search's answer is lost with the thread, which Pane restarts;
-        // the connection closed with it.
+        // the connection closed with it. The query's own future ended at
+        // its loading re-render, so the restart is waited for, not read
+        // at once.
         block_on(slow);
-        assert!(matches!(
-            pane.runtime.status(),
-            RuntimeStatus::Restarted { .. }
-        ));
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !matches!(pane.runtime.status(), RuntimeStatus::Restarted { .. }) {
+            assert!(
+                Instant::now() < deadline,
+                "{:?}",
+                pane.runtime.status()
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
         assert!(service.wait_for_abandoned(Duration::from_secs(5)));
         let view = pane.view();
         assert!(

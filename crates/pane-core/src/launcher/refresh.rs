@@ -173,16 +173,9 @@ impl Refresh {
         {
             let mut refreshing = self.lock();
             if refreshing.pushed.len() >= MAX_PUSHED || refreshing.pushed.contains(&view) {
-                // [diag-ff19] Diagnostic scaffolding for the answer's
-                // return: the ask dropped at the queue. fix-forward-20
-                // removes it with the root fix.
-                crate::diagnostic!("[diag-ff19] ask dropped: view={view}");
                 return;
             }
             refreshing.pushed.push(view);
-            // [diag-ff19] Diagnostic scaffolding; removed with the root
-            // fix.
-            crate::diagnostic!("[diag-ff19] ask queued: view={view}");
         }
         self.wake.poke();
     }

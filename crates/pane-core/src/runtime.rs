@@ -2468,16 +2468,7 @@ fn preference_values_of(state: &GuestState, command: Option<String>) -> Result<S
         .map(|data| data.preference_values(&package.identity))
         .unwrap_or_default();
     let declared = crate::preferences::declared(manifest, &command);
-    let json = crate::preferences::values_json(&declared, &stored);
-    // [diag-ff18] Diagnostic scaffolding for the search samples' address
-    // read: the JSON the preference read answers, with the owner and the
-    // stored map it was built from. fix-forward-19 removes it with the
-    // root fix.
-    crate::diagnostic!(
-        "[diag-ff18] preferences read: owner={owner} command={command} \
-         stored={stored:?} json={json}"
-    );
-    Ok(json)
+    Ok(crate::preferences::values_json(&declared, &stored))
 }
 
 impl launching::Host for GuestState {

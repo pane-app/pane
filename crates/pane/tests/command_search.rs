@@ -18,7 +18,7 @@ use service::Service;
 #[path = "support/settle.rs"]
 mod settle;
 
-use settle::{settle, settle_shown};
+use settle::{settle, settle_shown, until};
 
 #[path = "support/packages.rs"]
 mod packages;
@@ -96,9 +96,13 @@ fn the_commands_own_search_field_lists_the_service_results(cx: &mut TestAppConte
     );
 
     // Typing searches the service; its results are the rows, and the
-    // field holds the text typed.
+    // field holds the text typed. A designed view answers its searches
+    // asynchronously — the answer asks for its own drawing — so the rows
+    // are waited for, not read at once.
     cx.simulate_input("aurora");
-    let view = settle(&window, cx);
+    let view = until(&window, cx, |view| {
+        view.rows.first().is_some_and(|row| row.title == "aurora-charts")
+    });
     assert_eq!(titles(&view), ["aurora-charts", "aurora-cli"]);
     assert_eq!(field_text(&window, cx), "aurora");
     assert!(cx.debug_bounds("row-aurora-cli").is_some());
