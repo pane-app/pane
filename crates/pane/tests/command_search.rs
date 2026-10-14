@@ -130,9 +130,7 @@ fn the_commands_own_search_field_lists_the_service_results(cx: &mut TestAppConte
     cx.simulate_keystrokes("down");
     settle(&window, cx);
     cx.simulate_keystrokes("enter");
-    let shown = until(&window, cx, |view| {
-        matches!(view.status, Status::Result(_))
-    });
+    let shown = until(&window, cx, |view| matches!(view.status, Status::Result(_)));
     assert_eq!(
         shown.status,
         Status::Result(
