@@ -239,20 +239,21 @@ impl WasiHttpHooks for Sender {
                 let target = Target::of(&request)?;
                 let permit = network.connect(&owner, target.address())?;
                 let ceilings = Ceilings::new(limits, options);
-                let sending = send(request, target, ceilings, permit, watch);
-                let Some(sent) = unless_aborted(sending, aborted.as_mut()).await else {
-                    return Err(Error::HttpRequestDenied);
-                };
-                let (response, receiving) = sent?;
                 // [diag-ff20] Diagnostic scaffolding for the answer's
                 // return: the response's head arriving at the host, and
                 // the guest's read of its body — the two hops the fetch's
                 // answer crosses. fix-forward-21 removes them with the
                 // root fix.
+                let target_address = target.address();
+                let sending = send(request, target, ceilings, permit, watch);
+                let Some(sent) = unless_aborted(sending, aborted.as_mut()).await else {
+                    return Err(Error::HttpRequestDenied);
+                };
+                let (response, receiving) = sent?;
                 crate::diagnostic!(
                     "[diag-ff20] http answered: {} at {}",
                     response.status(),
-                    target.address()
+                    target_address
                 );
                 let receiving: Receiving = Box::new(async move {
                     let _undo = undo;
