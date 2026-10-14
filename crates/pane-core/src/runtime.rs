@@ -2404,15 +2404,15 @@ macro_rules! data_host {
             fn get(&mut self, key: String) -> Result<Option<String>, String> {
                 let _host = self.host();
                 // [diag-ff26] Diagnostic scaffolding for the pane twin's
-                // address read: the settings kind's own get, with the
-                // owner it was read for and what it answered.
-                // fix-forward-27 removes it with the root fix.
-                let owner = self.owner().map(str::to_owned);
+                // address read: the data kind's own get, with the owner
+                // it was read for and what it answered. fix-forward-27
+                // removes it with the root fix.
+                let owner = self.owner();
                 let answer = self.data()?.get($kind, &key);
                 crate::diagnostic!(
-                    "[diag-ff26] settings get: kind={} key={key} owner={owner:?} \
+                    "[diag-ff26] data get: kind={:?} key={key} owner={owner:?} \
                      answered={answer:?}",
-                    $kind.all()
+                    $kind
                 );
                 answer
             }
