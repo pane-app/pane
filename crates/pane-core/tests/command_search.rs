@@ -348,11 +348,7 @@ fn the_service_results_are_listed_and_open_their_details() {
             if matches!(&shown, Status::Result(_)) {
                 break;
             }
-            assert!(
-                Instant::now() < deadline,
-                "{}: {shown:?}",
-                fixture.package
-            );
+            assert!(Instant::now() < deadline, "{}: {shown:?}", fixture.package);
             std::thread::sleep(Duration::from_millis(10));
         }
         assert_eq!(
@@ -440,8 +436,10 @@ fn a_newer_search_stops_the_one_the_service_is_still_answering() {
         wait_for_request(&service, "/search?q=slow");
         let _ = wait_for_view(
             &pane,
-            |view| matches!(&view.screen, Screen::DesignedView(view)
-                if view.list.as_ref().is_some_and(|list| list.loading.is_some())),
+            |view| {
+                matches!(&view.screen, Screen::DesignedView(view)
+                    if view.list.as_ref().is_some_and(|list| list.loading.is_some()))
+            },
             "the slow search's loading bar never drew",
         );
 
