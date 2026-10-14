@@ -232,10 +232,21 @@ impl View for Search {
                     };
                 }
                 // A blank text: nothing is searched, nothing listed.
+                // The pending search's answer, if it answered, does not
+                // outlive the text it answered for: its answer would be
+                // read below and the results it found listed again, so the
+                // pending goes too — the JavaScript and TypeScript
+                // samples' listeners drop it with their results.
                 if query.trim().is_empty() {
                     *searched = String::new();
                     results.clear();
                     *failed = None;
+                    *pending = Pending::loading(async {
+                        SearchOutcome {
+                            results: Vec::new(),
+                            failed: None,
+                        }
+                    });
                 }
                 // A new text: its search starts here, drawn as the loading
                 // state until it answers.
@@ -266,11 +277,6 @@ impl View for Search {
                         } = this
                         {
                             *query = text.to_owned();
-                            // [diag-ff30] Diagnostic scaffolding for the
-                            // cleared-search root: the listener's own run,
-                            // marked where the host can read it.
-                            // fix-forward-31 removes it with the root fix.
-                            let _ = settings::set("pane-diag-ff30-listener-ran", text);
                             if text.trim().is_empty() {
                                 // A cleared search lists what the command
                                 // lists for none, as the JavaScript and
