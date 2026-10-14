@@ -266,6 +266,12 @@ impl View for Search {
                         } = this
                         {
                             *query = text.to_owned();
+                            // [diag-ff30] Diagnostic scaffolding for the
+                            // cleared-search root: the listener's own run,
+                            // marked where the host can read it.
+                            // fix-forward-31 removes it with the root fix.
+                            let _ =
+                                settings::set("pane-diag-ff30-listener-ran", text);
                             if text.trim().is_empty() {
                                 // A cleared search lists what the command
                                 // lists for none, as the JavaScript and
