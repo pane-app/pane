@@ -705,10 +705,11 @@ impl Launcher {
                 super::designed_list::first_list(&rendered.tree)
                     .map(|(node, list)| {
                         format!(
-                            " loading={} rows={} search={:?}",
+                            " loading={} rows={} search={:?} onSearchText={:?}",
                             list.is_loading,
                             node.children.len(),
-                            list.search_text
+                            list.search_text,
+                            list.on_search_text
                         )
                     })
                     .unwrap_or_default()

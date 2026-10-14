@@ -668,6 +668,11 @@ impl Launcher {
         let callback = *row.actions.first()?;
         let key = row.key.clone();
         state.sent_from = None;
+        // [diag-ff27] Diagnostic scaffolding for the drive that hangs
+        // between its typing and its Enter: the press of a designed
+        // list's row, whose event the item's answer rides. fix-forward-28
+        // removes it with the root fix.
+        crate::diagnostic!("[diag-ff27] press dispatched: callback={callback} key={key:?}");
         Some(Pending::DesignedEvent {
             handler: DesignedHandler::Press,
             callback,
