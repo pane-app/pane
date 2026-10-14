@@ -409,7 +409,10 @@ fn a_cleared_search_lists_the_command_as_it_is_now() {
         let view = wait_for_view(
             &pane,
             |view| {
-                view.rows.iter().map(|row| row.title.as_str()).collect::<Vec<_>>()
+                view.rows
+                    .iter()
+                    .map(|row| row.title.as_str())
+                    .collect::<Vec<_>>()
                     == ["Type to search the package registry", "Service address"]
             },
             "the cleared search's list never drew",
@@ -537,7 +540,10 @@ fn leaving_the_command_stops_its_search() {
         let _ = wait_for_view(
             &pane,
             |view| {
-                view.rows.iter().map(|row| row.title.as_str()).collect::<Vec<_>>()
+                view.rows
+                    .iter()
+                    .map(|row| row.title.as_str())
+                    .collect::<Vec<_>>()
                     == ["Type to search the package registry", "Service address"]
             },
             "the cleared search's list never drew",
