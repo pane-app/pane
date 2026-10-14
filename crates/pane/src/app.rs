@@ -1887,7 +1887,7 @@ impl LauncherWindow {
             if modifiers.shift {
                 id.push_str("shift-");
             }
-            if modifiers.meta {
+            if modifiers.platform {
                 id.push_str("cmd-");
             }
             id.push_str(&event.keystroke.key);
