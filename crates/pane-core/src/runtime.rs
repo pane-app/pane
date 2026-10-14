@@ -4611,15 +4611,15 @@ impl Host {
                 // changes that never re-render: the re-render the event's
                 // answer asks for, and whether its tree answers.
                 // fix-forward-24 removes it with the root fix.
-                crate::diagnostic!("[diag-ff23] re-render asked: view={:?} render={render}", view);
+                crate::diagnostic!(
+                    "[diag-ff23] re-render asked: view={:?} render={render}",
+                    view
+                );
                 let drawn = self
                     .render_designed(view, render, &chain, Why::Event)
                     .await
                     .map(DesignedNext::Tree);
-                crate::diagnostic!(
-                    "[diag-ff23] re-render answered: {}",
-                    drawn.is_ok()
-                );
+                crate::diagnostic!("[diag-ff23] re-render answered: {}", drawn.is_ok());
                 return drawn;
             }
         };

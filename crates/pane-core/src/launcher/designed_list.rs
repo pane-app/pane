@@ -738,9 +738,7 @@ impl Launcher {
                 // clear, whose answer never returns: the send and its
                 // completion. fix-forward-24 removes it with the root
                 // fix.
-                crate::diagnostic!(
-                    "[diag-ff23] clear send: callback={callback} key={key:?}"
-                );
+                crate::diagnostic!("[diag-ff23] clear send: callback={callback} key={key:?}");
                 let sent = launcher.send_designed_seen(
                     DesignedHandler::Input,
                     callback,
