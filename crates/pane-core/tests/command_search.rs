@@ -422,11 +422,10 @@ fn an_answer_to_an_older_search_is_not_shown() {
         block_on(newer);
         block_on(older);
         assert_eq!(pane.titles(), ["ember-tz"], "{}", fixture.package);
-        assert_eq!(
-            pane.view().screen,
-            Screen::CommandSearch {
-                query: "ember".into()
-            }
+        assert!(
+            matches!(pane.view().screen, Screen::DesignedView(_)),
+            "{:?}",
+            pane.view().screen
         );
     }
 }
@@ -442,13 +441,13 @@ fn leaving_the_command_stops_its_search() {
 
         let slow = pane.launcher.set_query("slow");
         wait_for_request(&service, "/search?q=slow");
-        // Escape clears the search, which stops it...
+        // Escape clears the search, which stops it... and the designed
+        // view stays with its field cleared, awaiting the next text.
         pane.launcher.back();
-        assert_eq!(
-            pane.view().screen,
-            Screen::CommandSearch {
-                query: String::new()
-            }
+        assert!(
+            matches!(pane.view().screen, Screen::DesignedView(_)),
+            "{:?}",
+            pane.view().screen
         );
         assert_eq!(pane.view().status, Status::Idle);
         assert!(service.wait_for_abandoned(Duration::from_secs(5)));
@@ -718,6 +717,9 @@ fn stopped_while_it_waits(fixture: &Fixture, happen: impl FnOnce(&Pane)) -> (Pan
     let service = Service::start();
     let pane = Pane::with(fixture);
     pane.use_service(&service.url());
+    // The search happens in the open command's own field, as every
+    // designed search does: the field exists only once the view is open.
+    pane.open();
     let slow = pane.launcher.set_query("slow");
     wait_for_request(&service, "/search?q=slow");
 
@@ -913,7 +915,6 @@ fn a_generation_s_undo_list_holds_every_subsystem_and_is_empty_after_its_end() {
         "schedule",
         "service",
         "hotkey",
-        "command search",
         "web request",
     ] {
         assert!(listed.contains(&what), "no {what} in {listed:?}");
@@ -982,11 +983,10 @@ fn a_crash_of_the_runtime_ends_a_search_with_an_error_not_its_results() {
         ));
         assert!(service.wait_for_abandoned(Duration::from_secs(5)));
         let view = pane.view();
-        assert_eq!(
-            view.screen,
-            Screen::CommandSearch {
-                query: "slow".into()
-            }
+        assert!(
+            matches!(view.screen, Screen::DesignedView(_)),
+            "{:?}",
+            view.screen
         );
         assert_eq!(view.rows, Vec::new(), "{}", fixture.package);
         let Status::Error(message) = view.status else {

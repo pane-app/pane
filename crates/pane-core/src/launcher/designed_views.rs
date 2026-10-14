@@ -697,9 +697,26 @@ impl Launcher {
     ) {
         // [diag-ff19] Diagnostic scaffolding for the answer's return: what
         // the drawing's answer carries — a tree, a navigation, or the
-        // error. fix-forward-20 removes it with the root fix.
+        // error — and, for a tree, its own list: whether it is still
+        // loading, how many rows it holds, and the search text it names.
+        // fix-forward-20 removes it with the root fix.
+        let list_state = match &result {
+            Ok(DesignedNext::Tree(rendered)) | Ok(DesignedNext::Pushed(_, rendered)) => {
+                super::designed_list::first_list(&rendered.tree)
+                    .map(|(node, list)| {
+                        format!(
+                            " loading={} rows={} search={:?}",
+                            list.is_loading,
+                            node.children.len(),
+                            list.search_text
+                        )
+                    })
+                    .unwrap_or_default()
+            }
+            _ => String::new(),
+        };
         crate::diagnostic!(
-            "[diag-ff19] answer shown: view={:?} number={} {}",
+            "[diag-ff19] answer shown: view={:?} number={} {}{}",
             view,
             number,
             match &result {
@@ -707,8 +724,9 @@ impl Launcher {
                 Ok(DesignedNext::Pushed(..)) => "pushed",
                 Ok(DesignedNext::Replaced(..)) => "replaced",
                 Ok(DesignedNext::Popped { .. }) => "popped",
-                Err(error) => "error",
-            }
+                Err(_error) => "error",
+            },
+            list_state
         );
         // What the answer opened, when it pushed or replaced a view in:
         // stacked only if the answer is applied.
