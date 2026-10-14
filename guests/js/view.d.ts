@@ -370,8 +370,14 @@ export interface ItemActionProps {
 /** A List item's properties. */
 export interface ItemProps extends NodeProps {
   /** The item's key: its stable identity, which the selection and the
-   * detail pane's render context name. */
+   * detail pane's render context name. The JSX transform takes the
+   * `key` attribute as the element's own identity, so a TypeScript
+   * item's key is named through `id`, which the node builder also
+   * reads as its key. */
   key?: string;
+  /** The item's key as the JSX transform cannot name it: the `key`
+   * attribute belongs to the element, and this reaches the node. */
+  id?: string;
   title?: string;
   subtitle?: string;
   icon?: object;

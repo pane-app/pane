@@ -163,6 +163,7 @@ function Packages() {
       {results.map((pkg) => (
         <List.Item
           key={`package:${pkg.name}`}
+          id={`package:${pkg.name}`}
           title={pkg.name}
           subtitle={pkg.summary}
           onClick={async () => {
