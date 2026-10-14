@@ -2393,18 +2393,17 @@ macro_rules! data_host {
         impl $interface::Host for GuestState {
             fn get(&mut self, key: String) -> Result<Option<String>, String> {
                 let _host = self.host();
-                let answer = self.data()?.get($kind, &key);
-                // [diag-ff30] Diagnostic scaffolding for the
-                // cleared-search root: the settings get that reads the
-                // sample listener's mark, with what it answered.
-                // fix-forward-31 removes it with the root fix.
-                if key == "pane-diag-ff30-listener-ran" {
-                    crate::diagnostic!("[diag-ff30] mark read: {answer:?}");
-                }
-                answer
+                self.data()?.get($kind, &key)
             }
 
             async fn set(&mut self, key: String, value: String) -> Result<(), String> {
+                // [diag-ff30] Diagnostic scaffolding for the
+                // cleared-search root: the sample listener's mark, seen
+                // by the host the moment the listener writes it.
+                // fix-forward-31 removes it with the root fix.
+                if key == "pane-diag-ff30-listener-ran" {
+                    crate::diagnostic!("[diag-ff30] mark set: {value:?}");
+                }
                 let data = self.data()?.clone();
                 self.hosted(async move { data.set($kind, &key, &value).await })
                     .await

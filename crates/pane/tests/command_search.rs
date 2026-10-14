@@ -10,7 +10,7 @@
 #[path = "../../pane-core/tests/support/service.rs"]
 mod service;
 
-use std::{path::Path, sync::Arc, time::Duration};
+use std::time::Duration;
 
 use gpui::{Entity, TestAppContext, VisualTestContext, prelude::*};
 use pane::LauncherWindow;
@@ -55,18 +55,6 @@ fn use_service(window: &Entity<LauncherWindow>, cx: &mut VisualTestContext, addr
     settle(window, cx);
 }
 
-/// A development stub for the windows these tests open: the packages are
-/// installed, not developed, so nothing ever builds — the channel is what
-/// the windows need, to redraw the launcher's background changes as the
-/// real app's window does.
-struct NoBuild;
-
-impl pane_core::develop::Builder for NoBuild {
-    fn build_for(&self, _folder: &Path) -> Result<Arc<dyn pane_core::develop::Build>, String> {
-        Err("the tests build nothing".into())
-    }
-}
-
 #[gpui::test]
 fn the_commands_own_search_field_lists_the_service_results(cx: &mut TestAppContext) {
     let service = Service::start();
@@ -80,7 +68,7 @@ fn the_commands_own_search_field_lists_the_service_results(cx: &mut TestAppConte
     // app's does: a designed search's answer lands on the refresh thread,
     // and only the changes channel tells the window to redraw it.
     let (sender, changes) = pane_core::changes::channel();
-    let launcher = launcher.with_development(Arc::new(NoBuild), sender);
+    let launcher = launcher.with_changes(sender);
     let (window, cx) = cx.add_window_view(|window, cx| {
         let mut launcher = LauncherWindow::new(launcher, window, cx);
         launcher.follow_changes(changes, window, cx);
@@ -194,7 +182,7 @@ fn backspace_in_the_empty_search_field_pops_the_view(cx: &mut TestAppContext) {
     // app's does: a designed search's answer lands on the refresh thread,
     // and only the changes channel tells the window to redraw it.
     let (sender, changes) = pane_core::changes::channel();
-    let launcher = launcher.with_development(Arc::new(NoBuild), sender);
+    let launcher = launcher.with_changes(sender);
     let (window, cx) = cx.add_window_view(|window, cx| {
         let mut launcher = LauncherWindow::new(launcher, window, cx);
         launcher.follow_changes(changes, window, cx);
