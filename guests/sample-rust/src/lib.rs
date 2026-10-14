@@ -144,9 +144,12 @@ impl Greeting {
         // move every field's path — losing the text, the caret and the
         // focus the user left in them (#238's rule).
         if !answered.is_empty() {
+            // The answer in the theme's success colour: what the user sees
+            // of the submission's own answer, over the fields that made it.
             view = view.child(
                 pane_extension::view::text(answered.as_str())
                     .style(pane_extension::view::TextStyle::Title)
+                    .color(pane_extension::Tone::Success)
                     .into_node(),
             );
         }

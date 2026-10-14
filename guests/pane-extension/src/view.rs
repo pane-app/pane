@@ -4373,22 +4373,25 @@ fn write_node(tree: &mut String, node: &Node) -> Result<(), String> {
             )?;
         }
         NodeKind::Spacer => {}
-        NodeKind::Text(text) => match &text.content {
-            TextContent::Plain(content) => {
-                tree.push_str(",\"text\":");
-                string(tree, content)?;
-            }
-            TextContent::Spans(spans) => {
-                tree.push_str(",\"spans\":[");
-                for (index, span) in spans.iter().enumerate() {
-                    if index > 0 {
-                        tree.push(',');
-                    }
-                    write_span(tree, span)?;
+        NodeKind::Text(text) => {
+            match &text.content {
+                TextContent::Plain(content) => {
+                    tree.push_str(",\"text\":");
+                    string(tree, content)?;
                 }
-                tree.push(']');
+                TextContent::Spans(spans) => {
+                    tree.push_str(",\"spans\":[");
+                    for (index, span) in spans.iter().enumerate() {
+                        if index > 0 {
+                            tree.push(',');
+                        }
+                        write_span(tree, span)?;
+                    }
+                    tree.push(']');
+                }
             }
-        },
+            write_text_props(tree, text)?;
+        }
         NodeKind::Button {
             label,
             tone,
@@ -5427,6 +5430,34 @@ fn write_draw(tree: &mut String, op: &Draw) -> Result<(), String> {
 }
 
 /// Writes `span` as the tree's JSON.
+/// Writes the text node `text`'s drawing properties: the style, level,
+/// colour, size, weight and truncation its builder named, as a span's are
+/// written (the tree's text node carries them too).
+fn write_text_props(tree: &mut String, text: &Text) -> Result<(), String> {
+    if let Some(style) = text.style {
+        tree.push_str(",\"style\":");
+        string(tree, text_style_name(style))?;
+    }
+    if let Some(level) = text.level {
+        tree.push_str(",\"level\":");
+        string(tree, text_level_name(level))?;
+    }
+    if let Some(color) = &text.color {
+        tree.push_str(",\"color\":");
+        write_paint(tree, color)?;
+    }
+    if let Some(size) = text.size {
+        let _ = write!(tree, ",\"size\":{size}");
+    }
+    if let Some(weight) = text.weight {
+        let _ = write!(tree, ",\"weight\":{weight}");
+    }
+    if text.truncate {
+        tree.push_str(",\"truncate\":true");
+    }
+    Ok(())
+}
+
 fn write_span(tree: &mut String, span: &Span) -> Result<(), String> {
     tree.push_str("{\"text\":");
     string(tree, &span.text)?;

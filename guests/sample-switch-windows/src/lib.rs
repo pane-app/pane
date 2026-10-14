@@ -125,10 +125,7 @@ impl Command for SwitchWindowsSample {
     /// The view the command opens: the windows Alt+Tab would show, listed
     /// anew each render. Without this the trait's default refuses the
     /// open, and the command's screen never shows.
-    async fn open_designed_view(
-        command: String,
-        _launch: LaunchRecord,
-    ) -> Result<Windows, String> {
+    async fn open_designed_view(command: String, _launch: LaunchRecord) -> Result<Windows, String> {
         if command == SWITCH {
             Ok(Windows)
         } else {

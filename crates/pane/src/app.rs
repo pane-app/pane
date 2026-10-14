@@ -364,8 +364,23 @@ impl LauncherWindow {
         // keyboard back, as the Settings window does for its sidebar
         // when a control that had it is gone.
         cx.on_focus_lost(window, |this, window, cx| {
+            // The keyboard can be left nowhere while a search field is on
+            // screen: the publication's re-render drops the node that held
+            // it, and a window whose focus resolves to no node matches no
+            // binding at all — every key falls through. The field takes
+            // the keyboard back, as the Settings window does for its
+            // sidebar when a control that had it is gone. A designed view
+            // whose tree asked for the keyboard gets its asked node back
+            // the same way: its re-renders can drop the focus just as the
+            // publication's did.
             if this.launcher.screen().search_field().is_some() {
                 this.query.focus(window, cx);
+            } else if let Some(asked) = this
+                .designed
+                .as_ref()
+                .and_then(|controls| controls.focus_ask.clone())
+            {
+                window.focus(&asked, cx);
             }
         })
         .detach();
@@ -922,12 +937,20 @@ impl LauncherWindow {
     }
 
     pub(crate) fn confirm(&mut self, _: &Confirm, window: &mut Window, cx: &mut Context<Self>) {
+        // [diag-ff20] Diagnostic scaffolding for the first-drive failure
+        // that leaves no trail: the Enter's arrival at the confirm, and
+        // the gate that takes it. fix-forward-21 removes it with the root
+        // fix.
+        pane_core::diagnostic!("[diag-ff20] confirm entered");
         // Enter ends the walk through the recent queries (#206), whatever
         // it runs — a held key included.
         self.recall = None;
         // The open Actions panel takes Enter from the key press itself, once
         // per press ([`LauncherWindow::panel_keys`]).
         if self.actions.is_some() {
+            // [diag-ff20] Diagnostic scaffolding; removed with the root
+            // fix.
+            pane_core::diagnostic!("[diag-ff20] confirm gate: actions panel");
             cx.propagate();
             return;
         }
@@ -939,8 +962,13 @@ impl LauncherWindow {
         if held_keys::keystroke_of(KeyboardAction::InvokeSelectedAction, cx)
             .is_some_and(|key| self.hold_key(key, window, cx))
         {
+            // [diag-ff20] Diagnostic scaffolding; removed with the root
+            // fix.
+            pane_core::diagnostic!("[diag-ff20] confirm gate: key held");
             return;
         }
+        // [diag-ff20] Diagnostic scaffolding; removed with the root fix.
+        pane_core::diagnostic!("[diag-ff20] confirm passed");
         // An item of a command's list (or a row of root search with actions
         // of its own, #150) runs its primary action once per press: the key
         // is handed on to [`LauncherWindow::item_action_keys`], which sees
@@ -961,6 +989,10 @@ impl LauncherWindow {
     /// opens the Actions panel at the submenu an item's primary action
     /// opens (#140), or activates the row.
     fn invoke_selected(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // [diag-ff20] Diagnostic scaffolding for the first-drive failure
+        // that leaves no trail: the invoke's arrival. fix-forward-21
+        // removes it with the root fix.
+        pane_core::diagnostic!("[diag-ff20] invoke selected");
         // The Logs screen's lines are its own: the selected one is copied.
         if self.extension_log_open() {
             self.copy_log_line(cx);

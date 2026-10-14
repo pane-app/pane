@@ -50,6 +50,10 @@ pub(crate) struct DesignedControls {
     /// Pane form's identity as one (#241) — either way one id per screen
     /// the controls follow.
     pub(super) view: ViewId,
+    /// The handle the tree last asked the keyboard for, when it asked:
+    /// where the window returns it when the focus is lost, as a search
+    /// field takes it back on the screens that have one.
+    pub(crate) focus_ask: Option<gpui::FocusHandle>,
     /// The keyed state of every stateful and focusable node the last tree
     /// named, by its path.
     pub(super) state: HashMap<String, KeyedState>,
@@ -76,6 +80,7 @@ impl DesignedControls {
         cx: &mut Context<LauncherWindow>,
     ) -> (DesignedControls, bool) {
         let mut controls = DesignedControls {
+            focus_ask: None,
             view,
             state: HashMap::new(),
             sent: HashMap::new(),
@@ -90,6 +95,7 @@ impl DesignedControls {
                 .get(&first)
                 .and_then(|state| state.focus_handle())
         {
+            controls.focus_ask = Some(handle.clone());
             window.focus(&handle, cx);
         }
         (controls, asked)
@@ -313,12 +319,16 @@ impl DesignedControls {
         // The focus ask: honoured when it is new — the tree the user saw
         // did not name it — so an open's ask focuses its node and a later
         // ask moves the focus there again, while an unchanged one leaves
-        // the focus wherever the user moved it.
+        // the focus wherever the user moved it. The handle the ask
+        // honours is kept: it is where the window returns the keyboard
+        // when the focus is lost, as a search field takes it back on the
+        // screens that have one.
         let asked = node.focus;
         if asked
             && !self.state.get(path).is_some_and(|entry| entry.asked)
             && let Some(handle) = self.state.get(path).and_then(|entry| entry.focus_handle())
         {
+            self.focus_ask = Some(handle.clone());
             window.focus(&handle, cx);
             walk.asked = true;
         }
