@@ -1288,19 +1288,30 @@ impl Runtime {
         launch: &LaunchRecord,
         data: Option<PackageData>,
     ) -> Result<Answer, CallError> {
+        // [diag-ff28] Diagnostic scaffolding for the first-drive and
+        // re-drive failures: the item action the activation falls through
+        // to, and whether its answer lands. fix-forward-29 removes it
+        // with the root fix.
+        crate::diagnostic!(
+            "[diag-ff28] item run: id={item_id} command={command:?} component={}",
+            component.display()
+        );
         let (reply, response) = oneshot::channel();
-        self.call(
-            Request::RunItem {
-                component: component.to_path_buf(),
-                command: command.map(str::to_owned),
-                item_id: item_id.to_owned(),
-                launch: launch.clone(),
-                data,
-                reply,
-            },
-            response,
-        )
-        .await
+        let answer = self
+            .call(
+                Request::RunItem {
+                    component: component.to_path_buf(),
+                    command: command.map(str::to_owned),
+                    item_id: item_id.to_owned(),
+                    launch: launch.clone(),
+                    data,
+                    reply,
+                },
+                response,
+            )
+            .await;
+        crate::diagnostic!("[diag-ff28] item answered: {}", answer.is_ok());
+        answer
     }
 
     /// Checks, without running any guest code, that `component` is a

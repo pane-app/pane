@@ -122,10 +122,17 @@ fn the_commands_own_search_field_lists_the_service_results(cx: &mut TestAppConte
         Some("/search?q=aurora")
     );
 
-    // Enter shows the selected package's details in a toast.
-    cx.simulate_keystrokes("down enter");
+    // Down moves the selection to the second row, and Enter shows the
+    // selected package's details in a toast: the press's answer draws
+    // asynchronously, as the search's did, so the toast is waited for —
+    // and the selection's move settles before the press, whose row it
+    // chooses.
+    cx.simulate_keystrokes("down");
+    settle(&window, cx);
+    cx.simulate_keystrokes("enter");
+    let shown = until(&window, cx, |view| matches!(view.status, Status::Result(_)));
     assert_eq!(
-        settle_shown(&window, cx),
+        shown.status,
         Status::Result(
             "aurora-cli 0.9.3 (Apache-2.0): Command-line parsing with subcommands".into()
         )
