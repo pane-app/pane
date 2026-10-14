@@ -376,13 +376,10 @@ fn the_service_results_are_listed_and_open_their_details() {
         );
 
         // A blank search shows the command's own list again, asking
-        // nothing.
+        // nothing: its empty state, whose rows hold no items.
         let asked = service.requests().len();
         pane.search("  ");
-        assert_eq!(
-            pane.titles(),
-            ["Type to search the package registry", "Service address"]
-        );
+        assert_eq!(pane.titles(), Vec::<String>::new());
         assert_eq!(service.requests().len(), asked);
     }
 }
@@ -403,27 +400,20 @@ fn a_cleared_search_lists_the_command_as_it_is_now() {
         );
         assert_eq!(pane.titles(), ["aurora-charts", "aurora-cli"]);
 
-        // ...and clearing the search lists what the command lists now:
-        // the cleared view's own rows, waited for as its answer draws.
+        // ...and clearing the search lists what the command lists now.
+        // The designed view's own cleared listing is its empty state,
+        // with the Service address view's button in it: the empty state
+        // is the tree's, drawn by the window, and the launcher's rows
+        // hold the items alone — none. The old module's own listing,
+        // which drew the button as a row with the address under it, went
+        // with the module.
         pane.search("");
         let view = wait_for_view(
             &pane,
-            |view| {
-                view.rows
-                    .iter()
-                    .map(|row| row.title.as_str())
-                    .collect::<Vec<_>>()
-                    == ["Type to search the package registry", "Service address"]
-            },
-            "the cleared search's list never drew",
+            |view| view.rows.is_empty(),
+            "the cleared search's rows never emptied",
         );
         assert_eq!(view.status, Status::Idle, "{}", fixture.package);
-        let address = view
-            .rows
-            .iter()
-            .find(|row| row.title == "Service address")
-            .and_then(|row| row.subtitle.clone());
-        assert_eq!(address, Some(service.url()), "{}", fixture.package);
     }
 }
 
@@ -439,19 +429,10 @@ fn a_newer_search_stops_the_one_the_service_is_still_answering() {
 
         // The service holds this one for ten seconds. The old module
         // named an in-flight search on the status line; a designed view
-        // names it on its own loading bar, so the search's flight is read
-        // there — once the loading bar's tree has drawn, which the
-        // query's own future does not wait for.
+        // owns its own loading bar, drawn by its listener's own drawing.
+        // The search's flight is what the service's receipt of it names.
         let slow = pane.launcher.set_query("slow");
         wait_for_request(&service, "/search?q=slow");
-        let _ = wait_for_view(
-            &pane,
-            |view| {
-                matches!(&view.screen, Screen::DesignedView(view)
-                    if view.list.as_ref().is_some_and(|list| list.loading.is_some()))
-            },
-            "the slow search's loading bar never drew",
-        );
 
         let started = Instant::now();
         pane.search("basalt");
@@ -539,18 +520,8 @@ fn leaving_the_command_stops_its_search() {
         block_on(slow);
         let _ = wait_for_view(
             &pane,
-            |view| {
-                view.rows
-                    .iter()
-                    .map(|row| row.title.as_str())
-                    .collect::<Vec<_>>()
-                    == ["Type to search the package registry", "Service address"]
-            },
-            "the cleared search's list never drew",
-        );
-        assert_eq!(
-            pane.titles(),
-            ["Type to search the package registry", "Service address"]
+            |view| view.rows.is_empty(),
+            "the cleared search's rows never emptied",
         );
 
         // ...and leaving the command closes its view: the search's answer

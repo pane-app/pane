@@ -1167,18 +1167,28 @@ impl Runtime {
         launch: &LaunchRecord,
         data: Option<PackageData>,
     ) -> Result<Answer, CallError> {
+        // [diag-ff26] Diagnostic scaffolding for the first-drive failure's
+        // named layer: the command run the activation makes, and whether
+        // its answer lands. fix-forward-27 removes it with the root fix.
+        crate::diagnostic!(
+            "[diag-ff26] action run: command={command} component={}",
+            component.display()
+        );
         let (reply, response) = oneshot::channel();
-        self.call(
-            Request::Run {
-                component: component.to_path_buf(),
-                command: command.to_owned(),
-                launch: launch.clone(),
-                data,
-                reply,
-            },
-            response,
-        )
-        .await
+        let answer = self
+            .call(
+                Request::Run {
+                    component: component.to_path_buf(),
+                    command: command.to_owned(),
+                    launch: launch.clone(),
+                    data,
+                    reply,
+                },
+                response,
+            )
+            .await;
+        crate::diagnostic!("[diag-ff26] action answered: {}", answer.is_ok());
+        answer
     }
 
     /// Has the command in `component` handle the user's choice of
@@ -2393,7 +2403,18 @@ macro_rules! data_host {
         impl $interface::Host for GuestState {
             fn get(&mut self, key: String) -> Result<Option<String>, String> {
                 let _host = self.host();
-                self.data()?.get($kind, &key)
+                // [diag-ff26] Diagnostic scaffolding for the pane twin's
+                // address read: the settings kind's own get, with the
+                // owner it was read for and what it answered.
+                // fix-forward-27 removes it with the root fix.
+                let owner = self.owner().map(str::to_owned);
+                let answer = self.data()?.get($kind, &key);
+                crate::diagnostic!(
+                    "[diag-ff26] settings get: kind={} key={key} owner={owner:?} \
+                     answered={answer:?}",
+                    $kind.all()
+                );
+                answer
             }
 
             async fn set(&mut self, key: String, value: String) -> Result<(), String> {
