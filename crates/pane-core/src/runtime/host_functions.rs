@@ -161,6 +161,10 @@ impl window_host::Host for GuestState {
 impl view_host::Host for GuestState {
     fn ask_to_render(&mut self, view: u64) {
         let _host = self.host();
+        // [diag-ff23] Diagnostic scaffolding for the query changes that
+        // never re-render: the redraw ask's arrival. fix-forward-24
+        // removes it with the root fix.
+        crate::diagnostic!("[diag-ff23] ask arrived: view={view}");
         if let Some(asks) = lock(&self.view_asks).clone() {
             asks(view);
         }

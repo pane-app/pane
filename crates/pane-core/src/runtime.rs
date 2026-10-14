@@ -4607,10 +4607,20 @@ impl Host {
                         None => return Err(CallError::ViewClosed),
                     }
                 };
-                return self
+                // [diag-ff23] Diagnostic scaffolding for the query
+                // changes that never re-render: the re-render the event's
+                // answer asks for, and whether its tree answers.
+                // fix-forward-24 removes it with the root fix.
+                crate::diagnostic!(
+                    "[diag-ff23] re-render asked: view={:?} render={render}",
+                    view
+                );
+                let drawn = self
                     .render_designed(view, render, &chain, Why::Event)
                     .await
                     .map(DesignedNext::Tree);
+                crate::diagnostic!("[diag-ff23] re-render answered: {}", drawn.is_ok());
+                return drawn;
             }
         };
         // The depth bound: a push that would go beyond it is refused as
