@@ -258,8 +258,18 @@ impl View for Search {
                     .search_placeholder("Search the registry…")
                     .is_loading(running)
                     .on_search_text(cx.value_listener(|this: &mut Self, text: &str| {
-                        if let Search::Rows { query, .. } = this {
+                        if let Search::Rows {
+                            query, results, failed, ..
+                        } = this
+                        {
                             *query = text.to_owned();
+                            if text.trim().is_empty() {
+                                // A cleared search lists what the command
+                                // lists for none, as the JavaScript and
+                                // TypeScript samples' listeners do.
+                                results.clear();
+                                *failed = None;
+                            }
                         }
                     }));
                 for result in results.iter() {
