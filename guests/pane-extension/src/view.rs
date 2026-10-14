@@ -4021,9 +4021,7 @@ impl<V: View> GuestView for Open<V> {
                 .iter_mut()
                 .find(|(number, _)| *number == render)
                 .and_then(|(_, listeners)| {
-                    let index = listeners
-                        .iter()
-                        .position(|(named, _)| *named == callback)?;
+                    let index = listeners.iter().position(|(named, _)| *named == callback)?;
                     Some(listeners.swap_remove(index).1)
                 })
         };
