@@ -1861,6 +1861,15 @@ impl LauncherWindow {
     /// hotkey. Keys the launcher binds (Enter, Escape, arrows, Tab) do not
     /// reach here; pressing a modifier alone is not a key press.
     fn key_down(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        // [diag-ff27] Diagnostic scaffolding for the drive that hangs
+        // between its typing and its Enter: every key the window
+        // receives, at the window's own entry. fix-forward-28 removes it
+        // with the root fix.
+        pane_core::diagnostic!(
+            "[diag-ff27] key down: {}{}",
+            event.keystroke.modifiers,
+            event.keystroke.key
+        );
         // Backspace pops the open designed view's stack, as it pops a view
         // whose search field is empty (the List's, #240): a designed view
         // shows no search field of its own yet, so Backspace is otherwise

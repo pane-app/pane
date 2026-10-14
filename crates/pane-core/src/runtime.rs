@@ -1167,28 +1167,18 @@ impl Runtime {
         launch: &LaunchRecord,
         data: Option<PackageData>,
     ) -> Result<Answer, CallError> {
-        // [diag-ff26] Diagnostic scaffolding for the first-drive failure's
-        // named layer: the command run the activation makes, and whether
-        // its answer lands. fix-forward-27 removes it with the root fix.
-        crate::diagnostic!(
-            "[diag-ff26] action run: command={command} component={}",
-            component.display()
-        );
         let (reply, response) = oneshot::channel();
-        let answer = self
-            .call(
-                Request::Run {
-                    component: component.to_path_buf(),
-                    command: command.to_owned(),
-                    launch: launch.clone(),
-                    data,
-                    reply,
-                },
-                response,
-            )
-            .await;
-        crate::diagnostic!("[diag-ff26] action answered: {}", answer.is_ok());
-        answer
+        self.call(
+            Request::Run {
+                component: component.to_path_buf(),
+                command: command.to_owned(),
+                launch: launch.clone(),
+                data,
+                reply,
+            },
+            response,
+        )
+        .await
     }
 
     /// Has the command in `component` handle the user's choice of
@@ -2403,18 +2393,7 @@ macro_rules! data_host {
         impl $interface::Host for GuestState {
             fn get(&mut self, key: String) -> Result<Option<String>, String> {
                 let _host = self.host();
-                // [diag-ff26] Diagnostic scaffolding for the pane twin's
-                // address read: the data kind's own get, with the owner
-                // it was read for and what it answered. fix-forward-27
-                // removes it with the root fix.
-                let owner = self.owner();
-                let answer = self.data()?.get($kind, &key);
-                crate::diagnostic!(
-                    "[diag-ff26] data get: kind={:?} key={key} owner={owner:?} \
-                     answered={answer:?}",
-                    $kind
-                );
-                answer
+                self.data()?.get($kind, &key)
             }
 
             async fn set(&mut self, key: String, value: String) -> Result<(), String> {

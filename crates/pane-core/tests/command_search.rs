@@ -431,8 +431,13 @@ fn a_newer_search_stops_the_one_the_service_is_still_answering() {
         // named an in-flight search on the status line; a designed view
         // owns its own loading bar, drawn by its listener's own drawing.
         // The search's flight is what the service's receipt of it names.
+        // The slow search's own event is waited out before the newer one
+        // is typed: events are handled one at a time, and the newer
+        // search's not waiting for the older one's ANSWER is the
+        // contract the timing assert below checks — not its event.
         let slow = pane.launcher.set_query("slow");
         wait_for_request(&service, "/search?q=slow");
+        block_on(slow);
 
         let started = Instant::now();
         pane.search("basalt");

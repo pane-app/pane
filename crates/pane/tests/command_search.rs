@@ -73,6 +73,10 @@ fn the_commands_own_search_field_lists_the_service_results(cx: &mut TestAppConte
     cx.simulate_keystrokes("enter");
     settle(&window, cx);
 
+    // The service this search reaches, as the backspace test's is: the
+    // install is settled before the address is written.
+    use_service(&window, cx, &service.url());
+
     // Root search finds the command by its title, and asks no service.
     cx.simulate_input("package search");
     let view = settle(&window, cx);
