@@ -1870,11 +1870,42 @@ impl LauncherWindow {
         // between its typing and its Enter: every key the window
         // receives, at the window's own entry. fix-forward-28 removes it
         // with the root fix.
+        // [diag-ff27] Diagnostic scaffolding for the drive whose Enter
+        // never dispatches: the key's arrival, whether the window holds
+        // focus, and what Pane's own key bindings say the key does —
+        // `None` names a key no binding of Pane's takes. fix-forward-32
+        // removes it with the root fix.
+        let says = {
+            let modifiers = &event.keystroke.modifiers;
+            let mut id = String::new();
+            if modifiers.control {
+                id.push_str("ctrl-");
+            }
+            if modifiers.alt {
+                id.push_str("alt-");
+            }
+            if modifiers.shift {
+                id.push_str("shift-");
+            }
+            if modifiers.platform {
+                id.push_str("cmd-");
+            }
+            id.push_str(&event.keystroke.key);
+            let binding = pane_core::keyboard::Binding::parse(&id).ok();
+            let keys = pane_core::PaneKeys::new(
+                &crate::settings::keyboard_of(cx),
+                crate::settings::navigation_of(cx),
+            );
+            binding
+                .as_ref()
+                .and_then(|binding| keys.taken(binding).map(str::to_owned))
+        };
         pane_core::diagnostic!(
-            "[diag-ff27] key down: {:?}{} focused={}",
+            "[diag-ff27] key down: {:?}{} focused={} says={:?}",
             event.keystroke.modifiers,
             event.keystroke.key,
-            window.focused(cx).is_some()
+            window.focused(cx).is_some(),
+            says
         );
         // Backspace pops the open designed view's stack, as it pops a view
         // whose search field is empty (the List's, #240): a designed view
