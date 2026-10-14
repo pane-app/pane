@@ -1896,7 +1896,9 @@ impl LauncherWindow {
                 &crate::settings::keyboard_of(cx),
                 crate::settings::navigation_of(cx),
             );
-            binding.as_ref().and_then(|binding| keys.taken(binding))
+            binding
+                .as_ref()
+                .and_then(|binding| keys.taken(binding).map(str::to_owned))
         };
         pane_core::diagnostic!(
             "[diag-ff27] key down: {:?}{} focused={} says={:?}",
