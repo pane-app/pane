@@ -64,14 +64,8 @@ fn the_commands_own_search_field_lists_the_service_results(cx: &mut TestAppConte
     cx.update(pane::bind_keys);
     let launcher =
         Launcher::with_packages(Runtime::start(), vec![], data.path().join("extensions"));
-    // The window follows the launcher's background changes as the real
-    // app's does: a designed search's answer lands on the refresh thread,
-    // and only the changes channel tells the window to redraw it.
-    let (sender, changes) = pane_core::changes::channel();
-    let launcher = launcher.with_changes(sender);
     let (window, cx) = cx.add_window_view(|window, cx| {
         let mut launcher = LauncherWindow::new(launcher, window, cx);
-        launcher.follow_changes(changes, window, cx);
         launcher.preview_package(&folder, window, cx);
         launcher
     });
@@ -129,17 +123,8 @@ fn the_commands_own_search_field_lists_the_service_results(cx: &mut TestAppConte
     );
 
     // Down moves the selection to the second row, and Enter shows the
-    // selected package's details in a toast. The rows are waited for
-    // before the Down chooses among them — the window's last draw can
-    // still be the loading one while the launcher already holds the
-    // results, and a settle on that consistent state chooses nothing —
-    // and the toast, drawn asynchronously as the search's answer was,
-    // is waited for after.
-    let _ = until(&window, cx, |view| {
-        view.rows
-            .first()
-            .is_some_and(|row| row.title == "aurora-charts")
-    });
+    // selected package's details in a toast: the toast, drawn
+    // asynchronously as the search's answer was, is waited for after.
     cx.simulate_keystrokes("down");
     settle(&window, cx);
     cx.simulate_keystrokes("enter");
@@ -178,14 +163,8 @@ fn backspace_in_the_empty_search_field_pops_the_view(cx: &mut TestAppContext) {
     cx.update(pane::bind_keys);
     let launcher =
         Launcher::with_packages(Runtime::start(), vec![], data.path().join("extensions"));
-    // The window follows the launcher's background changes as the real
-    // app's does: a designed search's answer lands on the refresh thread,
-    // and only the changes channel tells the window to redraw it.
-    let (sender, changes) = pane_core::changes::channel();
-    let launcher = launcher.with_changes(sender);
     let (window, cx) = cx.add_window_view(|window, cx| {
         let mut launcher = LauncherWindow::new(launcher, window, cx);
-        launcher.follow_changes(changes, window, cx);
         launcher.preview_package(&folder, window, cx);
         launcher
     });
