@@ -122,6 +122,12 @@ capture() {
   fi
 }
 check() { python3 "$(dirname "$0")/check_screenshot.py" "$out/$1" "$2" ${3:+"$3"}; }
+
+# The key-injection logger: the driver's own sends, so a failed leg's
+# pane.log read alongside this log says whether the driver stopped
+# sending or the app stopped receiving — the app-silence class's
+# driver-side evidence. One line per injection.
+inject() { echo "[inject $(date +%s.%N)] $*" >>"$out/inject.log"; }
 # Captures screenshot $1 until it shows text in color $2, for at most $3
 # seconds, then checks it: for a view that appears once work in the
 # background ends, whenever that is.
@@ -419,12 +425,15 @@ focus_launcher
 # narrows root to the matching command and Enter opens the best match.
 index=0
 for sample in "Rust sample" "JavaScript sample" "TypeScript sample"; do
+  inject "type $sample"
   "$xdotool" type --delay 50 "$sample"; sleep 1
   # Typing the command's name leaves its exact-titled row the best match,
   # selected: Enter opens it. (The samples answer only "reverse <text>"
   # queries, so no answer card takes the first row.)
+  inject "key Return"
   "$xdotool" key Return; sleep 3
   capture "$((index + 2))-command-$index.png"
+  inject "key Down Return"
   "$xdotool" key Down key Return; sleep 2
   capture "$((index + 2))-result-$index.png"
   check "$((index + 2))-result-$index.png" success   # the guest's answer
@@ -461,8 +470,10 @@ stop_pane
 # nothing.
 start_pane
 focus_launcher
+inject "type typescr"
 "$xdotool" type --delay 50 typescr; sleep 1
 capture 24-search.png
+inject "key Return"
 "$xdotool" key Return; sleep 3
 "$xdotool" key Down key Return; sleep 2
 capture 25-search-result.png
