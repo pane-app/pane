@@ -82,7 +82,7 @@ use alloc::format;
 use alloc::rc::Rc;
 use alloc::string::String;
 use alloc::vec::Vec;
-use core::cell::{OnceCell, RefCell};
+use core::cell::{Cell, OnceCell, RefCell};
 use core::fmt::Write as _;
 use core::future::Future;
 use core::pin::Pin;
@@ -135,19 +135,30 @@ pub trait View: Sized + 'static {
 /// and whether the render answers the refresh the view asked for (where
 /// an interval's work runs).
 pub struct Cx<'a, V: View> {
-    listeners: &'a mut Vec<Run<V>>,
+    listeners: &'a mut Vec<(u32, Run<V>)>,
+    /// The view's id mint: the next callback id, unique for the view's
+    /// life, so a render's ids are never an earlier render's.
+    next_id: &'a Cell<u32>,
     refreshed: bool,
     selected: Option<String>,
 }
 
 impl<V: View> Cx<'_, V> {
+    /// The next callback id: one no listener of this view has used, so a
+    /// render's tree never carries an id an earlier render's did.
+    fn mint(&mut self) -> u32 {
+        let id = self.next_id.get() + 1;
+        self.next_id.set(id);
+        id
+    }
+
     /// The listener `run` becomes, which a press of the control it is
     /// given to runs with the view's state mutably: `cx.listener(|this:
     /// &mut V| ...)`, handed to [`Button::on_click`] and its kind. The
     /// view re-renders after the press, as it does after every event.
     pub fn listener(&mut self, run: impl FnOnce(&mut V) + 'static) -> Listener {
-        let id = self.listeners.len() as u32 + 1;
-        self.listeners.push(Run::Listener(Box::new(run)));
+        let id = self.mint();
+        self.listeners.push((id, Run::Listener(Box::new(run))));
         Listener(id)
     }
 
@@ -158,8 +169,8 @@ impl<V: View> Cx<'_, V> {
     /// [`TextInput::on_input`], [`TextInput::on_change`] and the key
     /// listeners.
     pub fn value_listener(&mut self, run: impl FnOnce(&mut V, &str) + 'static) -> ValueListener {
-        let id = self.listeners.len() as u32 + 1;
-        self.listeners.push(Run::Value(Box::new(run)));
+        let id = self.mint();
+        self.listeners.push((id, Run::Value(Box::new(run))));
         ValueListener(id)
     }
 
@@ -171,8 +182,8 @@ impl<V: View> Cx<'_, V> {
         &mut self,
         run: impl FnOnce(&mut V, CanvasEvent) + 'static,
     ) -> CanvasListener {
-        let id = self.listeners.len() as u32 + 1;
-        self.listeners.push(Run::Canvas(Box::new(run)));
+        let id = self.mint();
+        self.listeners.push((id, Run::Canvas(Box::new(run))));
         CanvasListener(id)
     }
 
@@ -184,8 +195,8 @@ impl<V: View> Cx<'_, V> {
         &mut self,
         run: impl FnOnce(&mut V, &crate::form::FormValues) + 'static,
     ) -> FormListener {
-        let id = self.listeners.len() as u32 + 1;
-        self.listeners.push(Run::Form(Box::new(run)));
+        let id = self.mint();
+        self.listeners.push((id, Run::Form(Box::new(run))));
         FormListener(id)
     }
 
@@ -216,24 +227,24 @@ impl<V: View> Cx<'_, V> {
         open: Box<dyn FnOnce(&mut V) -> V>,
         on_pop: Option<Box<dyn FnOnce(&mut V, Option<&str>)>>,
     ) -> Listener {
-        let id = self.listeners.len() as u32 + 1;
-        self.listeners.push(Run::Push { open, on_pop });
+        let id = self.mint();
+        self.listeners.push((id, Run::Push { open, on_pop }));
         Listener(id)
     }
 
     /// A press that replaces this view with the state `open` builds: this
     /// view is dropped, never used again, the views below it staying.
     pub fn replace(&mut self, open: impl FnOnce(&mut V) -> V + 'static) -> Listener {
-        let id = self.listeners.len() as u32 + 1;
-        self.listeners.push(Run::Replace(Box::new(open)));
+        let id = self.mint();
+        self.listeners.push((id, Run::Replace(Box::new(open))));
         Listener(id)
     }
 
     /// A press that pops this view: the view below's tree shows again and
     /// it is told the view above popped, with no result.
     pub fn pop(&mut self) -> Listener {
-        let id = self.listeners.len() as u32 + 1;
-        self.listeners.push(Run::Pop(None));
+        let id = self.mint();
+        self.listeners.push((id, Run::Pop(None)));
         Listener(id)
     }
 
@@ -241,8 +252,8 @@ impl<V: View> Cx<'_, V> {
     /// view's state — to the view below, whose own `on_pop` runs with it
     /// before it re-renders.
     pub fn pop_with(&mut self, result: impl FnOnce(&mut V) -> String + 'static) -> Listener {
-        let id = self.listeners.len() as u32 + 1;
-        self.listeners.push(Run::Pop(Some(Box::new(result))));
+        let id = self.mint();
+        self.listeners.push((id, Run::Pop(Some(Box::new(result)))));
         Listener(id)
     }
 
@@ -3911,7 +3922,12 @@ pub struct Open<V: View> {
     state: RefCell<V>,
     /// The listeners of the last two renders, newest last: the render
     /// number and its listeners by callback id.
-    tables: RefCell<Vec<(u64, Vec<Run<V>>)>>,
+    tables: RefCell<Vec<(u64, Vec<(u32, Run<V>)>)>>,
+    /// The next callback id this view mints: every listener a render
+    /// names gets one of the view's own, never one an earlier render
+    /// used — a tree's ids are fresh each render, as the JavaScript
+    /// SDK's are.
+    next_id: Cell<u32>,
     /// The `on_pop` this view's last push registered, run when the view it
     /// pushed pops, with the result that pop answered.
     on_pop: RefCell<Option<Box<dyn FnOnce(&mut V, Option<&str>)>>>,
@@ -3923,6 +3939,7 @@ impl<V: View> Open<V> {
         Open {
             state: RefCell::new(state),
             tables: RefCell::new(Vec::new()),
+            next_id: Cell::new(0),
             on_pop: RefCell::new(None),
         }
     }
@@ -3935,7 +3952,7 @@ impl<V: View> GuestView for Open<V> {
         // when it answers (#243). Named for the render's duration, so the
         // work a `Pending` inside it starts asks for this view.
         ASKING_VIEW.store(view_of(&context), Ordering::Relaxed);
-        let mut listeners: Vec<Run<V>> = Vec::new();
+        let mut listeners: Vec<(u32, Run<V>)> = Vec::new();
         // This render answers the refresh the view asked for by
         // `refresh_after` — the drawing Pane waited to ask for, as the
         // context names — not one an event's answer asked for, and not
@@ -3946,6 +3963,7 @@ impl<V: View> GuestView for Open<V> {
         let answer = {
             let mut cx = Cx {
                 listeners: &mut listeners,
+                next_id: &self.next_id,
                 refreshed,
                 selected,
             };
@@ -3997,21 +4015,15 @@ impl<V: View> GuestView for Open<V> {
         } = event;
         // The listener the tree named, taken from the table of the render
         // the user saw: an event of an older render is stale, dropped.
-        let id = usize::try_from(callback.saturating_sub(1)).ok();
         let taken = {
             let mut tables = self.tables.borrow_mut();
-            match (
-                tables
-                    .iter_mut()
-                    .find(|(number, _)| *number == render)
-                    .map(|(_, listeners)| listeners),
-                id,
-            ) {
-                (Some(listeners), Some(id)) if id < listeners.len() => {
-                    Some(listeners.swap_remove(id))
-                }
-                _ => None,
-            }
+            tables
+                .iter_mut()
+                .find(|(number, _)| *number == render)
+                .and_then(|(_, listeners)| {
+                    let index = listeners.iter().position(|(named, _)| *named == callback)?;
+                    Some(listeners.swap_remove(index).1)
+                })
         };
         // Run what the tree named, answering the navigation it asked for.
         // A value listener is told the event's text: its payload's `value`

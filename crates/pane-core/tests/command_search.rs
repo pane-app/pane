@@ -57,7 +57,10 @@ const TYPESCRIPT: Fixture = Fixture {
     title: "TypeScript search sample",
 };
 
-const ALL: [Fixture; 3] = [RUST, JAVASCRIPT, TYPESCRIPT];
+// The JavaScript and TypeScript fixtures run first this round: the
+// cleared-search family's root is being split between the guests, and
+// which of them fails (or none) names the side it lives on.
+const ALL: [Fixture; 3] = [JAVASCRIPT, TYPESCRIPT, RUST];
 
 const COMMAND: &str = "Package search";
 
@@ -338,8 +341,21 @@ fn the_service_results_are_listed_and_open_their_details() {
         );
         assert_eq!(view.selected, Some(0));
 
-        // Enter asks the service for the package's details.
+        // Enter asks the service for the package's details: the action's
+        // answer draws asynchronously, like a search's, so it is waited
+        // for.
         pane.activate("aurora-cli");
+        // Generous: a TypeScript command's component compiles before its
+        // first press answers, and CI's runners are slow.
+        let deadline = Instant::now() + Duration::from_secs(15);
+        loop {
+            let shown = shown(&pane.launcher);
+            if matches!(&shown, Status::Result(_)) {
+                break;
+            }
+            assert!(Instant::now() < deadline, "{}: {shown:?}", fixture.package);
+            std::thread::sleep(Duration::from_millis(10));
+        }
         assert_eq!(
             shown(&pane.launcher),
             Status::Result(
@@ -353,8 +369,11 @@ fn the_service_results_are_listed_and_open_their_details() {
             ["/search?q=aurora", "/packages/aurora-cli"]
         );
 
-        // The text is sent encoded; nothing found lists nothing.
+        // The text is sent encoded; nothing found lists nothing: the
+        // follow-up search's fetch fires asynchronously, so its request
+        // is waited for as the first search's was.
         pane.search("no such thing");
+        wait_for_request(&service, "/search?q=no%20such%20thing");
         assert_eq!(pane.titles(), Vec::<String>::new(), "{}", fixture.package);
         assert_eq!(
             service.requests().last().map(String::as_str),
@@ -362,13 +381,10 @@ fn the_service_results_are_listed_and_open_their_details() {
         );
 
         // A blank search shows the command's own list again, asking
-        // nothing.
+        // nothing: its empty state, whose rows hold no items.
         let asked = service.requests().len();
         pane.search("  ");
-        assert_eq!(
-            pane.titles(),
-            ["Type to search the package registry", "Service address"]
-        );
+        assert_eq!(pane.titles(), Vec::<String>::new());
         assert_eq!(service.requests().len(), asked);
     }
 }
@@ -390,19 +406,19 @@ fn a_cleared_search_lists_the_command_as_it_is_now() {
         assert_eq!(pane.titles(), ["aurora-charts", "aurora-cli"]);
 
         // ...and clearing the search lists what the command lists now.
+        // The designed view's own cleared listing is its empty state,
+        // with the Service address view's button in it: the empty state
+        // is the tree's, drawn by the window, and the launcher's rows
+        // hold the items alone — none. The old module's own listing,
+        // which drew the button as a row with the address under it, went
+        // with the module.
         pane.search("");
         let view = wait_for_view(
             &pane,
-            |view| view.rows.iter().any(|row| row.title == "Service address"),
-            "the cleared search's list never drew",
+            |view| view.rows.is_empty(),
+            "the cleared search's rows never emptied",
         );
         assert_eq!(view.status, Status::Idle, "{}", fixture.package);
-        let address = view
-            .rows
-            .iter()
-            .find(|row| row.title == "Service address")
-            .and_then(|row| row.subtitle.clone());
-        assert_eq!(address, Some(service.url()), "{}", fixture.package);
     }
 }
 
@@ -416,10 +432,15 @@ fn a_newer_search_stops_the_one_the_service_is_still_answering() {
         // command is opened before the query is typed into it.
         pane.open();
 
-        // The service holds this one for ten seconds.
+        // The service holds this one for ten seconds. The old module
+        // named an in-flight search on the status line; a designed view
+        // owns its own loading bar, drawn by its listener's own drawing.
+        // The search's flight is what the service's receipt of it names.
+        // The contract: the newer search stops the older one's flight —
+        // the service sees the hang-up — and its own answer draws
+        // without waiting the older one's out.
         let slow = pane.launcher.set_query("slow");
         wait_for_request(&service, "/search?q=slow");
-        assert!(matches!(pane.view().status, Status::Running { .. }));
 
         let started = Instant::now();
         pane.search("basalt");
@@ -507,12 +528,8 @@ fn leaving_the_command_stops_its_search() {
         block_on(slow);
         let _ = wait_for_view(
             &pane,
-            |view| view.rows.iter().any(|row| row.title == "Service address"),
-            "the cleared search's list never drew",
-        );
-        assert_eq!(
-            pane.titles(),
-            ["Type to search the package registry", "Service address"]
+            |view| view.rows.is_empty(),
+            "the cleared search's rows never emptied",
         );
 
         // ...and leaving the command closes its view: the search's answer
@@ -801,6 +818,9 @@ fn stopped_while_it_waits(fixture: &Fixture, happen: impl FnOnce(&Pane)) -> (Pan
 /// command waits on it.
 fn waiting_on_the_service(pane: &Pane, service: &Service) -> std::thread::JoinHandle<()> {
     pane.use_service(&service.url());
+    // The search happens in the open command's own field, as every
+    // designed search does: the field exists only once the view is open.
+    pane.open();
     pane.search("misbehaving");
     // The rows the activation chooses from are the search's answer, which
     // a designed view draws asynchronously: waited for, not read at once.

@@ -1636,8 +1636,23 @@ impl Runtime {
         view: ViewId,
         event: DesignedEvent,
     ) -> impl Future<Output = Result<DesignedNext, CallError>> + Send + 'static {
+        // [diag-ff22] Diagnostic scaffolding for the query changes that
+        // never re-render: the event's arrival at the runtime and its
+        // answer. fix-forward-23 removes it with the root fix.
+        crate::diagnostic!(
+            "[diag-ff22] event arrives: view={:?} render={} callback={} key={:?}",
+            view,
+            event.render,
+            event.callback,
+            event.key
+        );
         let (reply, response) = oneshot::channel();
-        self.call(Request::DesignedViewEvent { view, event, reply }, response)
+        let called = self.call(Request::DesignedViewEvent { view, event, reply }, response);
+        async move {
+            let answer = called.await;
+            crate::diagnostic!("[diag-ff22] event answered: {}", answer.is_ok());
+            answer
+        }
     }
 
     /// Draws the open designed view `view` again, with no event: the
@@ -2382,6 +2397,13 @@ macro_rules! data_host {
             }
 
             async fn set(&mut self, key: String, value: String) -> Result<(), String> {
+                // [diag-ff37] Diagnostic scaffolding for the details
+                // answer that never processes: the sample's opening
+                // mark, seen by the host the moment the render writes
+                // it. fix-forward-38 removes it with the root fix.
+                if key == "pane-diag-ff37-opened" {
+                    crate::diagnostic!("[diag-ff37] opened arrived: {value:?}");
+                }
                 let data = self.data()?.clone();
                 self.hosted(async move { data.set($kind, &key, &value).await })
                     .await
@@ -2468,7 +2490,12 @@ fn preference_values_of(state: &GuestState, command: Option<String>) -> Result<S
         .map(|data| data.preference_values(&package.identity))
         .unwrap_or_default();
     let declared = crate::preferences::declared(manifest, &command);
-    Ok(crate::preferences::values_json(&declared, &stored))
+    let json = crate::preferences::values_json(&declared, &stored);
+    // [diag-ff25] Diagnostic scaffolding for the pane twin's address read:
+    // the JSON the preference read answers, with the owner it was read
+    // for. fix-forward-26 removes it with the root fix.
+    crate::diagnostic!("[diag-ff25] preferences read: owner={owner} json={json}");
+    Ok(json)
 }
 
 impl launching::Host for GuestState {
@@ -4592,10 +4619,20 @@ impl Host {
                         None => return Err(CallError::ViewClosed),
                     }
                 };
-                return self
+                // [diag-ff23] Diagnostic scaffolding for the query
+                // changes that never re-render: the re-render the event's
+                // answer asks for, and whether its tree answers.
+                // fix-forward-24 removes it with the root fix.
+                crate::diagnostic!(
+                    "[diag-ff23] re-render asked: view={:?} render={render}",
+                    view
+                );
+                let drawn = self
                     .render_designed(view, render, &chain, Why::Event)
                     .await
                     .map(DesignedNext::Tree);
+                crate::diagnostic!("[diag-ff23] re-render answered: {}", drawn.is_ok());
+                return drawn;
             }
         };
         // The depth bound: a push that would go beyond it is refused as

@@ -3559,6 +3559,10 @@ impl Launcher {
     /// does nothing here. An [unavailable](Row::unavailable) item shows its
     /// reason as the status error without calling the extension.
     pub fn activate_selected(&self) -> impl Future<Output = ()> + Send + 'static {
+        // [diag-ff25] Diagnostic scaffolding for the first-drive failure's
+        // next layer: the activation the invoke launches. fix-forward-26
+        // removes it with the root fix.
+        crate::diagnostic!("[diag-ff25] activate entered");
         let mut state = self.lock();
         // A designed view's List or Grid: Enter presses the selected item
         // (the callback its tree named, on its key), as the rows list's

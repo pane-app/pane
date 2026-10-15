@@ -161,6 +161,10 @@ impl window_host::Host for GuestState {
 impl view_host::Host for GuestState {
     fn ask_to_render(&mut self, view: u64) {
         let _host = self.host();
+        // [diag-ff23] Diagnostic scaffolding for the query changes that
+        // never re-render: the redraw ask's arrival. fix-forward-24
+        // removes it with the root fix.
+        crate::diagnostic!("[diag-ff23] ask arrived: view={view}");
         if let Some(asks) = lock(&self.view_asks).clone() {
             asks(view);
         }
@@ -179,6 +183,11 @@ impl view_host::Host for GuestState {
 impl feedback_host::Host for GuestState {
     fn show_toast(&mut self, toast: feedback_host::Toast) -> feedback_host::ToastId {
         let _host = self.host();
+        // [diag-ff25] Diagnostic scaffolding for the first-drive failure's
+        // next layer: the guest's own answer arriving as a toast — the
+        // answer card the smoke's checks look for. fix-forward-26 removes
+        // it with the root fix.
+        crate::diagnostic!("[diag-ff25] toast arrived: {}", toast.title);
         let Some(host) = self.host_functions() else {
             return 0;
         };

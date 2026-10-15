@@ -937,20 +937,17 @@ impl LauncherWindow {
     }
 
     pub(crate) fn confirm(&mut self, _: &Confirm, window: &mut Window, cx: &mut Context<Self>) {
-        // [diag-ff20] Diagnostic scaffolding for the first-drive failure
-        // that leaves no trail: the Enter's arrival at the confirm, and
-        // the gate that takes it. fix-forward-21 removes it with the root
-        // fix.
-        pane_core::diagnostic!("[diag-ff20] confirm entered");
+        // [diag-ff29] Diagnostic scaffolding for the drive whose Enter
+        // never dispatches: the confirm is the Enter's own action, so its
+        // arrival is the line between a key lost on the platform and one
+        // a binding refused. fix-forward-30 removes it with the root fix.
+        pane_core::diagnostic!("[diag-ff29] confirm entered");
         // Enter ends the walk through the recent queries (#206), whatever
         // it runs — a held key included.
         self.recall = None;
         // The open Actions panel takes Enter from the key press itself, once
         // per press ([`LauncherWindow::panel_keys`]).
         if self.actions.is_some() {
-            // [diag-ff20] Diagnostic scaffolding; removed with the root
-            // fix.
-            pane_core::diagnostic!("[diag-ff20] confirm gate: actions panel");
             cx.propagate();
             return;
         }
@@ -962,13 +959,8 @@ impl LauncherWindow {
         if held_keys::keystroke_of(KeyboardAction::InvokeSelectedAction, cx)
             .is_some_and(|key| self.hold_key(key, window, cx))
         {
-            // [diag-ff20] Diagnostic scaffolding; removed with the root
-            // fix.
-            pane_core::diagnostic!("[diag-ff20] confirm gate: key held");
             return;
         }
-        // [diag-ff20] Diagnostic scaffolding; removed with the root fix.
-        pane_core::diagnostic!("[diag-ff20] confirm passed");
         // An item of a command's list (or a row of root search with actions
         // of its own, #150) runs its primary action once per press: the key
         // is handed on to [`LauncherWindow::item_action_keys`], which sees
@@ -989,10 +981,10 @@ impl LauncherWindow {
     /// opens the Actions panel at the submenu an item's primary action
     /// opens (#140), or activates the row.
     fn invoke_selected(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        // [diag-ff20] Diagnostic scaffolding for the first-drive failure
-        // that leaves no trail: the invoke's arrival. fix-forward-21
-        // removes it with the root fix.
-        pane_core::diagnostic!("[diag-ff20] invoke selected");
+        // [diag-ff25] Diagnostic scaffolding for the first-drive failure's
+        // next layer: the invoke's arrival, and the answer of what it
+        // launches. fix-forward-26 removes it with the root fix.
+        pane_core::diagnostic!("[diag-ff25] invoke selected");
         // The Logs screen's lines are its own: the selected one is copied.
         if self.extension_log_open() {
             self.copy_log_line(cx);
@@ -1874,6 +1866,47 @@ impl LauncherWindow {
     /// hotkey. Keys the launcher binds (Enter, Escape, arrows, Tab) do not
     /// reach here; pressing a modifier alone is not a key press.
     fn key_down(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        // [diag-ff27] Diagnostic scaffolding for the drive that hangs
+        // between its typing and its Enter: every key the window
+        // receives, at the window's own entry. fix-forward-28 removes it
+        // with the root fix.
+        // [diag-ff27] Diagnostic scaffolding for the drive whose Enter
+        // never dispatches: the key's arrival, whether the window holds
+        // focus, and what Pane's own key bindings say the key does —
+        // `None` names a key no binding of Pane's takes. fix-forward-32
+        // removes it with the root fix.
+        let says = {
+            let modifiers = &event.keystroke.modifiers;
+            let mut id = String::new();
+            if modifiers.control {
+                id.push_str("ctrl-");
+            }
+            if modifiers.alt {
+                id.push_str("alt-");
+            }
+            if modifiers.shift {
+                id.push_str("shift-");
+            }
+            if modifiers.platform {
+                id.push_str("cmd-");
+            }
+            id.push_str(&event.keystroke.key);
+            let binding = pane_core::keyboard::Binding::parse(&id).ok();
+            let keys = pane_core::PaneKeys::new(
+                &crate::settings::keyboard_of(cx),
+                crate::settings::navigation_of(cx),
+            );
+            binding
+                .as_ref()
+                .and_then(|binding| keys.taken(binding).map(str::to_owned))
+        };
+        pane_core::diagnostic!(
+            "[diag-ff27] key down: {:?}{} focused={} says={:?}",
+            event.keystroke.modifiers,
+            event.keystroke.key,
+            window.focused(cx).is_some(),
+            says
+        );
         // Backspace pops the open designed view's stack, as it pops a view
         // whose search field is empty (the List's, #240): a designed view
         // shows no search field of its own yet, so Backspace is otherwise
@@ -2990,6 +3023,18 @@ impl Render for LauncherWindow {
         #[cfg(any(test, debug_assertions))]
         {
             self.drawn = Some(view.clone());
+            // [diag-ff34] Diagnostic scaffolding for the window-redraw
+            // root: the render number of the view this frame draws, so
+            // the next matrix says which renders the window drew and
+            // which it skipped. fix-forward-35 removes it with the root
+            // fix.
+            if let pane_core::Screen::DesignedView(snapshot) = &view.screen {
+                pane_core::diagnostic!(
+                    "[diag-ff34] frame drew: render={} loading={:?}",
+                    snapshot.render,
+                    snapshot.list.as_ref().map(|list| list.loading.is_some())
+                );
+            }
             self.drawn_over = self.actions.is_some() || self.launcher.confirmation().is_some();
             self.results.drawn_rows.clear();
         }

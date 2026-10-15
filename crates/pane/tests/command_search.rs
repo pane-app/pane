@@ -10,6 +10,8 @@
 #[path = "../../pane-core/tests/support/service.rs"]
 mod service;
 
+use std::time::Duration;
+
 use gpui::{Entity, TestAppContext, VisualTestContext, prelude::*};
 use pane::LauncherWindow;
 use pane_core::{Launcher, LauncherView, Runtime, Screen, Status};
@@ -18,7 +20,7 @@ use service::Service;
 #[path = "support/settle.rs"]
 mod settle;
 
-use settle::{settle, settle_shown, until};
+use settle::{settle, until};
 
 #[path = "support/packages.rs"]
 mod packages;
@@ -71,6 +73,10 @@ fn the_commands_own_search_field_lists_the_service_results(cx: &mut TestAppConte
     cx.simulate_keystrokes("enter");
     settle(&window, cx);
 
+    // The service this search reaches, as the backspace test's is: the
+    // install is settled before the address is written.
+    use_service(&window, cx, &service.url());
+
     // Root search finds the command by its title, and asks no service.
     cx.simulate_input("package search");
     let view = settle(&window, cx);
@@ -98,8 +104,11 @@ fn the_commands_own_search_field_lists_the_service_results(cx: &mut TestAppConte
     // Typing searches the service; its results are the rows, and the
     // field holds the text typed. A designed view answers its searches
     // asynchronously — the answer asks for its own drawing — so the rows
-    // are waited for, not read at once.
+    // are waited for, not read at once. The view throttles what it is
+    // told: the typing's text waits out the throttle's time on the
+    // executor's clock, which this platform's parked runs never move.
     cx.simulate_input("aurora");
+    cx.executor().advance_clock(Duration::from_millis(300));
     let view = until(&window, cx, |view| {
         view.rows
             .first()
@@ -113,10 +122,15 @@ fn the_commands_own_search_field_lists_the_service_results(cx: &mut TestAppConte
         Some("/search?q=aurora")
     );
 
-    // Enter shows the selected package's details in a toast.
-    cx.simulate_keystrokes("down enter");
+    // Down moves the selection to the second row, and Enter shows the
+    // selected package's details in a toast: the toast, drawn
+    // asynchronously as the search's answer was, is waited for after.
+    cx.simulate_keystrokes("down");
+    settle(&window, cx);
+    cx.simulate_keystrokes("enter");
+    let shown = until(&window, cx, |view| matches!(view.status, Status::Result(_)));
     assert_eq!(
-        settle_shown(&window, cx),
+        shown.status,
         Status::Result(
             "aurora-cli 0.9.3 (Apache-2.0): Command-line parsing with subcommands".into()
         )

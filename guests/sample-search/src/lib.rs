@@ -226,12 +226,21 @@ impl View for Search {
                     .and_then(|opening| opening.ready().cloned());
                 if let Some(done) = opened {
                     *opening = None;
+                    // [diag-ff37] Diagnostic scaffolding for the details
+                    // answer that never processes: the opening's answer
+                    // arriving in the render, marked where the host can
+                    // read it. fix-forward-38 removes it with the root
+                    // fix.
+                    let _ = settings::set("pane-diag-ff37-opened", "yes");
                     match done {
                         Ok(details) => show_toast(Toast::success(details)),
                         Err(why) => show_toast(Toast::failure(why)),
                     };
                 }
                 // A blank text: nothing is searched, nothing listed.
+                // The pending search's answer was dropped when the text
+                // was cleared (the listener's own branch), so the answer
+                // of the text the search ran for does not outlive it.
                 if query.trim().is_empty() {
                     *searched = String::new();
                     results.clear();
@@ -258,8 +267,31 @@ impl View for Search {
                     .search_placeholder("Search the registry…")
                     .is_loading(running)
                     .on_search_text(cx.value_listener(|this: &mut Self, text: &str| {
-                        if let Search::Rows { query, .. } = this {
+                        if let Search::Rows {
+                            query,
+                            results,
+                            failed,
+                            pending,
+                            ..
+                        } = this
+                        {
                             *query = text.to_owned();
+                            if text.trim().is_empty() {
+                                // A cleared search lists what the command
+                                // lists for none, as the JavaScript and
+                                // TypeScript samples' listeners do — and
+                                // the pending search's answer goes with
+                                // the results: read below, it would list
+                                // what the last search found again.
+                                results.clear();
+                                *failed = None;
+                                *pending = Pending::loading(async {
+                                    SearchOutcome {
+                                        results: Vec::new(),
+                                        failed: None,
+                                    }
+                                });
+                            }
                         }
                     }));
                 for result in results.iter() {
