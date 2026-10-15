@@ -226,6 +226,12 @@ impl View for Search {
                     .and_then(|opening| opening.ready().cloned());
                 if let Some(done) = opened {
                     *opening = None;
+                    // [diag-ff37] Diagnostic scaffolding for the details
+                    // answer that never processes: the opening's answer
+                    // arriving in the render, marked where the host can
+                    // read it. fix-forward-38 removes it with the root
+                    // fix.
+                    let _ = settings::set("pane-diag-ff37-opened", "yes");
                     match done {
                         Ok(details) => show_toast(Toast::success(details)),
                         Err(why) => show_toast(Toast::failure(why)),
