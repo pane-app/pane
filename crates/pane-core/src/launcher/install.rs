@@ -703,6 +703,14 @@ impl Launcher {
         // A refusal a newer Pane would satisfy points at Pane's own update
         // when one exists, as an update check's skip does (#318, ADR 0046).
         let checked = checked.map_err(|reason| updates::refusal_message(&reason, self));
+        // [diag-ff42] Diagnostic scaffolding for the 15-no-compatible
+        // layer's never-drawn error state: the preview's check answer —
+        // the refusal's own message when the package cannot be installed
+        // here — surfacing at the site where it becomes the view's Error
+        // status. fix-forward-43 removes it with the root fix.
+        if let Err(message) = &checked {
+            crate::diagnostic!("[diag-ff42] preview refused: {message}");
+        }
         let (view, entries) = preview_view(request, checked, installed);
         self.leave_command(state);
         state.view = view;
