@@ -200,6 +200,15 @@ impl WasiHttpHooks for Sender {
         // nothing here needs it.
         _received: Box<dyn Future<Output = Result<(), Error>> + Send>,
     ) -> Sent {
+        // [diag-ff35] Diagnostic scaffolding for the listener-armed fetch
+        // that never lands: the wasi:http call's arrival at the host —
+        // whether the fetch even started. fix-forward-36 removes it with
+        // the root fix.
+        crate::diagnostic!(
+            "[diag-ff35] http called: {} {}",
+            request.method(),
+            request.uri()
+        );
         if self.stopped() {
             // Stopped code starts no more work.
             return Box::new(async { Err(Error::HttpRequestDenied) });
