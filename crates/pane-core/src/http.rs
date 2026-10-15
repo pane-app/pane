@@ -245,11 +245,22 @@ impl WasiHttpHooks for Sender {
                     return Err(Error::HttpRequestDenied);
                 };
                 let (response, receiving) = sent?;
+                // [diag-ff36] Diagnostic scaffolding for the
+                // listener-armed fetch whose round-trip never completes:
+                // the response's head arriving at the host, and the
+                // guest's read of its body — the two hops the answer
+                // crosses. fix-forward-37 removes them with the root
+                // fix.
+                crate::diagnostic!("[diag-ff36] http answered: {}", response.status());
                 let receiving: Receiving = Box::new(async move {
                     let _undo = undo;
-                    unless_aborted(Box::into_pin(receiving), aborted.as_mut())
+                    let read = unless_aborted(Box::into_pin(receiving), aborted.as_mut())
                         .await
-                        .unwrap_or(Err(Error::HttpRequestDenied))
+                        .unwrap_or(Err(Error::HttpRequestDenied));
+                    // [diag-ff36] Diagnostic scaffolding; removed with the
+                    // root fix.
+                    crate::diagnostic!("[diag-ff36] http body read: {read:?}");
+                    read
                 });
                 Ok((response, receiving))
             },
