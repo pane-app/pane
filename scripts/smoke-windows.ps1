@@ -135,7 +135,13 @@ function Click-At($x, $y) {
     [Win]::mouse_event(0x2, 0, 0, 0, [UIntPtr]::Zero)   # left button down
     [Win]::mouse_event(0x4, 0, 0, 0, [UIntPtr]::Zero)   # left button up
 }
-function Send($keys) { [System.Windows.Forms.SendKeys]::SendWait($keys) }
+function Send($keys) {
+    # The key-injection logger: the driver's own sends, so a failed
+    # leg's pane.log read alongside this log says whether the driver
+    # stopped sending or the app stopped receiving.
+    Add-Content -Path "$OutDir/inject.log" -Value "[inject $(Get-Date -Format 'o')] $keys"
+    [System.Windows.Forms.SendKeys]::SendWait($keys)
+}
 # Presses one key, as a tool that injects input does (#260): the Windows
 # key has no SendKeys form, and the binding kinds the hotkeys gain are
 # pressed with the key's own code. Injected and untagged: another tool's
