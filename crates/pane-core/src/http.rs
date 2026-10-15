@@ -200,15 +200,6 @@ impl WasiHttpHooks for Sender {
         // nothing here needs it.
         _received: Box<dyn Future<Output = Result<(), Error>> + Send>,
     ) -> Sent {
-        // [diag-ff35] Diagnostic scaffolding for the listener-armed fetch
-        // that never lands: the wasi:http call's arrival at the host —
-        // whether the fetch even started. fix-forward-36 removes it with
-        // the root fix.
-        crate::diagnostic!(
-            "[diag-ff35] http called: {} {}",
-            request.method(),
-            request.uri()
-        );
         if self.stopped() {
             // Stopped code starts no more work.
             return Box::new(async { Err(Error::HttpRequestDenied) });
@@ -245,22 +236,11 @@ impl WasiHttpHooks for Sender {
                     return Err(Error::HttpRequestDenied);
                 };
                 let (response, receiving) = sent?;
-                // [diag-ff36] Diagnostic scaffolding for the
-                // listener-armed fetch whose round-trip never completes:
-                // the response's head arriving at the host, and the
-                // guest's read of its body — the two hops the answer
-                // crosses. fix-forward-37 removes them with the root
-                // fix.
-                crate::diagnostic!("[diag-ff36] http answered: {}", response.status());
                 let receiving: Receiving = Box::new(async move {
                     let _undo = undo;
-                    let read = unless_aborted(Box::into_pin(receiving), aborted.as_mut())
+                    unless_aborted(Box::into_pin(receiving), aborted.as_mut())
                         .await
-                        .unwrap_or(Err(Error::HttpRequestDenied));
-                    // [diag-ff36] Diagnostic scaffolding; removed with the
-                    // root fix.
-                    crate::diagnostic!("[diag-ff36] http body read: {read:?}");
-                    read
+                        .unwrap_or(Err(Error::HttpRequestDenied))
                 });
                 Ok((response, receiving))
             },

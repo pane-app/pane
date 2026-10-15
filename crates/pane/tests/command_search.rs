@@ -20,7 +20,7 @@ use service::Service;
 #[path = "support/settle.rs"]
 mod settle;
 
-use settle::{settle, until};
+use settle::{settle, settle_shown, until};
 
 #[path = "support/packages.rs"]
 mod packages;
@@ -122,18 +122,28 @@ fn the_commands_own_search_field_lists_the_service_results(cx: &mut TestAppConte
         Some("/search?q=aurora")
     );
 
-    // Down moves the selection to the second row, and Enter shows the
-    // selected package's details in a toast: the toast, drawn
-    // asynchronously as the search's answer was, is waited for after.
-    cx.simulate_keystrokes("down");
-    settle(&window, cx);
+    // Enter shows the selected package's details in a toast: a designed
+    // view's answer lands in the footer's toast, not the status line,
+    // so the toast is polled for through the shown fallback — settle,
+    // then the toast — as the harness twin's activation wait polls its
+    // shown status. The first row is selected (the Down's move is the
+    // separate question below).
     cx.simulate_keystrokes("enter");
-    let shown = until(&window, cx, |view| matches!(view.status, Status::Result(_)));
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    let shown = loop {
+        let status = settle_shown(&window, cx);
+        if !matches!(status, Status::Idle) {
+            break status;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the press's answer never drew: {status:?}"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    };
     assert_eq!(
-        shown.status,
-        Status::Result(
-            "aurora-cli 0.9.3 (Apache-2.0): Command-line parsing with subcommands".into()
-        )
+        shown,
+        Status::Result("aurora-charts 2.1.0 (MIT): Charts that draw in the terminal".into())
     );
 
     // Escape clears the search field, then leaves the command.
