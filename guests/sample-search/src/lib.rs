@@ -232,21 +232,13 @@ impl View for Search {
                     };
                 }
                 // A blank text: nothing is searched, nothing listed.
-                // The pending search's answer, if it answered, does not
-                // outlive the text it answered for: its answer would be
-                // read below and the results it found listed again, so the
-                // pending goes too — the JavaScript and TypeScript
-                // samples' listeners drop it with their results.
+                // The pending search's answer was dropped when the text
+                // was cleared (the listener's own branch), so the answer
+                // of the text the search ran for does not outlive it.
                 if query.trim().is_empty() {
                     *searched = String::new();
                     results.clear();
                     *failed = None;
-                    *pending = Pending::loading(async {
-                        SearchOutcome {
-                            results: Vec::new(),
-                            failed: None,
-                        }
-                    });
                 }
                 // A new text: its search starts here, drawn as the loading
                 // state until it answers.
@@ -273,6 +265,7 @@ impl View for Search {
                             query,
                             results,
                             failed,
+                            pending,
                             ..
                         } = this
                         {
@@ -280,9 +273,18 @@ impl View for Search {
                             if text.trim().is_empty() {
                                 // A cleared search lists what the command
                                 // lists for none, as the JavaScript and
-                                // TypeScript samples' listeners do.
+                                // TypeScript samples' listeners do — and
+                                // the pending search's answer goes with
+                                // the results: read below, it would list
+                                // what the last search found again.
                                 results.clear();
                                 *failed = None;
+                                *pending = Pending::loading(async {
+                                    SearchOutcome {
+                                        results: Vec::new(),
+                                        failed: None,
+                                    }
+                                });
                             }
                         }
                     }));
