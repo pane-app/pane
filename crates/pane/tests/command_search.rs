@@ -143,9 +143,7 @@ fn the_commands_own_search_field_lists_the_service_results(cx: &mut TestAppConte
     };
     assert_eq!(
         shown,
-        Status::Result(
-            "aurora-charts 2.1.0 (MIT): Charts that draw in the terminal".into()
-        )
+        Status::Result("aurora-charts 2.1.0 (MIT): Charts that draw in the terminal".into())
     );
 
     // Escape clears the search field, then leaves the command.
