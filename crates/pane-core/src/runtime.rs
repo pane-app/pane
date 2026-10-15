@@ -2397,6 +2397,13 @@ macro_rules! data_host {
             }
 
             async fn set(&mut self, key: String, value: String) -> Result<(), String> {
+                // [diag-ff37] Diagnostic scaffolding for the details
+                // answer that never processes: the sample's opening
+                // mark, seen by the host the moment the render writes
+                // it. fix-forward-38 removes it with the root fix.
+                if key == "pane-diag-ff37-opened" {
+                    crate::diagnostic!("[diag-ff37] opened arrived: {value:?}");
+                }
                 let data = self.data()?.clone();
                 self.hosted(async move { data.set($kind, &key, &value).await })
                     .await

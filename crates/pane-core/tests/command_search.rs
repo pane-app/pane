@@ -369,8 +369,11 @@ fn the_service_results_are_listed_and_open_their_details() {
             ["/search?q=aurora", "/packages/aurora-cli"]
         );
 
-        // The text is sent encoded; nothing found lists nothing.
+        // The text is sent encoded; nothing found lists nothing: the
+        // follow-up search's fetch fires asynchronously, so its request
+        // is waited for as the first search's was.
         pane.search("no such thing");
+        wait_for_request(&service, "/search?q=no%20such%20thing");
         assert_eq!(pane.titles(), Vec::<String>::new(), "{}", fixture.package);
         assert_eq!(
             service.requests().last().map(String::as_str),
