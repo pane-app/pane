@@ -5750,8 +5750,19 @@ impl Host {
         instance.calls = Some(calls);
         match result {
             // The guest went idle, or a call wants the instance: it is put
-            // back whole, for that call or the next.
-            Ok(Ok(())) => self.bring_back(path, taken, instance),
+            // back whole, for that call or the next. A call wanting it is
+            // the supersede point for the work the view left in flight:
+            // the web requests the old event's work started are aborted,
+            // their connections closed — the guest cannot cancel its own
+            // fetch, the host must.
+            Ok(Ok(())) => {
+                if wanted.load(Ordering::SeqCst) {
+                    if let Some(data) = instance.store.data().data.as_ref() {
+                        data.generation().abort_web_requests();
+                    }
+                }
+                self.bring_back(path, taken, instance)
+            }
             outcome => {
                 let data = instance.store.data().data.clone();
                 let out_of_memory = instance.store.data().out_of_memory;

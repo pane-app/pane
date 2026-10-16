@@ -175,6 +175,39 @@ impl Generation {
         self.0.number
     }
 
+    /// Aborts the web requests this generation's code started: the
+    /// undo entries the wasi:http sender registered, taken off the list
+    /// and run, so the requests' connections close. A newer event for
+    /// the view whose work started them is the supersede point — the
+    /// guest cannot cancel its own fetch, the host must — and the
+    /// entries fire without ending the generation, which still undoes
+    /// the rest of its list when it ends.
+    pub fn abort_web_requests(&self) {
+        let mut list = self.list();
+        let held = list
+            .entries
+            .iter()
+            .position(|(_, what, _)| *what == "web request")
+            .is_some();
+        if !held {
+            return;
+        }
+        let mut requests = Vec::new();
+        let mut rest = Vec::new();
+        for entry in list.entries.drain(..) {
+            if entry.1 == "web request" {
+                requests.push(entry);
+            } else {
+                rest.push(entry);
+            }
+        }
+        list.entries = rest;
+        drop(list);
+        for (_, _, undo) in requests {
+            let _ = undo();
+        }
+    }
+
     /// Why it ended, if it has.
     pub fn ended(&self) -> Option<End> {
         *self.0.end.borrow()
