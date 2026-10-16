@@ -192,10 +192,16 @@ impl Generation {
         if !held {
             return;
         }
-        let requests: Vec<Entry> = list
-            .entries
-            .drain_filter(|(_, what, _)| *what == "web request")
-            .collect();
+        let mut requests = Vec::new();
+        let mut rest = Vec::new();
+        for entry in list.entries.drain(..) {
+            if entry.1 == "web request" {
+                requests.push(entry);
+            } else {
+                rest.push(entry);
+            }
+        }
+        list.entries = rest;
         drop(list);
         for (_, _, undo) in requests {
             let _ = undo();
