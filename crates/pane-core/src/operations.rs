@@ -1021,15 +1021,6 @@ pub(crate) async fn send<T>(
     let (reply, response) = oneshot::channel();
     let sent = accessor.with(|mut view| {
         let state = view.get();
-        // [diag-ff53] Diagnostic scaffolding for the operations
-        // serving-context root: the serving state at the call's own
-        // check, with the caller's component. fix-forward-54 removes it
-        // with the root fix.
-        crate::diagnostic!(
-            "[diag-ff53] serving check: serving={} caller={}",
-            state.serving,
-            state.component.display()
-        );
         if !state.serving {
             return Err(outside_a_call());
         }
