@@ -166,11 +166,9 @@ fn greet(launcher: &Launcher, command: &str, source: &str, name: &str, times: &s
             ("times".to_owned(), FormValue::Text(times.to_owned())),
         ],
     ));
-    let view = launcher.view();
-    let Screen::DesignedView(shown) = &view.screen else {
-        panic!("{command}: no answered view: {:?}", view.screen)
-    };
-    // The answer text the tree holds, as the samples' own tests read it.
+    // The answer lands asynchronously: the tree first draws the call's
+    // loading text, the answer replacing it when the call completes —
+    // waited for as the samples' own tests wait for their answers.
     fn texts(node: &pane_core::Node, into: &mut Vec<String>) {
         if let pane_core::NodeKind::Text(text) = &node.kind {
             match &text.content {
@@ -184,9 +182,23 @@ fn greet(launcher: &Launcher, command: &str, source: &str, name: &str, times: &s
             texts(child, into);
         }
     }
-    let mut found = Vec::new();
-    texts(&shown.tree.root, &mut found);
-    found.join(" ")
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        let view = launcher.view();
+        if let Screen::DesignedView(shown) = &view.screen {
+            let mut found = Vec::new();
+            texts(&shown.tree.root, &mut found);
+            let joined = found.join(" ");
+            if !joined.contains("Calling the other extension") {
+                return joined;
+            }
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "{command}: the call's answer never drew"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
 }
 
 #[test]

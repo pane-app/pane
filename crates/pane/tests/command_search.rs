@@ -109,11 +109,31 @@ fn the_commands_own_search_field_lists_the_service_results(cx: &mut TestAppConte
     // executor's clock, which this platform's parked runs never move.
     cx.simulate_input("aurora");
     cx.executor().advance_clock(Duration::from_millis(300));
-    let view = until(&window, cx, |view| {
-        view.rows
-            .first()
-            .is_some_and(|row| row.title == "aurora-charts")
-    });
+    // The rows are read from the launcher's state — the window's redraw
+    // of them is the frame bracket's question, not this test's (the
+    // settle's drawn==view check false-fails when the window's frame
+    // lags the launcher's view, which it does intermittently on this
+    // platform).
+    let view = {
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            cx.run_until_parked();
+            let view =
+                cx.read_entity(&window, |window, _| window.launcher().view());
+            if view
+                .rows
+                .first()
+                .is_some_and(|row| row.title == "aurora-charts")
+            {
+                break view;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the search's answer never drew"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    };
     assert_eq!(titles(&view), ["aurora-charts", "aurora-cli"]);
     assert_eq!(field_text(&window, cx), "aurora");
     assert!(cx.debug_bounds("row-aurora-cli").is_some());
