@@ -3023,6 +3023,14 @@ impl Render for LauncherWindow {
         #[cfg(any(test, debug_assertions))]
         {
             self.drawn = Some(view.clone());
+            // [diag-ff43] Diagnostic scaffolding for the 15-no-compatible
+            // layer's never-drawn error state: the status this frame
+            // draws on a Package screen — the refusal's Error status
+            // reaching the render, or the Running the first frame drew.
+            // fix-forward-44 removes it with the root fix.
+            if let pane_core::Screen::Package { .. } = &view.screen {
+                pane_core::diagnostic!("[diag-ff43] frame status: {:?}", view.status);
+            }
             // [diag-ff34] Diagnostic scaffolding for the window-redraw
             // root: the render number of the view this frame draws, so
             // the next matrix says which renders the window drew and
