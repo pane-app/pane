@@ -500,7 +500,17 @@ Copy-Item "target/guests/sample_rust.wasm" $elsewhere
   "commands": [{ "id": "sample", "title": "Elsewhere sample", "component": "sample_rust.wasm" }]
 }
 '@ | Set-Content -Encoding ascii (Join-Path $elsewhere "pane.json")
-$process = Start-Pane "stderr-elsewhere.log" @("--install", $elsewhere)
+# The refusal's error status is the footer's toast, auto-cleared after
+# the toast's 3 seconds (#249, ADR 0035): the capture must land inside
+# that window — Start-Pane's settle would push it past the clear on a
+# slow leg. The window is waited for as Start-Pane waits for it, then
+# half a second for the preview's check, then the capture.
+$process = Start-Process -FilePath "target/debug/pane.exe" -ArgumentList @("--install", $elsewhere) -PassThru -RedirectStandardError (Join-Path $OutDir "stderr-elsewhere.log")
+for ($i = 0; $i -lt 50 -and $process.MainWindowHandle -eq 0; $i++) {
+    Start-Sleep -Milliseconds 200; $process.Refresh()
+}
+if ($process.MainWindowHandle -eq 0) { throw "Pane window did not appear" }
+Start-Sleep -Milliseconds 500
 Capture "15-no-compatible-package.png"
 Check "15-no-compatible-package.png" "error"   # "Not available on Windows: ..."
 Stop-Pane $process
