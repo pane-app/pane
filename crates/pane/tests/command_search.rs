@@ -118,8 +118,7 @@ fn the_commands_own_search_field_lists_the_service_results(cx: &mut TestAppConte
         let deadline = std::time::Instant::now() + Duration::from_secs(10);
         loop {
             cx.run_until_parked();
-            let view =
-                cx.read_entity(&window, |window, _| window.launcher().view());
+            let view = cx.read_entity(&window, |window, _| window.launcher().view());
             if view
                 .rows
                 .first()
