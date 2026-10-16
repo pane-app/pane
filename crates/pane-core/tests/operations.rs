@@ -145,6 +145,10 @@ fn samples(dirs: &Dirs) -> Launcher {
 
 /// Submits the greet form of `command` with `source`, `name` and `times`
 /// ("once" or "twice"), returning the outcome.
+fn result(text: &str) -> Status {
+    Status::Result(text.into())
+}
+
 fn greet(launcher: &Launcher, command: &str, source: &str, name: &str, times: &str) -> String {
     open_item(launcher, command, "Greet through another extension");
     // The form is a designed tree's (#241), submitted through the
