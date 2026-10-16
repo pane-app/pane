@@ -145,10 +145,15 @@ fn samples(dirs: &Dirs) -> Launcher {
 
 /// Submits the greet form of `command` with `source`, `name` and `times`
 /// ("once" or "twice"), returning the outcome.
-fn greet(launcher: &Launcher, command: &str, source: &str, name: &str, times: &str) -> Status {
+fn result(text: &str) -> Status {
+    Status::Result(text.into())
+}
+
+fn greet(launcher: &Launcher, command: &str, source: &str, name: &str, times: &str) -> String {
     open_item(launcher, command, "Greet through another extension");
     // The form is a designed tree's (#241), submitted through the
-    // designed seam.
+    // designed seam: the answer draws as the tree's own text, not the
+    // status line.
     assert!(
         matches!(launcher.view().screen, Screen::DesignedView(_)),
         "{command}: no form"
@@ -161,11 +166,27 @@ fn greet(launcher: &Launcher, command: &str, source: &str, name: &str, times: &s
             ("times".to_owned(), FormValue::Text(times.to_owned())),
         ],
     ));
-    launcher.view().status
-}
-
-fn result(text: &str) -> Status {
-    Status::Result(text.into())
+    let view = launcher.view();
+    let Screen::DesignedView(shown) = &view.screen else {
+        panic!("{command}: no answered view: {:?}", view.screen)
+    };
+    // The answer text the tree holds, as the samples' own tests read it.
+    fn texts(node: &pane_core::Node, into: &mut Vec<String>) {
+        if let pane_core::NodeKind::Text(text) = &node.kind {
+            match &text.content {
+                pane_core::TextContent::Plain(text) => into.push(text.clone()),
+                pane_core::TextContent::Spans(spans) => {
+                    into.extend(spans.iter().map(|span| span.text.clone()));
+                }
+            }
+        }
+        for child in &node.children {
+            texts(child, into);
+        }
+    }
+    let mut found = Vec::new();
+    texts(&shown.tree.root, &mut found);
+    found.join(" ")
 }
 
 #[test]
@@ -181,7 +202,7 @@ fn a_rust_command_calls_a_javascript_and_a_typescript_operation() {
             "Rust",
             "once"
         ),
-        result("Hello, Rust, from JavaScript")
+        "Hello, Rust, from JavaScript"
     );
     assert_eq!(
         greet(
@@ -191,7 +212,7 @@ fn a_rust_command_calls_a_javascript_and_a_typescript_operation() {
             "Rust",
             "once"
         ),
-        result("Hello, Rust, from TypeScript")
+        "Hello, Rust, from TypeScript"
     );
 }
 
@@ -206,7 +227,7 @@ fn javascript_and_typescript_commands_call_a_rust_operation() {
     ] {
         assert_eq!(
             greet(&launcher, command, &dirs.source(RUST), name, "once"),
-            result(&format!("Hello, {name}, from Rust"))
+            format!("Hello, {name}, from Rust")
         );
     }
 }
@@ -224,7 +245,7 @@ fn two_calls_made_at_once_are_both_served_in_every_language() {
     ] {
         assert_eq!(
             greet(&launcher, command, &dirs.source(target), "Ada", "twice"),
-            result(&format!("{answer} / {answer}")),
+            format!("{answer} / {answer}"),
             "{command}"
         );
     }
@@ -242,7 +263,7 @@ fn the_operation_s_own_error_reaches_the_caller_in_every_language() {
     ] {
         assert_eq!(
             greet(&launcher, command, &dirs.source(target), "", "once"),
-            Status::Error("failed: a name is needed".into()),
+            "failed: a name is needed",
             "{command}"
         );
     }
@@ -261,9 +282,7 @@ fn a_package_that_is_not_installed_is_reported_in_every_language() {
     ] {
         assert_eq!(
             greet(&launcher, command, &missing, "Ada", "once"),
-            Status::Error(format!(
-                "not-found: no installed extension has the source {missing}"
-            )),
+            format!("not-found: no installed extension has the source {missing}"),
             "{command}"
         );
     }
