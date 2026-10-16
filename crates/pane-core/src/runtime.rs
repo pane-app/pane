@@ -4550,6 +4550,19 @@ impl Host {
         let chain = self.chain();
         let view = open.id;
         let path = open.component.clone();
+        // The newer event for this view supersedes the work its earlier
+        // event left in flight: the web requests the old event's work
+        // started are aborted here — at the moment the newer event is
+        // committed, before the guest runs — so their connections close
+        // (the guest cannot cancel its own fetch, the host must). The
+        // supersede signal is the event dispatch itself, not any
+        // turn-taking call: the view's own answer-push also takes the
+        // turn, and aborting there would kill the answer's own fetch.
+        if let Some(instance) = self.instances.borrow().get(&path)
+            && let Some(generation) = instance.store.data().generation()
+        {
+            generation.abort_web_requests();
+        }
         let _turn = self.turn_for(&path, &chain).await?;
         self.live_designed(&open)?;
         let wit = command::UiEvent {
@@ -5750,19 +5763,8 @@ impl Host {
         instance.calls = Some(calls);
         match result {
             // The guest went idle, or a call wants the instance: it is put
-            // back whole, for that call or the next. A call wanting it is
-            // the supersede point for the work the view left in flight:
-            // the web requests the old event's work started are aborted,
-            // their connections closed — the guest cannot cancel its own
-            // fetch, the host must.
-            Ok(Ok(())) => {
-                if wanted.load(Ordering::SeqCst) {
-                    if let Some(data) = instance.store.data().data.as_ref() {
-                        data.generation().abort_web_requests();
-                    }
-                }
-                self.bring_back(path, taken, instance)
-            }
+            // back whole, for that call or the next.
+            Ok(Ok(())) => self.bring_back(path, taken, instance),
             outcome => {
                 let data = instance.store.data().data.clone();
                 let out_of_memory = instance.store.data().out_of_memory;
