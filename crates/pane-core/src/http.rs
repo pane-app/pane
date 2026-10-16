@@ -254,10 +254,7 @@ impl WasiHttpHooks for Sender {
                     .duration_since(std::time::UNIX_EPOCH)
                     .map(|d| d.as_millis())
                     .unwrap_or(0);
-                crate::diagnostic!(
-                    "[diag-ff46] http answered: {} +{at}ms",
-                    response.status()
-                );
+                crate::diagnostic!("[diag-ff46] http answered: {} +{at}ms", response.status());
                 let receiving: Receiving = Box::new(async move {
                     let _undo = undo;
                     unless_aborted(Box::into_pin(receiving), aborted.as_mut())
