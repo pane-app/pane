@@ -189,7 +189,7 @@ fn greet(launcher: &Launcher, command: &str, source: &str, name: &str, times: &s
             let mut found = Vec::new();
             texts(&shown.tree.root, &mut found);
             let joined = found.join(" ");
-            if !joined.contains("Calling the other extension") {
+            if !joined.is_empty() && !joined.contains("Calling the other extension") {
                 return joined;
             }
         }

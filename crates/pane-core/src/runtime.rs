@@ -5563,11 +5563,19 @@ impl Host {
         let state = instance.store.data_mut();
         state.helpers.stop_owned_by(state.owner);
         state.programs.clear();
-        // A call the guest sent but did not wait for before its call ended
-        // has no frame to serve it.
-        while let Ok(stranded) = calls.try_recv() {
-            let answer = stranded.unanswered(operations::outside_a_call());
-            let _ = stranded.reply.send(answer);
+        // A call the guest's own frame sent but did not wait for has no
+        // frame to serve it — but the work a view's own Pending started
+        // (#243) outlives the frame that spawned it, and the park keeps
+        // driving it: the calls that work made are put back with the
+        // instance, not stranded, so the park serves them. Only calls of
+        // a dropped instance — its generation ended, its code stopped —
+        // are stranded with the refusal.
+        let stranding = result.is_err();
+        if stranding {
+            while let Ok(stranded) = calls.try_recv() {
+                let answer = stranded.unanswered(operations::outside_a_call());
+                let _ = stranded.reply.send(answer);
+            }
         }
         instance.calls = Some(calls);
         match result {
@@ -5755,11 +5763,17 @@ impl Host {
         let state = instance.store.data_mut();
         state.helpers.stop_owned_by(state.owner);
         state.programs.clear();
-        // A call the guest sent but did not wait for has no frame to serve
-        // it.
-        while let Ok(stranded) = calls.try_recv() {
-            let answer = stranded.unanswered(operations::outside_a_call());
-            let _ = stranded.reply.send(answer);
+        // A call the guest's own frame sent but did not wait for has no
+        // frame to serve it — but the park's whole purpose is driving
+        // what the guest left pending, so its calls are put back with
+        // the instance, not stranded. Only calls of a dropped instance
+        // are stranded with the refusal.
+        let stranding = result.is_err();
+        if stranding {
+            while let Ok(stranded) = calls.try_recv() {
+                let answer = stranded.unanswered(operations::outside_a_call());
+                let _ = stranded.reply.send(answer);
+            }
         }
         instance.calls = Some(calls);
         match result {
