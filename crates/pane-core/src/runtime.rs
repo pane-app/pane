@@ -5576,7 +5576,7 @@ impl Host {
         // instance, not stranded, so the park serves them. Only calls of
         // a dropped instance — its generation ended, its code stopped —
         // are stranded with the refusal.
-        let stranding = !matches!(result, Ok(Ok(_)));
+        let stranding = result.is_err();
         if stranding {
             while let Ok(stranded) = calls.try_recv() {
                 let answer = stranded.unanswered(operations::outside_a_call());
@@ -5778,7 +5778,7 @@ impl Host {
         // what the guest left pending, so its calls are put back with
         // the instance, not stranded. Only calls of a dropped instance
         // are stranded with the refusal.
-        let stranding = !matches!(result, Ok(Ok(_)));
+        let stranding = result.is_err();
         if stranding {
             while let Ok(stranded) = calls.try_recv() {
                 let answer = stranded.unanswered(operations::outside_a_call());
