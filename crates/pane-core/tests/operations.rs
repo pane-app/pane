@@ -263,7 +263,7 @@ fn the_operation_s_own_error_reaches_the_caller_in_every_language() {
     ] {
         assert_eq!(
             greet(&launcher, command, &dirs.source(target), "", "once"),
-            Status::Error("failed: a name is needed".into()),
+            "failed: a name is needed",
             "{command}"
         );
     }
@@ -282,9 +282,7 @@ fn a_package_that_is_not_installed_is_reported_in_every_language() {
     ] {
         assert_eq!(
             greet(&launcher, command, &missing, "Ada", "once"),
-            Status::Error(format!(
-                "not-found: no installed extension has the source {missing}"
-            )),
+            format!("not-found: no installed extension has the source {missing}"),
             "{command}"
         );
     }
