@@ -20,7 +20,7 @@ use service::Service;
 #[path = "support/settle.rs"]
 mod settle;
 
-use settle::{settle, settle_shown, until};
+use settle::{settle, settle_shown};
 
 #[path = "support/packages.rs"]
 mod packages;

@@ -5668,12 +5668,23 @@ impl Host {
                         // call wants the instance: `wanted` is re-read on
                         // every wake, so a call noting itself and this going
                         // to sleep cannot miss each other on this thread.
+                        //
+                        // The Notified registration is held for the park's
+                        // whole duration: a registration created and dropped
+                        // within a single poll is gone before the turn
+                        // waiter's notify_waiters() arrives, and
+                        // notify_waiters() leaves no permit for a later
+                        // registration to find — the wake was lost, and the
+                        // park slept on until the store's own last task
+                        // drained (a fetch held for seconds). The future is
+                        // created once, polled on every wake, and its
+                        // registration persists until the park ends.
+                        let mut notified = std::pin::pin!(woken.notified());
                         std::future::poll_fn(|cx| {
                             if wanted.load(Ordering::SeqCst) {
                                 return Poll::Ready(());
                             }
-                            let mut woken = std::pin::pin!(woken.notified());
-                            if woken.as_mut().poll(cx).is_ready() {
+                            if notified.as_mut().poll(cx).is_ready() {
                                 return Poll::Ready(());
                             }
                             accessor.poll_no_interesting_tasks(cx)
