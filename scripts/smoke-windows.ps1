@@ -598,8 +598,18 @@ Send "{ENTER}"; Start-Sleep -Seconds 3   # open Call from Rust
 Send "{ENTER}"; Start-Sleep -Seconds 2   # "Greet through another extension": its form
 Send ("local:" + (Resolve-Path "target/guests/packages/sample-operations-js").Path)
 Send "{TAB}Rust"
-Send "{ENTER}"; Start-Sleep -Seconds 5   # Greet
-Capture "32-operation-answer.png"
+# The answer's toast auto-clears after its three seconds (#249, ADR
+# 0035): a five-second wait puts the capture past the clear on a leg
+# where the cross-language call answered quickly. The capture starts
+# at two seconds (inside the toast's window for a fast answer) and
+# retries for a slow one.
+Send "{ENTER}"; Start-Sleep -Seconds 2
+for ($i = 0; $i -lt 6; $i++) {
+    Capture "32-operation-answer.png"
+    $found = python "$PSScriptRoot/check_screenshot.py" (Join-Path $OutDir "32-operation-answer.png") "success" *> $null
+    if ($LASTEXITCODE -eq 0) { break }
+    Start-Sleep -Milliseconds 500
+}
 Check "32-operation-answer.png" "success"   # the JavaScript guest's answer
 $shots = "31-operations-target", "32-operation-answer" | ForEach-Object { Join-Path $OutDir "$_.png" }
 python "$PSScriptRoot/check_screenshot.py" --distinct @shots

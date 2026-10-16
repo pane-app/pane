@@ -645,8 +645,19 @@ focus_launcher
 "$xdotool" key Return; sleep 2   # "Greet through another extension": its form
 "$xdotool" type --delay 20 "local:$(realpath target/guests/packages/sample-operations-js)"
 "$xdotool" key Tab; "$xdotool" type --delay 50 Rust
-"$xdotool" key Return; sleep 5   # Greet
-capture 32-operation-answer.png
+# The answer's toast auto-clears after its three seconds (#249, ADR
+# 0035): a five-second wait puts the capture past the clear on a leg
+# where the cross-language call answered quickly. The capture starts
+# at two seconds (inside the toast's window for a fast answer) and
+# retries for a slow one.
+"$xdotool" key Return; sleep 2
+for _ in $(seq 6); do
+  capture 32-operation-answer.png
+  if python3 "$(dirname "$0")/check_screenshot.py" "$out/32-operation-answer.png" success >/dev/null 2>&1; then
+    break
+  fi
+  sleep 0.5
+done
 check 32-operation-answer.png success   # the JavaScript guest's answer
 python3 "$(dirname "$0")/check_screenshot.py" --distinct "$out"/{31-operations-target,32-operation-answer}.png
 stop_pane
