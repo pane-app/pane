@@ -392,10 +392,13 @@ fn backspace_backs_out_of_an_empty_command_search_but_not_one_with_text(cx: &mut
     settle(&window, cx);
     cx.simulate_keystrokes("backspace");
     let view = settle(&window, cx);
-    assert_eq!(
-        view.screen,
-        Screen::CommandSearch { query: "a".into() },
-        "the field's Backspace deletes its text"
+    // The designed view's search field keeps the key: Backspace deletes
+    // its text, the view staying the designed List it is (the old
+    // module's CommandSearch screen went with the module).
+    assert!(
+        matches!(view.screen, Screen::DesignedView { .. }),
+        "the field's Backspace deletes its text: {:?}",
+        view.screen
     );
     assert_eq!(field_text(&window, cx), "a");
 }
@@ -532,12 +535,10 @@ fn a_held_backspace_that_empties_a_field_does_not_back_out(cx: &mut TestAppConte
     press_held(cx, "backspace");
     press_held(cx, "backspace");
     let view = settle(&window, cx);
-    assert_eq!(
-        view.screen,
-        Screen::CommandSearch {
-            query: String::new()
-        },
-        "the repeats backed out of nothing"
+    assert!(
+        matches!(view.screen, Screen::DesignedView { .. }),
+        "the repeats backed out of nothing: {:?}",
+        view.screen
     );
     assert_eq!(field_text(&window, cx), "");
 
@@ -941,12 +942,10 @@ fn a_rebound_back_a_level_and_section_jump_take_effect(cx: &mut TestAppContext) 
     settle(&window, cx);
     cx.simulate_keystrokes("backspace");
     let view = settle(&window, cx);
-    assert_eq!(
-        view.screen,
-        Screen::CommandSearch {
-            query: String::new()
-        },
-        "the Backspace no longer backs out"
+    assert!(
+        matches!(view.screen, Screen::DesignedView { .. }),
+        "the Backspace no longer backs out: {:?}",
+        view.screen
     );
     cx.simulate_keystrokes("f9");
     let view = settle(&window, cx);

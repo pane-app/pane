@@ -3023,6 +3023,7 @@ impl Render for LauncherWindow {
         #[cfg(any(test, debug_assertions))]
         {
             self.drawn = Some(view.clone());
+
             // [diag-ff34] Diagnostic scaffolding for the window-redraw
             // root: the render number of the view this frame draws, so
             // the next matrix says which renders the window drew and

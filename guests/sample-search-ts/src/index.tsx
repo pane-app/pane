@@ -119,11 +119,14 @@ async function search(query: string): Promise<Found> {
 }
 
 /** The search view: a List that handles its search itself (#240), the
- * service's answers as its items. The search the text starts runs in the
- * event that hears it, and the results are drawn the moment they land;
- * the loading state shows while it runs. The "Service address" item
- * pushes a view of a text field and a Save button, the modern replacement
- * for the typed form the List document carried. */
+ * service's answers as its items. The search the text starts runs past
+ * the event that hears it — the event answers once its own synchronous
+ * part has started the search, so a newer one's answer is never made to
+ * wait behind it — and the results are drawn the moment they land, the
+ * arrival asking for its own drawing; the loading state shows while it
+ * runs. The "Service address" item pushes a view of a text field and a
+ * Save button, the modern replacement for the typed form the List
+ * document carried. */
 function Packages() {
   const [results, setResults] = useState<{ name: string; summary: string }[]>([]);
   const [failed, setFailed] = useState<string | null>(null);
@@ -136,6 +139,13 @@ function Packages() {
       setLoading(false);
       return;
     }
+    // A newer search starts: the rows the old one drew are cleared here,
+    // in the listener's synchronous part, as the Rust sample's render
+    // clears them when its query changes — the loading state the event's
+    // answer draws lists nothing stale, and the answer's own drawing
+    // fills the rows in when it lands.
+    setResults([]);
+    setFailed(null);
     setLoading(true);
     const run = search(text);
     const held = { run };

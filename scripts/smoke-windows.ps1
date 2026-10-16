@@ -135,7 +135,13 @@ function Click-At($x, $y) {
     [Win]::mouse_event(0x2, 0, 0, 0, [UIntPtr]::Zero)   # left button down
     [Win]::mouse_event(0x4, 0, 0, 0, [UIntPtr]::Zero)   # left button up
 }
-function Send($keys) { [System.Windows.Forms.SendKeys]::SendWait($keys) }
+function Send($keys) {
+    # The key-injection logger: the driver's own sends, so a failed
+    # leg's pane.log read alongside this log says whether the driver
+    # stopped sending or the app stopped receiving.
+    Add-Content -Path "$OutDir/inject.log" -Value "[inject $(Get-Date -Format 'o')] $keys"
+    [System.Windows.Forms.SendKeys]::SendWait($keys)
+}
 # Presses one key, as a tool that injects input does (#260): the Windows
 # key has no SendKeys form, and the binding kinds the hotkeys gain are
 # pressed with the key's own code. Injected and untagged: another tool's
@@ -494,7 +500,17 @@ Copy-Item "target/guests/sample_rust.wasm" $elsewhere
   "commands": [{ "id": "sample", "title": "Elsewhere sample", "component": "sample_rust.wasm" }]
 }
 '@ | Set-Content -Encoding ascii (Join-Path $elsewhere "pane.json")
-$process = Start-Pane "stderr-elsewhere.log" @("--install", $elsewhere)
+# The refusal's error status is the footer's toast, auto-cleared after
+# the toast's 3 seconds (#249, ADR 0035): the capture must land inside
+# that window — Start-Pane's settle would push it past the clear on a
+# slow leg. The window is waited for as Start-Pane waits for it, then
+# half a second for the preview's check, then the capture.
+$process = Start-Process -FilePath "target/debug/pane.exe" -ArgumentList @("--install", $elsewhere) -PassThru -RedirectStandardError (Join-Path $OutDir "stderr-elsewhere.log")
+for ($i = 0; $i -lt 50 -and $process.MainWindowHandle -eq 0; $i++) {
+    Start-Sleep -Milliseconds 200; $process.Refresh()
+}
+if ($process.MainWindowHandle -eq 0) { throw "Pane window did not appear" }
+Start-Sleep -Milliseconds 500
 Capture "15-no-compatible-package.png"
 Check "15-no-compatible-package.png" "error"   # "Not available on Windows: ..."
 Stop-Pane $process
@@ -582,8 +598,18 @@ Send "{ENTER}"; Start-Sleep -Seconds 3   # open Call from Rust
 Send "{ENTER}"; Start-Sleep -Seconds 2   # "Greet through another extension": its form
 Send ("local:" + (Resolve-Path "target/guests/packages/sample-operations-js").Path)
 Send "{TAB}Rust"
-Send "{ENTER}"; Start-Sleep -Seconds 5   # Greet
-Capture "32-operation-answer.png"
+# The answer's toast auto-clears after its three seconds (#249, ADR
+# 0035): a five-second wait puts the capture past the clear on a leg
+# where the cross-language call answered quickly. The capture starts
+# at two seconds (inside the toast's window for a fast answer) and
+# retries for a slow one.
+Send "{ENTER}"; Start-Sleep -Seconds 2
+for ($i = 0; $i -lt 6; $i++) {
+    Capture "32-operation-answer.png"
+    $found = python "$PSScriptRoot/check_screenshot.py" (Join-Path $OutDir "32-operation-answer.png") "success" *> $null
+    if ($LASTEXITCODE -eq 0) { break }
+    Start-Sleep -Milliseconds 500
+}
 Check "32-operation-answer.png" "success"   # the JavaScript guest's answer
 $shots = "31-operations-target", "32-operation-answer" | ForEach-Object { Join-Path $OutDir "$_.png" }
 python "$PSScriptRoot/check_screenshot.py" --distinct @shots

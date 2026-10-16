@@ -960,7 +960,14 @@ export interface Outcome {
  * `replace` name what opens — an element or a view — and `onPop`, given
  * with a push, runs when the pushed view pops, with the result its pop
  * answered (or `undefined`, the back key's), the view re-rendering
- * after. */
+ * after.
+ *
+ * Navigation is answered synchronously: a listener that returns a
+ * promise runs its work past the event's answer, and what that promise
+ * resolves with is not a navigation — the event that would carry it has
+ * answered. Navigate from the listener's synchronous part (`Push(...)`
+ * and `pop(...)` answer at once), and let awaited work change state,
+ * whose landing asks for the drawing that shows it. */
 export interface Navigation {
   push?: Element | DesignedView;
   replace?: Element | DesignedView;
@@ -1005,7 +1012,10 @@ export declare function Push(
 /** The view a command's `openView` answers with (pane.d.ts's
  * `DesignedView`): `component` rendered as its tree, its state kept
  * across renders, its listeners called by the events Pane sends.
- * `props`, when given, are passed to the component. */
+ * `props`, when given, are passed to the component. A listener that
+ * answers a promise runs its work past the event's answer: the event
+ * answers once the listener's synchronous part is done, and the work's
+ * landing asks for the drawing that shows it. */
 export declare function createView<Props extends Record<string, unknown>>(
   component: (props: Props) => Children,
   props?: Props,
