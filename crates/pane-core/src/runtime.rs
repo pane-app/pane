@@ -5497,6 +5497,10 @@ impl Host {
             .take()
             .unwrap_or_else(|| operations::channel().1);
         instance.store.data_mut().serving = true;
+        // [diag-ff53] Diagnostic scaffolding for the operations
+        // serving-context root: the serving flag's transitions.
+        // fix-forward-54 removes them with the root fix.
+        crate::diagnostic!("[diag-ff53] serving: true (run_guest)");
         // No command and no window unless the call says otherwise (see
         // `CallFor`): an operation's or a root search's call has none.
         instance.store.data_mut().set_call(CallFor::default());
@@ -5556,6 +5560,8 @@ impl Host {
             }
         };
         instance.store.data_mut().serving = false;
+        // [diag-ff53] Diagnostic scaffolding; removed with the root fix.
+        crate::diagnostic!("[diag-ff53] serving: false (run_guest end)");
         // A helper or a program runs no longer than the call that started
         // it: one the guest left running when its call ended is ended too,
         // with what it started, and the ids of those it spawned name
@@ -5660,6 +5666,8 @@ impl Host {
             .take()
             .unwrap_or_else(|| operations::channel().1);
         instance.store.data_mut().serving = true;
+        // [diag-ff53] Diagnostic scaffolding; removed with the root fix.
+        crate::diagnostic!("[diag-ff53] serving: true (park)");
         // No command and no window: the park runs no call of the user's.
         instance.store.data_mut().set_call(CallFor::default());
         let (wanted, woken) = {
@@ -5750,6 +5758,8 @@ impl Host {
             }
         };
         instance.store.data_mut().serving = false;
+        // [diag-ff53] Diagnostic scaffolding; removed with the root fix.
+        crate::diagnostic!("[diag-ff53] serving: false (park end)");
         // What the park's guest left running ends with it, as a call's
         // does: a helper or a program no call waits on.
         let state = instance.store.data_mut();
