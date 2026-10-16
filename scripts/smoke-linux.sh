@@ -543,7 +543,20 @@ cat >"$out/elsewhere/pane.json" <<'JSON'
   "commands": [{ "id": "sample", "title": "Elsewhere sample", "component": "sample_rust.wasm" }]
 }
 JSON
-start_pane --install "$out/elsewhere"
+# The refusal's error status is the footer's toast, auto-cleared after
+# the toast's 3 seconds (#249, ADR 0035): the capture must land inside
+# that window — the start_pane's settle would push it past the clear
+# on a slow leg. The window is waited for as start_pane waits for it,
+# then half a second for the preview's check, then the capture.
+"$pane" --install "$out/elsewhere" 2>>"$out/stderr.log" &
+pane_pid=$!
+window=
+for _ in $(seq 100); do
+  window=$("$xdotool" search --onlyvisible --pid "$pane_pid" 2>/dev/null | head -1) && [ -n "$window" ] && break
+  sleep 0.2
+done
+[ -n "$window" ] || { echo "Pane window did not appear"; exit 1; }
+sleep 0.5
 capture 15-no-compatible-package.png
 check 15-no-compatible-package.png error   # "Not available on Linux: ..."
 stop_pane
