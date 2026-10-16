@@ -3029,10 +3029,7 @@ impl Render for LauncherWindow {
             // reaching the render, or the Running the first frame drew.
             // fix-forward-44 removes it with the root fix.
             if let pane_core::Screen::Package { .. } = &view.screen {
-                pane_core::diagnostic!(
-                    "[diag-ff43] frame status: {:?}",
-                    view.status
-                );
+                pane_core::diagnostic!("[diag-ff43] frame status: {:?}", view.status);
             }
             // [diag-ff34] Diagnostic scaffolding for the window-redraw
             // root: the render number of the view this frame draws, so
