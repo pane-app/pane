@@ -200,6 +200,15 @@ impl WasiHttpHooks for Sender {
         // nothing here needs it.
         _received: Box<dyn Future<Output = Result<(), Error>> + Send>,
     ) -> Sent {
+        // [diag-ff46] Diagnostic scaffolding for the a_newer
+        // serialization question: the wasi:http call's arrival —
+        // whether the second request reached the host. fix-forward-47
+        // removes it with the root fix.
+        crate::diagnostic!(
+            "[diag-ff46] http called: {} {}",
+            request.method(),
+            request.uri()
+        );
         if self.stopped() {
             // Stopped code starts no more work.
             return Box::new(async { Err(Error::HttpRequestDenied) });
@@ -236,6 +245,9 @@ impl WasiHttpHooks for Sender {
                     return Err(Error::HttpRequestDenied);
                 };
                 let (response, receiving) = sent?;
+                // [diag-ff46] Diagnostic scaffolding; removed with the
+                // root fix.
+                crate::diagnostic!("[diag-ff46] http answered: {}", response.status());
                 let receiving: Receiving = Box::new(async move {
                     let _undo = undo;
                     unless_aborted(Box::into_pin(receiving), aborted.as_mut())

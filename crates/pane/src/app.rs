@@ -1139,6 +1139,20 @@ impl LauncherWindow {
     /// would act — the window's keystroke gate stops the key's dispatch
     /// then (#258; see the field in [`LauncherWindow::new`]). Everywhere
     /// else the field's own key consumes it first, as it should.
+    /// [diag-ff46] Diagnostic scaffolding; removed with the root fix.
+    fn interceptor_probe(
+        &mut self,
+        event: &KeyDownEvent,
+        _window: &mut Window,
+        _cx: &mut Context<Self>,
+    ) {
+        pane_core::diagnostic!(
+            "[diag-ff46] interceptor: {:?}{}",
+            event.keystroke.modifiers,
+            event.keystroke.key
+        );
+    }
+
     pub(crate) fn backspace_back_keys(
         &mut self,
         event: &KeyDownEvent,
@@ -3476,6 +3490,13 @@ impl Render for LauncherWindow {
             // back would act, and a stopped dispatch leaves the capture
             // loop after its first listener, so the one the gate means to
             // reach has to be it.
+            // [diag-ff46] Diagnostic scaffolding for the smoke's
+            // vanished-Enter question: the first capture listener sees
+            // binding-consumed keys the raw-key observer cannot — the
+            // Enter's arrival at the interceptor decides platform-loss
+            // (no line) from keymap-root (line present, no action).
+            // fix-forward-47 removes it with the root fix.
+            .capture_key_down(cx.listener(Self::interceptor_probe))
             .capture_key_down(cx.listener(Self::backspace_back_keys))
             .map(|content| Self::on_quick_slot_keys(content, cx))
             // A toast's actions' shortcuts first: the toast is what was
