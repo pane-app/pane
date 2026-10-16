@@ -4552,18 +4552,19 @@ impl Host {
         let path = open.component.clone();
         // The newer event for this view supersedes the work its earlier
         // event left in flight: the web requests the old event's work
-        // started are aborted here — at the moment the newer event is
-        // committed, before the guest runs — so their connections close
-        // (the guest cannot cancel its own fetch, the host must). The
-        // supersede signal is the event dispatch itself, not any
-        // turn-taking call: the view's own answer-push also takes the
-        // turn, and aborting there would kill the answer's own fetch.
+        // started are aborted here — after the turn is taken (the park
+        // that held the instance has ended and brought it back, so the
+        // instance is reachable) and before the guest runs, so their
+        // connections close (the guest cannot cancel its own fetch, the
+        // host must). The supersede signal is the event dispatch itself,
+        // not any turn-taking call: the view's own answer-push also takes
+        // the turn, and aborting there would kill the answer's own fetch.
+        let _turn = self.turn_for(&path, &chain).await?;
         if let Some(instance) = self.instances.borrow().get(&path)
             && let Some(generation) = instance.store.data().generation()
         {
             generation.abort_web_requests();
         }
-        let _turn = self.turn_for(&path, &chain).await?;
         self.live_designed(&open)?;
         let wit = command::UiEvent {
             render: event.render,
