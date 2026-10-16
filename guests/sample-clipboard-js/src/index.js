@@ -15,6 +15,7 @@
 // deletes it.
 // @ts-check
 import { closeMainWindow, showHUD, showToast } from "@pane-app/extension/feedback";
+import { getPreferenceValues } from "@pane-app/extension/preferences";
 import { NotAvailableError, PASTE_FALLBACK, paste } from "@pane-app/extension/system";
 import * as history from "pane:extension/clipboard-history@0.2.0";
 
@@ -246,10 +247,35 @@ async function outcome(itemId) {
   throw new Error(`unknown item: ${itemId}`);
 }
 
+/** The retention the user chose, as the package's `keepHistoryFor`
+ * preference names it (its card in Settings, #241): a number of seconds,
+ * or `undefined` when the preference is absent or names nothing the
+ * history accepts. */
+function chosenRetention() {
+  let values;
+  try {
+    values = getPreferenceValues();
+  } catch {
+    // Pane refused (the code is stopped): the retention stands as it is.
+    return undefined;
+  }
+  const seconds = Number(values.keepHistoryFor);
+  return Number.isInteger(seconds) && RETENTIONS.includes(seconds) ? seconds : undefined;
+}
+
 /** @type {import("@pane-app/extension").Command} */
 export const command = {
   async render() {
-    const status = host(history.status);
+    // The retention the user chose through the extension's card is applied
+    // here, before the history is read: the same value, the same effect the
+    // card promises — items already older are deleted at once (so the
+    // listing the command draws is the kept one).
+    let status = host(history.status);
+    const chosen = chosenRetention();
+    if (chosen !== undefined && chosen !== status.retentionSeconds) {
+      host(() => history.setRetention(chosen));
+      status = host(history.status);
+    }
     const items = [toggle(status)];
     if (status.capture !== "off") {
       items.push(
