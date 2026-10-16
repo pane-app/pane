@@ -151,6 +151,13 @@ function Packages() {
       setLoading(false);
       return;
     }
+    // A newer search starts: the rows the old one drew are cleared here,
+    // in the listener's synchronous part, as the Rust sample's render
+    // clears them when its query changes — the loading state the event's
+    // answer draws lists nothing stale, and the answer's own drawing
+    // fills the rows in when it lands.
+    setResults([]);
+    setFailed(null);
     setLoading(true);
     const held = { run: search(text) };
     searching.current = held;
