@@ -29,10 +29,24 @@
 // asking; its pop event carries no result. A root node's
 // `navigationTitle` names the view, shown where a screen's title is.
 //
+// A listener that answers a promise does its work past the event that
+// heard it: the event answers once the listener's synchronous part is
+// done (the state it writes is drawn by the render that follows the
+// event, as every event's is), and the drawing that shows what the work
+// wrote is asked for when the promise settles, as pending data's is
+// (#243) — so the view's later events are never made to wait behind the
+// work (a newer search's answer draws while an older one's fetch runs).
+// Navigation is what a listener answers without a promise: what its
+// promise resolves with is not one, for the event that would carry it
+// has answered — a listener that must navigate after awaiting stores the
+// ask in state and draws it, or navigates from the next event.
+//
 // The tree is JSON with the version of the UI component set it targets;
 // a Pane that renders another major refuses it naming both versions, and
 // one that knows less draws what it understands.
 
+import { logThrown } from "./console.js";
+import { showToast } from "./feedback.js";
 import { askToRender, measureText as witMeasureText } from "pane:extension/view@0.2.0";
 
 /** The version of the UI component set this SDK writes. */
@@ -40,6 +54,24 @@ const COMPONENT_SET = "1.3";
 
 /** The empty outcome: what a handler that navigates nowhere answers. */
 const NOTHING_NEXT = { push: null, replace: null, pop: null };
+
+/** Whether `value` is a promise a listener's work runs on through: the
+ * listener was called, its synchronous part has run, and what it answers
+ * is a thenable rather than the navigation it asked for. */
+function isThenable(value) {
+  return value !== null && typeof value === "object" && typeof value.then === "function";
+}
+
+/** The text of what a listener's work rejected with: the message of an
+ * `Error` or of an object with one, or the text of anything else — the
+ * same reading an event's error answer gives it. */
+function messageOf(thrown) {
+  if (thrown instanceof Error) return thrown.message;
+  if (thrown !== null && typeof thrown === "object" && typeof thrown.message === "string") {
+    return thrown.message;
+  }
+  return String(thrown);
+}
 
 /** The callback id of the pop event, the event Pane sends a view when the
  * one above it popped: an id no tree names (this SDK's ids start at 1),
@@ -387,7 +419,7 @@ function writeChild(child, index, parentPath, callbacks, cells, used, into) {
   }
   if (typeof type === "function") {
     if (typeof type.node === "string") {
-      into.push(builtinNode(type.node, props, path, callbacks, cells, used));
+      into.push(builtinNode(type.node, props, path, callbacks, cells, used, child.key));
       return;
     }
     // A function component: run it and write what it rendered, its
@@ -418,8 +450,12 @@ function valueListener(callbacks, listener) {
   return id;
 }
 
-/** One built-in node, with the properties `props` gives it. */
-function builtinNode(name, props, path, callbacks, cells, used) {
+/** One built-in node, with the properties `props` give it: `key`, when
+ * the element itself names one (the JSX transform moves a `key="…"`
+ * attribute there, out of the properties), is the node's key too — the
+ * identity its state is kept by and its events addressed to, the same one
+ * the properties' own `key` names when an author writes it there. */
+function builtinNode(name, props, path, callbacks, cells, used, key) {
   const given = props ?? {};
   const children = [];
   // A dropdown's children are its items, given as objects rather than
@@ -429,6 +465,7 @@ function builtinNode(name, props, path, callbacks, cells, used) {
   }
   const node = { type: name };
   if (given.key !== undefined) node.key = given.key;
+  else if (key !== undefined) node.key = key;
   // A form field's `id` is its key: the identity its value is collected
   // under and its state kept by (#241).
   if (given.id !== undefined && node.key === undefined) node.key = given.id;
@@ -948,7 +985,10 @@ function textOf(children) {
  * or [`Push`] answer (or an object of the same shape): the pushed or
  * replacing view is a `createView` view too, and the `onPop` a push was
  * given runs when the pushed view pops, with the result its pop
- * answered, the view re-rendering after.
+ * answered, the view re-rendering after. A listener that answers a
+ * promise runs its work past the event: the event answers once the
+ * listener's synchronous part is done, and the work's landing asks for
+ * the drawing that shows it (see the module's header).
  */
 export function createView(component, props = {}) {
   /** The hook cells of each component instance, by its place in the tree. */
@@ -964,6 +1004,28 @@ export function createView(component, props = {}) {
   /** The view's id, as its render context names it: what asks Pane to
    * draw it again when pending data lands (#243). */
   let view = 0;
+  /** `work`, a promise a listener answered: its event has answered
+   * already — the listener's synchronous part was all that call waited
+   * for — and the drawing that shows the state the work writes is asked
+   * for when it settles (#243), as pending data's landing is. What it
+   * rejects with is shown as the event's error answer would have shown
+   * it (a failure toast, logged to the package's extension log too),
+   * and the drawing is asked for all the same, for the state the work
+   * had written before it threw. */
+  const runsOn = (work) => {
+    work.then(
+      () => askToRender(view),
+      (thrown) => {
+        logThrown(thrown);
+        showToast({
+          style: "failure",
+          title: "The extension reported an error",
+          message: messageOf(thrown),
+        });
+        askToRender(view);
+      },
+    );
+  };
   return {
     async render(context) {
       const number = numberOf(context, newest + 1);
@@ -1021,12 +1083,17 @@ export function createView(component, props = {}) {
     async handleEvent(event) {
       // The pop event: the view above this one popped. Its payload is the
       // result that pop answered; the view re-renders after it, as after
-      // every event.
+      // every event. The `onPop` is a listener: its synchronous part is
+      // all this call waits for, and a promise it answers runs on past
+      // the event, its landing asking for the drawing that shows it.
       if (event.callback === POP_CALLBACK) {
         const run = onPop;
         onPop = null;
         if (run !== null) {
-          await run(popResultOf(event.payload));
+          const answered = run(popResultOf(event.payload));
+          if (isThenable(answered)) {
+            runsOn(answered);
+          }
         }
         return NOTHING_NEXT;
       }
@@ -1041,8 +1108,16 @@ export function createView(component, props = {}) {
         // The listener is told the event's payload as it is: a text
         // listener reads its text (its `value` or `key`), a value listener
         // what its `value` or `values` carries whatever type it is (#241),
-        // a canvas's the event it names (#242).
-        navigation = await run(event.payload);
+        // a canvas's the event it names (#242). What it answers without a
+        // promise is the navigation it asked for; a promise is work that
+        // runs past this event's answer (the module's header names the
+        // discipline), its landing drawing itself.
+        const answered = run(event.payload);
+        if (isThenable(answered)) {
+          runsOn(answered);
+        } else {
+          navigation = answered;
+        }
       }
       // What the listener answered next: at most one of a push, a replace
       // and a pop is acted on — a pop first, then a replace, then a push,
