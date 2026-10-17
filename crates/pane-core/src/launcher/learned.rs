@@ -196,7 +196,6 @@ impl LearnedChoices {
     /// its queries while they still count.
     /// How many results have uses recorded, as the diagnostics bracket
     /// what the comparator is given.
-    #[cfg(any(test, debug_assertions))]
     pub(super) fn counted(&self) -> usize {
         self.uses.len()
     }
