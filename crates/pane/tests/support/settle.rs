@@ -63,6 +63,103 @@ pub fn settle(window: &Entity<LauncherWindow>, cx: &mut VisualTestContext) -> La
     }
 }
 
+/// Runs the window, as [`settle`] does, until the launcher is no longer
+/// running an action and the keys the window held for the query's list
+/// have been applied — but reads the launcher's state alone, never
+/// demanding that the window's last frame drew it. The window's redraw
+/// of a change is the frame bracket's question, not the waiting test's:
+/// a settle that demands the drawn frame match false-fails when it lags
+/// the launcher's state, as it does on this platform — the answer a
+/// thread computed reaches the launcher while the frame it would appear
+/// in never comes, and the state the test means to settle on is already
+/// there (the fix-forward rounds' evidence, #363 and #374).
+///
+/// The wait's end moves the clock the window's timers run on past the
+/// settle timers the platform arms — the announcer's typing settle, a
+/// held key's deadline, both 300 ms — before it returns, as time passes
+/// for a user reading what settled before acting again: a window whose
+/// clock never moved has starved them, the redraw they ask for never
+/// happens, and the keys the test presses next arrive nowhere. Tests
+/// that measure the clock itself while their work settles drive their
+/// own clock and read the state with a poll of their own.
+pub fn settle_state(window: &Entity<LauncherWindow>, cx: &mut VisualTestContext) -> LauncherView {
+    let deadline = Instant::now() + Duration::from_secs(60);
+    loop {
+        cx.run_until_parked();
+        let (view, held) = cx.read_entity(window, |window, _| {
+            (window.launcher().view(), window.held_keys())
+        });
+        if !matches!(view.status, Status::Running { .. }) && held.is_empty() {
+            // The settle horizon: a late answer can still change the
+            // state under it, so the read is taken again after.
+            cx.executor().advance_clock(SETTLED_PAST);
+            cx.run_until_parked();
+            let (view, held) = cx.read_entity(window, |window, _| {
+                (window.launcher().view(), window.held_keys())
+            });
+            if !matches!(view.status, Status::Running { .. }) && held.is_empty() {
+                return view;
+            }
+        }
+        assert!(
+            Instant::now() < deadline,
+            "timed out: the launcher shows {view:?} (keys still held: {held:?})"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
+/// Runs the window until `done` holds for the launcher's view, read from
+/// the launcher's state alone: the window's last frame is not demanded.
+/// The window's redraw of a change is the frame bracket's question, not
+/// the waiting test's — a wait that demands the drawn frame match
+/// false-fails when it lags the launcher's state, as it does on this
+/// platform (the fix-forward rounds' evidence, #363 and #374: the rows
+/// are read from the launcher's state with an inline poll, matching the
+/// pane-core harness's wait shape) — and what the test asserts of the
+/// state is the launcher's, whichever frame shows it.
+///
+/// The wait's end moves the clock the window's timers run on past the
+/// settle timers the platform arms, as [`settle_state`] does: the keys
+/// the test types after it land. A test that measures the clock while
+/// its answer settles — a loading bar's lateness, a fade's leaving —
+/// drives its own clock and reads the state with a poll of its own
+/// instead, unmoved by this.
+pub fn until_state(
+    window: &Entity<LauncherWindow>,
+    cx: &mut VisualTestContext,
+    mut done: impl FnMut(&LauncherView) -> bool,
+) -> LauncherView {
+    // Generous: opening a JavaScript command compiles a 4 MB component
+    // first, and CI's runners are slow.
+    let deadline = Instant::now() + Duration::from_secs(60);
+    loop {
+        cx.run_until_parked();
+        let view = cx.read_entity(window, |window, _| window.launcher().view());
+        if done(&view) {
+            // The settle horizon, as [`settle_state`] takes it: a late
+            // answer can still change the state under the predicate, so
+            // it is read again after the clock has moved.
+            cx.executor().advance_clock(SETTLED_PAST);
+            cx.run_until_parked();
+            let view = cx.read_entity(window, |window, _| window.launcher().view());
+            if done(&view) {
+                return view;
+            }
+        }
+        assert!(
+            Instant::now() < deadline,
+            "timed out: the launcher shows {view:?}"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
+/// How far past the settle timers a wait's end moves the clock: the
+/// announcer's settle and a held key's deadline are 300 ms, and the
+/// horizon clears both.
+const SETTLED_PAST: Duration = Duration::from_millis(310);
+
 /// Runs the window, as [`settle`] does, until its last frame also drew
 /// nothing over the launcher: no Actions panel, no confirmation. Keys go
 /// where the last frame put them, so after Enter chose an action in the

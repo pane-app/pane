@@ -10,7 +10,7 @@
 //! clock, which the bar's whole count moves; the service-held command
 //! search covers the status-running kind of waited-for work.
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use gpui::{Entity, TestAppContext, VisualTestContext, prelude::*, px};
 use pane::LauncherWindow;
@@ -19,7 +19,7 @@ use pane_core::{Launcher, LauncherView, Runtime, Screen, Status};
 #[path = "support/settle.rs"]
 mod settle;
 
-use settle::{settle, settle_shown, until};
+use settle::{settle, settle_shown};
 
 #[path = "support/packages.rs"]
 mod packages;
@@ -220,9 +220,26 @@ fn a_slow_root_search_shows_the_late_loading_bar_and_fades_it_away(cx: &mut Test
     // from where it was, and the window is idle again. The query's list
     // is held while the provider answers (#201), so the wait is for the
     // answer's row, not for the rows to stop being the blank query's.
-    let view = until(&window, cx, |view| {
-        view.rows.iter().any(|row| row.title == "Slow answer")
-    });
+    // The row is read from the launcher's state alone — the clock this
+    // test measures its line with stays its own, so no state-reading
+    // helper that moves it — and the window's redraw of the row is the
+    // frame bracket's question (a settle demanding the drawn frame match
+    // false-fails while it lags the state, as it does on this platform).
+    let view = {
+        let deadline = Instant::now() + Duration::from_secs(30);
+        loop {
+            cx.run_until_parked();
+            let view = cx.read_entity(&window, |window, _| window.launcher().view());
+            if view.rows.iter().any(|row| row.title == "Slow answer") {
+                break view;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "the answer never arrived: {view:?}"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    };
     assert_eq!(titles(&view), ["Slow answer"]);
     frame(cx, SOME);
     let (strength, _) = bar(&window, cx).expect("the line still shows");
