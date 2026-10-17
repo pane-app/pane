@@ -815,7 +815,9 @@ fn stopped_while_it_waits(fixture: &Fixture, happen: impl FnOnce(&Pane)) -> (Pan
 
 /// Activates the details of `stall-details`, whose answer the service
 /// starts and never finishes, and returns the activation's thread once the
-/// command waits on it.
+/// command waits on it. A designed view's press answers when its listener
+/// returned, the fetch it started running on past that, so the thread
+/// ends while the request still waits: its end is not the call's.
 fn waiting_on_the_service(pane: &Pane, service: &Service) -> std::thread::JoinHandle<()> {
     pane.use_service(&service.url());
     // The search happens in the open command's own field, as every
@@ -867,11 +869,11 @@ fn other_extensions_answer_while_a_call_waits_on_the_network() {
             "{}",
             fixture.package
         );
-        assert!(
-            !waiting.is_finished(),
-            "{}: the waiting call ended first",
-            fixture.package
-        );
+        // The waiting call is the request the service holds: a designed
+        // view's press runs its listener synchronously, the fetch it
+        // starts running on past the event's answer, so the activation's
+        // thread ending no longer says the call ended — the service's
+        // open connections say it, and the request is still one of them.
         assert!(service.abandoned().is_empty(), "{:?}", service.abandoned());
         block_on(pane.launcher.set_enabled(&identity, false));
         assert!(

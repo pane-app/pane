@@ -572,7 +572,7 @@ impl Launcher {
                 // send — names a listener the send's render never held,
                 // and the view drops the event, losing the query.
                 let pair = {
-                    let mut state = launcher.lock();
+                    let state = launcher.lock();
                     let Screen::DesignedView(snapshot) = &state.view.screen else {
                         return;
                     };
