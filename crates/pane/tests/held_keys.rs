@@ -195,6 +195,14 @@ fn enter_pressed_at_once_with_typing_runs_the_published_first_row(cx: &mut TestA
     // view's throttle and the key's hold both wait out their times on the
     // executor's clock, which this platform's parked runs never move, so
     // the typing's wait moves it past both.
+    // The clock settles before the typing (the settle family's note in
+    // settle.rs, as the digit chord's own test takes it): the typing
+    // lands only in a window whose clock has moved past the platform's
+    // settle timers — swallowed, the query stays as it was, the list
+    // stays published, and the Enter runs at once over the previous
+    // list's row instead of waiting under the hold.
+    cx.executor().advance_clock(Duration::from_millis(310));
+    cx.run_until_parked();
     cx.simulate_input("+1");
     cx.simulate_keystrokes("enter");
     assert_eq!(
@@ -202,6 +210,12 @@ fn enter_pressed_at_once_with_typing_runs_the_published_first_row(cx: &mut TestA
         Status::Idle,
         "nothing ran while the list is held"
     );
+    // The query's answer settles before the hold's time is moved: the
+    // hold applies its keys at the deadline OR the publication, whichever
+    // comes first, and the answer arrives on the runtime's real thread —
+    // waited for here so the deadline the advance below fires finds the
+    // published list, not the previous one.
+    wait_for_rows(&window, cx, &["1+24"]);
     cx.executor().advance_clock(Duration::from_millis(350));
 
     // The sample answers within the budget: the published list takes
@@ -231,7 +245,13 @@ fn the_open_actions_chord_waits_for_the_querys_list(cx: &mut TestAppContext) {
     wait_for_rows(&window, cx, &["24"]);
 
     // The chord pressed under the new query's hold opens no panel yet —
-    // not over the previous list's row.
+    // not over the previous list's row. The clock settles before the
+    // typing (the settle family's note in settle.rs, as the enter's own
+    // test takes it): swallowed, the query stays as it was, the list
+    // stays published, and the chord opens the panel at once over the
+    // previous list's row.
+    cx.executor().advance_clock(Duration::from_millis(310));
+    cx.run_until_parked();
     cx.simulate_input("+1");
     cx.simulate_keystrokes(OPEN_ACTIONS);
     assert!(!cx.read_entity(&window, |window, _| window.actions_open()));
@@ -294,7 +314,12 @@ fn tab_waits_for_the_querys_list(cx: &mut TestAppContext) {
     cx.simulate_input("reverse 42");
     wait_for_rows(&window, cx, &["24"]);
 
-    // Tab pressed under the new query's hold moves no focus yet.
+    // Tab pressed under the new query's hold moves no focus yet. The
+    // clock settles before the typing, as the enter's own test takes it:
+    // swallowed, the query stays as it was, the list stays published,
+    // and the Tab takes its focus move at once.
+    cx.executor().advance_clock(Duration::from_millis(310));
+    cx.run_until_parked();
     cx.simulate_input("+1");
     cx.simulate_keystrokes("tab");
     assert!(
