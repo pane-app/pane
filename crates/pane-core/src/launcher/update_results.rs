@@ -683,6 +683,15 @@ impl Launcher {
     /// thread. The pass's rows are put in the installed list's order,
     /// whatever order its checks and applies completed in.
     pub(in crate::launcher) fn note_update_pass(&self, pass: &Pass) {
+        // [diag-ff63] Diagnostic scaffolding for the announcement
+        // population root: the pass as it arrives, and what the record
+        // took of it. fix-forward-64 removes it with the root fix.
+        crate::diagnostic!(
+            "[diag-ff63] note pass: found_new={} asked={} failed={}",
+            pass.found_new,
+            pass.asked,
+            pass.results.failed.len()
+        );
         let written = {
             let mut state = self.lock();
             let mut pass = pass.clone();
@@ -693,6 +702,13 @@ impl Launcher {
                 .collect();
             pass.in_order_of(&installed);
             let replaced = state.update_results.record(&pass);
+            // [diag-ff63] The record's verdict, and the unannounced count
+            // it leaves.
+            crate::diagnostic!(
+                "[diag-ff63] recorded: replaced={} unannounced={:?}",
+                replaced,
+                state.update_results.unannounced()
+            );
             // The results view lists the record the pass just wrote, its
             // query and selection kept: a pass that records while the
             // view is open shows its own rows, not the ones it replaced.

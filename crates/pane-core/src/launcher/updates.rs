@@ -473,7 +473,11 @@ impl Updates {
             let state = self.lock();
             (state.clock.now(), state.next_check)
         };
+        // [diag-ff63] Diagnostic scaffolding: the updater's look, and
+        // whether the check ran.
+        crate::diagnostic!("[diag-ff63] updater pass: now={} next={}", now, next);
         let asked = if now >= next {
+            crate::diagnostic!("[diag-ff63] updater check runs");
             self.check(launcher)
         } else {
             None
