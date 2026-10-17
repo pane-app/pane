@@ -690,7 +690,7 @@ fn the_open_screen_of_a_package_that_does_not_opt_in_reopens() {
     // The reopened screen, waited for as the push that opened the view
     // was: the reload's reopen is its own launch.
     let deadline = Instant::now() + Duration::from_secs(10);
-    while !matches!(launcher.view().screen, Screen::Command { .. }) {
+    while !matches!(launcher.view().screen, Screen::Command) {
         assert!(
             Instant::now() < deadline,
             "the command's root view never reopened: {:?}",
