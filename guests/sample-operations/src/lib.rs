@@ -173,10 +173,12 @@ impl View for Calling {
                         Ok(answers) => answers
                             .iter()
                             .map(|answer| match serde_json::from_str::<Value>(answer) {
-                                Ok(answer) => match answer.get("greeting").and_then(Value::as_str) {
-                                    Some(greeting) => greeting.to_owned(),
-                                    None => "the answer has no greeting".to_owned(),
-                                },
+                                Ok(answer) => {
+                                    match answer.get("greeting").and_then(Value::as_str) {
+                                        Some(greeting) => greeting.to_owned(),
+                                        None => "the answer has no greeting".to_owned(),
+                                    }
+                                }
                                 Err(error) => format!("{error}"),
                             })
                             .collect::<Vec<String>>()
