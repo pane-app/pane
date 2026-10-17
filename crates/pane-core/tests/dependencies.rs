@@ -120,7 +120,8 @@ impl Dirs {
                 "title": "Caller",
                 "apiVersion": "0.2",
                 "commands": [
-                    {{ "id": "call", "title": "Call from JavaScript", "component": "caller.wasm" }}
+                    {{ "id": "call", "title": "Call from JavaScript", "component": "caller.wasm" }},
+                    {{ "id": "form", "title": "Greet from the form", "component": "caller.wasm", "mode": "designed" }}
                 ],
                 "operations": [{{ "id": "greet", "version": 1, "component": "caller.wasm" }}],
                 "dependencies": [{dependencies}]
