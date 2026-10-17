@@ -1212,6 +1212,10 @@ impl Launcher {
         &self,
         mode: GameMode,
     ) -> impl Future<Output = Result<(), String>> + Send + 'static {
+        // [diag-ff62] Diagnostic scaffolding for the record-drop root:
+        // each call's requested mode. fix-forward-63 removes it with the
+        // root fix.
+        crate::diagnostic!("[diag-ff62] set_game_mode: on={}", mode.on);
         let applied = {
             let mut state = self.lock();
             match mode.refusal() {
@@ -1230,13 +1234,19 @@ impl Launcher {
                 Some(installation) => {
                     let dir = installation.dir.clone();
                     let mode = launcher.lock().game.mode.clone();
+                    // [diag-ff62] Diagnostic scaffolding: the captured
+                    // mode and the write's result.
+                    crate::diagnostic!("[diag-ff62] save: on={}", mode.on);
                     // The save runs under the record's write queue, so it
                     // lands in the order its change was made: a second
                     // change's save waits for the first's, and the older
                     // write's rename cannot land after the newer one's.
                     let queue = launcher.lock().game.queue();
                     let _held = queue.lock().await;
-                    off_thread(move || mode.save(&dir)).await
+                    let writing = mode.clone();
+                    let saved = off_thread(move || writing.save(&dir)).await;
+                    crate::diagnostic!("[diag-ff62] saved: {:?}", saved);
+                    saved
                 }
                 None => Err("this launcher keeps no game mode".into()),
             };
