@@ -270,13 +270,33 @@ fn select_starting(launcher: &Launcher, prefix: &str) {
     launcher.select(index);
 }
 
-/// Saves the draft `text` through `sample`'s form.
+/// Saves the draft `text` through `sample`'s form: the item's press
+/// pushes the draft's designed view — its opening is waited for, the push
+/// opening on its own — and the submission is delivered through the
+/// designed seam, the form the tree holds.
 fn save_draft(launcher: &Launcher, sample: &Sample, text: &str) {
     open(launcher, sample.command);
     select_starting(launcher, "Edit the draft");
     block_on(launcher.activate_selected());
-    assert!(matches!(launcher.view().screen, Screen::DesignedView(_)));
-    block_on(launcher.submit_pane_form(vec![("draft".to_owned(), text.to_owned())]));
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !matches!(launcher.view().screen, Screen::DesignedView(_)) {
+        if Instant::now() > deadline {
+            panic!(
+                "the draft view never opened ({}): {:?} (status {:?})",
+                sample.title,
+                launcher.view().screen,
+                launcher.view().status
+            );
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+    block_on(launcher.submit_designed_form(
+        None,
+        vec![(
+            "draft".to_owned(),
+            pane_core::FormValue::Text(text.to_owned()),
+        )],
+    ));
 }
 
 /// Waits until `what` holds, asserting it did within [`PROMPTLY`].
@@ -654,9 +674,30 @@ fn the_open_screen_of_a_package_that_does_not_opt_in_reopens() {
         .map(|row| row.id.clone())
         .unwrap_or_default();
     block_on(launcher.activate_selected());
-    assert!(matches!(launcher.view().screen, Screen::DesignedView(_)));
+    // The view the press pushes opens on the launch thread: waited for,
+    // as every pushed view here is.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !matches!(launcher.view().screen, Screen::DesignedView(_)) {
+        assert!(
+            Instant::now() < deadline,
+            "the color view never opened: {:?}",
+            launcher.view().screen
+        );
+        thread::sleep(Duration::from_millis(10));
+    }
 
     block_on(launcher.reload(&identity));
+    // The reopened screen, waited for as the push that opened the view
+    // was: the reload's reopen is its own launch.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !matches!(launcher.view().screen, Screen::Command { .. }) {
+        assert!(
+            Instant::now() < deadline,
+            "the command's root view never reopened: {:?}",
+            launcher.view().screen
+        );
+        thread::sleep(Duration::from_millis(10));
+    }
     assert_eq!(
         launcher.view().screen,
         Screen::Command,

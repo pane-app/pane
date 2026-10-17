@@ -12,7 +12,8 @@
 // the Rust and TypeScript handoff samples.
 // @ts-check
 import { showToast } from "@pane-app/extension/feedback";
-import { Button, Column, Push, TextInput, pop, useState } from "@pane-app/extension/view";
+import { launch } from "pane:extension/commands@0.2.0";
+import { Form, Text, createView, useState } from "@pane-app/extension/view";
 import { jsxs } from "@pane-app/extension/jsx-runtime";
 import { save, load } from "@pane-app/extension/state";
 
@@ -76,6 +77,15 @@ export const lifecycle = {
 
 /** @type {import("@pane-app/extension").Command} */
 export const command = {
+  // The "draft" item's action launches this view: the draft's form, as a
+  // designed view the command opens.
+  async openView(commandId) {
+    if (commandId !== "draft") {
+      throw new Error(`unknown command: ${commandId}`);
+    }
+    return createView(DraftView);
+  },
+
   // The command's list: the counter and the draft as they stand, with
   // the actions that change them. Stable item ids, so a reopened screen
   // keeps its selection.
@@ -96,7 +106,9 @@ export const command = {
           id: "draft",
           title: `Edit the draft (${draft.split(/\s+/).filter(Boolean).length} words)`,
           subtitle: `The draft is ${quoted(draft)}`,
-          onClick: Push(jsxs(DraftView, { children: [] })),
+          onAction: async () => {
+            launch({ command: "draft" }, "user-initiated", [], null);
+          },
         },
       ],
     };
@@ -104,30 +116,38 @@ export const command = {
 };
 
 /**
- * The draft's form as a designed view (#241): a text field and a Save
- * button. Saving pops the view, which re-renders the list with the draft
- * it kept.
+ * The draft's form as a designed view (#241): a form with the draft's
+ * field, its submission saving it — the answer drawing over the form,
+ * as a form's submission answers. Saving pops the view, which re-renders
+ * the list with the draft it kept.
  */
 function DraftView() {
-  const [text, setText] = useState(state().draft);
-  return jsxs(Column, {
+  const [saved, setSaved] = useState("");
+  /** @param {import("@pane-app/extension/view").FormSubmittedValues} values */
+  const submit = (values) => {
+    const text = String(values.draft ?? "").trim();
+    if (text === "") {
+      setSaved("Enter the draft");
+      return;
+    }
+    state().draft = text;
+    setSaved(`Saved the draft ${quoted(text)}`);
+  };
+  return jsxs(Form, {
+    key: "form",
     navigationTitle: "Edit the draft",
-    gap: "m",
+    submitTitle: "Save",
+    onSubmit: submit,
     children: [
-      jsxs(TextInput, {
+      ...(saved === "" ? [] : [jsxs(Text, { style: "title", children: [saved] })]),
+      jsxs(Form.TextField, {
         key: "draft",
+        id: "draft",
         label: "Draft",
         placeholder: "What a replacement must keep",
-        value: text,
-        onInput: (/** @type {string} */ value) => setText(value),
-        children: [text],
-      }),
-      jsxs(Button, {
-        onClick: () => {
-          state().draft = text;
-          pop(`Saved the draft ${quoted(text)}`);
-        },
-        children: ["Save"],
+        value: state().draft,
+        autoFocus: true,
+        error: saved === "Enter the draft" ? "Enter the draft" : undefined,
       }),
     ],
   });
