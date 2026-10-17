@@ -124,9 +124,14 @@ function CallForm({ waiting = false }: { waiting?: boolean }): Element {
     const name = String(submitted.name ?? "");
     const times = submitted.times === "twice" ? 2 : 1;
     try {
-      const result = await call(source, "greet", 1, JSON.stringify({ name }));
-      const greeting = JSON.parse(result).greeting as string;
-      setAnswer(times === 2 ? `${greeting} (twice at once)` : greeting);
+      // The calls are made at once, both served (#136): Promise.all
+      // joins them, their greetings drawn together.
+      const calls = Array.from({ length: times }, () =>
+        call(source, "greet", 1, JSON.stringify({ name })),
+      );
+      const answers = await Promise.all(calls);
+      const greetings = answers.map((answer) => (JSON.parse(answer) as { greeting: string }).greeting);
+      setAnswer(greetings.join(" / "));
     } catch (problem) {
       const payload = (problem as { payload?: { kind: string; message: string } }).payload;
       setAnswer(payload ? `${payload.kind}: ${payload.message}` : String(problem));

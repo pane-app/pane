@@ -12,4 +12,4 @@ crate-type = ["cdylib"]
 pane-extension.workspace = true
 wasip3 = { version = "=0.9.0", default-features = false }
 serde_json = { version = "1", default-features = false, features = ["alloc"] }
-futures = { version = "0.3", default-features = false, features = ["async-await"] }
+futures = { version = "0.3", default-features = false, features = ["alloc", "async-await"] }
