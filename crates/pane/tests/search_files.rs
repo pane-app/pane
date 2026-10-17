@@ -443,13 +443,11 @@ fn enter_on_a_program_shows_it_and_the_panel_offers_copy_name(cx: &mut TestAppCo
     let world = World::new();
     let launcher = world.launcher(cx);
     let (window, cx) = open_files(cx, launcher);
-    // The clock settles before the typing, as a user reads the screen
-    // before typing into it: the platform's settle timers fire, the
-    // window redraws, and the typing lands where the field is — typing
-    // into a window whose clock never moved arrives nowhere, and the
-    // wait below times out with the listing unfiltered.
-    cx.executor().advance_clock(Duration::from_millis(310));
-    cx.run_until_parked();
+    // The typing needs no horizon of its own: open_files' closing wait
+    // already took one (the note there), and a second move of the clock
+    // on CI — the timers it fires, the redraw they ask — is the one
+    // thing this flow does that the sibling typing tests don't, and the
+    // matrix says their typing lands while this one's arrived nowhere.
     cx.simulate_input("setup");
     // The row is read from the launcher's state: the window's redraw of
     // it is the frame bracket's question, not this wait's.

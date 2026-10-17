@@ -1770,7 +1770,14 @@ fn the_list_does_not_flicker_while_providers_answer_within_the_budget(cx: &mut T
     wait_for_rows(&window, cx, &["24"]);
 
     // Typing on: before the search has even begun asking, the field shows
-    // the new query and the list shown is still the previous one.
+    // the new query and the list shown is still the previous one. The
+    // clock settles before the typing (the settle family's note in
+    // settle.rs, as the held keys' own tests take it): the typing lands
+    // only in a window whose clock has moved past the platform's settle
+    // timers — swallowed, the field keeps the previous query and the
+    // assert below reads it.
+    cx.executor().advance_clock(Duration::from_millis(310));
+    cx.run_until_parked();
     cx.simulate_input("+1");
     let typed = cx.read_entity(&window, |window, _| {
         window.launcher().view().query().map(str::to_owned)
