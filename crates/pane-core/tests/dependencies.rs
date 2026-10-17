@@ -16,6 +16,7 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use futures::executor::block_on;
 use pane_core::{
@@ -120,7 +121,9 @@ impl Dirs {
                 "title": "Caller",
                 "apiVersion": "0.2",
                 "commands": [
-                    {{ "id": "call", "title": "Call from JavaScript", "component": "caller.wasm" }}
+                    {{ "id": "call", "title": "Call from JavaScript", "component": "caller.wasm" }},
+                    {{ "id": "greet", "title": "Greet through another extension", "component": "caller.wasm", "mode": "designed" }},
+                    {{ "id": "wait", "title": "Wait in another extension", "component": "caller.wasm", "mode": "designed" }}
                 ],
                 "operations": [{{ "id": "greet", "version": 1, "component": "caller.wasm" }}],
                 "dependencies": [{dependencies}]
@@ -179,8 +182,23 @@ fn installed(launcher: &Launcher) -> Vec<String> {
     launcher.packages().iter().map(|p| p.title()).collect()
 }
 
+/// Every text a designed tree holds, collected in document order.
+fn form_texts(node: &pane_core::Node, into: &mut Vec<String>) {
+    if let pane_core::NodeKind::Text(text) = &node.kind {
+        match &text.content {
+            pane_core::TextContent::Plain(text) => into.push(text.clone()),
+            pane_core::TextContent::Spans(spans) => {
+                into.extend(spans.iter().map(|span| span.text.clone()));
+            }
+        }
+    }
+    for child in &node.children {
+        form_texts(child, into);
+    }
+}
+
 /// Calls `greet` from Caller's command with `source` and the name "Ada".
-fn greet(launcher: &Launcher, source: &str) -> Status {
+fn greet(launcher: &Launcher, source: &str) -> String {
     launcher.back();
     launcher.back();
     launcher.back();
@@ -195,7 +213,8 @@ fn greet(launcher: &Launcher, source: &str) -> Status {
         "the form's command did not launch"
     );
     // The form is a designed tree's (#241), submitted through the
-    // designed seam.
+    // designed seam: the answer draws as the tree's own text, not the
+    // status line.
     assert!(
         matches!(launcher.view().screen, Screen::DesignedView(_)),
         "no form"
@@ -208,7 +227,27 @@ fn greet(launcher: &Launcher, source: &str) -> Status {
             ("times".to_owned(), FormValue::Text("once".to_owned())),
         ],
     ));
-    launcher.view().status
+    // The answer lands asynchronously: the tree first draws the call's
+    // loading text, the answer replacing it when the call completes —
+    // waited for as the samples' own tests wait for their answers.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let view = launcher.view();
+        if let Screen::DesignedView(shown) = &view.screen {
+            let mut found = Vec::new();
+            form_texts(&shown.tree.root, &mut found);
+            let joined = found.join(" ");
+            if !joined.is_empty() && !joined.contains("Calling the other extension") {
+                return joined;
+            }
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the call's answer never drew: {:?}",
+            view.status
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
 }
 
 fn result(text: &str) -> Status {
@@ -285,21 +324,19 @@ fn installing_adds_the_missing_required_dependency_whose_operation_the_code_call
     assert_eq!(installed(&launcher), ["Rust operations sample", "Caller"]);
     // The JavaScript code calls the Rust package by the id its manifest
     // declares.
-    assert_eq!(greet(&launcher, "greeter"), result("Hello, Ada, from Rust"));
+    assert_eq!(greet(&launcher, "greeter"), "Hello, Ada, from Rust");
     assert_eq!(
         greet(&launcher, "helper"),
-        error(&format!(
+        format!(
             "not-found: Caller's optional dependency `helper` from {} is not installed; \
              install it to use it",
             dirs.identity(TYPESCRIPT)
-        ))
+        )
     );
     assert_eq!(
         greet(&launcher, "nobody"),
-        error(
-            "not-found: Caller declares no dependency `nobody` in its pane.json, and `nobody` \
+        "not-found: Caller declares no dependency `nobody` in its pane.json, and `nobody` \
              is not a package identity; it declares `greeter` and `helper`"
-        )
     );
 
     // The optional one, installed on its own, is used.
@@ -308,10 +345,7 @@ fn installing_adds_the_missing_required_dependency_whose_operation_the_code_call
         launcher.view().status,
         result("Installed TypeScript operations sample")
     );
-    assert_eq!(
-        greet(&launcher, "helper"),
-        result("Hello, Ada, from TypeScript")
-    );
+    assert_eq!(greet(&launcher, "helper"), "Hello, Ada, from TypeScript");
 
     // Where each dependency resolved is kept: after a restart, even with the
     // source folders gone, the calls still reach them.
@@ -319,7 +353,7 @@ fn installing_adds_the_missing_required_dependency_whose_operation_the_code_call
     fs::remove_dir_all(dirs.folder(RUST)).unwrap();
     fs::remove_dir_all(dirs.folder("caller")).unwrap();
     let launcher = dirs.launcher();
-    assert_eq!(greet(&launcher, "greeter"), result("Hello, Ada, from Rust"));
+    assert_eq!(greet(&launcher, "greeter"), "Hello, Ada, from Rust");
 }
 
 #[test]
@@ -344,7 +378,7 @@ fn an_installed_required_dependency_is_used_as_it_is() {
 
     assert_eq!(launcher.view().status, result("Installed Caller"));
     assert_eq!(installed(&launcher), ["Rust operations sample", "Caller"]);
-    assert_eq!(greet(&launcher, "greeter"), result("Hello, Ada, from Rust"));
+    assert_eq!(greet(&launcher, "greeter"), "Hello, Ada, from Rust");
 }
 
 #[test]
@@ -420,7 +454,7 @@ fn a_disabled_required_dependency_is_not_enabled_again() {
         .unwrap()
         .clone();
     assert_eq!(command.unavailable, None);
-    assert_eq!(greet(&launcher, "greeter"), result("Hello, Ada, from Rust"));
+    assert_eq!(greet(&launcher, "greeter"), "Hello, Ada, from Rust");
 }
 
 #[test]
@@ -650,10 +684,8 @@ fn an_update_adding_a_required_dependency_installs_it() {
     assert_eq!(installed(&launcher), ["Caller"]);
     assert_eq!(
         greet(&launcher, "greeter"),
-        error(
-            "not-found: Caller declares no dependency `greeter` in its pane.json, and \
+        "not-found: Caller declares no dependency `greeter` in its pane.json, and \
              `greeter` is not a package identity; it declares none"
-        )
     );
 
     dirs.caller(GREETER);
@@ -666,7 +698,7 @@ fn an_update_adding_a_required_dependency_installs_it() {
         result("Updated Caller with Rust operations sample, which it requires")
     );
     assert_eq!(installed(&launcher), ["Caller", "Rust operations sample"]);
-    assert_eq!(greet(&launcher, "greeter"), result("Hello, Ada, from Rust"));
+    assert_eq!(greet(&launcher, "greeter"), "Hello, Ada, from Rust");
 }
 
 #[test]
@@ -930,7 +962,7 @@ fn a_required_dependency_cannot_be_changed_while_an_install_relies_on_it() {
 
     block_on(installing);
     assert_eq!(launcher.view().status, result("Installed Caller"));
-    assert_eq!(greet(&launcher, "greeter"), result("Hello, Ada, from Rust"));
+    assert_eq!(greet(&launcher, "greeter"), "Hello, Ada, from Rust");
 
     // Once the install is over, it can be uninstalled.
     block_on(launcher.uninstall(&dirs.identity(RUST), SavedData::Delete));
@@ -1109,20 +1141,51 @@ fn a_call_by_dependency_id_reaches_only_the_operations_declared_for_it() {
     block_on(launcher.activate_selected());
     select_title(&launcher, "Wait in another extension");
     block_on(launcher.activate_selected());
+    // The item's action launches the form's command on Pane's own launch
+    // thread: wait for it to open before reading the screen.
+    assert!(
+        launcher.wait_for_launches(std::time::Duration::from_secs(20)),
+        "the wait form's command did not launch"
+    );
+    assert!(
+        matches!(launcher.view().screen, Screen::DesignedView(_)),
+        "no wait form"
+    );
     block_on(launcher.submit_designed_form(
         None,
         vec![("source".to_owned(), FormValue::Text("greeter".to_owned()))],
     ));
 
+    // The refusal lands asynchronously: the tree first draws the call's
+    // loading text, the answer replacing it when the call is refused —
+    // waited for as the form's own answer is.
+    let refused;
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let view = launcher.view();
+        if let Screen::DesignedView(shown) = &view.screen {
+            let mut found = Vec::new();
+            form_texts(&shown.tree.root, &mut found);
+            let joined = found.join(" ");
+            if !joined.is_empty() && !joined.contains("Calling the other extension") {
+                refused = joined;
+                break;
+            }
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the call's refusal never drew: {:?}",
+            view.status
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
     assert_eq!(
-        launcher.view().status,
-        error(
-            "refused: Caller declares that it calls `greet` version 1 through its dependency \
+        refused,
+        "refused: Caller declares that it calls `greet` version 1 through its dependency \
              `greeter`, not `wait` version 1; declare it in its pane.json to call it"
-        )
     );
     // The operation it declares is reached.
-    assert_eq!(greet(&launcher, "greeter"), result("Hello, Ada, from Rust"));
+    assert_eq!(greet(&launcher, "greeter"), "Hello, Ada, from Rust");
 }
 
 /// Makes `link` a symbolic link to the folder `target`; `None` where the
@@ -1155,10 +1218,7 @@ fn a_dependency_folder_made_a_link_after_installing_is_still_reached() {
     }
     block_on(launcher.install_package(&typescript));
 
-    assert_eq!(
-        greet(&launcher, "helper"),
-        result("Hello, Ada, from TypeScript")
-    );
+    assert_eq!(greet(&launcher, "helper"), "Hello, Ada, from TypeScript");
 }
 
 #[test]
@@ -1192,7 +1252,7 @@ fn a_package_installed_through_a_link_resolves_sources_from_the_folder_it_points
             dirs.identity("real/caller")
         ]
     );
-    assert_eq!(greet(&launcher, "greeter"), result("Hello, Ada, from Rust"));
+    assert_eq!(greet(&launcher, "greeter"), "Hello, Ada, from Rust");
 }
 
 // The capabilities a package uses, planned as its dependencies are

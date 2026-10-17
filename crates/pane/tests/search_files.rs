@@ -39,7 +39,7 @@ mod repo_server;
 
 use defaults::pinned;
 use recording::{Done, RecordingSystem};
-use settle::{settle, until};
+use settle::{settle, settle_state, until, until_state};
 
 /// Open actions' default binding on this system.
 const OPEN_ACTIONS: &str = if cfg!(target_os = "macos") {
@@ -238,7 +238,13 @@ fn open_files(
         view.rows.first().is_some_and(|row| row.id == COMMAND)
     });
     cx.simulate_keystrokes("enter");
-    until(&window, cx, |view| {
+    // The command's opening settles on the launcher's state, and the
+    // wait's end takes the settle horizon (the settle family's note in
+    // settle.rs): the typing every caller of this goes on to — the
+    // command's own search — lands only in a window whose clock has
+    // moved past the platform's settle timers, and into one whose clock
+    // never moved it arrives nowhere, the search staying unfiltered.
+    until_state(&window, cx, |view| {
         matches!(view.screen, Screen::CommandSearch { .. })
             && view.rows.iter().any(|row| row.title == "shot.png")
     });
@@ -437,8 +443,15 @@ fn enter_on_a_program_shows_it_and_the_panel_offers_copy_name(cx: &mut TestAppCo
     let world = World::new();
     let launcher = world.launcher(cx);
     let (window, cx) = open_files(cx, launcher);
+    // The typing needs no horizon of its own: open_files' closing wait
+    // already took one (the note there), and a second move of the clock
+    // on CI — the timers it fires, the redraw they ask — is the one
+    // thing this flow does that the sibling typing tests don't, and the
+    // matrix says their typing lands while this one's arrived nowhere.
     cx.simulate_input("setup");
-    until(&window, cx, |view| {
+    // The row is read from the launcher's state: the window's redraw of
+    // it is the frame bracket's question, not this wait's.
+    until_state(&window, cx, |view| {
         view.rows
             .first()
             .is_some_and(|row| row.title == "setup.exe")
@@ -447,13 +460,13 @@ fn enter_on_a_program_shows_it_and_the_panel_offers_copy_name(cx: &mut TestAppCo
 
     // The Actions panel lists Pane's file actions, Copy Name among them.
     cx.simulate_keystrokes(OPEN_ACTIONS);
-    settle(&window, cx);
+    settle_state(&window, cx);
     assert!(cx.read_entity(&window, |window, _| window.actions_open()));
     for entry in ["action-Run", "action-Copy Path", "action-Copy Name"] {
         assert!(cx.debug_bounds(entry).is_some(), "{entry} is listed");
     }
     cx.simulate_keystrokes("escape");
-    settle(&window, cx);
+    settle_state(&window, cx);
     assert!(!cx.read_entity(&window, |window, _| window.actions_open()));
 
     // Enter shows it in the file manager; nothing runs it.

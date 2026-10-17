@@ -169,6 +169,28 @@ fn greet(launcher: &Launcher, command: &str, source: &str, name: &str, times: &s
     // The answer lands asynchronously: the tree first draws the call's
     // loading text, the answer replacing it when the call completes —
     // waited for as the samples' own tests wait for their answers.
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        let view = launcher.view();
+        if let Screen::DesignedView(shown) = &view.screen {
+            let joined = tree_texts(&shown.tree.root).join(" ");
+            if !joined.is_empty() && !joined.contains("Calling the other extension") {
+                return joined;
+            }
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "{command}: the call's answer never drew"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+/// The texts the designed tree `node` holds, in order, as the greets'
+/// answer helper reads them (ff47's shape): the call's answer replaces
+/// the loading text the tree first draws, so a test that waits for an
+/// answer polls the texts until they are no longer the loading one.
+fn tree_texts(node: &pane_core::Node) -> Vec<String> {
     fn texts(node: &pane_core::Node, into: &mut Vec<String>) {
         if let pane_core::NodeKind::Text(text) = &node.kind {
             match &text.content {
@@ -182,20 +204,27 @@ fn greet(launcher: &Launcher, command: &str, source: &str, name: &str, times: &s
             texts(child, into);
         }
     }
+    let mut found = Vec::new();
+    texts(node, &mut found);
+    found
+}
+
+/// The text the open designed view's answer replaced the call's loading
+/// text with, as `greet` reads the greets' answers: the answer lands
+/// asynchronously, `what` naming the wait in its timeout.
+fn answered(launcher: &Launcher, what: &str) -> String {
     let deadline = std::time::Instant::now() + Duration::from_secs(10);
     loop {
         let view = launcher.view();
         if let Screen::DesignedView(shown) = &view.screen {
-            let mut found = Vec::new();
-            texts(&shown.tree.root, &mut found);
-            let joined = found.join(" ");
+            let joined = tree_texts(&shown.tree.root).join(" ");
             if !joined.is_empty() && !joined.contains("Calling the other extension") {
                 return joined;
             }
         }
         assert!(
             std::time::Instant::now() < deadline,
-            "{command}: the call's answer never drew"
+            "{what}: the call's answer never drew"
         );
         std::thread::sleep(Duration::from_millis(10));
     }
@@ -1258,17 +1287,25 @@ fn disabling_a_sample_target_stops_its_wait_in_every_language() {
         // Recorded after the caller answered, so its answer is seen first.
         let disabling = launcher.set_enabled(&dirs.identity(target), false);
         pending.assert_stopped();
+        block_on(disabling);
 
+        // The refusal's answer lands in the caller's tree, as the form's
+        // answers do (the designed era): the call the target's disabling
+        // stopped ends with the refusal #14 said in the status line — the
+        // same message, read where the designed era puts a call's answer,
+        // the loading text it replaced waited out as the greets' are. The
+        // wait the target started stays stopped: "started" below, the
+        // sample's own contract (its doc: disabling it meanwhile stops
+        // the call — nothing after the wait runs).
         assert_eq!(
-            launcher.view().status,
-            Status::Error(format!(
+            answered(&launcher, "{caller} calling {target}"),
+            format!(
                 "disabled: {} is disabled; Pane does not enable it for a call, enable it in \
                  Settings",
                 sample_titles(target).0
-            )),
+            ),
             "{caller} calling {target}"
         );
-        block_on(disabling);
         assert_eq!(dirs.waiting().as_deref(), Some("started"));
     }
 }

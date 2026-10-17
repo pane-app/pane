@@ -108,7 +108,7 @@ impl DesignedStack {
     }
 
     /// The top view: the one on screen.
-    fn top(&self) -> &OpenDesignedView {
+    pub(super) fn top(&self) -> &OpenDesignedView {
         self.views.last().expect("the stack holds the root")
     }
 
@@ -121,6 +121,12 @@ impl DesignedStack {
     /// the refresh thread draws a pushed drawing for (#243).
     pub(super) fn top_id(&self) -> u64 {
         self.top().id.number()
+    }
+
+    /// The number of the tree the top view last showed, which an event
+    /// raised on it is named with.
+    pub(super) fn top_rendered(&self) -> u64 {
+        self.top().rendered
     }
 
     /// The runtime thread number of the top view, whose crash closes the

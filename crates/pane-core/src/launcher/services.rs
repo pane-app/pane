@@ -454,7 +454,10 @@ fn waking(weak: Weak<Services>) -> impl Fn() + Send + Sync + 'static {
 /// The services thread: starts the cycles that are due, then waits until
 /// one is, something changes, or this Pane stops.
 fn serve_until_stopped(launcher: WeakLauncher, services: Weak<Services>) {
-    while let Some(current) = services.upgrade() {
+    loop {
+        let Some(current) = services.upgrade() else {
+            return;
+        };
         let Some(seen) = current.wake.pokes() else {
             return;
         };
@@ -473,7 +476,15 @@ fn serve_until_stopped(launcher: WeakLauncher, services: Weak<Services>) {
             start_run(&current, &launcher, key, run);
         }
         let wait = current.next_wait();
-        if !current.wake.wait(seen, wait) {
+        // The wake alone across the wait: the services themselves are not
+        // held, so the launcher's drop runs `Drop for Services`, whose
+        // `wake.stop()` ends this wait. Holding the services here would
+        // keep them alive past the Pane that asked for them, and the
+        // clock's next advance would wake this thread into a cycle on the
+        // dropped launcher's stale state.
+        let wake = current.wake.clone();
+        drop(current);
+        if !wake.wait(seen, wait) {
             return;
         }
     }

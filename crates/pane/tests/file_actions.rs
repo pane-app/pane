@@ -35,7 +35,7 @@ mod settle;
 mod recording;
 
 use recording::{Done, RecordingSystem};
-use settle::settle;
+use settle::{settle, settle_state};
 
 /// A handler that records the files it is asked to open.
 #[derive(Clone, Default)]
@@ -179,7 +179,12 @@ fn search_files<'a>(
                         .is_some_and(|subtitle| subtitle.starts_with('~'))
             })
     });
-    settle(&window, cx);
+    // The settle reads the launcher's state: the window's redraw of the
+    // rows the search answered is the frame bracket's question, and the
+    // settle's drawn==view demand false-fails while the frame lags the
+    // state (as it does on this platform — the rows are in the
+    // launcher's view while the last frame still shows none).
+    settle_state(&window, cx);
     (window, cx)
 }
 
@@ -293,16 +298,18 @@ fn ctrl_enter_on_a_program_opens_the_panel_at_open_with(cx: &mut TestAppContext)
     let (world, launcher) = World::launcher(cx);
     let (window, cx) = search_files(cx, launcher, "run plan");
     cx.simulate_keystrokes(SECONDARY);
-    settle(&window, cx);
+    settle_state(&window, cx);
     assert!(cx.read_entity(&window, |window, _| window.actions_open()));
     // The installed applications, by name, once the submenu answered.
+    // The state-reading settle: the submenu's entries reach the
+    // launcher while the frame that would draw them lags.
     let deadline = Instant::now() + Duration::from_secs(60);
     while cx.debug_bounds("action-Notepad").is_none() {
         assert!(
             Instant::now() < deadline,
             "Open With… never listed the applications"
         );
-        settle(&window, cx);
+        settle_state(&window, cx);
         std::thread::sleep(Duration::from_millis(5));
     }
     for entry in ["action-code editor", "action-Notepad", "action-Zed"] {

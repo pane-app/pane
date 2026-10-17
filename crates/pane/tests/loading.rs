@@ -10,7 +10,7 @@
 //! clock, which the bar's whole count moves; the service-held command
 //! search covers the status-running kind of waited-for work.
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use gpui::{Entity, TestAppContext, VisualTestContext, prelude::*, px};
 use pane::LauncherWindow;
@@ -19,7 +19,7 @@ use pane_core::{Launcher, LauncherView, Runtime, Screen, Status};
 #[path = "support/settle.rs"]
 mod settle;
 
-use settle::{settle, settle_shown, until};
+use settle::{settle, settle_shown, settle_state};
 
 #[path = "support/packages.rs"]
 mod packages;
@@ -220,9 +220,26 @@ fn a_slow_root_search_shows_the_late_loading_bar_and_fades_it_away(cx: &mut Test
     // from where it was, and the window is idle again. The query's list
     // is held while the provider answers (#201), so the wait is for the
     // answer's row, not for the rows to stop being the blank query's.
-    let view = until(&window, cx, |view| {
-        view.rows.iter().any(|row| row.title == "Slow answer")
-    });
+    // The row is read from the launcher's state alone — the clock this
+    // test measures its line with stays its own, so no state-reading
+    // helper that moves it — and the window's redraw of the row is the
+    // frame bracket's question (a settle demanding the drawn frame match
+    // false-fails while it lags the state, as it does on this platform).
+    let view = {
+        let deadline = Instant::now() + Duration::from_secs(30);
+        loop {
+            cx.run_until_parked();
+            let view = cx.read_entity(&window, |window, _| window.launcher().view());
+            if view.rows.iter().any(|row| row.title == "Slow answer") {
+                break view;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "the answer never arrived: {view:?}"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    };
     assert_eq!(titles(&view), ["Slow answer"]);
     frame(cx, SOME);
     let (strength, _) = bar(&window, cx).expect("the line still shows");
@@ -330,40 +347,122 @@ fn a_slow_command_search_shows_the_line_under_its_own_rule(cx: &mut TestAppConte
     assert_eq!(titles(&view).first(), Some(&"Package search"));
     cx.simulate_keystrokes("enter");
     let view = settle(&window, cx);
-    assert_eq!(
-        view.screen,
-        Screen::CommandSearch {
-            query: String::new()
-        }
-    );
+    // The command's own search is its designed list's (#240): the view
+    // handles the search itself, so the field the user types into is the
+    // list's, empty as the search opens — the screen kind the typed-form
+    // era asserted (CommandSearch) is retired.
+    let Screen::DesignedView(shown) = &view.screen else {
+        panic!("the command's search opened: {:?}", view.screen)
+    };
+    let list = shown.list.as_ref().expect("the search's own list");
+    assert!(list.searching, "the view handles the search itself");
+    assert_eq!(list.search, "");
 
-    // Its form points it at this test's service.
-    cx.simulate_keystrokes("down enter");
-    let view = settle(&window, cx);
-    assert!(
-        matches!(view.screen, Screen::DesignedView(_)),
-        "{:?}",
-        view.screen
-    );
-    cx.simulate_input(&service.url());
-    cx.simulate_keystrokes("enter");
-    let view = settle(&window, cx);
+    // Its form points it at this test's service: the empty state's
+    // Service address button, reached by Tab from the search field and
+    // pressed with Enter (the button's own key) — the designed era's
+    // focus path, where the typed-form era's list rows were selected
+    // with Down.
+    cx.simulate_keystrokes("tab enter");
+    // The state-reading settle: the button's pressed view reaches the
+    // launcher while the frame that would draw it lags, and the settle's
+    // drawn==view demand false-fails on that (the settle family's note).
+    let view = settle_state(&window, cx);
+    let Screen::DesignedView(shown) = &view.screen else {
+        panic!("the Service address view opened: {:?}", view.screen)
+    };
     assert_eq!(
-        view.status,
-        Status::Result(format!("Searching {} from now on", service.url()))
+        shown.tree.root.navigation_title.as_deref(),
+        Some("Service address"),
+        "the address view is the screen"
     );
-    cx.simulate_keystrokes("escape");
-    settle(&window, cx);
+    // The address view's field carries the service it uses now (the
+    // sample's default, its doc: the address is a setting the Service
+    // address view changes), so the new address replaces it: Select All,
+    // then the typing over the selection — the typed-form era's form
+    // began empty, and the designed view's field begins full. The clock
+    // settles before the typing, as a user reads the form before filling
+    // it (the settle-horizon note in settle.rs): the typing lands where
+    // the field is — into a window whose clock never moved it arrives
+    // nowhere.
+    cx.executor().advance_clock(Duration::from_millis(310));
+    cx.run_until_parked();
+    cx.simulate_keystrokes("ctrl-a");
+    cx.simulate_input(&service.url());
+    // The typing settles before the Save is pressed: the window holds
+    // keys typed toward a field whose list has not published (the
+    // designed search's throttle, #240), and a press given while the
+    // hold stands lands behind it — the settle waits the hold out and
+    // moves the clock past it, as a user stops typing before saving.
+    settle_state(&window, cx);
+    // The view's Save button saves it, as the sample's doc says (a text
+    // field and a Save button): Tab reaches the button from the field
+    // and Enter presses it — the view is no form node, so the typed-form
+    // era's Enter-to-submit commits the field only. The press pops the
+    // view, the list below becoming the screen again — which is what the
+    // typed-form era's Escape below did, closing the form, so no escape
+    // is needed here.
+    cx.simulate_keystrokes("tab enter");
+    // The save's answer is the setting it wrote (the sample's doc: the
+    // address is a setting the Service address view changes) — the
+    // typed-form era's status line said "Searching {address} from now
+    // on", and the designed view's pop answer reaches only a push's
+    // `on_pop`, which this sample's push names none of. The setting is
+    // what the search below reads, so it is what this waits for, written
+    // on the runtime's thread as the record waits are.
+    {
+        let expected = format!("\"service\": \"{}\"", service.url());
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            let read = std::fs::read_to_string(data.path().join("extensions/settings.json")).ok();
+            if read.as_deref().is_some_and(|text| text.contains(&expected)) {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "the save never wrote the service: {:?}",
+                read
+            );
+            cx.run_until_parked();
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+    // The state-reading settle: the pop's view change reaches the
+    // launcher while the frame lags, and the horizon moves the clock so
+    // the typing below lands.
+    settle_state(&window, cx);
 
     // A search the service holds for ten seconds: the command is asked,
     // the wait is on and the field is on screen.
     cx.simulate_input("slow");
-    cx.run_until_parked();
-    let view = cx.read_entity(&window, |window, _| window.launcher().view());
-    assert!(
-        matches!(view.status, Status::Running { .. }),
-        "the search is pending"
-    );
+    // The typed search settles into its ask: the designed list's field
+    // holds the keys typed toward it until its list publishes or the
+    // hold's own time ends (the throttle, #240, the hold 300 ms on the
+    // clock), so the clock moves past the hold to land the typing —
+    // before the search itself starts, which is what the bar's
+    // threshold below is measured from, so the horizon cannot reach it.
+    // The typed-form era's run_until_parked caught the search starting
+    // because its field published at once.
+    cx.executor().advance_clock(Duration::from_millis(310));
+    // The search is waited for as the designed era reads it: the list's
+    // own search (the view handling it, #240) reports its pending
+    // through the core's `pending_since`, not the status line the
+    // typed-form era's CommandSearch set — the quiet period the search
+    // waits out is real time (#202), so this waits in real time.
+    {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            cx.run_until_parked();
+            if cx
+                .read_entity(&window, |window, _| window.launcher().pending_since())
+                .is_some()
+            {
+                break;
+            }
+            assert!(Instant::now() < deadline, "the search never started");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
     assert!(
         cx.read_entity(&window, |window, _| window.launcher().pending_since())
             .is_some(),
