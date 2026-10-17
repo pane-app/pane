@@ -4550,7 +4550,21 @@ impl Host {
         let chain = self.chain();
         let view = open.id;
         let path = open.component.clone();
+        // The newer event for this view supersedes the work its earlier
+        // event left in flight: the web requests the old event's work
+        // started are aborted here — after the turn is taken (the park
+        // that held the instance has ended and brought it back, so the
+        // instance is reachable) and before the guest runs, so their
+        // connections close (the guest cannot cancel its own fetch, the
+        // host must). The supersede signal is the event dispatch itself,
+        // not any turn-taking call: the view's own answer-push also takes
+        // the turn, and aborting there would kill the answer's own fetch.
         let _turn = self.turn_for(&path, &chain).await?;
+        if let Some(instance) = self.instances.borrow().get(&path)
+            && let Some(generation) = instance.store.data().generation()
+        {
+            generation.abort_web_requests();
+        }
         self.live_designed(&open)?;
         let wit = command::UiEvent {
             render: event.render,
@@ -5549,11 +5563,19 @@ impl Host {
         let state = instance.store.data_mut();
         state.helpers.stop_owned_by(state.owner);
         state.programs.clear();
-        // A call the guest sent but did not wait for before its call ended
-        // has no frame to serve it.
-        while let Ok(stranded) = calls.try_recv() {
-            let answer = stranded.unanswered(operations::outside_a_call());
-            let _ = stranded.reply.send(answer);
+        // A call the guest's own frame sent but did not wait for has no
+        // frame to serve it — but the work a view's own Pending started
+        // (#243) outlives the frame that spawned it, and the park keeps
+        // driving it: the calls that work made are put back with the
+        // instance, not stranded, so the park serves them. Only calls of
+        // a dropped instance — its generation ended, its code stopped —
+        // are stranded with the refusal.
+        let stranding = result.is_err();
+        if stranding {
+            while let Ok(stranded) = calls.try_recv() {
+                let answer = stranded.unanswered(operations::outside_a_call());
+                let _ = stranded.reply.send(answer);
+            }
         }
         instance.calls = Some(calls);
         match result {
@@ -5668,12 +5690,23 @@ impl Host {
                         // call wants the instance: `wanted` is re-read on
                         // every wake, so a call noting itself and this going
                         // to sleep cannot miss each other on this thread.
+                        //
+                        // The Notified registration is held for the park's
+                        // whole duration: a registration created and dropped
+                        // within a single poll is gone before the turn
+                        // waiter's notify_waiters() arrives, and
+                        // notify_waiters() leaves no permit for a later
+                        // registration to find — the wake was lost, and the
+                        // park slept on until the store's own last task
+                        // drained (a fetch held for seconds). The future is
+                        // created once, polled on every wake, and its
+                        // registration persists until the park ends.
+                        let mut notified = std::pin::pin!(woken.notified());
                         std::future::poll_fn(|cx| {
                             if wanted.load(Ordering::SeqCst) {
                                 return Poll::Ready(());
                             }
-                            let mut woken = std::pin::pin!(woken.notified());
-                            if woken.as_mut().poll(cx).is_ready() {
+                            if notified.as_mut().poll(cx).is_ready() {
                                 return Poll::Ready(());
                             }
                             accessor.poll_no_interesting_tasks(cx)
@@ -5730,11 +5763,17 @@ impl Host {
         let state = instance.store.data_mut();
         state.helpers.stop_owned_by(state.owner);
         state.programs.clear();
-        // A call the guest sent but did not wait for has no frame to serve
-        // it.
-        while let Ok(stranded) = calls.try_recv() {
-            let answer = stranded.unanswered(operations::outside_a_call());
-            let _ = stranded.reply.send(answer);
+        // A call the guest's own frame sent but did not wait for has no
+        // frame to serve it — but the park's whole purpose is driving
+        // what the guest left pending, so its calls are put back with
+        // the instance, not stranded. Only calls of a dropped instance
+        // are stranded with the refusal.
+        let stranding = result.is_err();
+        if stranding {
+            while let Ok(stranded) = calls.try_recv() {
+                let answer = stranded.unanswered(operations::outside_a_call());
+                let _ = stranded.reply.send(answer);
+            }
         }
         instance.calls = Some(calls);
         match result {

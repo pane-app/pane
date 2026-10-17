@@ -20,7 +20,7 @@ use service::Service;
 #[path = "support/settle.rs"]
 mod settle;
 
-use settle::{settle, settle_shown, until};
+use settle::{settle, settle_shown};
 
 #[path = "support/packages.rs"]
 mod packages;
@@ -135,7 +135,21 @@ fn the_commands_own_search_field_lists_the_service_results(cx: &mut TestAppConte
     };
     assert_eq!(titles(&view), ["aurora-charts", "aurora-cli"]);
     assert_eq!(field_text(&window, cx), "aurora");
-    assert!(cx.debug_bounds("row-aurora-cli").is_some());
+    // The row's drawn frame is waited for with its own deadline: the
+    // window's redraw of the answered view is the platform's notify
+    // processing, which lags the launcher's state (the [diag-ff34]
+    // family's data).
+    {
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while cx.debug_bounds("row-aurora-cli").is_none() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the answered view's frame never drew"
+            );
+            cx.run_until_parked();
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
     assert_eq!(
         service.requests().last().map(String::as_str),
         Some("/search?q=aurora")
