@@ -23,7 +23,7 @@ use pane_core::develop::Toolchains;
 use pane_core::icons::encode_png;
 use pane_core::system_icons::SystemIcon;
 use pane_core::{IconSource, Launcher, ResultAction, Runtime, Screen, SlotChange};
-use settle::{settle, until};
+use settle::{settle, settle_state, until};
 use tempfile::TempDir;
 
 /// How long extraction may take on a slow machine.
@@ -320,7 +320,10 @@ fn a_pinned_applications_slot_draws_its_icon(cx: &mut TestAppContext) {
     for _ in 0..4 {
         cx.simulate_keystrokes("backspace");
     }
-    settle(&window, cx);
+    // The state-reading settle: the pin's status reached the launcher
+    // while the frame that would draw it lags (the settle family's
+    // note), and the settle's drawn==view demand false-fails on that.
+    settle_state(&window, cx);
     until_drawn(cx, &format!("icon-slot-1-image-{dark}"));
     assert!(
         !drawn(cx, "icon-slot-1-tile"),

@@ -18,10 +18,10 @@
 
 use core::cell::RefCell;
 
-use pane_extension::alloc::{format, string::String};
+use pane_extension::alloc::{borrow::ToOwned, format, string::String};
 use pane_extension::commands::LaunchRecord;
 use pane_extension::form;
-use pane_extension::view::{Answer, Cx, IntoAnswer};
+use pane_extension::view::{Answer, Cx, IntoAnswer, IntoNode};
 use pane_extension::{Command, List, choice};
 
 /// The package's own type, whose designed view the SDK exports.
@@ -124,6 +124,21 @@ impl Command for __STRUCT__ {
     /// The form the command opens: a designed view (its pane.json says
     /// `"mode": "designed"`).
     type DesignedView = Greeting;
+
+    /// Opens it: a fresh form, empty and unrefused. Each call opens a
+    /// new view with its own state.
+    async fn open_designed_view(
+        command: String,
+        _launch: LaunchRecord,
+    ) -> Result<Greeting, String> {
+        if command != "__NAME__" {
+            return Err(format!("unknown command: {command}"));
+        }
+        Ok(Greeting {
+            answered: RefCell::new(String::new()),
+            error: RefCell::new(None),
+        })
+    }
 
     async fn render() -> Result<List, String> {
         match pane_extension::commands::current().command.as_str() {

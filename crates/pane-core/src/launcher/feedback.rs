@@ -247,6 +247,10 @@ impl Launcher {
             // presence above is set, so the toast is the footer's, not a
             // HUD.
             if presence == WindowPresence::Shown {
+                // [diag-ff58] Diagnostic scaffolding for the
+                // announcement-delivery root: the showing that should
+                // announce. fix-forward-59 removes it with the root fix.
+                crate::diagnostic!("[diag-ff58] presence shown: same={}", same);
                 self.announce_update_failures(&mut state);
             }
             if same {

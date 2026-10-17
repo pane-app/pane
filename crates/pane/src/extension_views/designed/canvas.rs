@@ -54,7 +54,10 @@ use crate::ui::tokens;
 use super::components::{self, short};
 use super::reconcile::Held;
 use super::tree::Draw;
-use super::{Activate, Decrement, Increment};
+use super::{
+    Activate, CanvasKeyDown, CanvasKeyEnd, CanvasKeyHome, CanvasKeyLeft, CanvasKeyRight,
+    CanvasKeyUp, Decrement, Increment,
+};
 
 /// One layer of a canvas's drawing, in the order the tree paints them: a
 /// run of shape operations (painted together, through one GPUI canvas),
@@ -278,13 +281,18 @@ pub(super) fn canvas(
     // One node to assistive technology: the role its tree named (a generic
     // one when it named none), its label and its value; the drawing adds
     // no nodes of its own.
+    // The role the element takes is only one the tree NAMED: a tree that
+    // names none (or the generic one) leaves the element its own default,
+    // which is the generic node the accessibility tree filters — setting
+    // that one is refused (gpui asserts it), and nothing of the drawing
+    // needs it named.
     let role = |named: Option<pane_core::CanvasRole>| match named {
-        Some(pane_core::CanvasRole::ColorWell) => Role::ColorWell,
-        Some(pane_core::CanvasRole::Slider) => Role::Slider,
-        Some(pane_core::CanvasRole::Image) => Role::Image,
-        Some(pane_core::CanvasRole::Figure) => Role::Figure,
-        Some(pane_core::CanvasRole::Group) => Role::Group,
-        None | Some(pane_core::CanvasRole::Generic) => Role::GenericContainer,
+        Some(pane_core::CanvasRole::ColorWell) => Some(Role::ColorWell),
+        Some(pane_core::CanvasRole::Slider) => Some(Role::Slider),
+        Some(pane_core::CanvasRole::Image) => Some(Role::Image),
+        Some(pane_core::CanvasRole::Figure) => Some(Role::Figure),
+        Some(pane_core::CanvasRole::Group) => Some(Role::Group),
+        None | Some(pane_core::CanvasRole::Generic) => None,
     };
     let label = held.a11y.label.clone().or_else(|| node.name.clone());
     let value = held.a11y.value.clone().unwrap_or_default();
@@ -397,7 +405,7 @@ pub(super) fn canvas(
         .min_w(px(0.))
         .min_h(px(0.))
         .size_full()
-        .role(role(held.a11y.role))
+        .when_some(role(held.a11y.role), |element, role| element.role(role))
         .when_some(label, |element, label| element.aria_label(label))
         .when(!value.is_empty(), |element| element.aria_value(value))
         .when_some(focus, |element, focus| element.track_focus(&focus))
@@ -417,6 +425,42 @@ pub(super) fn canvas(
             let on = on.clone();
             move |this, _, window, cx| {
                 this.designed_canvas_semantic(&on, on.handlers.on_activate, window, cx);
+            }
+        }))
+        .on_action::<CanvasKeyUp>(cx.listener({
+            let on = on.clone();
+            move |this, _, window, cx| {
+                this.designed_canvas_own_key(&on, "up", window, cx);
+            }
+        }))
+        .on_action::<CanvasKeyDown>(cx.listener({
+            let on = on.clone();
+            move |this, _, window, cx| {
+                this.designed_canvas_own_key(&on, "down", window, cx);
+            }
+        }))
+        .on_action::<CanvasKeyLeft>(cx.listener({
+            let on = on.clone();
+            move |this, _, window, cx| {
+                this.designed_canvas_own_key(&on, "left", window, cx);
+            }
+        }))
+        .on_action::<CanvasKeyRight>(cx.listener({
+            let on = on.clone();
+            move |this, _, window, cx| {
+                this.designed_canvas_own_key(&on, "right", window, cx);
+            }
+        }))
+        .on_action::<CanvasKeyHome>(cx.listener({
+            let on = on.clone();
+            move |this, _, window, cx| {
+                this.designed_canvas_own_key(&on, "home", window, cx);
+            }
+        }))
+        .on_action::<CanvasKeyEnd>(cx.listener({
+            let on = on.clone();
+            move |this, _, window, cx| {
+                this.designed_canvas_own_key(&on, "end", window, cx);
             }
         }))
         .child(drawing)
@@ -1486,6 +1530,37 @@ impl LauncherWindow {
             ],
         );
         self.designed_canvas_send(DesignedHandler::Wheel, on, wheel, payload, window, cx);
+    }
+
+    /// One of the canvas at `path`'s own navigation keys, as its tree's
+    /// `onKey` asked for: the key is told to that handler, the binding
+    /// that reaches here being the canvas's own.
+    fn designed_canvas_own_key(
+        &mut self,
+        on: &OnCanvas,
+        key: &'static str,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        // The tree's `onKey` id is the drawn node's, kept in the
+        // controls' state: the canvas's own handlers are the pointer and
+        // semantics ones.
+        let Some(handler) = self
+            .designed
+            .as_ref()
+            .and_then(|controls| controls.state.get(&on.path))
+            .and_then(|entry| entry.on_key)
+        else {
+            return;
+        };
+        self.designed_canvas_send(
+            DesignedHandler::Key,
+            on,
+            handler,
+            format!("{{\"key\":\"{key}\"}}"),
+            window,
+            cx,
+        );
     }
 
     /// One of the canvas at `path`'s semantic handlers ran: increment on

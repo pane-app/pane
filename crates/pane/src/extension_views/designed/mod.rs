@@ -125,7 +125,13 @@ actions!(
         ChoosePath,
         Increment,
         Decrement,
-        Activate
+        Activate,
+        CanvasKeyUp,
+        CanvasKeyDown,
+        CanvasKeyLeft,
+        CanvasKeyRight,
+        CanvasKeyHome,
+        CanvasKeyEnd
     ]
 );
 
@@ -163,6 +169,18 @@ pub(crate) fn bind_keys(cx: &mut App) {
         KeyBinding::new("up", Increment, Some(CANVAS_SEMANTICS_CONTEXT)),
         KeyBinding::new("down", Decrement, Some(CANVAS_SEMANTICS_CONTEXT)),
         KeyBinding::new("space", Activate, Some(CANVAS_SEMANTICS_CONTEXT)),
+        // A canvas whose tree asks for keys (its `onKey`) takes the
+        // navigation keys as its own while it holds the focus: the binding
+        // is the deepest context's, so the focused canvas's own keys win
+        // over the launcher's root-list navigation — the keystroke
+        // observer never sees a key that acted, and without a binding of
+        // its own the arrows moved the root's selection instead.
+        KeyBinding::new("up", CanvasKeyUp, Some(CANVAS_CONTEXT)),
+        KeyBinding::new("down", CanvasKeyDown, Some(CANVAS_CONTEXT)),
+        KeyBinding::new("left", CanvasKeyLeft, Some(CANVAS_CONTEXT)),
+        KeyBinding::new("right", CanvasKeyRight, Some(CANVAS_CONTEXT)),
+        KeyBinding::new("home", CanvasKeyHome, Some(CANVAS_CONTEXT)),
+        KeyBinding::new("end", CanvasKeyEnd, Some(CANVAS_CONTEXT)),
         KeyBinding::new("ctrl-enter", SubmitForm, Some(INPUT_CONTEXT)),
         KeyBinding::new("ctrl-enter", SubmitForm, Some(AREA_CONTEXT)),
         KeyBinding::new("up", StepDateUp, Some(DATE_CONTEXT)),

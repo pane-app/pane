@@ -373,6 +373,17 @@ impl LauncherWindow {
             // whose tree asked for the keyboard gets its asked node back
             // the same way: its re-renders can drop the focus just as the
             // publication's did.
+            //
+            // The toast's details are the exception: their focus handle
+            // takes the keyboard while their popover is still to be drawn,
+            // and the focus resolves to no node until the frame that
+            // renders it. Taking the keyboard back then would steal it
+            // before the popover exists, and the keys would fall to the
+            // screen below — Enter invoking the root's selected row
+            // instead of the toast's action.
+            if this.toast.details_open() {
+                return;
+            }
             if this.launcher.screen().search_field().is_some() {
                 this.query.focus(window, cx);
             } else if let Some(asked) = this
@@ -941,7 +952,6 @@ impl LauncherWindow {
         // never dispatches: the confirm is the Enter's own action, so its
         // arrival is the line between a key lost on the platform and one
         // a binding refused. fix-forward-30 removes it with the root fix.
-        pane_core::diagnostic!("[diag-ff29] confirm entered");
         // Enter ends the walk through the recent queries (#206), whatever
         // it runs — a held key included.
         self.recall = None;
@@ -3043,6 +3053,17 @@ impl Render for LauncherWindow {
         // outcome of the status line is a toast too, timed here and
         // cleared through the launcher when its time is up (#249).
         let toast = self.footer_toast(&view.status);
+        // [diag-ff58] Diagnostic scaffolding for the
+        // announcement-delivery root: whether a frame drew a toast.
+        // fix-forward-59 removes it with the root fix.
+        pane_core::diagnostic!(
+            "[diag-ff58] frame toast: {} active={}",
+            toast
+                .as_ref()
+                .map(|shown| shown.toast.title.clone())
+                .unwrap_or_default(),
+            window.is_window_active(),
+        );
         self.time_toast(toast.as_ref(), &view.status, window, cx);
         // Pane's Clipboard History and Search Files draw their own split
         // view (#102, #177), with a confirmation the command asks for over
