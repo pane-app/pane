@@ -265,7 +265,7 @@ fn opens(kind: Kind, launcher: &Launcher) {
             let deadline = Instant::now() + Duration::from_secs(10);
             loop {
                 let view = launcher.view();
-                if matches!(view.screen, Screen::Command { .. })
+                if matches!(view.screen, Screen::Command)
                     && view
                         .rows
                         .iter()
