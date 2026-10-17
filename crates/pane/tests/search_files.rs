@@ -238,7 +238,13 @@ fn open_files(
         view.rows.first().is_some_and(|row| row.id == COMMAND)
     });
     cx.simulate_keystrokes("enter");
-    until(&window, cx, |view| {
+    // The command's opening settles on the launcher's state, and the
+    // wait's end takes the settle horizon (the settle family's note in
+    // settle.rs): the typing every caller of this goes on to — the
+    // command's own search — lands only in a window whose clock has
+    // moved past the platform's settle timers, and into one whose clock
+    // never moved it arrives nowhere, the search staying unfiltered.
+    until_state(&window, cx, |view| {
         matches!(view.screen, Screen::CommandSearch { .. })
             && view.rows.iter().any(|row| row.title == "shot.png")
     });

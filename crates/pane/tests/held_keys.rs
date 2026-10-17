@@ -260,7 +260,13 @@ fn a_digit_chord_waits_for_the_querys_list(cx: &mut TestAppContext) {
 
     // Ctrl+1 picks the first row: pressed under the hold, it waits, so it
     // picks the published list's first row — the answer "1+24", not the
-    // previous list's "24".
+    // previous list's "24". The clock settles before the typing, as the
+    // settle family's note in settle.rs says: the typing lands only in a
+    // window whose clock has moved past the platform's settle timers —
+    // swallowed, the query stays as it was, the list stays published,
+    // and the chord runs at once over the previous list's first row.
+    cx.executor().advance_clock(Duration::from_millis(310));
+    cx.run_until_parked();
     cx.simulate_input("+1");
     cx.simulate_keystrokes("ctrl-1");
     assert_eq!(
