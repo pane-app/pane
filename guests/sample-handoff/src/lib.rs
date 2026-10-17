@@ -18,8 +18,8 @@ use core::cell::RefCell;
 
 use pane_extension::alloc::{borrow::ToOwned, format, string::String, vec::Vec};
 use pane_extension::feedback::{Toast, show_toast};
-use pane_extension::view::{Cx, IntoAnswer, IntoNode, View, column};
 use pane_extension::form::{self, FormValues};
+use pane_extension::view::{Cx, IntoAnswer, IntoNode, View, column};
 use pane_extension::{Command, Item, LaunchRecord, List, lifecycle, state};
 
 /// The state this instance keeps in memory: the counter and the draft,
@@ -158,7 +158,9 @@ impl View for DraftView {
         let saved = self.saved.borrow().clone();
         let error = *self.error.borrow();
         let draft = KEPT.0.borrow().draft.clone();
-        let mut view = column().navigation_title("Edit the draft").gap(pane_extension::view::Space::M);
+        let mut view = column()
+            .navigation_title("Edit the draft")
+            .gap(pane_extension::view::Space::M);
         if !saved.is_empty() {
             view = view.child(
                 pane_extension::view::text(saved.as_str())
