@@ -4074,7 +4074,9 @@ impl<V: View> GuestView for Open<V> {
                 Some(Next::Replace(Open::new(state)))
             }
             Some(Run::Pop(answer)) => {
-                let result = answer.as_ref().map(|answer| answer(&mut self.state.borrow_mut()));
+                let result = answer
+                    .as_ref()
+                    .map(|answer| answer(&mut self.state.borrow_mut()));
                 Some(Next::Pop(result.unwrap_or_default()))
             }
             None => None,
