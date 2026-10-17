@@ -1932,11 +1932,18 @@ fn typing_an_applications_name_shows_it_and_enter_opens_it(cx: &mut TestAppConte
 
     cx.simulate_input("fire");
     // Pane's install row matches the four letters fuzzily below the
-    // application's prefix match (#193).
+    // application's prefix match (#193), and so does the applications
+    // sample's own command row, whose subtitle says what it finds: the
+    // sample replaced the extension whose row matched nothing (#285),
+    // and the three rows are the answer.
     wait_for_rows(
         &window,
         cx,
-        &["Launch Firefox", "Install extension from Git…"],
+        &[
+            "Launch Firefox",
+            "Install extension from Git…",
+            "JavaScript applications sample",
+        ],
     );
     assert!(
         cx.debug_bounds("row-Launch Firefox").is_some(),
@@ -1949,9 +1956,10 @@ fn typing_an_applications_name_shows_it_and_enter_opens_it(cx: &mut TestAppConte
     // (#132).
     assert_eq!(focused.as_deref(), Some("Search"), "the field");
     typing_settles(cx);
-    // Two rows: the application's prefix match and Pane's install row
-    // (#193).
-    until_announced(cx, "Launch Firefox, 1 of 2");
+    // Three rows: the application's prefix match, Pane's install row,
+    // and the sample's own command row, whose subtitle matches the four
+    // letters as the install row does (#193, #285's fixture).
+    until_announced(cx, "Launch Firefox, 1 of 3");
 
     cx.simulate_keystrokes("enter");
     let view = settle(&window, cx);
@@ -2533,11 +2541,18 @@ fn a_running_action_cannot_be_dispatched_again_through_the_footer_button(cx: &mu
 
     cx.simulate_input("fire");
     // Pane's install row matches the four letters fuzzily below the
-    // application's prefix match (#193).
+    // application's prefix match (#193), and so does the applications
+    // sample's own command row, whose subtitle says what it finds: the
+    // sample replaced the extension whose row matched nothing (#285),
+    // and the three rows are the answer.
     wait_for_rows(
         &window,
         cx,
-        &["Launch Firefox", "Install extension from Git…"],
+        &[
+            "Launch Firefox",
+            "Install extension from Git…",
+            "JavaScript applications sample",
+        ],
     );
     let nodes = accessible_nodes(cx);
     node(&nodes, "Button", "Open application");
