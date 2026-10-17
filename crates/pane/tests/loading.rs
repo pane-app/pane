@@ -463,7 +463,6 @@ fn a_slow_command_search_shows_the_line_under_its_own_rule(cx: &mut TestAppConte
             std::thread::sleep(Duration::from_millis(5));
         }
     }
-    let view = cx.read_entity(&window, |window, _| window.launcher().view());
     assert!(
         cx.read_entity(&window, |window, _| window.launcher().pending_since())
             .is_some(),
