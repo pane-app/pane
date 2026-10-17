@@ -584,7 +584,9 @@ impl Launcher {
                         .designed_view
                         .as_ref()
                         .map(|stack| stack.top_rendered());
-                    callback.zip(seen).map(|(callback, seen)| (callback, key, seen))
+                    callback
+                        .zip(seen)
+                        .map(|(callback, seen)| (callback, key, seen))
                 };
                 let Some((callback, key, seen)) = pair else {
                     return;
