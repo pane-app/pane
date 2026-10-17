@@ -156,7 +156,7 @@ impl<V: View> Cx<'_, V> {
     /// given to runs with the view's state mutably: `cx.listener(|this:
     /// &mut V| ...)`, handed to [`Button::on_click`] and its kind. The
     /// view re-renders after the press, as it does after every event.
-    pub fn listener(&mut self, run: impl FnOnce(&mut V) + 'static) -> Listener {
+    pub fn listener(&mut self, run: impl Fn(&mut V) + 'static) -> Listener {
         let id = self.mint();
         self.listeners.push((id, Run::Listener(Box::new(run))));
         Listener(id)
@@ -168,7 +168,7 @@ impl<V: View> Cx<'_, V> {
     /// or a key as it was pressed, is the text: handed to
     /// [`TextInput::on_input`], [`TextInput::on_change`] and the key
     /// listeners.
-    pub fn value_listener(&mut self, run: impl FnOnce(&mut V, &str) + 'static) -> ValueListener {
+    pub fn value_listener(&mut self, run: impl Fn(&mut V, &str) + 'static) -> ValueListener {
         let id = self.mint();
         self.listeners.push((id, Run::Value(Box::new(run))));
         ValueListener(id)
@@ -180,7 +180,7 @@ impl<V: View> Cx<'_, V> {
     /// [`on_pointer_down`](CanvasBuilder::on_pointer_down) and its kind.
     pub fn canvas_listener(
         &mut self,
-        run: impl FnOnce(&mut V, CanvasEvent) + 'static,
+        run: impl Fn(&mut V, CanvasEvent) + 'static,
     ) -> CanvasListener {
         let id = self.mint();
         self.listeners.push((id, Run::Canvas(Box::new(run))));
@@ -193,7 +193,7 @@ impl<V: View> Cx<'_, V> {
     /// (#241). Each field's value is keyed by its key.
     pub fn form_listener(
         &mut self,
-        run: impl FnOnce(&mut V, &crate::form::FormValues) + 'static,
+        run: impl Fn(&mut V, &crate::form::FormValues) + 'static,
     ) -> FormListener {
         let id = self.mint();
         self.listeners.push((id, Run::Form(Box::new(run))));
@@ -204,7 +204,7 @@ impl<V: View> Cx<'_, V> {
     /// pushed view's state from this view's, this view staying below it
     /// (its state kept, its tree shown again when the pushed view pops).
     /// Handed to [`Button::on_click`], as a listener is.
-    pub fn push(&mut self, open: impl FnOnce(&mut V) -> V + 'static) -> Listener {
+    pub fn push(&mut self, open: impl Fn(&mut V) -> V + 'static) -> Listener {
         self.pushed(Box::new(open), None)
     }
 
@@ -214,18 +214,18 @@ impl<V: View> Cx<'_, V> {
     /// after. The Raycast-style `Action.Push`'s `onPop`.
     pub fn push_with(
         &mut self,
-        open: impl FnOnce(&mut V) -> V + 'static,
-        on_pop: impl FnOnce(&mut V, Option<&str>) + 'static,
+        open: impl Fn(&mut V) -> V + 'static,
+        on_pop: impl Fn(&mut V, Option<&str>) + 'static,
     ) -> Listener {
-        self.pushed(Box::new(open), Some(Box::new(on_pop)))
+        self.pushed(Box::new(open), Some(alloc::sync::Arc::new(on_pop)))
     }
 
     /// A press that pushes a view above this one, `on_pop` kept to answer
     /// this view when it pops.
     fn pushed(
         &mut self,
-        open: Box<dyn FnOnce(&mut V) -> V>,
-        on_pop: Option<Box<dyn FnOnce(&mut V, Option<&str>)>>,
+        open: Box<dyn Fn(&mut V) -> V>,
+        on_pop: Option<alloc::sync::Arc<dyn Fn(&mut V, Option<&str>)>>,
     ) -> Listener {
         let id = self.mint();
         self.listeners.push((id, Run::Push { open, on_pop }));
@@ -234,7 +234,7 @@ impl<V: View> Cx<'_, V> {
 
     /// A press that replaces this view with the state `open` builds: this
     /// view is dropped, never used again, the views below it staying.
-    pub fn replace(&mut self, open: impl FnOnce(&mut V) -> V + 'static) -> Listener {
+    pub fn replace(&mut self, open: impl Fn(&mut V) -> V + 'static) -> Listener {
         let id = self.mint();
         self.listeners.push((id, Run::Replace(Box::new(open))));
         Listener(id)
@@ -251,7 +251,7 @@ impl<V: View> Cx<'_, V> {
     /// A press that pops this view, answering `result` — built from this
     /// view's state — to the view below, whose own `on_pop` runs with it
     /// before it re-renders.
-    pub fn pop_with(&mut self, result: impl FnOnce(&mut V) -> String + 'static) -> Listener {
+    pub fn pop_with(&mut self, result: impl Fn(&mut V) -> String + 'static) -> Listener {
         let id = self.mint();
         self.listeners.push((id, Run::Pop(Some(Box::new(result)))));
         Listener(id)
@@ -302,26 +302,26 @@ pub struct CanvasListener(u32);
 /// builds.
 enum Run<V> {
     /// Runs the listener; nothing next.
-    Listener(Box<dyn FnOnce(&mut V)>),
+    Listener(Box<dyn Fn(&mut V)>),
     /// Runs the listener with the event's text; nothing next.
-    Value(Box<dyn FnOnce(&mut V, &str)>),
+    Value(Box<dyn Fn(&mut V, &str)>),
     /// Runs the listener with the canvas event the payload names; nothing
     /// next.
-    Canvas(Box<dyn FnOnce(&mut V, CanvasEvent)>),
+    Canvas(Box<dyn Fn(&mut V, CanvasEvent)>),
     /// Runs the listener with the form's submitted values; nothing next
     /// (#241).
-    Form(Box<dyn FnOnce(&mut V, &crate::form::FormValues)>),
+    Form(Box<dyn Fn(&mut V, &crate::form::FormValues)>),
     /// Builds the state of a view pushed above this one, `on_pop` (when
     /// given) kept to answer this view when it pops.
     Push {
-        open: Box<dyn FnOnce(&mut V) -> V>,
-        on_pop: Option<Box<dyn FnOnce(&mut V, Option<&str>)>>,
+        open: Box<dyn Fn(&mut V) -> V>,
+        on_pop: Option<alloc::sync::Arc<dyn Fn(&mut V, Option<&str>)>>,
     },
     /// Builds the state of the view replacing this one.
-    Replace(Box<dyn FnOnce(&mut V) -> V>),
+    Replace(Box<dyn Fn(&mut V) -> V>),
     /// Pops this view, answering the result the closure builds (an empty
     /// one when there is none).
-    Pop(Option<Box<dyn FnOnce(&mut V) -> String>>),
+    Pop(Option<Box<dyn Fn(&mut V) -> String>>),
 }
 
 /// One node of the tree: a layout primitive or UI component, with the
@@ -3930,7 +3930,7 @@ pub struct Open<V: View> {
     next_id: Cell<u32>,
     /// The `on_pop` this view's last push registered, run when the view it
     /// pushed pops, with the result that pop answered.
-    on_pop: RefCell<Option<Box<dyn FnOnce(&mut V, Option<&str>)>>>,
+    on_pop: RefCell<Option<alloc::sync::Arc<dyn Fn(&mut V, Option<&str>)>>>,
 }
 
 impl<V: View> Open<V> {
@@ -4015,6 +4015,11 @@ impl<V: View> GuestView for Open<V> {
         } = event;
         // The listener the tree named, taken from the table of the render
         // the user saw: an event of an older render is stale, dropped.
+        // The listener is put back once run: a render's listener serves
+        // every event its tree raised — the user's second keystroke
+        // before the view re-renders is delivered as the first was, as
+        // the JavaScript SDK's listener is (a listener that must run once
+        // guards itself by its own state).
         let taken = {
             let mut tables = self.tables.borrow_mut();
             tables
@@ -4025,11 +4030,19 @@ impl<V: View> GuestView for Open<V> {
                     Some(listeners.swap_remove(index).1)
                 })
         };
+        let put_back = |run: Run<V>| {
+            let mut tables = self.tables.borrow_mut();
+            if let Some((_, listeners)) = tables.iter_mut().find(|(number, _)| *number == render)
+                && !listeners.iter().any(|(named, _)| *named == callback)
+            {
+                listeners.push((callback, run));
+            }
+        };
         // Run what the tree named, answering the navigation it asked for.
         // A value listener is told the event's text: its payload's `value`
         // (a field's, a control's) or `key` (a key pressed).
         let text = text_of(&payload);
-        let next = match taken {
+        let next = match taken.as_ref() {
             Some(Run::Listener(run)) => {
                 run(&mut self.state.borrow_mut());
                 None
@@ -4053,7 +4066,7 @@ impl<V: View> GuestView for Open<V> {
             }
             Some(Run::Push { open, on_pop }) => {
                 let state = open(&mut self.state.borrow_mut());
-                *self.on_pop.borrow_mut() = on_pop;
+                *self.on_pop.borrow_mut() = on_pop.clone();
                 Some(Next::Push(Open::new(state)))
             }
             Some(Run::Replace(open)) => {
@@ -4061,11 +4074,14 @@ impl<V: View> GuestView for Open<V> {
                 Some(Next::Replace(Open::new(state)))
             }
             Some(Run::Pop(answer)) => {
-                let result = answer.map(|answer| answer(&mut self.state.borrow_mut()));
+                let result = answer.as_ref().map(|answer| answer(&mut self.state.borrow_mut()));
                 Some(Next::Pop(result.unwrap_or_default()))
             }
             None => None,
         };
+        if let Some(run) = taken {
+            put_back(run);
+        }
         Ok(match next {
             Some(Next::Push(view)) => Outcome {
                 push: Some(wit::View::new(view)),
