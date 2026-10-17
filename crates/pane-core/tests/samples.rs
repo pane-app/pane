@@ -852,8 +852,10 @@ fn views_open_at_once_keep_their_own_state(sample: &Sample) {
         }
     };
     // One moves right, the other left: each view's own state.
-    let first_next = block_on(runtime.designed_view_event(first, pressed(&rendered, "right"), false));
-    let second_next = block_on(runtime.designed_view_event(second, pressed(&rendered, "left"), false));
+    let first_next =
+        block_on(runtime.designed_view_event(first, pressed(&rendered, "right"), false));
+    let second_next =
+        block_on(runtime.designed_view_event(second, pressed(&rendered, "left"), false));
 
     assert_eq!(value_of(&first_next), "Purple, #8E24AA");
     assert_eq!(value_of(&second_next), "Teal, #00897B");
