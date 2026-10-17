@@ -194,7 +194,7 @@ fn typing_edits_at_once_and_the_echo_never_fights_it(cx: &mut TestAppContext) {
     let (opened, cx) = open(cx);
     let window = opened.window;
     assert!(
-        cx.debug_bounds("designed-input-Name").is_some(),
+        cx.debug_bounds("field-name").is_some(),
         "the gallery's fields are drawn"
     );
 

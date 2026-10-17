@@ -3053,17 +3053,6 @@ impl Render for LauncherWindow {
         // outcome of the status line is a toast too, timed here and
         // cleared through the launcher when its time is up (#249).
         let toast = self.footer_toast(&view.status);
-        // [diag-ff58] Diagnostic scaffolding for the
-        // announcement-delivery root: whether a frame drew a toast.
-        // fix-forward-59 removes it with the root fix.
-        pane_core::diagnostic!(
-            "[diag-ff58] frame toast: {} active={}",
-            toast
-                .as_ref()
-                .map(|shown| shown.toast.title.clone())
-                .unwrap_or_default(),
-            window.is_window_active(),
-        );
         self.time_toast(toast.as_ref(), &view.status, window, cx);
         // Pane's Clipboard History and Search Files draw their own split
         // view (#102, #177), with a confirmation the command asks for over

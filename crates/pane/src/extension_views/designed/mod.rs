@@ -379,7 +379,17 @@ impl LauncherWindow {
             }
             return;
         }
-        let closed = shown.is_none();
+        // A view whose controls are gone closed: the keyboard goes with
+        // them, and the list takes it back on the screens whose list
+        // holds it, as `sync_root_search` then gives the field its own
+        // on the search screens. Only the closing itself: the sync runs
+        // over every change the launcher reports, and a screen that
+        // holds no view of its own leaves the keyboard where the user
+        // put it — the search field, a toast's open details — while the
+        // root handle resolves to no node on the search screens, so a
+        // sync-time focus there would leave every key falling through
+        // to nothing.
+        let closed = self.designed.is_some() && shown.is_none();
         // A view whose List searches as the user types opens on its
         // search field: the field the header shows is the window's own,
         // and typing into it is the view's first act — a tree that asks
@@ -398,6 +408,10 @@ impl LauncherWindow {
             self.query.focus(window, cx);
         }
         if closed {
+            // The view's focused control is gone: the list's handle is
+            // the keyboard's back on a screen whose list tracks it, and
+            // a search screen's field re-focuses over this in
+            // `sync_root_search`.
             window.focus(&self.focus_handle, cx);
         }
     }
