@@ -262,10 +262,13 @@ fn announce_by_showing(
 }
 
 /// Opens the update results view through the announcement toast's View
-/// Details: the toast key focuses the action, Enter chooses it.
+/// Details: the toast key opens the details popover, Enter chooses its
+/// action. The popover's element is drawn before Enter is sent: its focus
+/// handle carries the context only once its element is rendered, and an
+/// Enter before that lands on the root's selected row instead.
 fn view_details(window: &gpui::Entity<LauncherWindow>, cx: &mut VisualTestContext) {
     cx.simulate_keystrokes(TOAST_KEY);
-    settle(window, cx);
+    until_drawn(cx, "toast-details-action-primary", "the toast's details");
     cx.simulate_keystrokes("enter");
     until(window, cx, |view| {
         matches!(view.screen, Screen::UpdateResults { .. })
