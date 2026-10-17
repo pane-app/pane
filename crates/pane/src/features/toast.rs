@@ -194,6 +194,12 @@ pub(crate) struct ToastDetails {
 }
 
 impl ToastControls {
+    /// Whether the toast's details popover is open: its focus handle is
+    /// the one the window must leave alone while it renders.
+    pub(crate) fn details_open(&self) -> bool {
+        self.open.is_some()
+    }
+
     pub(crate) fn new(cx: &mut App) -> ToastControls {
         ToastControls {
             close: cx.focus_handle().tab_stop(true),
