@@ -39,7 +39,7 @@ mod repo_server;
 
 use defaults::pinned;
 use recording::{Done, RecordingSystem};
-use settle::{settle, until};
+use settle::{settle, settle_state, until, until_state};
 
 /// Open actions' default binding on this system.
 const OPEN_ACTIONS: &str = if cfg!(target_os = "macos") {
@@ -437,8 +437,17 @@ fn enter_on_a_program_shows_it_and_the_panel_offers_copy_name(cx: &mut TestAppCo
     let world = World::new();
     let launcher = world.launcher(cx);
     let (window, cx) = open_files(cx, launcher);
+    // The clock settles before the typing, as a user reads the screen
+    // before typing into it: the platform's settle timers fire, the
+    // window redraws, and the typing lands where the field is — typing
+    // into a window whose clock never moved arrives nowhere, and the
+    // wait below times out with the listing unfiltered.
+    cx.executor().advance_clock(Duration::from_millis(310));
+    cx.run_until_parked();
     cx.simulate_input("setup");
-    until(&window, cx, |view| {
+    // The row is read from the launcher's state: the window's redraw of
+    // it is the frame bracket's question, not this wait's.
+    until_state(&window, cx, |view| {
         view.rows
             .first()
             .is_some_and(|row| row.title == "setup.exe")
@@ -447,13 +456,13 @@ fn enter_on_a_program_shows_it_and_the_panel_offers_copy_name(cx: &mut TestAppCo
 
     // The Actions panel lists Pane's file actions, Copy Name among them.
     cx.simulate_keystrokes(OPEN_ACTIONS);
-    settle(&window, cx);
+    settle_state(&window, cx);
     assert!(cx.read_entity(&window, |window, _| window.actions_open()));
     for entry in ["action-Run", "action-Copy Path", "action-Copy Name"] {
         assert!(cx.debug_bounds(entry).is_some(), "{entry} is listed");
     }
     cx.simulate_keystrokes("escape");
-    settle(&window, cx);
+    settle_state(&window, cx);
     assert!(!cx.read_entity(&window, |window, _| window.actions_open()));
 
     // Enter shows it in the file manager; nothing runs it.
