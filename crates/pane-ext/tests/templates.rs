@@ -19,7 +19,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use futures::executor::block_on;
 use pane_core::develop::{BuildJob, BuildOutcome, Builder, Toolchains};
@@ -191,6 +191,21 @@ fn build(folder: &Path) {
     );
 }
 
+/// Every text a designed tree holds, collected in document order.
+fn tree_texts(node: &pane_core::Node, into: &mut Vec<String>) {
+    if let pane_core::NodeKind::Text(text) = &node.kind {
+        match &text.content {
+            pane_core::TextContent::Plain(text) => into.push(text.clone()),
+            pane_core::TextContent::Spans(spans) => {
+                into.extend(spans.iter().map(|span| span.text.clone()));
+            }
+        }
+    }
+    for child in &node.children {
+        tree_texts(child, into);
+    }
+}
+
 /// What the launcher shows of the last outcome: the status line, else the
 /// toast in the footer.
 fn shown(launcher: &Launcher) -> Status {
@@ -243,20 +258,37 @@ fn opens(kind: Kind, launcher: &Launcher) {
                 Status::Result(format!("Hello from {}", title(kind)))
             );
         }
-        // Without text sent, the detail says so.
+        // Without text sent, the detail says so: the command's screen
+        // draws its rows asynchronously, waited for as the samples' own
+        // tests wait for their answers.
         Kind::Detail => {
-            assert_eq!(launcher.view().screen, Screen::Command, "{kind:?}");
-            let view = launcher.view();
-            assert!(
-                view.rows
-                    .iter()
-                    .any(|row| row.title.starts_with("Nothing yet")),
-                "{:?}",
-                view.rows
-            );
+            let deadline = Instant::now() + Duration::from_secs(10);
+            loop {
+                let view = launcher.view();
+                if matches!(view.screen, Screen::Command { .. })
+                    && view
+                        .rows
+                        .iter()
+                        .any(|row| row.title.starts_with("Nothing yet"))
+                {
+                    break;
+                }
+                assert!(
+                    Instant::now() < deadline,
+                    "the detail never drew: {:?} (status {:?})",
+                    view.screen,
+                    view.status
+                );
+                std::thread::sleep(Duration::from_millis(10));
+            }
         }
         // The form command opens its form as a designed view (#241),
-        // whose submission answers what was filled in.
+        // whose submission answers what was filled in. The answer lands
+        // asynchronously: the tree first draws the form's loading text,
+        // the answer replacing it when the submission completes — waited
+        // for as the samples' own tests wait for their answers, and read
+        // as the tree's own text (a form's tree holds no list, so no
+        // rows carry it).
         Kind::Form => {
             assert!(
                 matches!(launcher.view().screen, Screen::DesignedView(_)),
@@ -276,13 +308,30 @@ fn opens(kind: Kind, launcher: &Launcher) {
                     ),
                 ],
             ));
-            let view = launcher.view();
-            let title: String = view.rows.iter().map(|row| row.title.clone()).collect();
-            assert!(
-                title.contains("Hello, Ada"),
-                "{kind:?}: {title:?} ({:?})",
-                view.status
-            );
+            let deadline = Instant::now() + Duration::from_secs(10);
+            loop {
+                let view = launcher.view();
+                if let Screen::DesignedView(shown) = &view.screen {
+                    let mut found = Vec::new();
+                    tree_texts(&shown.tree.root, &mut found);
+                    let joined = found.join(" ");
+                    if joined.contains("Hello, Ada") {
+                        break;
+                    }
+                    assert!(
+                        Instant::now() < deadline,
+                        "{kind:?}: the submission's answer never drew: {joined:?} ({:?})",
+                        view.status
+                    );
+                } else {
+                    assert!(
+                        Instant::now() < deadline,
+                        "{kind:?}: the form's screen left: {:?}",
+                        view.screen
+                    );
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
         }
         // The no-view command runs without a screen, root search staying
         // as it was, and answers in a toast.
