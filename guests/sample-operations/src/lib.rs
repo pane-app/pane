@@ -161,14 +161,26 @@ impl View for Calling {
                 Pending::loading(async move {
                     let input = json!({ "name": name }).to_string();
                     let times = if times == "twice" { 2 } else { 1 };
-                    match call(source.into(), "greet".into(), times, input).await {
-                        Ok(answer) => match serde_json::from_str::<Value>(&answer) {
-                            Ok(answer) => match answer.get("greeting").and_then(Value::as_str) {
-                                Some(greeting) => greeting.to_owned(),
-                                None => "the answer has no greeting".to_owned(),
-                            },
-                            Err(error) => format!("{error}"),
-                        },
+                    // The calls are made at once, both served (#136): joined,
+                    // their greetings drawn together.
+                    let calls =
+                        (0..times).map(|_| call(source.clone(), "greet".into(), 1, input.clone()));
+                    match futures::future::join_all(calls)
+                        .await
+                        .into_iter()
+                        .collect::<Result<Vec<String>, _>>()
+                    {
+                        Ok(answers) => answers
+                            .iter()
+                            .map(|answer| match serde_json::from_str::<Value>(answer) {
+                                Ok(answer) => match answer.get("greeting").and_then(Value::as_str) {
+                                    Some(greeting) => greeting.to_owned(),
+                                    None => "the answer has no greeting".to_owned(),
+                                },
+                                Err(error) => format!("{error}"),
+                            })
+                            .collect::<Vec<String>>()
+                            .join(" / "),
                         Err(error) => error.explain(),
                     }
                 })
