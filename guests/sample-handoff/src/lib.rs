@@ -18,7 +18,8 @@ use core::cell::RefCell;
 
 use pane_extension::alloc::{borrow::ToOwned, format, string::String, vec::Vec};
 use pane_extension::feedback::{Toast, show_toast};
-use pane_extension::view::{Cx, IntoAnswer, View, button, column, item, list, text_input};
+use pane_extension::view::{Cx, IntoAnswer, IntoNode, View, column};
+use pane_extension::form::{self, FormValues};
 use pane_extension::{Command, Item, LaunchRecord, List, lifecycle, state};
 
 /// The state this instance keeps in memory: the counter and the draft,
@@ -84,7 +85,8 @@ impl Command for Handoff {
             return Err(format!("unknown command: {command}"));
         }
         Ok(DraftView {
-            text: RefCell::new(KEPT.0.borrow().draft.clone()),
+            saved: RefCell::new(String::new()),
+            error: RefCell::new(false),
         })
     }
 
@@ -134,30 +136,55 @@ impl Command for Handoff {
 /// button. Saving pops the view back to the list, which re-renders with
 /// the draft it kept.
 struct DraftView {
-    /// The field's value, as the user typed it.
-    text: RefCell<String>,
+    /// The answer the last submission gave, drawn over the form.
+    saved: RefCell<String>,
+    /// Why the last submission was refused, on the draft's field.
+    error: RefCell<bool>,
 }
 
 impl View for DraftView {
     fn render(&mut self, cx: &mut Cx<Self>) -> impl IntoAnswer {
-        let text = self.text.borrow().clone();
-        column()
-            .navigation_title("Edit the draft")
-            .gap(pane_extension::view::Space::M)
-            .child(
-                text_input(text.clone())
-                    .label("Draft")
-                    .placeholder("What a replacement must keep")
-                    .on_input(cx.value_listener(|this: &mut Self, value: &str| {
-                        *this.text.borrow_mut() = value.to_owned();
-                    })),
-            )
-            .child(button("Save").on_click(cx.pop_with(|this| {
-                let text = this.text.borrow().clone();
-                KEPT.0.borrow_mut().draft = text.clone();
-                format!("Saved the draft {}", quoted(&text))
-            })))
-            .into_answer()
+        let submit = cx.form_listener(|this: &mut Self, values: &FormValues| {
+            let text = values.text("draft").unwrap_or_default().trim().to_owned();
+            if text.is_empty() {
+                *this.error.borrow_mut() = true;
+                *this.saved.borrow_mut() = String::new();
+                return;
+            }
+            *this.error.borrow_mut() = false;
+            KEPT.0.borrow_mut().draft = text.clone();
+            *this.saved.borrow_mut() = format!("Saved the draft {}", quoted(&text));
+        });
+        let saved = self.saved.borrow().clone();
+        let error = *self.error.borrow();
+        let draft = KEPT.0.borrow().draft.clone();
+        let mut view = column().navigation_title("Edit the draft").gap(pane_extension::view::Space::M);
+        if !saved.is_empty() {
+            view = view.child(
+                pane_extension::view::text(saved.as_str())
+                    .style(pane_extension::view::TextStyle::Title)
+                    .into_node(),
+            );
+        }
+        let field = form::text_field("draft")
+            .title("Draft")
+            .placeholder("What a replacement must keep")
+            .default_value(draft)
+            .auto_focus();
+        let field = if error {
+            field.error("Enter the draft")
+        } else {
+            field
+        };
+        view.child(
+            form::Form::new()
+                .key("form")
+                .submit_title("Save")
+                .on_submit(submit)
+                .child(field.into_node())
+                .into_node(),
+        )
+        .into_answer()
     }
 }
 
