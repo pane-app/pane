@@ -313,9 +313,7 @@ impl Game {
     /// The record's write queue: held across a save, so changes land in
     /// order.
     pub(super) fn queue(&mut self) -> std::sync::Arc<tokio::sync::Mutex<()>> {
-        self.writing
-            .get_or_insert_with(Default::default)
-            .clone()
+        self.writing.get_or_insert_with(Default::default).clone()
     }
 }
 
