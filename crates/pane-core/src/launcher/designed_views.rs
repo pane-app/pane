@@ -209,13 +209,21 @@ pub(super) struct SentDesignedEvent {
 }
 
 impl OpenDesignedView {
-    /// Sends `event` to the view, numbering it for ordering.
-    fn send(&mut self, runtime: &Runtime, event: DesignedEvent) -> SentDesignedEvent {
+    /// Sends `event` to the view, numbering it for ordering. `supersedes`
+    /// says the event replaces the work its view left in flight — a
+    /// search's newer text — so the older work's requests are aborted
+    /// when the event is dispatched.
+    fn send(
+        &mut self,
+        runtime: &Runtime,
+        event: DesignedEvent,
+        supersedes: bool,
+    ) -> SentDesignedEvent {
         self.sent += 1;
         SentDesignedEvent {
             view: self.id,
             number: self.sent,
-            reply: Box::pin(runtime.designed_view_event(self.id, event)),
+            reply: Box::pin(runtime.designed_view_event(self.id, event, supersedes)),
         }
     }
 
@@ -500,6 +508,21 @@ impl Launcher {
     ) -> impl Future<Output = ()> + Send + 'static {
         let mut state = self.lock();
         let epoch = state.screen_epoch;
+        // Whether this event supersedes the work its view left in flight:
+        // only a search's does — the field's value as the user typed it,
+        // non-empty, the newer query replacing the older one's requests.
+        // A clear's empty value leaves the view's background work to run
+        // to its end, as every other event does.
+        let supersedes = matches!(handler, DesignedHandler::Input)
+            && serde_json::from_str::<serde_json::Value>(&payload)
+                .ok()
+                .and_then(|value| {
+                    value
+                        .get("value")
+                        .and_then(|value| value.as_str())
+                        .map(str::to_owned)
+                })
+                .is_some_and(|text| !text.is_empty());
         // The view as it is now: the tree the user saw (named by `seen`,
         // else the one on screen), the event built from it, and whether
         // the stale-event rule drops that event.
@@ -539,7 +562,7 @@ impl Launcher {
         let sent = match (held, self.runtime()) {
             (Some((event, None)), Ok(runtime)) => {
                 let stack = state.designed_view.as_mut().expect("a view is open");
-                Some(stack.top_mut().send(runtime, event))
+                Some(stack.top_mut().send(runtime, event, supersedes))
             }
             _ => None,
         };
@@ -957,7 +980,7 @@ impl Launcher {
                 payload,
             };
             match self.runtime() {
-                Ok(runtime) => Some(stack.top_mut().send(runtime, event)),
+                Ok(runtime) => Some(stack.top_mut().send(runtime, event, false)),
                 Err(_) => None,
             }
         };

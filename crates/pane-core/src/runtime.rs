@@ -842,6 +842,11 @@ enum Request {
     DesignedViewEvent {
         view: ViewId,
         event: DesignedEvent,
+        /// Whether this event supersedes the work its view left in
+        /// flight: a search's does — the field's newer text replacing the
+        /// older one's requests — and no other event does, the view's own
+        /// background work running to its end as it left it.
+        supersedes: bool,
         reply: oneshot::Sender<Result<DesignedNext, CallError>>,
     },
     RefreshDesignedView {
@@ -1635,6 +1640,7 @@ impl Runtime {
         &self,
         view: ViewId,
         event: DesignedEvent,
+        supersedes: bool,
     ) -> impl Future<Output = Result<DesignedNext, CallError>> + Send + 'static {
         // [diag-ff22] Diagnostic scaffolding for the query changes that
         // never re-render: the event's arrival at the runtime and its
@@ -1647,7 +1653,15 @@ impl Runtime {
             event.key
         );
         let (reply, response) = oneshot::channel();
-        let called = self.call(Request::DesignedViewEvent { view, event, reply }, response);
+        let called = self.call(
+            Request::DesignedViewEvent {
+                view,
+                event,
+                supersedes,
+                reply,
+            },
+            response,
+        );
         async move {
             let answer = called.await;
             crate::diagnostic!("[diag-ff22] event answered: {}", answer.is_ok());
@@ -4033,7 +4047,12 @@ impl Host {
                         .await,
                 );
             }),
-            Request::DesignedViewEvent { view, event, reply } => {
+            Request::DesignedViewEvent {
+                view,
+                event,
+                supersedes,
+                reply,
+            } => {
                 // The view as it is now: an event sent before the view was
                 // closed is still handled, before the view is dropped.
                 let open = self.designed_views.borrow().get(&view).cloned();
@@ -4042,7 +4061,7 @@ impl Host {
                     return;
                 };
                 Box::pin(async move {
-                    let _ = reply.send(self.designed_view_event(open, event).await);
+                    let _ = reply.send(self.designed_view_event(open, event, supersedes).await);
                 })
             }
             Request::RefreshDesignedView {
@@ -4546,6 +4565,7 @@ impl Host {
         &self,
         open: LiveDesignedView,
         event: DesignedEvent,
+        supersedes: bool,
     ) -> Result<DesignedNext, CallError> {
         let chain = self.chain();
         let view = open.id;
@@ -4559,8 +4579,14 @@ impl Host {
         // host must). The supersede signal is the event dispatch itself,
         // not any turn-taking call: the view's own answer-push also takes
         // the turn, and aborting there would kill the answer's own fetch.
+        // Only a search's event supersedes — the field's newer text,
+        // replacing the older query's requests. Every other event leaves
+        // the view's own background work to run to its end: a clear's
+        // answer is the field it left, and the fetch the cleared search
+        // started answers in the background, never replacing it.
         let _turn = self.turn_for(&path, &chain).await?;
-        if let Some(instance) = self.instances.borrow().get(&path)
+        if supersedes
+            && let Some(instance) = self.instances.borrow().get(&path)
             && let Some(generation) = instance.store.data().generation()
         {
             generation.abort_web_requests();
@@ -6647,7 +6673,7 @@ mod tests {
         assert_eq!(block_on(runtime.running()), Vec::<PathBuf>::new());
         assert_eq!(block_on(runtime.designed_view_count()), 0);
         assert_eq!(
-            block_on(runtime.designed_view_event(view, designed_key_event())),
+            block_on(runtime.designed_view_event(view, designed_key_event(), false)),
             Err(CallError::ViewClosed)
         );
     }
@@ -6673,10 +6699,10 @@ mod tests {
             block_on(runtime.open_designed_view(&component, "color", &default_launch())).unwrap();
         assert_ne!(old, new);
         assert_eq!(
-            block_on(runtime.designed_view_event(old, designed_key_event())),
+            block_on(runtime.designed_view_event(old, designed_key_event(), false)),
             Err(CallError::ViewClosed)
         );
-        assert!(block_on(runtime.designed_view_event(new, designed_key_event())).is_ok());
+        assert!(block_on(runtime.designed_view_event(new, designed_key_event(), false)).is_ok());
         assert_eq!(block_on(runtime.designed_view_count()), 1);
     }
 
@@ -6800,7 +6826,7 @@ mod tests {
         assert_eq!(block_on(runtime.running()), vec![other.clone()]);
         // The other command's view is still open, and the package runs
         // again from a fresh instance.
-        assert!(block_on(runtime.designed_view_event(view, designed_key_event())).is_ok());
+        assert!(block_on(runtime.designed_view_event(view, designed_key_event(), false)).is_ok());
         assert!(
             block_on(runtime.render_with(&component, Some(packages.owned_by(&identity)))).is_ok()
         );
@@ -7059,7 +7085,7 @@ mod tests {
 
         assert_eq!(block_on(stale), Err(CallError::Disabled));
         assert_eq!(block_on(runtime.designed_view_count()), 1);
-        assert!(block_on(runtime.designed_view_event(view, designed_key_event())).is_ok());
+        assert!(block_on(runtime.designed_view_event(view, designed_key_event(), false)).is_ok());
     }
 
     /// The launch record every designed view of these tests opens with:
