@@ -37,6 +37,8 @@ use std::future::Future;
 use std::pin::Pin;
 
 use super::presentation::Section;
+use std::sync::Arc;
+
 use super::{Entry, Launcher, Pending, Row, Screen, State, first_index};
 use crate::host_settings::SearchSensitivity;
 use crate::runtime::{
@@ -74,6 +76,46 @@ pub(super) struct ListHeld {
     asked_at: Option<usize>,
     // When the list's loading began, in the clock's milliseconds.
     loading_since: Option<u64>,
+    // The link the next search send waits for: the sends are started in
+    // the order their queries arrive, but a thread that runs first would
+    // send first, dispatching the newer query's event before the older's
+    // — whose supersede-cancel would drop the newer's request. Each send
+    // waits the link before it out.
+    search_link: Option<Arc<SearchLink>>,
+}
+
+/// One link in the chain of a view's search sends: the send threads wait
+/// for the link of the send before theirs, so the events leave in the
+/// order their queries arrived.
+#[derive(Debug, Default)]
+pub(super) struct SearchLink {
+    sent: std::sync::Mutex<bool>,
+    told: std::sync::Condvar,
+}
+
+impl SearchLink {
+    /// Waits until the send before this link's has left.
+    fn wait(&self) {
+        let mut sent = self
+            .sent
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        while !*sent {
+            sent = self
+                .told
+                .wait(sent)
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+        }
+    }
+
+    /// Notes that this link's send has left, freeing the next.
+    fn left(&self) {
+        *self
+            .sent
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = true;
+        self.told.notify_all();
+    }
 }
 
 /// One row of a designed List's or Grid's presentation: what activating
@@ -478,7 +520,7 @@ impl Launcher {
         state: &mut State,
         text: &str,
     ) -> Option<Pin<Box<dyn Future<Output = ()> + Send>>> {
-        let event = {
+        let (event, wait_for, link) = {
             let Screen::DesignedView(snapshot) = &state.view.screen else {
                 return None;
             };
@@ -486,16 +528,26 @@ impl Launcher {
             let stack = state.designed_view.as_mut()?;
             let held = &mut stack.top_mut().list;
             held.search = text.to_owned();
-            list.searching.then(|| {
+            let event = list.searching.then(|| {
                 held.reported.retain(|reported| reported != text);
                 held.reported.push(text.to_owned());
                 (list.on_search_text, list.key.clone(), text.to_owned())
-            })
+            });
+            // The send this query starts waits for the one before it, and
+            // the next waits for this: the events leave in the order the
+            // queries arrived.
+            let wait_for = held.search_link.clone();
+            let link = event.as_ref().map(|_| {
+                let link = Arc::new(SearchLink::default());
+                held.search_link = Some(link.clone());
+                link
+            });
+            (event, wait_for, link)
         };
         // The rows and the snapshot's list reflect the new text at once.
         self.present_designed_list(state);
-        let (callback, key, text) = event?;
-        let callback = callback?;
+        let (_, _, text) = event?;
+        let link = link?;
         let payload = value_payload(&text);
         // The send happens on a thread of its own, started now: a caller
         // can hold the returned future un-polled while it waits for what
@@ -506,11 +558,39 @@ impl Launcher {
         // name the view the event is raised on: the thread waits the lock
         // out instead of deadlocking with it, as the selection's and the
         // back-out's sends do on threads of their own.
-        let key = (!key.is_empty()).then_some(key);
         let launcher = self.clone();
         let started = std::thread::Builder::new()
             .name("pane-designed-search".into())
             .spawn(move || {
+                if let Some(previous) = wait_for {
+                    previous.wait();
+                }
+                // The callback id and the render the event carries name
+                // one tree: the one on screen when the send leaves. A
+                // pair read apart — the callback from the tree the query
+                // arrived on, the render from the one on screen at the
+                // send — names a listener the send's render never held,
+                // and the view drops the event, losing the query.
+                let pair = {
+                    let state = launcher.lock();
+                    let Screen::DesignedView(snapshot) = &state.view.screen else {
+                        return;
+                    };
+                    let Some(list) = &snapshot.list else {
+                        return;
+                    };
+                    let (callback, key) = (list.on_search_text, list.key.clone());
+                    let seen = state
+                        .designed_view
+                        .as_ref()
+                        .map(|stack| stack.top_rendered());
+                    callback
+                        .zip(seen)
+                        .map(|(callback, seen)| (callback, key, seen))
+                };
+                let Some((callback, key, seen)) = pair else {
+                    return;
+                };
                 // [diag-ff22] Diagnostic scaffolding for the query changes
                 // that never re-render: the search-text event's send, and
                 // its outcome. fix-forward-23 removes it with the root
@@ -521,13 +601,14 @@ impl Launcher {
                 let sent = launcher.send_designed_seen(
                     DesignedHandler::Input,
                     callback,
-                    key.as_deref(),
-                    None,
+                    (!key.is_empty()).then_some(key.as_str()),
+                    Some(seen),
                     payload,
                 );
                 futures::executor::block_on(sent);
                 crate::diagnostic!("[diag-ff22] search sent");
                 launcher.changed();
+                link.left();
             });
         // The future the caller holds completes when the search's answer
         // has landed: the thread's end.
