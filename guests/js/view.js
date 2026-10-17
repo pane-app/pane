@@ -18,9 +18,11 @@
 // with: it implements `render(context)` and `handleEvent(event)` for
 // Pane's envelope, hiding the wire format and the callback ids. The ids
 // name each render's listeners; the tables of the last two renders are
-// kept, so a press of what the user could see is delivered even if the
-// view has rendered since, and an older one is dropped. React is not
-// used: its scheduler needs timers that run only inside calls.
+// kept — and the one the user's events still name, which the view keeps
+// showing while Pane refuses its newer trees — so a press of what the
+// user could see is delivered even if the view has rendered since, and
+// an older one is dropped. React is not used: its scheduler needs timers
+// that run only inside calls.
 //
 // A listener may navigate (#239), returning what `push`, `replace`, `pop`
 // or `Push` answer: the pushed or replacing view is a view of the same
@@ -995,6 +997,12 @@ export function createView(component, props = {}) {
   const cells = new Map();
   /** The listeners of the last two renders, by render number and id. */
   const tables = new Map();
+  /** The render the user's last event named, so the one still shown: a
+   * view that renders past it without the newer trees landing on screen —
+   * Pane refusing a tree that breaks a canvas bound keeps the last good
+   * one — still serves events on the tree the user sees, so its table is
+   * kept from the eviction below. */
+  let seen = 0;
   /** The `onPop` the view's last push registered, run when it pops. */
   let onPop = null;
   /** The ticks the last render registered. */
@@ -1059,10 +1067,13 @@ export function createView(component, props = {}) {
         if (!used.has(path)) cells.delete(path);
       }
       tables.set(number, callbacks);
-      // Keep the last two renders' tables: an event raised on the tree the
-      // user saw is delivered even if the view has rendered since.
+      // Keep the last two renders' tables — and the one the user's events
+      // still name (see `seen`): an event raised on the tree the user saw
+      // is delivered even if the view has rendered since, and the tree
+      // still on screen keeps its listeners while the view renders past
+      // what it shows.
       for (const render of tables.keys()) {
-        if (render < number - 1) tables.delete(render);
+        if (render < number - 1 && render !== seen) tables.delete(render);
       }
       if (root.length !== 1) {
         throw new Error("a view renders one root node");
@@ -1081,6 +1092,10 @@ export function createView(component, props = {}) {
       };
     },
     async handleEvent(event) {
+      // The render this event names is the one the user saw: kept from
+      // the next render's eviction (see `seen`), for a view that renders
+      // past what it shows.
+      seen = event.render;
       // The pop event: the view above this one popped. Its payload is the
       // result that pop answered; the view re-renders after it, as after
       // every event. The `onPop` is a listener: its synchronous part is

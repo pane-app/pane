@@ -131,10 +131,13 @@ impl Counter {
             }
             // A text operation over the character limit.
             Some("home") => ops.push(text("x".repeat(65_537))),
-            // An image operation over the inline data limit.
+            // An image operation over the inline data limit: the whole
+            // `data:` URL counts — the 22-character prefix with the
+            // payload — so a payload 21 bytes under the limit puts the
+            // URL one byte over it.
             Some("end") => ops.push(Draw::image(Icon::url(format!(
                 "data:image/png;base64,{}",
-                "a".repeat(1_048_577)
+                "a".repeat(1_048_577 - 22)
             )))),
             _ => ops.push(text(format!("{} events", self.events.get()))),
         }
@@ -154,20 +157,23 @@ impl Counter {
         )
     }
 
-    /// A key the canvas is focused for: "left" refuses, "right" traps, and
-    /// "down", "home" and "end" draw a canvas over one of Pane's limits.
+    /// A key the canvas is focused for: "left" refuses, "right" traps,
+    /// and "down", "home" and "end" draw a canvas over one of Pane's
+    /// limits. Every key the view answers counts, as the custom view it
+    /// replaced counted them (#21): the limit keys too.
     fn keyed(&self, key: &str) {
         match key {
-            "left" => self.refuse.set(true),
+            "left" => {
+                self.refuse.set(true);
+                return;
+            }
             "right" => panic!("view trap"),
             "down" => self.oversize.set(Some("down")),
             "home" => self.oversize.set(Some("home")),
             "end" => self.oversize.set(Some("end")),
-            _ => {
-                self.oversize.set(None);
-                self.events.set(self.events.get() + 1);
-            }
+            _ => self.oversize.set(None),
         }
+        self.events.set(self.events.get() + 1);
     }
 
     /// A pointer event the canvas received: each one counts.

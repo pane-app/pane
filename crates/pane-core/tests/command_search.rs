@@ -219,11 +219,28 @@ impl Pane {
         block_on(self.launcher.set_query(text));
     }
 
-    /// The error shown: a failure toast of an action's.
-    fn error(&self) -> String {
-        match shown(&self.launcher) {
-            Status::Error(message) => message,
-            other => panic!("expected an error, found {other:?}"),
+    /// The error shown once it lands, waiting for `part` in it: a
+    /// failure toast of an action's, which arrives after the activation's
+    /// future ends (the fetch it started runs on past the listener that
+    /// returned), so the one before it is still shown until then. Its
+    /// wrapping differs by sample — the JavaScript and TypeScript SDKs
+    /// show a listener's rejection titled "The extension reported an
+    /// error", the Rust sample toasts its own failure text — so the wait
+    /// is for the failure the samples share.
+    fn error_shows(&self, part: &str) {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            if let Status::Error(shown) = shown(&self.launcher)
+                && shown.contains(part)
+            {
+                return;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "the action's failure never showed: {:?}",
+                shown(&self.launcher)
+            );
+            std::thread::sleep(Duration::from_millis(10));
         }
     }
 }
@@ -603,6 +620,23 @@ fn drip_limits() -> HttpLimits {
     }
 }
 
+/// The open designed view's first empty state, its title, if its tree
+/// holds one: a failed search's answer is drawn in place of its results
+/// (the samples' own error view), so a test that waits for a stalled
+/// search's end polls for the failure it names.
+fn empty_state_of(view: &LauncherView) -> Option<String> {
+    let Screen::DesignedView(shown) = &view.screen else {
+        return None;
+    };
+    fn of(node: &pane_core::Node) -> Option<String> {
+        match &node.kind {
+            pane_core::NodeKind::EmptyState(state) => Some(state.title.clone()),
+            _ => node.children.iter().find_map(of),
+        }
+    }
+    of(&shown.tree.root)
+}
+
 #[test]
 fn a_service_that_stalls_is_given_up_on_within_the_limits() {
     for fixture in &ALL {
@@ -617,21 +651,21 @@ fn a_service_that_stalls_is_given_up_on_within_the_limits() {
         // A head, then nothing: the wait between two pieces of the body.
         // The event the text raises waits for the whole search (the
         // JavaScript and TypeScript samples) or its push does (the Rust
-        // one, `Pending` in the render): either way the rows appear once
-        // the answer lands, waited for with a deadline a loaded runner
-        // can afford.
+        // one, `Pending` in the render): either way the fetch's failure
+        // ends the search, drawn as the view's own empty state in place
+        // of results — never as rows — waited for with a deadline a
+        // loaded runner can afford.
         let started = Instant::now();
         pane.open();
         pane.search("stall");
-        let deadline = Instant::now() + Duration::from_secs(30);
-        while pane.titles().is_empty() {
-            assert!(
-                Instant::now() < deadline,
-                "{}: the search never answered",
-                fixture.package
-            );
-            std::thread::sleep(Duration::from_millis(10));
-        }
+        wait_for_view(
+            &pane,
+            |view| {
+                empty_state_of(view)
+                    .is_some_and(|title| title.contains("Could not reach the service"))
+            },
+            "the stalled search's failure never drew",
+        );
         assert!(
             started.elapsed() < defaults.between_bytes * 8,
             "{:?}",
@@ -642,15 +676,14 @@ fn a_service_that_stalls_is_given_up_on_within_the_limits() {
         pane.runtime.set_http_limits(drip_limits());
         let started = Instant::now();
         pane.search("drip");
-        let deadline = Instant::now() + Duration::from_secs(30);
-        while pane.titles().is_empty() {
-            assert!(
-                Instant::now() < deadline,
-                "{}: the search never answered",
-                fixture.package
-            );
-            std::thread::sleep(Duration::from_millis(10));
-        }
+        wait_for_view(
+            &pane,
+            |view| {
+                empty_state_of(view)
+                    .is_some_and(|title| title.contains("Could not reach the service"))
+            },
+            "the dripping search's failure never drew",
+        );
         assert!(
             started.elapsed() < defaults.deadline * 4,
             "{:?}",
@@ -659,6 +692,11 @@ fn a_service_that_stalls_is_given_up_on_within_the_limits() {
 
         // An action's request is bounded the same way.
         pane.search("misbehaving");
+        let _ = wait_for_view(
+            &pane,
+            |view| view.rows.iter().any(|row| row.title == "huge-details"),
+            "the misbehaving search's answer never drew",
+        );
         assert_eq!(
             pane.titles(),
             ["huge-details", "stall-details", "drip-details"],
@@ -668,16 +706,10 @@ fn a_service_that_stalls_is_given_up_on_within_the_limits() {
         pane.runtime.set_http_limits(stall_limits());
         let started = Instant::now();
         pane.activate("stall-details");
-        assert_eq!(
-            pane.error(),
-            format!(
-                "The extension reported an error: Could not reach the service at {}: \
-                 the service did not answer in time",
-                service.url()
-            ),
-            "{}",
-            fixture.package
-        );
+        pane.error_shows(&format!(
+            "Could not reach the service at {}: the service did not answer in time",
+            service.url()
+        ));
         assert!(
             started.elapsed() < defaults.between_bytes * 8,
             "{:?}",
@@ -685,20 +717,16 @@ fn a_service_that_stalls_is_given_up_on_within_the_limits() {
         );
         pane.runtime.set_http_limits(drip_limits());
         pane.activate("drip-details");
-        assert_eq!(
-            pane.error(),
-            format!(
-                "The extension reported an error: Could not reach the service at {}: \
-                 the service took too long to answer",
-                service.url()
-            )
-        );
+        pane.error_shows(&format!(
+            "Could not reach the service at {}: the service took too long to answer",
+            service.url()
+        ));
         pane.activate("huge-details");
-        assert_eq!(
-            pane.error(),
-            "The extension reported an error: The answer is larger than the \
-             4194304 bytes Pane accepts"
-        );
+        pane.error_shows(&format!(
+            "Could not reach the service at {}: the answer is larger than the 4194304 bytes \
+             Pane accepts",
+            service.url()
+        ));
 
         // Pane hung up on each, and the extension carries on.
         let deadline = Instant::now() + Duration::from_secs(30);
@@ -707,6 +735,11 @@ fn a_service_that_stalls_is_given_up_on_within_the_limits() {
             std::thread::sleep(Duration::from_millis(10));
         }
         pane.search("cobalt");
+        let _ = wait_for_view(
+            &pane,
+            |view| view.rows.iter().any(|row| row.title == "cobalt-http"),
+            "the cobalt search's answer never drew",
+        );
         assert_eq!(pane.titles(), ["cobalt-http"], "{}", fixture.package);
     }
 }
@@ -1080,23 +1113,39 @@ fn a_crash_of_the_runtime_ends_a_search_with_an_error_not_its_results() {
             std::thread::sleep(Duration::from_millis(10));
         }
         assert!(service.wait_for_abandoned(Duration::from_secs(5)));
+        // The crashed thread held the view, so the view closed with it
+        // (#17: back at root search) and the crash is said in the status
+        // line: the search ended with an error, not its results.
         let view = pane.view();
         assert!(
-            matches!(view.screen, Screen::DesignedView(_)),
-            "{:?}",
+            matches!(view.screen, Screen::Root { .. }),
+            "{}: {:?}",
+            fixture.package,
             view.screen
         );
-        assert_eq!(view.rows, Vec::new(), "{}", fixture.package);
         let Status::Error(message) = view.status else {
             panic!("{}: {:?}", fixture.package, view.status);
         };
         assert!(
-            message.contains("it stopped before answering and was started again"),
+            message.contains("stopped unexpectedly and was started again"),
             "{message}"
         );
 
-        // The restarted runtime searches.
+        // The restarted runtime searches: the command opens again, and
+        // its search's answer is waited for as every designed answer is.
+        pane.open();
         pane.search("basalt");
+        let view = wait_for_view(
+            &pane,
+            |view| view.rows.iter().any(|row| row.title == "basalt"),
+            "the basalt search's answer never drew",
+        );
+        assert!(
+            matches!(view.screen, Screen::DesignedView { .. }),
+            "{}: {:?}",
+            fixture.package,
+            view.screen
+        );
         assert_eq!(pane.titles(), ["basalt"], "{}", fixture.package);
     }
 }
