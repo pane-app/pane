@@ -822,6 +822,12 @@ impl Launcher {
     /// launcher again says nothing more. The announcement re-arms when a
     /// new pass records.
     pub(in crate::launcher) fn announce_update_failures(&self, state: &mut State) {
+        // [diag-ff58] Diagnostic scaffolding for the
+        // announcement-delivery root: the announce's arrival and count.
+        crate::diagnostic!(
+            "[diag-ff58] announce: unannounced={:?}",
+            state.update_results.unannounced()
+        );
         let Some(failed) = state.update_results.unannounced() else {
             return;
         };
