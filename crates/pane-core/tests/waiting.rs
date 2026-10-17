@@ -140,7 +140,11 @@ impl Dirs {
                 "apiVersion": "0.2",
                 "commands": [
                     {{ "id": "call", "title": "Call from JavaScript",
-                       "component": "caller.wasm", "takesQuery": true }}
+                       "component": "caller.wasm", "takesQuery": true }},
+                    {{ "id": "greet", "title": "Greet through another extension",
+                       "component": "caller.wasm", "mode": "designed" }},
+                    {{ "id": "wait", "title": "Wait in another extension",
+                       "component": "caller.wasm", "mode": "designed" }}
                 ],
                 "operations": [{{ "id": "greet", "version": 1, "component": "caller.wasm" }}],
                 "dependencies": [{dependencies}]
@@ -297,6 +301,32 @@ fn row(launcher: &Launcher, title: &str) -> Row {
         .into_iter()
         .find(|row| row.title == title)
         .unwrap_or_else(|| panic!("no row {title:?} in {:?}", titles(launcher)))
+}
+
+/// The texts the open designed view's tree holds, in order, as the
+/// operations answers are read (ff47's shape): a form's answer lands in
+/// its own tree, replacing the loading text it first draws.
+fn tree_texts(launcher: &Launcher) -> Vec<String> {
+    let view = launcher.view();
+    let Screen::DesignedView(shown) = &view.screen else {
+        return Vec::new();
+    };
+    fn texts(node: &pane_core::Node, into: &mut Vec<String>) {
+        if let pane_core::NodeKind::Text(text) = &node.kind {
+            match &text.content {
+                pane_core::TextContent::Plain(text) => into.push(text.clone()),
+                pane_core::TextContent::Spans(spans) => {
+                    into.extend(spans.iter().map(|span| span.text.clone()));
+                }
+            }
+        }
+        for child in &node.children {
+            texts(child, into);
+        }
+    }
+    let mut found = Vec::new();
+    texts(&shown.tree.root, &mut found);
+    found
 }
 
 /// Why the command titled `title` cannot run, as a waiting reason.
@@ -497,14 +527,38 @@ fn a_waiting_package_answers_its_operations_unavailable_with_the_reason() {
     assert_eq!(launcher.view().screen, Screen::Command);
     select_title(&launcher, "Greet through another extension");
     block_on(launcher.activate_selected());
-    block_on(launcher.submit_pane_form(vec![
-        ("source".to_owned(), dirs.source("caller").to_owned()),
-        ("name".to_owned(), "Ada".to_owned()),
-        ("times".to_owned(), "once".to_owned()),
-    ]));
-    assert_eq!(
-        error(&launcher.view().status),
-        "unavailable: Caller is waiting for Rust operations sample, which is disabled"
+    // The item's action launches the form's command on Pane's own launch
+    // thread: wait for it to open before reading the screen.
+    assert!(
+        launcher.wait_for_launches(Duration::from_secs(20)),
+        "the form's command did not launch"
+    );
+    // The form is a designed tree's (#241): the call the submission makes
+    // answers in the tree's own text, the loading text it first draws.
+    block_on(launcher.submit_designed_form(
+        None,
+        vec![
+            (
+                "source".to_owned(),
+                pane_core::FormValue::Text(dirs.source("caller").to_owned()),
+            ),
+            (
+                "name".to_owned(),
+                pane_core::FormValue::Text("Ada".to_owned()),
+            ),
+            (
+                "times".to_owned(),
+                pane_core::FormValue::Text("once".to_owned()),
+            ),
+        ],
+    ));
+    until(
+        "the waiting answer",
+        vec![
+            "unavailable: Caller is waiting for Rust operations sample, which is disabled"
+                .to_owned(),
+        ],
+        || tree_texts(&launcher),
     );
 }
 
@@ -707,27 +761,51 @@ fn waiting_leaves_an_open_screen_and_its_calls_alone_and_never_pauses_it() {
     let greeter = dirs.identity(GREETER);
 
     // The caller's command is open when its dependency is disabled: the
-    // screen stays, and its calls answer as calls do.
+    // screen stays, and its calls answer as calls do. The form the item
+    // opens first, while its dependency still serves: the item's action
+    // launches the form's command on Pane's own launch thread, waited for
+    // before the dependency goes.
     open(&launcher, "Call from JavaScript");
     assert_eq!(launcher.view().screen, Screen::Command);
-    block_on(launcher.set_enabled(&greeter, false));
-    assert_eq!(
-        launcher.view().screen,
-        Screen::Command,
-        "the open screen stays"
-    );
-    assert!(dirs.runs(&launcher, "caller"), "its instance stays");
     select_title(&launcher, "Greet through another extension");
     block_on(launcher.activate_selected());
-    block_on(launcher.submit_pane_form(vec![
-        ("source".to_owned(), "greeter".to_owned()),
-        ("name".to_owned(), "Ada".to_owned()),
-        ("times".to_owned(), "once".to_owned()),
-    ]));
-    assert_eq!(
-        error(&launcher.view().status),
-        "disabled: Rust operations sample is disabled; Pane does not enable it for a call, \
-         enable it in Settings"
+    assert!(
+        launcher.wait_for_launches(Duration::from_secs(20)),
+        "the form's command did not launch"
+    );
+    block_on(launcher.set_enabled(&greeter, false));
+    assert!(
+        matches!(launcher.view().screen, Screen::DesignedView(_)),
+        "the open screen stays: {:?}",
+        launcher.view().screen
+    );
+    assert!(dirs.runs(&launcher, "caller"), "its instance stays");
+    // The form is a designed tree's (#241): the call the submission makes
+    // answers in the tree's own text, the loading text it first draws.
+    block_on(launcher.submit_designed_form(
+        None,
+        vec![
+            (
+                "source".to_owned(),
+                pane_core::FormValue::Text("greeter".to_owned()),
+            ),
+            (
+                "name".to_owned(),
+                pane_core::FormValue::Text("Ada".to_owned()),
+            ),
+            (
+                "times".to_owned(),
+                pane_core::FormValue::Text("once".to_owned()),
+            ),
+        ],
+    ));
+    until(
+        "the disabled answer",
+        vec![format!(
+            "disabled: Rust operations sample is disabled; {}",
+            "Pane does not enable it for a call, enable it in Settings"
+        )],
+        || tree_texts(&launcher),
     );
     // Waiting never counts towards pausing: no Retry row for the caller.
     manage(&launcher);

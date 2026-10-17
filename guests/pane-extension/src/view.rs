@@ -62,11 +62,13 @@
 //! unless it is given as [`Paint::exact`]. Icons and images come from
 //! [`crate::Icon`], the one icon model the list tree shares.
 //!
-//! The listeners of the last two renders are kept: a press of what the
-//! user could see is delivered even if the view has rendered since, and
-//! an older event is dropped. The component set's version is written into
-//! every document; a Pane that renders another major refuses it naming
-//! both versions, and one that knows less draws what it understands.
+//! The listeners of the last two renders are kept — and the one the
+//! user's events still name, which the view keeps showing while Pane
+//! refuses its newer trees: a press of what the user could see is
+//! delivered even if the view has rendered since, and an older event is
+//! dropped. The component set's version is written into every document;
+//! a Pane that renders another major refuses it naming both versions,
+//! and one that knows less draws what it understands.
 //!
 //! A view's answer may navigate (#239): [`Cx::push`] pushes a view above
 //! this one, [`Cx::replace`] replaces this view with one, [`Cx::pop`] and
@@ -3923,6 +3925,11 @@ pub struct Open<V: View> {
     /// The listeners of the last two renders, newest last: the render
     /// number and its listeners by callback id.
     tables: RefCell<Vec<(u64, Vec<(u32, Run<V>)>)>>,
+    /// The render the user's last event named, so the one still shown: a
+    /// view that renders past it without the newer trees landing on
+    /// screen — Pane refusing a tree that breaks a canvas bound keeps the
+    /// last good one — still serves events on the tree the user sees.
+    seen: Cell<u64>,
     /// The next callback id this view mints: every listener a render
     /// names gets one of the view's own, never one an earlier render
     /// used — a tree's ids are fresh each render, as the JavaScript
@@ -3939,6 +3946,7 @@ impl<V: View> Open<V> {
         Open {
             state: RefCell::new(state),
             tables: RefCell::new(Vec::new()),
+            seen: Cell::new(0),
             next_id: Cell::new(0),
             on_pop: RefCell::new(None),
         }
@@ -3979,11 +3987,16 @@ impl<V: View> GuestView for Open<V> {
         let mut tree = String::new();
         write_node(&mut tree, &answer.node)?;
         let document = format!("{{\"version\":\"{COMPONENT_SET}\",\"root\":{tree}}}");
-        // Keep the last two renders' listeners: an event raised on the tree
-        // the user saw is delivered even if the view has rendered since.
+        // Keep the last two renders' listeners: an event raised on the
+        // tree the user saw is delivered even if the view has rendered
+        // since — and the one the user's events still name, for a view
+        // that renders past what it shows when Pane refuses a newer
+        // tree: the tree on screen still raises events, so its
+        // listeners stay.
+        let seen = self.seen.get();
         self.tables
             .borrow_mut()
-            .retain(|(number, _)| *number + 1 >= render);
+            .retain(|(number, _)| *number + 1 >= render || *number == seen);
         self.tables.borrow_mut().push((render, listeners));
         Ok(Rendered {
             tree: document,
@@ -3996,6 +4009,10 @@ impl<V: View> GuestView for Open<V> {
     }
 
     async fn handle_event(&self, event: UiEvent) -> Result<Outcome, String> {
+        // The render this event names is the one the user saw: kept from
+        // the next render's eviction (see `render`), for a view that
+        // renders past what it shows.
+        self.seen.set(event.render);
         // The pop event: the view above this one popped, its payload the
         // result that pop answered. The view re-renders after it, as after
         // every event.

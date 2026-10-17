@@ -3517,6 +3517,14 @@ impl Launcher {
             }
             Screen::Root { query } => {
                 if !query.is_empty() {
+                    // Leaving the query abandons what its rows started:
+                    // a pending activation holds the screen it left, so
+                    // the epoch's move has the view it opens after the
+                    // user left closed again (#21's rule) instead of
+                    // landing on a screen the user went back from. The
+                    // blank query's own search captures the epoch as of
+                    // now, so its results still land.
+                    state.screen_epoch += 1;
                     self.search(&mut state, "");
                 } else {
                     // Root search, an empty query: nothing to back out of.
