@@ -1159,7 +1159,7 @@ fn a_call_by_dependency_id_reaches_only_the_operations_declared_for_it() {
     // The refusal lands asynchronously: the tree first draws the call's
     // loading text, the answer replacing it when the call is refused —
     // waited for as the form's own answer is.
-    let mut refused = String::new();
+    let refused;
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
         let view = launcher.view();
