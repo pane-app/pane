@@ -309,7 +309,8 @@ fn blocks(lines: &mut Lines) -> Vec<Block> {
 }
 
 /// `line` as a fence's opening: ` ``` ` or `~~~`, with an optional
-/// language after it. The bool says the fence is a tilde one.
+/// language after it — with or without a space between, as CommonMark
+/// writes an info string. The bool says the fence is a tilde one.
 fn fence(line: &str) -> Option<(bool, Option<String>)> {
     let tilde = line.starts_with("~~~");
     let rest = if tilde {
@@ -317,13 +318,14 @@ fn fence(line: &str) -> Option<(bool, Option<String>)> {
     } else {
         line.strip_prefix("```")?
     };
-    if rest.is_empty() {
+    // The language: the fence's info string, trimmed of the space that
+    // may sit before it. Only whitespace follows the language — a
+    // fence's line names nothing else.
+    let language = rest.trim();
+    if language.is_empty() {
         return Some((tilde, None));
     }
-    let language = rest.strip_prefix(' ')?;
-    // Only whitespace follows the language: a fence's line names nothing
-    // else.
-    (!language.trim().is_empty() && language == language.trim())
+    (!language.is_empty() && language == language.trim())
         .then(|| (tilde, Some(language.to_owned())))
 }
 

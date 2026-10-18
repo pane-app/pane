@@ -161,6 +161,7 @@ fn a_repository_named_in_the_form_is_previewed_installed_and_run(cx: &mut TestAp
     cx.simulate_keystrokes("enter");
     settle(&window, cx);
     press_enter_on(&window, cx, "Say hello");
+    // The answer is a toast in the footer, the window being shown.
     assert_eq!(
         settle_shown(&window, cx),
         Status::Result("Hello from the Git repository".into())
@@ -237,10 +238,11 @@ fn one_extension_of_a_collection_named_by_its_id_is_previewed_installed_and_run(
     cx.simulate_keystrokes("enter");
     settle(&window, cx);
     press_enter_on(&window, cx, "Say hello");
-    assert_eq!(
-        settle_shown(&window, cx),
-        Status::Result("Hello from the Git repository".into())
-    );
+    // The second Escape, at an empty root search, hid the window — so the
+    // action's toast is a HUD, the footer being gone with the window
+    // (#141), and the answer is read from it.
+    let hud = cx.read_entity(&window, |window, _| window.hud());
+    assert_eq!(hud, Some("Hello from the Git repository".to_owned()));
 
     // Its page in Settings shows its source, the repository's address with
     // its id (#307).
@@ -339,8 +341,13 @@ fn a_collection_opens_the_choice_ticks_previews_and_installs_several(cx: &mut Te
             "the check mark of {title} is rendered"
         );
     }
+    // The repository's name is its address without the scheme or the
+    // `.git` suffix the address may carry.
     for line in [
-        format!("Source: Git repository {}", &url["http://".len()..]),
+        format!(
+            "Source: Git repository {}",
+            url["http://".len()..].trim_end_matches(".git")
+        ),
         "Tick the extensions to install: each one installs on its own, with its own preview \
          and record"
             .into(),
@@ -458,9 +465,13 @@ fn a_collection_opens_the_choice_ticks_previews_and_installs_several(cx: &mut Te
         view.details()
     );
 
-    // Their commands run, from root search.
+    // Their commands run, from root search. The window is hidden — an
+    // earlier Escape left it at an empty root, which hides it — so the
+    // action's answer is a HUD, the footer being gone with the window
+    // (#141).
     cx.simulate_keystrokes("escape");
     settle(&window, cx);
+    window.update_in(cx, |this, window, cx| this.show_again(window, cx));
     press_enter_on(&window, cx, "Clock from Git");
     press_enter_on(&window, cx, "Say hello");
     assert_eq!(

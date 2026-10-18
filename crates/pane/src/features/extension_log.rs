@@ -254,7 +254,7 @@ impl LauncherWindow {
             log.read(&self.launcher);
         }
         if opened {
-            self.unhide(window, cx);
+            self.show(window, cx);
             window.activate_window();
             cx.activate(true);
             window.focus(&self.focus_handle, cx);

@@ -443,6 +443,27 @@ impl LauncherWindow {
             .map(|(entity, _, _)| entity.read(cx).as_str().to_owned())
     }
 
+    /// Test support: the value the open designed view's select keyed
+    /// `key` committed — the value a form's submission collects for it,
+    /// as a field's live text is what it collects for a text field.
+    #[doc(hidden)]
+    pub fn designed_select_text(&self, key: &str) -> Option<String> {
+        let controls = self.designed.as_ref()?;
+        let (_, entry) = controls
+            .state
+            .iter()
+            .find(|(path, _)| path.ends_with(&format!("/{key}")))?;
+        let Held::Select { .. } = &entry.held else {
+            return None;
+        };
+        // What the control last reported, else the value its tree names.
+        controls
+            .sent
+            .get(key)
+            .cloned()
+            .or_else(|| select_value_of(&self.launcher, key))
+    }
+
     /// The editing state, the focus and the bookkeeping of the open
     /// designed view's field keyed `key`.
     fn designed_field_at(
@@ -1307,18 +1328,25 @@ impl LauncherWindow {
         // The chosen value is what the trigger names and a submission of
         // the form reads, whether or not the tree named a change handler
         // for the select: noted as sent, the tree that carries it not
-        // having landed (#241).
+        // having landed (#241). A select of a form Pane itself asks —
+        // which names no change handler of its own — still commits its
+        // choice into the tree the screen holds, as `designed_event`
+        // would take an extension's change into the tree its answer
+        // holds (#241).
         if !key.is_empty() {
             self.note_sent(&key, value.to_owned());
             cx.notify();
         }
-        let Some(callback) = callback else {
+        if callback.is_none() {
+            if matches!(self.launcher.screen(), pane_core::Screen::PaneForm(_)) && !key.is_empty() {
+                self.launcher.pane_form_changed(&key, value);
+            }
             return;
-        };
+        }
         let payload = payload(value);
         self.designed_event(
             DesignedHandler::Change,
-            callback,
+            callback.unwrap_or_default(),
             key,
             render,
             payload,
@@ -1438,6 +1466,25 @@ impl LauncherWindow {
             committed: committed.map(gpui::SharedString::from),
         }
     }
+}
+
+/// The value the tree of the open screen names for the select keyed
+/// `key`, when one does.
+fn select_value_of(launcher: &pane_core::Launcher, key: &str) -> Option<String> {
+    let tree = match launcher.screen() {
+        pane_core::Screen::DesignedView(view) => Some(view.tree),
+        pane_core::Screen::PaneForm(form) => Some(form.tree),
+        _ => None,
+    }?;
+    fn of(node: &pane_core::Node, key: &str) -> Option<String> {
+        if node.key.as_deref() == Some(key)
+            && let pane_core::NodeKind::Select(select) = &node.kind
+        {
+            return select.value.clone();
+        }
+        node.children.iter().find_map(|child| of(child, key))
+    }
+    of(&tree.root, key)
 }
 
 /// The least time between the search events of a designed List whose view

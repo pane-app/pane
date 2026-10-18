@@ -3561,7 +3561,7 @@ mod tests {
     fn the_shared_components_read_their_properties() {
         let tree = tree(
             r#"{"type":"column","children":[
-                {"type":"text","text":"a","spans":[
+                {"type":"text","spans":[
                     {"text":"Accept the "},
                     {"text":"terms","color":"accent","onPress":3},
                     {"text":" now","code":true}

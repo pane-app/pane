@@ -669,7 +669,7 @@ fn the_form_draws_the_settings_field_families(cx: &mut TestAppContext) {
     assert_eq!(name.top(), label.bottom() + px(8.), "the label over it");
 
     let greeting = cx
-        .debug_bounds("field-Greeting")
+        .debug_bounds("field-greeting")
         .expect("the greeting's group");
     let trigger = cx
         .debug_bounds("designed-select-Hello")
@@ -677,7 +677,7 @@ fn the_form_draws_the_settings_field_families(cx: &mut TestAppContext) {
     assert_eq!(trigger.size.height, px(30.), "a select's trigger");
     assert!(paint::paints_fill_at(cx, trigger, 0x0000003D), "black 24%");
     let label = cx
-        .debug_bounds("field-label-Greeting")
+        .debug_bounds("field-label-greeting")
         .expect("the greeting's label");
     assert_eq!(trigger.top(), label.bottom() + px(8.), "the label over it");
     assert_eq!(
