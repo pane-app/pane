@@ -30,10 +30,13 @@ mod paint;
 
 #[path = "support/settle.rs"]
 mod settle;
+#[path = "support/wait.rs"]
+mod wait;
 
 use a11y::focused_label;
 use paint::paints_fill_at;
 use settle::until;
+use wait::settle_frames;
 
 /// The dark theme's accent, which the "Surface" text's hover variant
 /// fills with.
@@ -393,16 +396,18 @@ fn the_scroll_position_survives_re_renders_and_reorders(cx: &mut TestAppContext)
         "the gallery starts at its top"
     );
 
-    // The wheel scrolls it.
+    // The wheel scrolls it down: a wheel's negative delta, as GPUI's
+    // scroll handles take it, moves the content up, and the offset the
+    // region keeps is negative once it has scrolled away from its top.
     let heading = bounds(cx, "designed-text-The UI component set");
     cx.simulate_event(gpui::ScrollWheelEvent {
         position: heading.center(),
-        delta: gpui::ScrollDelta::Pixels(gpui::point(px(0.), px(300.))),
+        delta: gpui::ScrollDelta::Pixels(gpui::point(px(0.), px(-300.))),
         modifiers: gpui::Modifiers::none(),
         touch_phase: gpui::TouchPhase::Moved,
     });
     let at = scrolled(&window, cx);
-    assert!(at.y > px(0.), "the gallery scrolled: {at:?}");
+    assert!(at.y < px(0.), "the gallery scrolled: {at:?}");
 
     // A re-render keeps the position: "Reorder" redraws the tree with
     // the fields swapped.
@@ -475,7 +480,12 @@ fn the_hover_survives_re_renders(cx: &mut TestAppContext) {
     let window = opened.window;
     // The pointer over a node with a hover variant: the variant applies
     // with no call into the extension, and a re-render — the field's own
-    // answer, which never moves the pointer — keeps it applied.
+    // answer, which never moves the pointer — keeps it applied. The
+    // gallery's Surface text sits below the default viewport's fold, and
+    // the list paints only what is in view (#165): the window is made
+    // tall enough that it is, as the tokens test makes it.
+    cx.simulate_resize(gpui::size(px(1920.), px(2200.)));
+    settle_frames(cx);
     let surface = bounds(cx, "designed-text-Surface");
     let over = surface.center();
     cx.simulate_mouse_move(over, None::<gpui::MouseButton>, gpui::Modifiers::none());
@@ -485,10 +495,19 @@ fn the_hover_survives_re_renders(cx: &mut TestAppContext) {
         "the hover variant fills with the accent"
     );
 
-    // A re-render keeps the hover: typing in the field answers with a
-    // tree, and the variant still applies.
-    focus_field(&window, cx, "name");
-    cx.simulate_input(" more");
+    // A re-render keeps the hover: text written into the field answers
+    // with a tree, and the variant still applies. The text arrives
+    // through the field's input handler, as an input method commits it,
+    // not as key presses: GPUI shows no hover while the last input was
+    // the keyboard (its `is_hovered`), so typed keys would hide the
+    // variant whatever the re-render kept.
+    let field = field_of(&window, cx, "name");
+    let end = field_text(&window, cx, "name").encode_utf16().count();
+    cx.update(|window, cx| {
+        field.update(cx, |field, cx| {
+            field.replace_text_in_range(Some(end..end), " more", window, cx);
+        })
+    });
     wait_for_echo(&window, cx, "typed more");
     let hovered = bounds(cx, "designed-text-Surface");
     assert!(

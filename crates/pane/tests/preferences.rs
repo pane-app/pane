@@ -154,7 +154,7 @@ fn the_setup_screen_asks_for_what_is_unset_and_launches_on_enter(cx: &mut TestAp
     let shown = nodes(cx);
     node(
         &shown,
-        "Heading",
+        "Label",
         "Set these up before using Show preferences",
     );
     node(&shown, "Label", "Setting up the preferences sample");
@@ -168,7 +168,8 @@ fn the_setup_screen_asks_for_what_is_unset_and_launches_on_enter(cx: &mut TestAp
     // The API key, focused first, is hidden as it is typed.
     cx.simulate_input("abc");
     settle(&opened.window, cx);
-    let field = node(&nodes(cx), "TextInput", "API key");
+    // A password field, as assistive technology names it (#237).
+    let field = node(&nodes(cx), "PasswordInput", "API key");
     assert_eq!(field["value"], "\u{2022}\u{2022}\u{2022}");
 
     // Tab reaches the folder; Enter saves both and opens the command.

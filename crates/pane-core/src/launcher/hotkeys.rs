@@ -382,11 +382,11 @@ fn gone_dynamic(state: &State, shortcut: &Shortcut) -> Option<String> {
         .find(|(_, registered)| registered.shortcut == *shortcut)
         .map(|(command, _)| command.as_str())?;
     // A dynamic item's hotkey is recorded by its row id, `<command
-    // id>:<item id>`; a manifest command's has no `:`.
-    if !command.contains(':') {
-        return None;
-    }
+    // id>:<item id>`; a manifest command's has no `:` after its manifest
+    // id. The package's key goes first, so the item is cut from what
+    // follows it — the key itself may hold a `:`.
     let (key, manifest) = split(command);
+    let (manifest, _item) = manifest.split_once(':')?;
     let package = state
         .packages
         .iter()

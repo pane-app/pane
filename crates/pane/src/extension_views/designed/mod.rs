@@ -299,6 +299,7 @@ impl LauncherWindow {
             let width = geometry.search_text_inset * 40.;
             div()
                 .id("designed-loading")
+                .debug_selector(|| "designed-loading-bar".into())
                 .flex_none()
                 .overflow_hidden()
                 .h(px(2.))
@@ -1516,18 +1517,17 @@ impl LauncherWindow {
         }
     }
 
+    /// Whether the designed list's field holds text the view has not been
+    /// told yet: typed while the throttle waits, or while another search
+    /// event is in flight.
+    pub(crate) fn designed_search_pending(&self) -> bool {
+        self.designed_search.pending.is_some()
+    }
+
     /// The designed list's search field changed to `text`, as the user
     /// typed it: the text waits to be told to the view, one event in
     /// flight at a time and none before the throttle's time has passed.
     pub(crate) fn designed_search_typed(&mut self, text: &str, cx: &mut Context<Self>) {
-        // [diag-ff23] Diagnostic scaffolding for the pane twin's typed
-        // search that never starts: the typing's arrival, and whether the
-        // flush's state allows a send. fix-forward-24 removes it with the
-        // root fix.
-        pane_core::diagnostic!(
-            "[diag-ff23] typed: text={text:?} in_flight={}",
-            self.designed_search.in_flight
-        );
         self.designed_search.pending = Some(text.to_owned());
         self.designed_search_flush(cx);
     }
@@ -1565,13 +1565,8 @@ impl LauncherWindow {
             }
         };
         let Some(text) = send else {
-            // [diag-ff23] Diagnostic scaffolding; removed with the root
-            // fix.
-            pane_core::diagnostic!("[diag-ff23] typed held: nothing sent");
             return;
         };
-        // [diag-ff23] Diagnostic scaffolding; removed with the root fix.
-        pane_core::diagnostic!("[diag-ff23] typed sent: text={text:?}");
         self.designed_search.in_flight = true;
         self.designed_search.sent = Some(cx.background_executor().now());
         let pending = self.launcher.set_query(&text);

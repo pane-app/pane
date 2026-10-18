@@ -672,8 +672,12 @@ fn children(
         .collect()
 }
 
-/// The children of a `stack`, each wrapped in the full-size layer its
-/// place puts it in.
+/// The children of a `stack`: the first in the layer that sizes the
+/// stack — in flow, wrapping the child, so the stack is as large as its
+/// first child — and each further one over it, wrapped in the full-size
+/// layer its place puts it in. A stack with no in-flow child would size
+/// to nothing, and a place would place its children around an empty
+/// box; the first child gives the box the rest are placed over.
 fn stack_children(
     parent: &Node,
     path: &mut String,
@@ -691,21 +695,30 @@ fn stack_children(
             place_child(path, child, index, &duplicates);
             let drawn = draw_node(child, path, draw, cx);
             path.truncate(start);
-            layer(child, drawn, default, draw.theme)
+            layer(child, drawn, default, index == 0, draw.theme)
         })
         .collect()
 }
 
-/// `element` in the layer a `stack`'s child is placed in: full-size and
-/// absolutely positioned, aligning the child by its `place` (the stack's
-/// own, `align`, when the child says none) and offset from it in its
-/// placement's directions.
-fn layer(child: &Node, element: AnyElement, default: Place, theme: &Theme) -> AnyElement {
+/// `element` in the layer a `stack`'s child is placed in: the layer a
+/// later child is over the stack in is full-size and absolutely
+/// positioned, aligning the child by its `place` (the stack's own,
+/// `align`, when the child says none) and offset from it in its
+/// placement's directions; the first child's layer (`sizing`) is in
+/// flow, wrapping the child — its place has no room to move it in, and
+/// its offset becomes the stack's own margin from where it flows.
+fn layer(
+    child: &Node,
+    element: AnyElement,
+    default: Place,
+    sizing: bool,
+    theme: &Theme,
+) -> AnyElement {
     let place = child.place.unwrap_or(default);
     let layer = div()
-        .absolute()
-        .size_full()
+        .when(!sizing, |layer| layer.absolute().size_full())
         .flex()
+        .flex_col()
         .map(|layer| match place {
             Place::TopStart | Place::Start | Place::BottomStart => layer.items_start(),
             Place::Top | Place::Center | Place::Bottom => layer.items_center(),

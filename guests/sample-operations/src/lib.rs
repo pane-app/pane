@@ -114,8 +114,10 @@ struct Calling {
     source: RefCell<String>,
     name: RefCell<String>,
     times: RefCell<String>,
-    /// The call a submission started, its answer on its way.
-    pending: Option<Pending<String>>,
+    /// The call a submission started, its answer on its way: the answer,
+    /// and whether the call succeeded — drawn in the theme's success
+    /// colour only then.
+    pending: Option<Pending<(String, bool)>>,
     /// Why the last submission was refused: its field and message.
     error: RefCell<(String, String)>,
 }
@@ -153,8 +155,8 @@ impl View for Calling {
             let pending = if waiting {
                 Pending::loading(async move {
                     match call(source.into(), "wait".into(), 1, "{}".into()).await {
-                        Ok(_) => "Waited in the other extension".to_owned(),
-                        Err(error) => error.explain(),
+                        Ok(_) => ("Waited in the other extension".to_owned(), true),
+                        Err(error) => (error.explain(), false),
                     }
                 })
             } else {
@@ -170,20 +172,23 @@ impl View for Calling {
                         .into_iter()
                         .collect::<Result<Vec<String>, _>>()
                     {
-                        Ok(answers) => answers
-                            .iter()
-                            .map(|answer| match serde_json::from_str::<Value>(answer) {
-                                Ok(answer) => {
-                                    match answer.get("greeting").and_then(Value::as_str) {
-                                        Some(greeting) => greeting.to_owned(),
-                                        None => "the answer has no greeting".to_owned(),
+                        Ok(answers) => (
+                            answers
+                                .iter()
+                                .map(|answer| match serde_json::from_str::<Value>(answer) {
+                                    Ok(answer) => {
+                                        match answer.get("greeting").and_then(Value::as_str) {
+                                            Some(greeting) => greeting.to_owned(),
+                                            None => "the answer has no greeting".to_owned(),
+                                        }
                                     }
-                                }
-                                Err(error) => format!("{error}"),
-                            })
-                            .collect::<Vec<String>>()
-                            .join(" / "),
-                        Err(error) => error.explain(),
+                                    Err(error) => format!("{error}"),
+                                })
+                                .collect::<Vec<String>>()
+                                .join(" / "),
+                            true,
+                        ),
+                        Err(error) => (error.explain(), false),
                     }
                 })
             };
@@ -193,15 +198,24 @@ impl View for Calling {
         if let Some(pending) = &mut self.pending
             && let Some(answer) = pending.ready()
         {
-            let answer = answer.clone();
+            let (answer, succeeded) = answer.clone();
             self.pending = None;
             let mut view = form_of(self, submit, answer.clone());
             let _ = &mut view;
+            // A greeting in the theme's success colour, as the samples'
+            // forms draw what their submission answered; a failure in the
+            // danger colour.
+            let tone = if succeeded {
+                pane_extension::Tone::Success
+            } else {
+                pane_extension::Tone::Danger
+            };
             return pane_extension::view::column()
                 .gap(pane_extension::view::Space::M)
                 .child(
                     pane_extension::view::text(answer.as_str())
-                        .style(pane_extension::view::TextStyle::Title),
+                        .style(pane_extension::view::TextStyle::Title)
+                        .color(tone),
                 )
                 .child(view)
                 .into_answer();

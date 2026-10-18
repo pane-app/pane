@@ -187,6 +187,9 @@ fn the_screen_reopens_after_a_development_mode_reload(cx: &mut TestAppContext) {
     );
     cx.simulate_keystrokes("escape");
     settle(&window, cx);
+    // The blank query collates Pane's own rows among the commands (#199):
+    // the package's command is chosen by its title, not its place.
+    select(&window, cx, "Say hello");
     cx.simulate_keystrokes("enter");
     until(&window, cx, |view| matches!(view.screen, Screen::Command));
     assert_eq!(settle(&window, cx).title, "Rust sample");

@@ -64,8 +64,15 @@ fn the_commands_own_search_field_lists_the_service_results(cx: &mut TestAppConte
     cx.update(pane::bind_keys);
     let launcher =
         Launcher::with_packages(Runtime::start(), vec![], data.path().join("extensions"));
+    // The window learns what the launcher changed in the background — a
+    // view's own ask to be drawn again, answered on the refresh thread —
+    // as the binary's window does: without it, the answer reaches the
+    // launcher while the window never draws it.
+    let (sender, changes) = pane_core::changes::channel();
+    let launcher = launcher.with_changes(sender);
     let (window, cx) = cx.add_window_view(|window, cx| {
         let mut launcher = LauncherWindow::new(launcher, window, cx);
+        launcher.follow_changes(changes, window, cx);
         launcher.preview_package(&folder, window, cx);
         launcher
     });
@@ -137,8 +144,7 @@ fn the_commands_own_search_field_lists_the_service_results(cx: &mut TestAppConte
     assert_eq!(field_text(&window, cx), "aurora");
     // The row's drawn frame is waited for with its own deadline: the
     // window's redraw of the answered view is the platform's notify
-    // processing, which lags the launcher's state (the [diag-ff34]
-    // family's data).
+    // processing, which lags the launcher's state.
     {
         let deadline = std::time::Instant::now() + Duration::from_secs(10);
         while cx.debug_bounds("row-aurora-cli").is_none() {
@@ -210,8 +216,15 @@ fn backspace_in_the_empty_search_field_pops_the_view(cx: &mut TestAppContext) {
     cx.update(pane::bind_keys);
     let launcher =
         Launcher::with_packages(Runtime::start(), vec![], data.path().join("extensions"));
+    // The window learns what the launcher changed in the background — a
+    // view's own ask to be drawn again, answered on the refresh thread —
+    // as the binary's window does: without it, the answer reaches the
+    // launcher while the window never draws it.
+    let (sender, changes) = pane_core::changes::channel();
+    let launcher = launcher.with_changes(sender);
     let (window, cx) = cx.add_window_view(|window, cx| {
         let mut launcher = LauncherWindow::new(launcher, window, cx);
+        launcher.follow_changes(changes, window, cx);
         launcher.preview_package(&folder, window, cx);
         launcher
     });

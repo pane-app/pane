@@ -991,10 +991,6 @@ impl LauncherWindow {
     /// opens the Actions panel at the submenu an item's primary action
     /// opens (#140), or activates the row.
     fn invoke_selected(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        // [diag-ff25] Diagnostic scaffolding for the first-drive failure's
-        // next layer: the invoke's arrival, and the answer of what it
-        // launches. fix-forward-26 removes it with the root fix.
-        pane_core::diagnostic!("[diag-ff25] invoke selected");
         // The Logs screen's lines are its own: the selected one is copied.
         if self.extension_log_open() {
             self.copy_log_line(cx);
@@ -3051,19 +3047,6 @@ impl Render for LauncherWindow {
         #[cfg(any(test, debug_assertions))]
         {
             self.drawn = Some(view.clone());
-
-            // [diag-ff34] Diagnostic scaffolding for the window-redraw
-            // root: the render number of the view this frame draws, so
-            // the next matrix says which renders the window drew and
-            // which it skipped. fix-forward-35 removes it with the root
-            // fix.
-            if let pane_core::Screen::DesignedView(snapshot) = &view.screen {
-                pane_core::diagnostic!(
-                    "[diag-ff34] frame drew: render={} loading={:?}",
-                    snapshot.render,
-                    snapshot.list.as_ref().map(|list| list.loading.is_some())
-                );
-            }
             self.drawn_over = self.actions.is_some() || self.launcher.confirmation().is_some();
             self.results.drawn_rows.clear();
         }

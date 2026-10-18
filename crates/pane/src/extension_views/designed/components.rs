@@ -386,7 +386,10 @@ pub(super) fn button(
 /// The keys `keys` name, as a key sequence: a binding's, when they spell
 /// one, else a cap each.
 fn keys_of(keys: &[String]) -> KeySequence {
-    let joined = keys.join("+");
+    // Joined as a binding is written — `Binding::parse` splits on `-`,
+    // so a `+` join reads the whole sequence as one unknown key and
+    // draws it as a single cap in its uppercase name.
+    let joined = keys.join("-");
     match Binding::parse(&joined) {
         Ok(binding) => binding_keys(&binding),
         Err(_) => KeySequence {
