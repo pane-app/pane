@@ -249,12 +249,18 @@ fn the_components_announce_their_roles_and_names(cx: &mut TestAppContext) {
         .iter()
         .find(|node| node["role"] == "Slider" && node["label"] == "Volume")
         .expect("a slider");
-    assert!((slider["numeric_value"].as_f64().unwrap() - 0.4).abs() < 1e-6, "{slider:?}");
+    assert!(
+        (slider["numeric_value"].as_f64().unwrap() - 0.4).abs() < 1e-6,
+        "{slider:?}"
+    );
     let progress = nodes
         .iter()
         .find(|node| node["role"] == "ProgressIndicator" && node["label"] == "Installed")
         .expect("a progress bar");
-    assert!((progress["numeric_value"].as_f64().unwrap() - 0.7).abs() < 1e-6, "{progress:?}");
+    assert!(
+        (progress["numeric_value"].as_f64().unwrap() - 0.7).abs() < 1e-6,
+        "{progress:?}"
+    );
 }
 
 #[gpui::test]
@@ -351,12 +357,7 @@ fn the_tokens_and_raw_values_resolve_to_the_light_theme(cx: &mut TestAppContext)
 /// has its own app — the settings the appearance is named to are the
 /// process's one global, so a second window in the same app would keep
 /// the first's theme — and its own test entry above gives it that.
-fn tokens_and_raw_values(
-    cx: &mut TestAppContext,
-    theme: &'static str,
-    danger: u32,
-    accent: u32,
-) {
+fn tokens_and_raw_values(cx: &mut TestAppContext, theme: &'static str, danger: u32, accent: u32) {
     let (opened, cx) = open(cx, theme);
     // The gallery's Surface text sits below the default viewport's fold,
     // and the list paints only what is in view (#165): the window is
