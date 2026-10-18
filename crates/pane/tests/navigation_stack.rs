@@ -194,7 +194,12 @@ fn shift_escape_drops_the_whole_stack(cx: &mut TestAppContext) {
     cx.simulate_keystrokes("enter");
     wait_for(&window, cx, "Deeper: One");
     assert_eq!(depth(&window, cx), 3);
-    cx.simulate_keystrokes("shift-escape");
+    // Return to root is Command+Esc on macOS.
+    cx.simulate_keystrokes(if cfg!(target_os = "macos") {
+        "cmd-escape"
+    } else {
+        "shift-escape"
+    });
     let view = settle(&window, cx);
     assert!(matches!(view.screen, Screen::Root { .. }));
     assert_eq!(

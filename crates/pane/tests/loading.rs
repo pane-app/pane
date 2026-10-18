@@ -440,7 +440,13 @@ fn a_slow_command_search_shows_the_line_under_its_own_rule(cx: &mut TestAppConte
     // nowhere.
     cx.executor().advance_clock(Duration::from_millis(310));
     cx.run_until_parked();
-    cx.simulate_keystrokes("ctrl-a");
+    // Select All is Command+A on macOS, where Ctrl+A moves to the start
+    // of the line.
+    cx.simulate_keystrokes(if cfg!(target_os = "macos") {
+        "cmd-a"
+    } else {
+        "ctrl-a"
+    });
     cx.simulate_input(&service.url());
     // The typing settles before the Save is pressed: the window holds
     // keys typed toward a field whose list has not published (the
