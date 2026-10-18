@@ -1349,12 +1349,12 @@ fn decide(event: &KBDLLHOOKSTRUCT) -> (bool, Option<u32>, bool) {
                     // session ends, and this event passes.
                     state.recording = false;
                     state.recognizer.recording(false);
-                    post(WM_RECORDED_ENDED, 0);
+                    post(state.adapter, WM_RECORDED_ENDED, 0);
                     return Some((false, None, false));
                 }
                 Some(match state.recognizer.step(key) {
                     Decision::Recorded(report) => {
-                        post(WM_RECORDED, pack(report));
+                        post(state.adapter, WM_RECORDED, pack(report));
                         (true, None, false)
                     }
                     Decision::Swallow => (true, None, false),
@@ -1390,15 +1390,17 @@ fn decide(event: &KBDLLHOOKSTRUCT) -> (bool, Option<u32>, bool) {
         .unwrap_or((false, None, false))
 }
 
-/// Posts `message` with `word` to the adapter's thread; a post that
-/// fails leaves the recognizer's answer as it was, and the hotkey
-/// thread will see the session's end when it ends.
-fn post(message: u32, word: usize) {
-    if let Some(adapter) = adapter_thread() {
-        // SAFETY: plain values, posted to the adapter's thread, which
-        // pumps its messages.
-        let _ = unsafe { PostThreadMessageW(adapter, message, WPARAM(word), LPARAM(0)) };
-    }
+/// Posts `message` with `word` to the adapter's thread `adapter`; a post
+/// that fails leaves the recognizer's answer as it was, and the hotkey
+/// thread will see the session's end when it ends. The thread is passed
+/// in, not read through [`adapter_thread`]: [`decide`] calls this while
+/// it holds the hook's state borrowed mutably, where that read's borrow
+/// fails and the post was dropped — a recording session held the keys
+/// back and reported none of them.
+fn post(adapter: u32, message: u32, word: usize) {
+    // SAFETY: plain values, posted to the adapter's thread, which pumps
+    // its messages.
+    let _ = unsafe { PostThreadMessageW(adapter, message, WPARAM(word), LPARAM(0)) };
 }
 
 /// Whether a window of Pane's own process is the one in front, so a
