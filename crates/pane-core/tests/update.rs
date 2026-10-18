@@ -920,10 +920,13 @@ fn an_automatic_update_hands_the_state_over_to_the_new_code() {
 
     dirs.publish_component("0.2.0", handoff_component());
     dirs.check(&launcher);
-    assert_eq!(
-        launcher.view().status,
-        Status::Result("Updated Settings from npm to 0.2.0".into())
-    );
+    // A successful background update is quiet (#256): the outcome is in
+    // the recorded results, not the status line.
+    assert_eq!(launcher.view().status, Status::Idle);
+    let recorded = launcher.update_results();
+    assert_eq!(recorded.updated.len(), 1, "{recorded:#?}");
+    assert_eq!(recorded.updated[0].title, "Settings from npm");
+    assert_eq!(recorded.updated[0].detail, "0.1.0 → 0.2.0");
 
     // The new code's first start restored the count the old instance
     // handed over: the update replaced the code as a reload does.
@@ -2026,7 +2029,9 @@ fn a_renamed_id_is_followed_on_update_keeping_the_installed_identity() {
     let moved = branch
         .repo
         .commit(&borrowed(&files), "Rename clock to time");
-    dirs.check(&launcher);
+    // The pass after one that already ran comes a day later: the check
+    // the first rename followed set when the next one is.
+    dirs.check_next_day(&launcher);
     let record = dirs.extension_record("branch", "clock");
     assert_eq!(
         record["git"],
@@ -2162,10 +2167,11 @@ fn a_new_release_of_one_extension_that_needs_a_newer_pane_is_refused() {
     // The new release needs an API this Pane does not provide (ADR 0046):
     // skipped with that reason, so skipping never looks like a fault —
     // nothing failed, and the record holds the row under Skipped — and
-    // the installed copy keeps running.
+    // the installed copy keeps running. This Pane provides 0.2 (#320), so
+    // the release a minor beyond it is the one refused.
     release_extension(
         &tools.repo,
-        &tools_files("extensions/clock", "0.2.0", "1.0.0", "0.2"),
+        &tools_files("extensions/clock", "0.2.0", "1.0.0", "0.3"),
         "clock",
         "0.2.0",
     );
@@ -2180,7 +2186,7 @@ fn a_new_release_of_one_extension_that_needs_a_newer_pane_is_refused() {
     let detail = &recorded.skipped[0].detail;
     assert!(
         detail.starts_with(
-            "Incompatible package: it needs Pane extension API 0.2, but this Pane provides 0.1."
+            "Incompatible package: it needs Pane extension API 0.3, but this Pane provides 0.2"
         ),
         "{detail}"
     );

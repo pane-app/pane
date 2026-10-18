@@ -762,12 +762,16 @@ fn completions_appear_while_typing_and_run_what_they_offer() {
         search(&pane.launcher, "Run with completions");
         select_title(&pane.launcher, "Run with Completions");
         block_on(pane.launcher.activate_selected());
-        assert_eq!(
+        // The command is a designed view (#240): its List's own search
+        // field is what the typing reaches, and what the field matches
+        // replaces the list while it holds text.
+        assert!(matches!(
             pane.launcher.view().screen,
-            Screen::CommandSearch {
-                query: String::new()
-            }
-        );
+            Screen::DesignedView(view) if view
+                .list
+                .as_ref()
+                .is_some_and(|list| list.search.is_empty())
+        ));
         assert_eq!(titles(&pane.launcher), ["Type a command line"]);
 
         // Typing completes from every source, the typed text's own row

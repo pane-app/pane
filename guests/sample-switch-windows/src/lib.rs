@@ -23,7 +23,7 @@ use pane_extension::alloc::{
     string::{String, ToString},
 };
 use pane_extension::feedback::{Toast, show_toast};
-use pane_extension::view::{Cx, IntoNode, item, list};
+use pane_extension::view::{Cx, IntoAnswer, item, list};
 use pane_extension::windows::{self, Window};
 use pane_extension::{Command, Icon, LaunchRecord};
 
@@ -77,19 +77,20 @@ fn answer(title: &str, switched: Result<(), windows::WindowsError>) {
 /// The view the command opens (#240): the windows Alt+Tab would show, in
 /// z-order with the front application's first, read again each render —
 /// so the switch's answer re-draws it. With none listed, the list says
-/// so; the listing failing says why.
+/// so; the listing failing is the error it answers, as the JavaScript
+/// and TypeScript samples let it surface.
 struct Windows;
 
 impl pane_extension::view::View for Windows {
-    fn render(&mut self, cx: &mut Cx<Self>) -> impl IntoNode {
+    fn render(&mut self, cx: &mut Cx<Self>) -> impl IntoAnswer {
         match windows::list_windows() {
-            Ok(listed) if listed.is_empty() => list()
+            Ok(listed) if listed.is_empty() => Ok(list()
                 .navigation_title("Switch Windows")
                 .search_placeholder("Filter the windows…")
                 .child(
                     pane_extension::view::empty_state("No windows are open")
                         .description("Nothing Alt+Tab would show is listed"),
-                ),
+                )),
             Ok(listed) => {
                 let mut view = list()
                     .navigation_title("Switch Windows")
@@ -97,18 +98,12 @@ impl pane_extension::view::View for Windows {
                 for listed in listed.iter() {
                     view = view.child(window(cx, listed));
                 }
-                view
+                Ok(view)
             }
-            Err(error) => list()
-                .navigation_title("Switch Windows")
-                .search_placeholder("Filter the windows…")
-                .child(
-                    pane_extension::view::empty_state(format!(
-                        "The open windows could not be listed: {}",
-                        error.message()
-                    ))
-                    .description("Nothing was switched to"),
-                ),
+            // The listing failed: the error is shown to the user, the
+            // view keeping nothing — there is no last good tree to keep
+            // — as the samples' host calls let a failure surface.
+            Err(error) => Err(String::from(error.message())),
         }
     }
 }

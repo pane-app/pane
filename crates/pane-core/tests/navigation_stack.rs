@@ -371,12 +371,12 @@ fn a_push_beyond_the_depth_bound_is_the_extensions_error() {
         );
 
         // The back key unwinds the stack one view at a time, the root's
-        // own back leaving the command.
+        // own back leaving the command: one back per view the stack held.
         let mut popped = 0;
         while pane.launcher.back() {
             popped += 1;
         }
-        assert_eq!(popped, MAX_NAVIGATION_DEPTH - 1, "{language}");
+        assert_eq!(popped, MAX_NAVIGATION_DEPTH, "{language}");
         pane.settled();
         assert!(matches!(pane.launcher.view().screen, Screen::Root { .. }));
         assert_eq!(pane.count(), 0, "{language}: every view is dropped");
@@ -468,10 +468,11 @@ fn a_replace_swaps_the_top_of_the_stack() {
     assert_eq!(pane.count(), 2);
 
     // The back key pops the replacing view, and the root's own back
-    // leaves the command.
+    // leaves the command. The root below it is the view the first
+    // replace answered: its tree is what shows again.
     assert!(pane.launcher.back());
     pane.settled();
-    assert_eq!(pane.text(), "Count: 0");
+    assert_eq!(pane.text(), "Pushed");
     assert!(pane.launcher.back());
     assert!(matches!(pane.launcher.view().screen, Screen::Root { .. }));
     assert_eq!(pane.count(), 0);

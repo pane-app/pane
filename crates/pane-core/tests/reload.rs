@@ -8,6 +8,7 @@
 use std::fs;
 use std::future::Future;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use futures::executor::block_on;
 use pane_core::{Launcher, PackageIdentity, Runtime, Screen, Status};
@@ -448,6 +449,12 @@ fn open_color(launcher: &Launcher, command: &str) {
     // list names it, "Choose a color".
     select_title(launcher, "Choose a color");
     block_on(launcher.activate_selected());
+    // The item's action launches the color view's command on Pane's own
+    // launch thread: wait for it to open before reading the screen.
+    assert!(
+        launcher.wait_for_launches(Duration::from_secs(20)),
+        "the color view's command did not launch"
+    );
     assert!(matches!(launcher.view().screen, Screen::DesignedView(_)));
     send_right(launcher);
 }
@@ -534,15 +541,24 @@ fn reloading_reopens_the_commands_root_view_not_the_one_it_pushed() {
     rebuild(&folder, "sample_js");
     block_on(launcher.reload(&PackageIdentity::local(&folder).unwrap()));
 
-    // The screen that was on display opens again: only the command's root
-    // view, not the view it had pushed, which the author restores from a
-    // state handoff if they want it back. Its state is not carried over:
-    // the view closed with the old instance.
+    // The screen that was on display opens again: the command's root
+    // view, which for a designed command is the designed view it opens
+    // (#242), not a view it had pushed above that — the author restores
+    // one from a state handoff if they want it back. Its state is not
+    // carried over: the view closed with the old instance, so the
+    // reopened one draws the new code's fresh view.
     let view = launcher.view();
-    assert_eq!(view.screen, Screen::Command);
+    assert!(
+        matches!(view.screen, Screen::DesignedView(_)),
+        "the root view reopened: {:?}",
+        view.screen
+    );
     assert_eq!(view.status, Status::Result("Reloaded Dev".into()));
-    assert_eq!(view.rows[view.selected.unwrap()].title, "Open Dev");
-    assert_eq!(block_on(runtime.designed_view_count()), 0);
+    assert_eq!(block_on(runtime.designed_view_count()), 1);
+    let reopened = color(&launcher);
+    send_right(&launcher);
+    assert_ne!(color(&launcher), reopened);
+    // The command's list opens again: the new code's screen.
     assert_eq!(open(&launcher, "Open Dev"), "JavaScript sample");
 }
 
