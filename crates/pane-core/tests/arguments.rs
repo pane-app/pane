@@ -939,7 +939,9 @@ fn an_alias_and_a_space_open_a_command_without_arguments_at_once() {
 
     // A view command that searches opens its screen at once, and what is
     // typed next is its own search's text. The space's flow needs the
-    // space after the alias in the query; Tab's is the alias alone.
+    // space after the alias in the query; Tab's is the alias alone. The
+    // search sample's command is a designed view (#240): its List's own
+    // search field is what the typing reaches.
     pane.search("ps");
     assert_eq!(launcher.alias_after_tab(), Some(AliasFlow::Opens));
     pane.search("ps ");
@@ -947,12 +949,15 @@ fn an_alias_and_a_space_open_a_command_without_arguments_at_once() {
     block_on(launcher.activate_selected());
     assert!(matches!(
         launcher.view().screen,
-        Screen::CommandSearch { query } if query.is_empty()
+        Screen::DesignedView(view) if view.list.as_ref().is_some_and(|list| list.search.is_empty())
     ));
     block_on(launcher.set_query("hello"));
     assert!(matches!(
         launcher.view().screen,
-        Screen::CommandSearch { query } if query == "hello"
+        Screen::DesignedView(view) if view
+            .list
+            .as_ref()
+            .is_some_and(|list| list.search == "hello")
     ));
 
     // A no-view command runs at once. The space's flow needs the space

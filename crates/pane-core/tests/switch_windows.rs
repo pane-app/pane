@@ -724,15 +724,36 @@ fn a_listing_with_no_windows_says_so() {
         let pane = Pane::with(&sample);
         pane.open(&sample);
         assert_eq!(
-            pane.rows(),
-            [(
+            empty_state(&pane.launcher),
+            Some((
                 "No windows are open".into(),
                 Some("Nothing Alt+Tab would show is listed".into())
-            )],
+            )),
             "{}",
             sample.title
         );
     }
+}
+
+/// The open designed view's list empty state, its title and description,
+/// if it names one: a List holds any child that is not an item as its
+/// empty view (#240), drawn by the window rather than listed as a row,
+/// so the samples' "no windows" answer is read there.
+fn empty_state(launcher: &Launcher) -> Option<(String, Option<String>)> {
+    let view = launcher.view();
+    let Screen::DesignedView(shown) = &view.screen else {
+        return None;
+    };
+    let empty = shown.list.as_ref()?.empty.as_ref()?;
+    fn of(node: &pane_core::Node) -> Option<(String, Option<String>)> {
+        match &node.kind {
+            pane_core::NodeKind::EmptyState(state) => {
+                Some((state.title.clone(), state.description.clone()))
+            }
+            _ => node.children.iter().find_map(of),
+        }
+    }
+    of(empty)
 }
 
 #[test]

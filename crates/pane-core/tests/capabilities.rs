@@ -1545,15 +1545,20 @@ fn the_choice_is_kept_across_an_update_of_the_chosen_provider() {
         launcher.back();
     }
     registry.publish(name, "0.2.0", npm_registry::pack(&provider("0.2.0")));
-    clock.advance(Duration::from_secs(2));
+    // Past the first check's minute: the update pass runs on its own
+    // schedule, and it is what the pass updates.
+    clock.advance(Duration::from_secs(62));
     assert!(
         launcher.wait_for_updates(Duration::from_secs(30)),
         "the updater did not settle"
     );
-    assert_eq!(
-        launcher.view().status,
-        Status::Result("Updated npm greet provider to 0.2.0".into())
-    );
+    // A successful background update is quiet (#256): the outcome is in
+    // the recorded results, and the installed copy is the new version.
+    assert_eq!(launcher.view().status, Status::Idle);
+    let recorded = launcher.update_results();
+    assert_eq!(recorded.updated.len(), 1, "{recorded:#?}");
+    assert_eq!(recorded.updated[0].title, "npm greet provider");
+    assert_eq!(recorded.updated[0].detail, "0.1.0 → 0.2.0");
     // The choice still routes to it, not to the TypeScript provider.
     assert_eq!(
         greet(&launcher, "Greet from Rust"),

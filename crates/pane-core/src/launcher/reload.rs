@@ -585,20 +585,23 @@ impl Launcher {
         self.leave_command(state);
         // The new code's command of the same id, one that opens a screen:
         // only the command's root view is reopened; a view or form it had
-        // pushed is not.
+        // pushed is not. A designed command's root view is the designed
+        // view it opens (#242, the item that used to open a custom view
+        // launches it), reopened as its launch opens it.
         let package = state.package(identity)?;
         let registration = package
             .commands()
             .into_iter()
             .find(|offered| offered.manifest_id() == command)?;
-        if package.mode_of(&command) != CommandMode::View {
+        let designed = package.mode_of(&command) == CommandMode::Designed;
+        if !designed && package.mode_of(&command) != CommandMode::View {
             return None;
         }
         let opening = Opening {
             component: registration.component.clone(),
             command,
             no_view: false,
-            designed: false,
+            designed,
             launch,
             // Reopened with the text its search field held, where the new
             // code's command still owns the launcher's field (the

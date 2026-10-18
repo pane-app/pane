@@ -267,11 +267,12 @@ fn typing_a_files_name_lists_it_under_files_and_enter_opens_it() {
     let (launcher, _runtime) = home.with_files();
     search(&launcher, "plan");
     let rows = file_rows(&launcher);
-    // The exact name first, at most five files, then the row searching
-    // them all.
+    // The exact name first, at most five files. The row that searched
+    // them all — the retired extension's own last result — went with it:
+    // the files the sample answers are the search, and a path-like
+    // query's own row comes from the typed-query seam alone.
     assert_eq!(rows[0], "plan.txt", "{rows:?}");
-    assert!(rows.len() <= 6, "{rows:?}");
-    assert_eq!(rows.last().unwrap(), "Find files (Rust) for “plan”");
+    assert!(rows.len() <= 5, "{rows:?}");
     // Hidden, ignored, node_modules and cache-tagged entries are absent.
     for absent in [
         "hidden plan.txt",
