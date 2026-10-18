@@ -320,11 +320,20 @@ fn the_keyboard_fills_in_and_submits_the_form(cx: &mut TestAppContext, sample: &
         )),
         "{nodes:?}"
     );
-    // Escape leaves the form's view for the command's list, the selection
-    // kept on the row that launched it.
+    // Escape leaves the form's command for root search, as the designed
+    // tree's own back leaves any command when its stack holds only the
+    // root view (docs/designed-tree.md): the launch that opened the form
+    // made way for it as a hotkey's does, so its back leaves for root
+    // search rather than the list it was dispatched from — the model
+    // #241's tree replaced, where the form was the launching command's
+    // own screen and its back returned to that command's list.
     cx.simulate_keystrokes("escape");
     let view = settle(&window, cx);
-    assert_eq!((view.screen, view.selected), (Screen::Command, Some(4)));
+    assert!(
+        matches!(view.screen, Screen::Root { .. }),
+        "{:?}",
+        view.screen
+    );
 }
 
 fn a_rejected_field_shows_its_error_and_takes_focus(cx: &mut TestAppContext, sample: &Sample) {
