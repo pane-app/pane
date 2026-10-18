@@ -743,6 +743,9 @@ for ((i = 0; i < 3; i++)); do "$xdotool" key Down; done
 "$xdotool" key Return; sleep 2   # "Save a note"
 "$xdotool" key Down key Return; sleep 2   # "Sign in"
 "$xdotool" key Down key Return; sleep 2   # "Show what Pane keeps"
+# The footer cuts the answer short before its cached greeting, the value
+# 43 checks changed: the toast key opens its details, which show it whole.
+"$xdotool" key ctrl+t; sleep 1
 capture 40-kept.png
 check 40-kept.png success   # every value, the cached greeting included
 "$xdotool" key Escape; sleep 1
@@ -768,6 +771,7 @@ close_settings
 "$xdotool" key Return; sleep 3
 for ((i = 0; i < 5; i++)); do "$xdotool" key Down; done
 "$xdotool" key Return; sleep 2   # "Show what Pane keeps"
+"$xdotool" key ctrl+t; sleep 1   # its details, as 40's
 capture 43-kept-after-clear.png
 check 43-kept-after-clear.png success   # "... Cached greeting: none"
 python3 "$(dirname "$0")/check_screenshot.py" --distinct "$out/40-kept.png" "$out/43-kept-after-clear.png"
@@ -799,9 +803,10 @@ focus_launcher
 "$xdotool" type --delay 50 'pane smoke'; sleep 3
 capture 44-application.png
 check 44-application.png selected 3000   # the selected application row
-"$xdotool" key Return; sleep 3
-capture 45-opened.png
-check 45-opened.png success   # "Opened Launch Pane Smoke App"
+# The answer is a toast, which leaves the footer 3 seconds after it shows
+# (#249): it is captured as it shows, not after a fixed wait that outlasts it.
+"$xdotool" key Return
+capture_until 45-opened.png success 10   # "Opened Launch Pane Smoke App"
 for _ in $(seq 50); do [ -f "$apps/launched" ] && break; sleep 0.2; done
 [ -f "$apps/launched" ] || { echo "the application did not run"; exit 1; }
 python3 "$(dirname "$0")/check_screenshot.py" --distinct "$out"/{44-application,45-opened}.png
