@@ -29,9 +29,13 @@ mod paint;
 #[path = "support/settle.rs"]
 mod settle;
 
+#[path = "support/wait.rs"]
+mod wait;
+
 use a11y::accessibility;
 use paint::{paints_background_at, paints_fill_at};
 use settle::{settle, until};
+use wait::settle_frames;
 
 /// The theme's dark danger and light danger tones: what a tone token
 /// resolves to in each appearance.
@@ -40,9 +44,10 @@ const LIGHT_DANGER: u32 = 0xC9372FFF;
 /// The theme's dark and light panel solids: what a raw colour is
 /// corrected against.
 const DARK_PANEL: u32 = 0x16171AFF;
-/// The theme's accent in each appearance.
+/// The theme's accent: the one accent in both appearances (its readable
+/// text form differs; the fill the tone resolves to does not).
 const DARK_ACCENT: u32 = 0xC9EE6AFF;
-const LIGHT_ACCENT: u32 = 0x5C7A17FF;
+const LIGHT_ACCENT: u32 = 0xC9EE6AFF;
 /// A raw blue, too pale to read on the dark panel at 2.5:1.
 const RAW_BLUE: u32 = 0x88CCFFFF;
 
@@ -232,7 +237,9 @@ fn the_components_announce_their_roles_and_names(cx: &mut TestAppContext) {
             "the {label} {role} is announced: {json}"
         );
     }
-    // The toggle's state and the slider's value, as the tree reports them.
+    // The toggle's state and the slider's and the progress bar's values,
+    // as the tree reports them: a slider's and a bar's value is the
+    // numeric one AccessKit carries, with its bounds and step.
     let toggle = nodes
         .iter()
         .find(|node| node["role"] == "Switch" && node["label"] == "Dark mode")
@@ -242,12 +249,12 @@ fn the_components_announce_their_roles_and_names(cx: &mut TestAppContext) {
         .iter()
         .find(|node| node["role"] == "Slider" && node["label"] == "Volume")
         .expect("a slider");
-    assert_eq!(slider["value"].as_f64(), Some(0.4), "{slider:?}");
+    assert!((slider["numeric_value"].as_f64().unwrap() - 0.4).abs() < 1e-6, "{slider:?}");
     let progress = nodes
         .iter()
         .find(|node| node["role"] == "ProgressIndicator" && node["label"] == "Installed")
         .expect("a progress bar");
-    assert_eq!(progress["value"].as_f64(), Some(0.7), "{progress:?}");
+    assert!((progress["numeric_value"].as_f64().unwrap() - 0.7).abs() < 1e-6, "{progress:?}");
 }
 
 #[gpui::test]
@@ -331,43 +338,61 @@ fn corrected(color: gpui::Hsla, surface: gpui::Hsla, needed: f32) -> gpui::Hsla 
 }
 
 #[gpui::test]
-fn the_tokens_and_raw_values_resolve_to_the_theme_in_both_appearances(cx: &mut TestAppContext) {
-    for (theme, danger, accent) in [
-        ("dark", DARK_DANGER, DARK_ACCENT),
-        ("light", LIGHT_DANGER, LIGHT_ACCENT),
-    ] {
-        let (opened, cx) = open(cx, theme);
-        let _ = &opened;
-        // The tone token: the danger colour of the appearance, as the
-        // Surface text's background.
-        let surface = bounds(cx, "designed-text-Surface");
-        assert!(
-            paints_fill_at(cx, surface, danger),
-            "{theme}: the danger tone fills the surface text"
-        );
-        // The hover variant, applied with no call into the extension: the
-        // accent while the pointer is over it.
-        let over = surface.center();
-        let before = view(&opened.window, cx).status;
-        cx.simulate_mouse_move(over, None::<gpui::MouseButton>, gpui::Modifiers::none());
-        let hovered = bounds(cx, "designed-text-Surface");
-        assert!(
-            paints_fill_at(cx, hovered, accent),
-            "{theme}: the hover variant fills with the accent"
-        );
-        // The pressed variant, while the mouse is held on it.
-        cx.simulate_mouse_down(over, gpui::MouseButton::Left, gpui::Modifiers::none());
-        let pressed = bounds(cx, "designed-text-Surface");
-        let variant = pressed_variant(accent);
-        assert!(
-            paints_background_at(cx, pressed, variant),
-            "{theme}: the pressed variant applies"
-        );
-        cx.simulate_mouse_up(over, gpui::MouseButton::Left, gpui::Modifiers::none());
-        // Nothing was sent to the extension while the variants applied.
-        let after = view(&opened.window, cx).status;
-        assert_eq!(before, after, "{theme}: no call into the extension");
-    }
+fn the_tokens_and_raw_values_resolve_to_the_dark_theme(cx: &mut TestAppContext) {
+    tokens_and_raw_values(cx, "dark", DARK_DANGER, DARK_ACCENT);
+}
+
+#[gpui::test]
+fn the_tokens_and_raw_values_resolve_to_the_light_theme(cx: &mut TestAppContext) {
+    tokens_and_raw_values(cx, "light", LIGHT_DANGER, LIGHT_ACCENT);
+}
+
+/// The tone tokens and the raw values in one appearance: each appearance
+/// has its own app — the settings the appearance is named to are the
+/// process's one global, so a second window in the same app would keep
+/// the first's theme — and its own test entry above gives it that.
+fn tokens_and_raw_values(
+    cx: &mut TestAppContext,
+    theme: &'static str,
+    danger: u32,
+    accent: u32,
+) {
+    let (opened, cx) = open(cx, theme);
+    // The gallery's Surface text sits below the default viewport's fold,
+    // and the list paints only what is in view (#165): the window is
+    // made tall enough that it is, before its fills are read on the
+    // scene the frame drew.
+    cx.simulate_resize(gpui::size(gpui::px(1920.), gpui::px(2200.)));
+    settle_frames(cx);
+    // The tone token: the danger colour of the appearance, as the
+    // Surface text's background.
+    let surface = bounds(cx, "designed-text-Surface");
+    assert!(
+        paints_fill_at(cx, surface, danger),
+        "{theme}: the danger tone fills the surface text"
+    );
+    // The hover variant, applied with no call into the extension: the
+    // accent while the pointer is over it.
+    let over = surface.center();
+    let before = view(&opened.window, cx).status;
+    cx.simulate_mouse_move(over, None::<gpui::MouseButton>, gpui::Modifiers::none());
+    let hovered = bounds(cx, "designed-text-Surface");
+    assert!(
+        paints_fill_at(cx, hovered, accent),
+        "{theme}: the hover variant fills with the accent"
+    );
+    // The pressed variant, while the mouse is held on it.
+    cx.simulate_mouse_down(over, gpui::MouseButton::Left, gpui::Modifiers::none());
+    let pressed = bounds(cx, "designed-text-Surface");
+    let variant = pressed_variant(accent);
+    assert!(
+        paints_background_at(cx, pressed, variant),
+        "{theme}: the pressed variant applies"
+    );
+    cx.simulate_mouse_up(over, gpui::MouseButton::Left, gpui::Modifiers::none());
+    // Nothing was sent to the extension while the variants applied.
+    let after = view(&opened.window, cx).status;
+    assert_eq!(before, after, "{theme}: no call into the extension");
 }
 
 /// The pressed wash of a hover colour, as Pane's own pressed rule doubles
