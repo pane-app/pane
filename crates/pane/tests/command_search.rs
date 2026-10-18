@@ -144,8 +144,7 @@ fn the_commands_own_search_field_lists_the_service_results(cx: &mut TestAppConte
     assert_eq!(field_text(&window, cx), "aurora");
     // The row's drawn frame is waited for with its own deadline: the
     // window's redraw of the answered view is the platform's notify
-    // processing, which lags the launcher's state (the [diag-ff34]
-    // family's data).
+    // processing, which lags the launcher's state.
     {
         let deadline = std::time::Instant::now() + Duration::from_secs(10);
         while cx.debug_bounds("row-aurora-cli").is_none() {

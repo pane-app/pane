@@ -200,10 +200,6 @@ impl WasiHttpHooks for Sender {
         // nothing here needs it.
         _received: Box<dyn Future<Output = Result<(), Error>> + Send>,
     ) -> Sent {
-        // [diag-ff60] Diagnostic scaffolding for the second-query
-        // fetch-never-starts root: the fetch's own start.
-        // fix-forward-61 removes it with the root fix.
-        crate::diagnostic!("[diag-ff60] http send: {}", request.uri());
         if self.stopped() {
             // Stopped code starts no more work.
             return Box::new(async { Err(Error::HttpRequestDenied) });

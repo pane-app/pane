@@ -1642,18 +1642,8 @@ impl Runtime {
         event: DesignedEvent,
         supersedes: bool,
     ) -> impl Future<Output = Result<DesignedNext, CallError>> + Send + 'static {
-        // [diag-ff22] Diagnostic scaffolding for the query changes that
-        // never re-render: the event's arrival at the runtime and its
-        // answer. fix-forward-23 removes it with the root fix.
-        crate::diagnostic!(
-            "[diag-ff22] event arrives: view={:?} render={} callback={} key={:?}",
-            view,
-            event.render,
-            event.callback,
-            event.key
-        );
         let (reply, response) = oneshot::channel();
-        let called = self.call(
+        self.call(
             Request::DesignedViewEvent {
                 view,
                 event,
@@ -1661,12 +1651,7 @@ impl Runtime {
                 reply,
             },
             response,
-        );
-        async move {
-            let answer = called.await;
-            crate::diagnostic!("[diag-ff22] event answered: {}", answer.is_ok());
-            answer
-        }
+        )
     }
 
     /// Draws the open designed view `view` again, with no event: the
@@ -2498,10 +2483,6 @@ fn preference_values_of(state: &GuestState, command: Option<String>) -> Result<S
         .unwrap_or_default();
     let declared = crate::preferences::declared(manifest, &command);
     let json = crate::preferences::values_json(&declared, &stored);
-    // [diag-ff25] Diagnostic scaffolding for the pane twin's address read:
-    // the JSON the preference read answers, with the owner it was read
-    // for. fix-forward-26 removes it with the root fix.
-    crate::diagnostic!("[diag-ff25] preferences read: owner={owner} json={json}");
     Ok(json)
 }
 
@@ -4652,20 +4633,10 @@ impl Host {
                         None => return Err(CallError::ViewClosed),
                     }
                 };
-                // [diag-ff23] Diagnostic scaffolding for the query
-                // changes that never re-render: the re-render the event's
-                // answer asks for, and whether its tree answers.
-                // fix-forward-24 removes it with the root fix.
-                crate::diagnostic!(
-                    "[diag-ff23] re-render asked: view={:?} render={render}",
-                    view
-                );
-                let drawn = self
+                return self
                     .render_designed(view, render, &chain, Why::Event)
                     .await
                     .map(DesignedNext::Tree);
-                crate::diagnostic!("[diag-ff23] re-render answered: {}", drawn.is_ok());
-                return drawn;
             }
         };
         // The depth bound: a push that would go beyond it is refused as

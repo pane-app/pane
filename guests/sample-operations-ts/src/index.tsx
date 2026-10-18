@@ -103,6 +103,9 @@ async function openForm(which: string): Promise<void> {
  */
 function CallForm({ waiting = false }: { waiting?: boolean }): Element {
   const [answer, setAnswer] = useState("");
+  // Whether the call failed: its answer is drawn in the danger colour
+  // then, and a greeting in the success colour.
+  const [failed, setFailed] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const submit = async (submitted: FormSubmittedValues) => {
     const source = String(submitted.source ?? "").trim();
@@ -114,9 +117,11 @@ function CallForm({ waiting = false }: { waiting?: boolean }): Element {
     if (waiting) {
       try {
         await call(source, "wait", 1, "{}");
+        setFailed(false);
         setAnswer("Waited in the other extension");
       } catch (problem) {
         const payload = (problem as { payload?: { kind: string; message: string } }).payload;
+        setFailed(true);
         setAnswer(payload ? `${payload.kind}: ${payload.message}` : String(problem));
       }
       return;
@@ -131,9 +136,11 @@ function CallForm({ waiting = false }: { waiting?: boolean }): Element {
       );
       const answers = await Promise.all(calls);
       const greetings = answers.map((answer) => (JSON.parse(answer) as { greeting: string }).greeting);
+      setFailed(false);
       setAnswer(greetings.join(" / "));
     } catch (problem) {
       const payload = (problem as { payload?: { kind: string; message: string } }).payload;
+      setFailed(true);
       setAnswer(payload ? `${payload.kind}: ${payload.message}` : String(problem));
     }
   };
@@ -169,7 +176,9 @@ function CallForm({ waiting = false }: { waiting?: boolean }): Element {
   }
   return (
     <Column gap="m">
-      <Text style="title">{answer}</Text>
+      <Text style="title" color={failed ? "danger" : "success"}>
+        {answer}
+      </Text>
       {form}
     </Column>
   );
