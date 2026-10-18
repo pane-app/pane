@@ -69,6 +69,10 @@ struct Held {
     coalescing: Option<(Instant, Vec<PathBuf>, bool)>,
 }
 
+/// The registration id of the report [`Watchers::poke`] sends to end the
+/// thread's wait: no registration has it, so no watcher takes it.
+const LOOK_AGAIN: u64 = u64::MAX;
+
 /// What a native watcher's own thread reports.
 struct Report {
     /// The registration the event is of.
@@ -122,9 +126,16 @@ impl Watchers {
         self.wake.settled(limit)
     }
 
-    /// Wakes the watchers thread: something it looks at changed.
+    /// Wakes the watchers thread: something it looks at changed. The
+    /// thread waits on the reports between its looks, so a report no
+    /// watcher sent ends that wait too: a watcher registered now is
+    /// watching at once, not at the next look.
     pub(super) fn poke(&self) {
         self.wake.poke();
+        let _ = self.reports.0.send(Report {
+            id: LOOK_AGAIN,
+            event: Err(notify::Error::generic("look again")),
+        });
     }
 }
 
@@ -157,7 +168,12 @@ fn until_stopped(launcher: WeakLauncher, watchers: Weak<Watchers>) {
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
             receiver.recv_timeout(wait).ok()
         };
-        if reported.is_some() {
+        if let Some(report) = reported {
+            // The report that ended the wait is the look's to take, as
+            // every other report is: sent back, it is not lost.
+            if report.id != LOOK_AGAIN {
+                let _ = current.reports.0.send(report);
+            }
             current.wake.poke();
         }
     }

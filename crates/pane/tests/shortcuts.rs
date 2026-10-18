@@ -2225,7 +2225,21 @@ fn a_hotkey_cell_records_the_kinds_a_session_reports(cx: &mut TestAppContext) {
         "the cell names the side as Windows does: {label:?}"
     );
     assert!(hotkeys.registered.lock().unwrap().contains(&right_ctrl));
-    assert!(hotkeys_record(&data).contains("\"tap:rctrl\""));
+    // The record is saved off the window's thread: waited for, as the
+    // other record waits are.
+    {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let record = data.path().join("extensions").join("hotkeys.json");
+        while !fs::read_to_string(&record).is_ok_and(|text| text.contains("\"tap:rctrl\"")) {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the record never held the tap: {:?}",
+                fs::read_to_string(&record)
+            );
+            settings_cx.run_until_parked();
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    }
     // The recorded binding opens the command, as a chord's does: Echo is
     // a no-view command, so the hotkey runs it without opening a view,
     // and its toast says what it was sent — nothing, for a hotkey's

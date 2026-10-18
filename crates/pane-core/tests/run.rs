@@ -1680,12 +1680,15 @@ mod windows {
         search(&launcher, "Run with completions");
         select_title(&launcher, "Run with Completions");
         block_on(launcher.activate_selected());
-        assert_eq!(
+        // The command is a designed view (#240): its List's own search
+        // field is what the typing reaches, as the samples' is.
+        assert!(matches!(
             launcher.view().screen,
-            Screen::CommandSearch {
-                query: String::new()
-            }
-        );
+            Screen::DesignedView(view) if view
+                .list
+                .as_ref()
+                .is_some_and(|list| list.search.is_empty())
+        ));
         assert_eq!(titles(&launcher), ["Type a command line"]);
         block_on(launcher.set_query("note"));
         assert_eq!(titles(&launcher), ["Run “note”", "notepad -a", "notepad"]);

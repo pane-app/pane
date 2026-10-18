@@ -357,19 +357,25 @@ fn a_push_does_not_overwrite_a_newer_event_answer() {
 #[test]
 fn a_view_that_pushes_while_hidden_is_drawn_when_shown_again() {
     let pane = fixture();
+    // Shown, the press's drawing asks for another, drawn at once: the
+    // press's own and the pushed one, settled before the window hides —
+    // a push still in flight as it hides would be one drawn while shown,
+    // whichever moment the drawing thread took it.
     pane.press("Push a render");
-    assert_eq!(renders(&pane), 2);
+    pane.settled();
+    assert_eq!(renders(&pane), 3, "the press's drawing and the pushed one");
 
-    // The window hides: the view is not drawn, so its push waits.
+    // The window hides: the press's drawing is its answer, but the view
+    // is not drawn again, so the push it asks for waits.
     pane.launcher.set_window_presence(WindowPresence::Hidden);
     pane.press("Push a render");
     pane.settled();
-    assert_eq!(renders(&pane), 3, "no drawing while hidden");
+    assert_eq!(renders(&pane), 4, "no drawing while hidden");
 
     // Shown again: the push that waited is drawn at once.
     pane.launcher.set_window_presence(WindowPresence::Shown);
     pane.settled();
-    assert_eq!(renders(&pane), 4, "the pushed drawing on showing");
+    assert_eq!(renders(&pane), 5, "the pushed drawing on showing");
 }
 
 /// One Pane with the `designed` fixture and the operations fixtures `a`
