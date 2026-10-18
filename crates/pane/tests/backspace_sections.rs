@@ -17,6 +17,7 @@
 //! moving the pins.
 
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use futures::executor::block_on;
 use gpui::{Entity, TestAppContext, VisualTestContext, prelude::*};
@@ -42,7 +43,7 @@ mod setup;
 mod service;
 
 use a11y::focused_label;
-use settle::{enter_flow, settle, settle_shown, until};
+use settle::{enter_flow, settle, settle_shown, until, until_state};
 use setup::actions_shortcut;
 
 /// The keystroke that moves the pinned home's focused pin one place
@@ -219,6 +220,24 @@ fn open_installed<'a>(
     let (window, cx) = open_launcher(cx, launcher);
     settle(&window, cx);
     (window, cx)
+}
+
+/// Points the installed search sample at `address`: the service its
+/// command searches is the package's preference, written as Settings
+/// writes it, and the window settled after.
+fn use_service(window: &Entity<LauncherWindow>, cx: &mut VisualTestContext, address: &str) {
+    let identity = cx.read_entity(window, |window, _| {
+        window
+            .launcher()
+            .packages()
+            .into_iter()
+            .next()
+            .expect("the search sample is installed")
+            .identity
+    });
+    let launcher = window.update(cx, |window, _| window.launcher().clone());
+    block_on(launcher.set_preference(&identity, "service", Some(address))).expect("saved");
+    settle(window, cx);
 }
 
 /// The window over the sample `name`'s previewed package, in a data
@@ -621,22 +640,21 @@ fn a_command_search_moves_five_rows(cx: &mut TestAppContext) {
     let data = tempfile::tempdir().unwrap();
     let (window, cx) = open_installed(cx, vec![], data.path(), "sample-search");
 
-    // Point the command's search at this test's service.
+    // Point the command's search at this test's service: its address is
+    // the package's preference, written before the command opens, as the
+    // command search tests write it.
+    use_service(&window, cx, &service.url());
     cx.simulate_input("package search");
     settle(&window, cx);
     cx.simulate_keystrokes("enter");
     settle(&window, cx);
-    cx.simulate_keystrokes("down enter");
-    let view = settle(&window, cx);
-    assert!(view.form().is_some(), "{:?}", view.screen);
-    cx.simulate_input(&service.url());
-    cx.simulate_keystrokes("enter");
-    settle(&window, cx);
-    cx.simulate_keystrokes("escape");
-    settle(&window, cx);
 
+    // The designed List throttles what its field is told (#240): the
+    // typing waits out the throttle's time on the window's clock before
+    // the search is asked, and its answer is read from the state.
     cx.simulate_input("a");
-    let view = settle(&window, cx);
+    cx.executor().advance_clock(Duration::from_millis(300));
+    let view = until_state(&window, cx, |view| titles(view).len() == 6);
     assert_eq!(titles(&view).len(), 6, "{:?}", titles(&view));
     assert_eq!(view.selected, Some(0));
     cx.simulate_keystrokes("alt-down");
@@ -667,6 +685,9 @@ fn ctrl_arrows_cross_root_searches_sections_scrolling_the_label_into_view(cx: &m
         Launcher::with_packages(Runtime::start(), commands, data.path().join("extensions"));
     block_on(launcher.install_package(&rust_sample()));
     let (window, cx) = open_launcher(cx, launcher);
+    // The launcher's own size, not the test display's: a list that fits
+    // every row never scrolls a label out of view.
+    cx.simulate_resize(gpui::size(gpui::px(640.), gpui::px(420.)));
 
     // The answer above twenty matches: "Rust sample" and "Results".
     cx.simulate_input("reverse 42");
@@ -685,8 +706,10 @@ fn ctrl_arrows_cross_root_searches_sections_scrolling_the_label_into_view(cx: &m
 
     // Ten rows down, the "Results" label is out of view; the jump back
     // lands on the section's first row with its label scrolled into view.
+    // The answer is the list's first row, so the first match is its
+    // second, and ten rows below it is the twelfth.
     cx.simulate_keystrokes("alt-down alt-down");
-    assert_eq!(settle(&window, cx).selected, Some(10));
+    assert_eq!(settle(&window, cx).selected, Some(11));
     assert!(!in_view(cx, "section-Results"), "the label is out of view");
     cx.simulate_keystrokes("ctrl-up");
     let view = settle(&window, cx);
@@ -874,10 +897,10 @@ fn the_emacs_pair_moves_the_selection_and_the_argument_fields(cx: &mut TestAppCo
     assert_eq!(focused_label(cx).as_deref(), Some("Name"));
     cx.simulate_keystrokes(EMACS_RIGHT);
     assert_eq!(focused_label(cx).as_deref(), Some("Secret"));
-    // The tone field: its chosen segment is what assistive technology
-    // reads of it, the radio group's active descendant.
+    // The tone field: a dropdown (#241), its trigger named for the
+    // field as assistive technology reads it.
     cx.simulate_keystrokes(EMACS_RIGHT);
-    assert_eq!(focused_label(cx).as_deref(), Some("Warm"));
+    assert_eq!(focused_label(cx).as_deref(), Some("Tone"));
     cx.simulate_keystrokes(EMACS_LEFT);
     assert_eq!(focused_label(cx).as_deref(), Some("Secret"));
     cx.simulate_keystrokes(EMACS_LEFT);

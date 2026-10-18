@@ -167,6 +167,11 @@ fn a_runtime_crash_is_explained_and_the_runtime_restarted_from_the_window(cx: &m
     // The command runs again.
     cx.simulate_keystrokes("escape");
     settle(&window, cx);
+    // The earlier Escape left an empty root, which hid the window; hidden,
+    // the action's toast would be a HUD (#141), so the window is shown
+    // again first, as the hotkey shows it.
+    window.update_in(cx, |this, window, cx| this.show_again(window, cx));
+    settle(&window, cx);
     press_enter_on(&window, cx, "Say hello");
     press_enter_on(&window, cx, "Say hello");
     let shown = settle_shown(&window, cx);

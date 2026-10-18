@@ -299,6 +299,7 @@ impl LauncherWindow {
             let width = geometry.search_text_inset * 40.;
             div()
                 .id("designed-loading")
+                .debug_selector(|| "designed-loading-bar".into())
                 .flex_none()
                 .overflow_hidden()
                 .h(px(2.))
