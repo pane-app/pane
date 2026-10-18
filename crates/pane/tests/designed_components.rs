@@ -208,10 +208,17 @@ fn the_components_announce_their_roles_and_names(cx: &mut TestAppContext) {
     // fields text inputs, one a password; the select a combo box with the
     // chosen value; the markdown link a link; the rich row a list item;
     // the section headers and the empty state's title headings.
+    // The keycap names its chord as the system does: macOS writes Ctrl
+    // out as "Control".
+    let chord = if cfg!(target_os = "macos") {
+        "Control+Shift+P"
+    } else {
+        "Ctrl+Shift+P"
+    };
     let expect = [
         ("Label", "The UI component set"),
         ("Link", "terms"),
-        ("Image", "Ctrl+Shift+P"),
+        ("Image", chord),
         ("Label", "beta"),
         ("Label", "3"),
         ("Switch", "Dark mode"),

@@ -320,6 +320,16 @@ fn root_shortcut() -> &'static str {
     }
 }
 
+/// The keystroke that selects all of a field's text on this platform:
+/// Ctrl+A moves to the start of the line in a macOS field.
+fn select_all_shortcut() -> &'static str {
+    if cfg!(target_os = "macos") {
+        "cmd-a"
+    } else {
+        "ctrl-a"
+    }
+}
+
 /// The keystroke that dismisses the launcher on this platform.
 fn dismiss_shortcut() -> &'static str {
     if cfg!(target_os = "macos") {
@@ -865,15 +875,10 @@ fn a_binding_that_would_take_over_typing_is_refused(cx: &mut TestAppContext) {
     settings_cx.run_until_parked();
     // A plain letter, a plain editing key and the platform's select-all
     // are all refused: text editing stays owned by the focused field.
-    let select_all = if cfg!(target_os = "macos") {
-        "cmd-a"
-    } else {
-        "ctrl-a"
-    };
     for (keystroke, expected) in [
         ("j", "is protected: it types a character"),
         ("backspace", "is protected: it deletes text"),
-        (select_all, "is protected: it selects all text"),
+        (select_all_shortcut(), "is protected: it selects all text"),
     ] {
         settings_cx.simulate_keystrokes(keystroke);
         settings_cx.run_until_parked();
@@ -1255,7 +1260,7 @@ fn a_form_still_submits_with_the_rebound_key_and_the_footer_button(cx: &mut Test
     select_row(&window, cx, "Greet someone");
     cx.simulate_keystrokes("ctrl-j");
     settle(&window, cx);
-    cx.simulate_keystrokes("ctrl-a");
+    cx.simulate_keystrokes(select_all_shortcut());
     cx.simulate_input("Grace");
     click(cx, "primary-action");
     until_answered(&window, cx, "Hello, Grace, from the Rust guest");

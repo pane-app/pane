@@ -61,6 +61,21 @@ const MOVE_PIN_UP: &str = if cfg!(target_os = "macos") {
     "ctrl-alt-up"
 };
 
+/// The keystroke that jumps to the previous section's first row on this
+/// system: Command+Up on macOS, Ctrl+Up elsewhere.
+const SECTION_UP: &str = if cfg!(target_os = "macos") {
+    "cmd-up"
+} else {
+    "ctrl-up"
+};
+
+/// The keystroke that jumps to the next section's first row.
+const SECTION_DOWN: &str = if cfg!(target_os = "macos") {
+    "cmd-down"
+} else {
+    "ctrl-down"
+};
+
 /// The Emacs choice's previous- and next-result keys, and its Left and
 /// Right, on this system.
 const EMACS_PREVIOUS: &str = if cfg!(target_os = "macos") {
@@ -623,11 +638,11 @@ fn a_command_list_moves_five_rows_and_jumps_to_its_ends(cx: &mut TestAppContext)
 
     // One section of its own: down goes to the last row, up from inside
     // it to its first, and no further.
-    cx.simulate_keystrokes("ctrl-down");
+    cx.simulate_keystrokes(SECTION_DOWN);
     assert_eq!(settle(&window, cx).selected, Some(7));
-    cx.simulate_keystrokes("ctrl-up");
+    cx.simulate_keystrokes(SECTION_UP);
     assert_eq!(settle(&window, cx).selected, Some(0));
-    cx.simulate_keystrokes("ctrl-up");
+    cx.simulate_keystrokes(SECTION_UP);
     assert_eq!(settle(&window, cx).selected, Some(0));
 }
 
@@ -701,7 +716,7 @@ fn ctrl_arrows_cross_root_searches_sections_scrolling_the_label_into_view(cx: &m
     assert!(in_view(cx, "section-Results"));
 
     // The first row of the next section: the first match.
-    cx.simulate_keystrokes("ctrl-down");
+    cx.simulate_keystrokes(SECTION_DOWN);
     assert_eq!(selected_title(&settle(&window, cx)), "reverse 42 01");
 
     // Ten rows down, the "Results" label is out of view; the jump back
@@ -711,7 +726,7 @@ fn ctrl_arrows_cross_root_searches_sections_scrolling_the_label_into_view(cx: &m
     cx.simulate_keystrokes("alt-down alt-down");
     assert_eq!(settle(&window, cx).selected, Some(11));
     assert!(!in_view(cx, "section-Results"), "the label is out of view");
-    cx.simulate_keystrokes("ctrl-up");
+    cx.simulate_keystrokes(SECTION_UP);
     let view = settle(&window, cx);
     assert_eq!(selected_title(&view), "reverse 42 01");
     assert!(
@@ -721,17 +736,17 @@ fn ctrl_arrows_cross_root_searches_sections_scrolling_the_label_into_view(cx: &m
 
     // From the section's first row, up: the "Rust sample" answer, and
     // nothing above it to reach.
-    cx.simulate_keystrokes("ctrl-up");
+    cx.simulate_keystrokes(SECTION_UP);
     assert_eq!(selected_title(&settle(&window, cx)), "24");
-    cx.simulate_keystrokes("ctrl-up");
+    cx.simulate_keystrokes(SECTION_UP);
     assert_eq!(selected_title(&settle(&window, cx)), "24");
 
     // No next section past the last: the last row, and it stays there.
-    cx.simulate_keystrokes("ctrl-down");
+    cx.simulate_keystrokes(SECTION_DOWN);
     assert_eq!(selected_title(&settle(&window, cx)), "reverse 42 01");
-    cx.simulate_keystrokes("ctrl-down");
+    cx.simulate_keystrokes(SECTION_DOWN);
     assert_eq!(selected_title(&settle(&window, cx)), "reverse 42 20");
-    cx.simulate_keystrokes("ctrl-down");
+    cx.simulate_keystrokes(SECTION_DOWN);
     assert_eq!(selected_title(&settle(&window, cx)), "reverse 42 20");
 }
 
@@ -751,23 +766,23 @@ fn the_vertical_pinned_rows_count_as_the_first_section(cx: &mut TestAppContext) 
     assert_eq!(settle(&window, cx).selected, Some(0));
 
     // From the rows' first row, up: the first pin.
-    cx.simulate_keystrokes("ctrl-up");
+    cx.simulate_keystrokes(SECTION_UP);
     assert_eq!(focused_label(cx).as_deref(), Some("Pinned 1: Charlie"));
 
     // From the pins, down: the rows' first row, focus back in the field.
-    cx.simulate_keystrokes("ctrl-down");
+    cx.simulate_keystrokes(SECTION_DOWN);
     assert!(query_has_focus(&window, cx));
     assert_eq!(selected_title(&settle(&window, cx)), "Alpha");
 
     // The first pin is the pins' own first row: up stays on it.
     cx.simulate_keystrokes("tab");
     assert_eq!(focused_label(cx).as_deref(), Some("Pinned 1: Charlie"));
-    cx.simulate_keystrokes("ctrl-up");
+    cx.simulate_keystrokes(SECTION_UP);
     assert_eq!(focused_label(cx).as_deref(), Some("Pinned 1: Charlie"));
     // From the second pin, up: the first.
     cx.simulate_keystrokes("tab");
     assert_eq!(focused_label(cx).as_deref(), Some("Pinned 2: Alpha"));
-    cx.simulate_keystrokes("ctrl-up");
+    cx.simulate_keystrokes(SECTION_UP);
     assert_eq!(focused_label(cx).as_deref(), Some("Pinned 1: Charlie"));
 }
 
@@ -781,14 +796,14 @@ fn the_horizontal_strip_is_not_entered(cx: &mut TestAppContext) {
     assert_eq!(settle(&window, cx).selected, Some(0));
     assert!(query_has_focus(&window, cx));
 
-    cx.simulate_keystrokes("ctrl-up");
+    cx.simulate_keystrokes(SECTION_UP);
     let view = settle(&window, cx);
     assert_eq!(view.selected, Some(0), "the selection stays");
     assert!(query_has_focus(&window, cx), "the focus stays in the field");
     // Down from the strip still leaves it for the first row.
     cx.simulate_keystrokes("tab");
     assert_eq!(focused_label(cx).as_deref(), Some("Pinned 1: Charlie"));
-    cx.simulate_keystrokes("ctrl-down");
+    cx.simulate_keystrokes(SECTION_DOWN);
     assert!(query_has_focus(&window, cx));
     assert_eq!(selected_title(&settle(&window, cx)), "Alpha");
 }
@@ -828,30 +843,31 @@ fn the_actions_panel_jumps_entries_and_groups(cx: &mut TestAppContext) {
 
     // The groups: the "Edit", "Share" and "Danger" sections' first
     // entries, the last entry past the last group, and the first of all.
+    let downs = |count: usize| vec![SECTION_DOWN; count].join(" ");
     assert_eq!(
-        runs("ctrl-down", &window, cx),
+        runs(&downs(1), &window, cx),
         Status::Result("Rename: Alpha note".into())
     );
     assert_eq!(
-        runs("ctrl-down ctrl-down", &window, cx),
+        runs(&downs(2), &window, cx),
         Status::Result("Copy Link: Alpha note".into())
     );
     assert_eq!(
-        runs("ctrl-down ctrl-down ctrl-down", &window, cx),
+        runs(&downs(3), &window, cx),
         Status::Result("Delete: Alpha note".into())
     );
     assert_eq!(
-        runs("ctrl-down ctrl-down ctrl-down ctrl-down", &window, cx),
+        runs(&downs(4), &window, cx),
         Status::Result("Delete: Alpha note".into())
     );
     assert_eq!(
-        runs("ctrl-up", &window, cx),
+        runs(SECTION_UP, &window, cx),
         Status::Result("Open: Alpha note".into())
     );
     // From inside "Share" — past its first entry — up lands on its own
     // first entry first, before the group above it.
     assert_eq!(
-        runs("alt-down down ctrl-up", &window, cx),
+        runs(&format!("alt-down down {SECTION_UP}"), &window, cx),
         Status::Result("Copy Link: Alpha note".into())
     );
 }
@@ -984,7 +1000,7 @@ fn a_rebound_back_a_level_and_section_jump_take_effect(cx: &mut TestAppContext) 
     settle(&window, cx);
     let view = settle(&window, cx);
     assert_eq!(view.selected, Some(0));
-    cx.simulate_keystrokes("ctrl-down");
+    cx.simulate_keystrokes(SECTION_DOWN);
     assert_eq!(
         settle(&window, cx).selected,
         Some(0),
