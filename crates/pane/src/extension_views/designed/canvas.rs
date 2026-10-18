@@ -761,6 +761,13 @@ fn resolve(ops: &[CanvasOp], draw: &Draw) -> Vec<Layer> {
     if !run.is_empty() {
         layers.push(Layer::Shapes(run));
     }
+    // The shapes layer is what measures the drawing area (its GPUI
+    // canvas tells the window the size the layout gave it): a drawing of
+    // text or images alone has one too, empty and beneath them, so its
+    // size and its changes still reach the view.
+    if !layers.iter().any(|layer| matches!(layer, Layer::Shapes(_))) {
+        layers.insert(0, Layer::Shapes(Vec::new()));
+    }
     layers
 }
 
@@ -1480,6 +1487,24 @@ impl LauncherWindow {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
+        // GPUI reports no hover while the last input was the keyboard
+        // (`is_hovered`): a key pressed with the pointer resting on the
+        // canvas is no leave of it, nor the move that follows an enter.
+        // The view hears the pointer cross the canvas's edge, as the
+        // window last told it, and nothing more.
+        if !over && window.last_input_was_keyboard() {
+            return;
+        }
+        if let Some(controls) = self.designed.as_mut()
+            && let Some(entry) = controls.state.get_mut(&on.path)
+            && let Held::Canvas { drag, .. } = &mut entry.held
+        {
+            let mut drag = drag.borrow_mut();
+            if drag.inside == over {
+                return;
+            }
+            drag.inside = over;
+        }
         let handler = if over {
             on.handlers.on_pointer_enter
         } else {

@@ -1622,98 +1622,7 @@ fn node(wire: WireNode, depth: usize, nodes: &mut usize) -> Result<Node, ReadErr
             "the view's tree is {depth} levels deep; at most {MAX_DEPTH} are drawn"
         )));
     }
-    // A node whose `requires` this Pane does not meet is one it does not
-    // know: it asks for a later minor version than the one Pane renders,
-    // and degrades as an unknown node does.
-    let meets = wire
-        .requires
-        .is_none_or(|required| required <= COMPONENT_SET.1);
-    let kind = if !meets {
-        NodeKind::Unknown(wire.kind.clone())
-    } else {
-        match wire.kind.as_str() {
-            "column" => NodeKind::Column(layout(&wire)?),
-            "row" => NodeKind::Row(layout(&wire)?),
-            "stack" => NodeKind::Stack(place_of(&wire, "align")?.unwrap_or_default()),
-            "scroll" => NodeKind::Scroll {
-                orientation: orientation_of(&wire, "orientation")?.unwrap_or_default(),
-            },
-            "spacer" => NodeKind::Spacer,
-            "divider" => NodeKind::Divider {
-                orientation: orientation_of(&wire, "orientation")?.unwrap_or_default(),
-            },
-            "text" => NodeKind::Text(text(&wire)?),
-            "button" => NodeKind::Button(button(&wire)?),
-            "link" => NodeKind::Link(link(&wire)?),
-            "icon" => NodeKind::Icon(icon_node(&wire, "icon")?),
-            "icon-tile" => NodeKind::IconTile(icon_node(&wire, "icon")?),
-            "image" => NodeKind::Image(image(&wire)?),
-            "rich-row" => NodeKind::RichRow(rich_row(&wire)?),
-            "keycap" => NodeKind::Keycap(keycap(&wire)?),
-            "key-sequence" => NodeKind::KeySequence(key_sequence(&wire)?),
-            "tag" => NodeKind::Tag(texted(&wire, "text")?),
-            "badge" => NodeKind::Badge(badge(&wire)?),
-            "toggle" => NodeKind::Toggle(Toggle {
-                on: boolean(&wire, "on")?
-                    .or(boolean(&wire, "default")?)
-                    .unwrap_or(false),
-                on_change: callback(&wire, "onChange")?,
-                label: string(&wire, "label")?,
-                field: field_props(&wire)?,
-            }),
-            "checkbox" => NodeKind::Checkbox(Checkbox {
-                checked: boolean(&wire, "checked")?
-                    .or(boolean(&wire, "default")?)
-                    .unwrap_or(false),
-                on_change: callback(&wire, "onChange")?,
-                label: string(&wire, "label")?,
-                field: field_props(&wire)?,
-            }),
-            "segmented" => NodeKind::Segmented(segmented(&wire)?),
-            "select" => NodeKind::Select(select(&wire)?),
-            "slider" => NodeKind::Slider(slider(&wire)?),
-            "progress" => NodeKind::Progress(Progress {
-                value: number(&wire, "value")?.ok_or(unreadable("a progress node has no value"))?,
-                label: string(&wire, "label")?,
-            }),
-            "loading" => NodeKind::Loading(Loading {
-                label: string(&wire, "label")?,
-            }),
-            "markdown" => NodeKind::Markdown(markdown_node(&wire)?),
-            "card" => NodeKind::Card(layout(&wire)?),
-            "section-header" => NodeKind::SectionHeader(section_header(&wire)?),
-            "metadata-list" => NodeKind::MetadataList(metadata_list(&wire)?),
-            "empty-state" => NodeKind::EmptyState(empty_state(&wire)?),
-            "text-input" => NodeKind::TextInput(text_input(&wire)?),
-            "password-input" => NodeKind::PasswordInput(text_input(&wire)?),
-            "text-area" => NodeKind::TextArea(text_input(&wire)?),
-            "list" => NodeKind::List(list_node(&wire)?),
-            "grid" => NodeKind::Grid(list_node(&wire)?),
-            "list-section" => NodeKind::ListSection(list_section(&wire)?),
-            "list-item" => NodeKind::ListItem(list_item(&wire, depth, nodes)?),
-            "grid-item" => NodeKind::GridItem(grid_item(&wire)?),
-            "list-dropdown" => NodeKind::ListDropdown(list_dropdown(&wire)?),
-            "detail" => NodeKind::Detail(layout(&wire)?),
-            "canvas" => NodeKind::Canvas(canvas(&wire)?),
-            "form" => NodeKind::Form(FormNode {
-                on_submit: callback(&wire, "onSubmit")?,
-                submit_label: string(&wire, "submitLabel")?,
-            }),
-            "date-picker" => NodeKind::DatePicker(date_field(&wire)?),
-            "date-time-picker" => NodeKind::DateTimePicker(date_field(&wire)?),
-            "tag-picker" => NodeKind::TagPicker(TagPicker {
-                tags: texts(&wire, "tags")?
-                    .or_else(|| texts(&wire, "default").ok().flatten())
-                    .unwrap_or_default(),
-                options: options(&wire, "options")?,
-                on_change: callback(&wire, "onChange")?,
-                field: field_props(&wire)?,
-            }),
-            "file-picker" => NodeKind::FilePicker(file_picker(&wire)?),
-            "folder-picker" => NodeKind::FolderPicker(file_picker(&wire)?),
-            _ => NodeKind::Unknown(wire.kind.clone()),
-        }
-    };
+    let kind = kind_of(&wire, depth, nodes)?;
     let style = style(&wire)?;
     let place = place_of(&wire, "place")?;
     let offset = offset_of(&wire)?;
@@ -1746,6 +1655,106 @@ fn node(wire: WireNode, depth: usize, nodes: &mut usize) -> Result<Node, ReadErr
         on_focus: wire.on_focus,
         on_blur: wire.on_blur,
         on_key: wire.on_key,
+    })
+}
+
+/// The kind of node `wire` describes, read from its own properties. Kept
+/// out of [`node`], whose frame is the one the tree's depth repeats: the
+/// many kinds' readings take their room on the stack here, once per node
+/// and gone before its children are read, so a tree as deep as
+/// [`MAX_DEPTH`] fits the stack of the thread that reads it.
+#[inline(never)]
+fn kind_of(wire: &WireNode, depth: usize, nodes: &mut usize) -> Result<NodeKind, ReadError> {
+    // A node whose `requires` this Pane does not meet is one it does not
+    // know: it asks for a later minor version than the one Pane renders,
+    // and degrades as an unknown node does.
+    let meets = wire
+        .requires
+        .is_none_or(|required| required <= COMPONENT_SET.1);
+    if !meets {
+        return Ok(NodeKind::Unknown(wire.kind.clone()));
+    }
+    Ok(match wire.kind.as_str() {
+        "column" => NodeKind::Column(layout(wire)?),
+        "row" => NodeKind::Row(layout(wire)?),
+        "stack" => NodeKind::Stack(place_of(wire, "align")?.unwrap_or_default()),
+        "scroll" => NodeKind::Scroll {
+            orientation: orientation_of(wire, "orientation")?.unwrap_or_default(),
+        },
+        "spacer" => NodeKind::Spacer,
+        "divider" => NodeKind::Divider {
+            orientation: orientation_of(wire, "orientation")?.unwrap_or_default(),
+        },
+        "text" => NodeKind::Text(text(wire)?),
+        "button" => NodeKind::Button(button(wire)?),
+        "link" => NodeKind::Link(link(wire)?),
+        "icon" => NodeKind::Icon(icon_node(wire, "icon")?),
+        "icon-tile" => NodeKind::IconTile(icon_node(wire, "icon")?),
+        "image" => NodeKind::Image(image(wire)?),
+        "rich-row" => NodeKind::RichRow(rich_row(wire)?),
+        "keycap" => NodeKind::Keycap(keycap(wire)?),
+        "key-sequence" => NodeKind::KeySequence(key_sequence(wire)?),
+        "tag" => NodeKind::Tag(texted(wire, "text")?),
+        "badge" => NodeKind::Badge(badge(wire)?),
+        "toggle" => NodeKind::Toggle(Toggle {
+            on: boolean(wire, "on")?
+                .or(boolean(wire, "default")?)
+                .unwrap_or(false),
+            on_change: callback(wire, "onChange")?,
+            label: string(wire, "label")?,
+            field: field_props(wire)?,
+        }),
+        "checkbox" => NodeKind::Checkbox(Checkbox {
+            checked: boolean(wire, "checked")?
+                .or(boolean(wire, "default")?)
+                .unwrap_or(false),
+            on_change: callback(wire, "onChange")?,
+            label: string(wire, "label")?,
+            field: field_props(wire)?,
+        }),
+        "segmented" => NodeKind::Segmented(segmented(wire)?),
+        "select" => NodeKind::Select(select(wire)?),
+        "slider" => NodeKind::Slider(slider(wire)?),
+        "progress" => NodeKind::Progress(Progress {
+            value: number(wire, "value")?.ok_or(unreadable("a progress node has no value"))?,
+            label: string(wire, "label")?,
+        }),
+        "loading" => NodeKind::Loading(Loading {
+            label: string(wire, "label")?,
+        }),
+        "markdown" => NodeKind::Markdown(markdown_node(wire)?),
+        "card" => NodeKind::Card(layout(wire)?),
+        "section-header" => NodeKind::SectionHeader(section_header(wire)?),
+        "metadata-list" => NodeKind::MetadataList(metadata_list(wire)?),
+        "empty-state" => NodeKind::EmptyState(empty_state(wire)?),
+        "text-input" => NodeKind::TextInput(text_input(wire)?),
+        "password-input" => NodeKind::PasswordInput(text_input(wire)?),
+        "text-area" => NodeKind::TextArea(text_input(wire)?),
+        "list" => NodeKind::List(list_node(wire)?),
+        "grid" => NodeKind::Grid(list_node(wire)?),
+        "list-section" => NodeKind::ListSection(list_section(wire)?),
+        "list-item" => NodeKind::ListItem(list_item(wire, depth, nodes)?),
+        "grid-item" => NodeKind::GridItem(grid_item(wire)?),
+        "list-dropdown" => NodeKind::ListDropdown(list_dropdown(wire)?),
+        "detail" => NodeKind::Detail(layout(wire)?),
+        "canvas" => NodeKind::Canvas(canvas(wire)?),
+        "form" => NodeKind::Form(FormNode {
+            on_submit: callback(wire, "onSubmit")?,
+            submit_label: string(wire, "submitLabel")?,
+        }),
+        "date-picker" => NodeKind::DatePicker(date_field(wire)?),
+        "date-time-picker" => NodeKind::DateTimePicker(date_field(wire)?),
+        "tag-picker" => NodeKind::TagPicker(TagPicker {
+            tags: texts(wire, "tags")?
+                .or_else(|| texts(wire, "default").ok().flatten())
+                .unwrap_or_default(),
+            options: options(wire, "options")?,
+            on_change: callback(wire, "onChange")?,
+            field: field_props(wire)?,
+        }),
+        "file-picker" => NodeKind::FilePicker(file_picker(wire)?),
+        "folder-picker" => NodeKind::FolderPicker(file_picker(wire)?),
+        _ => NodeKind::Unknown(wire.kind.clone()),
     })
 }
 

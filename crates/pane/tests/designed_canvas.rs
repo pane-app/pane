@@ -91,17 +91,6 @@ fn until_value(window: &Entity<LauncherWindow>, cx: &mut VisualTestContext, expe
     });
 }
 
-/// Waits until the canvas says it has received `expected`.
-fn until_received(window: &Entity<LauncherWindow>, cx: &mut VisualTestContext, expected: &str) {
-    let expected = expected.to_owned();
-    until(window, cx, move |view| {
-        canvas_value_of(&view.screen)
-            .and_then(|value| value.split_once("; ").map(|(_, events)| events.to_owned()))
-            .as_deref()
-            == Some(&expected)
-    });
-}
-
 /// Where the canvas's drawing area starts.
 fn canvas_origin(cx: &mut VisualTestContext) -> gpui::Point<gpui::Pixels> {
     cx.debug_bounds("designed-canvas-fill")
@@ -147,23 +136,40 @@ fn the_canvas_receives_its_richer_input(cx: &mut TestAppContext) {
     let origin = canvas_origin(cx);
     let at = |x: f32, y: f32| origin + gpui::point(px(x), px(y));
 
-    // The wheel over it.
+    // The pointer comes onto it first, as a user's does before the
+    // wheel turns or a button presses there: its entering is an event of
+    // its own, and the steps below are each their own events after it.
+    cx.simulate_mouse_move(at(20., 10.), None, gpui::Modifiers::none());
+    until_last(&window, cx, "pointer-enter");
+
+    // The wheel over it, told where it turned.
     cx.simulate_event(gpui::ScrollWheelEvent {
         position: at(20., 10.),
         delta: gpui::ScrollDelta::Lines(gpui::point(0., -2.)),
         modifiers: gpui::Modifiers::none(),
         touch_phase: gpui::TouchPhase::Moved,
     });
-    until_received(&window, cx, "wheel");
+    until_last(&window, cx, "wheel 20,10");
 
-    // A double click is a press, the double, and the second press.
-    cx.simulate_click(at(20., 10.), gpui::Modifiers::none());
-    until_received(&window, cx, "wheel; pointer-down 20,10");
-    cx.simulate_click(at(20., 10.), gpui::Modifiers::none());
-    until_received(
+    // A double click: the second press, counted twice, is a press and
+    // the double — then its release.
+    cx.simulate_event(gpui::MouseDownEvent {
+        position: at(20., 10.),
+        modifiers: gpui::Modifiers::none(),
+        button: gpui::MouseButton::Left,
+        click_count: 2,
+        first_mouse: false,
+    });
+    cx.simulate_event(gpui::MouseUpEvent {
+        position: at(20., 10.),
+        modifiers: gpui::Modifiers::none(),
+        button: gpui::MouseButton::Left,
+        click_count: 2,
+    });
+    until_last(
         &window,
         cx,
-        "wheel; pointer-down 20,10; double-click 20,10; pointer-down 20,10",
+        "pointer-down 20,10; double-click 20,10; pointer-up 20,10",
     );
 
     // The secondary button.
@@ -172,20 +178,24 @@ fn the_canvas_receives_its_richer_input(cx: &mut TestAppContext) {
         gpui::MouseButton::Right,
         gpui::Modifiers::none(),
     );
-    until_received(
-        &window,
-        cx,
-        "wheel; pointer-down 20,10; double-click 20,10; pointer-down 20,10; secondary 30,10",
-    );
+    until_last(&window, cx, "secondary 30,10");
 
     // The canvas takes the keyboard: its own key events, beyond the
     // arrows the semantic handlers take.
     cx.simulate_keystrokes("k");
-    until_received(
-        &window,
-        cx,
-        "wheel; pointer-down 20,10; double-click 20,10; pointer-down 20,10; secondary 30,10; key k",
-    );
+    until_last(&window, cx, "key k");
+}
+
+/// Runs the window until the events the canvas's value names end with
+/// `last`: the fixture keeps the latest few, so a step's own events are
+/// read as the newest of them.
+fn until_last(window: &Entity<LauncherWindow>, cx: &mut VisualTestContext, last: &str) {
+    let last = last.to_owned();
+    until(window, cx, move |view| {
+        canvas_value_of(&view.screen)
+            .and_then(|value| value.split_once("; ").map(|(_, events)| events.to_owned()))
+            .is_some_and(|events| events.ends_with(&last))
+    });
 }
 
 /// The canvas's accessibility: one node, with the role its tree named

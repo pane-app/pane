@@ -785,7 +785,8 @@ fn filler_rendered(
     };
     let ops = format!("[{{\"op\":\"text\",\"x\":4,\"y\":4,\"text\":\"{value}\"}}]");
     let tree = format!(
-        "{{\"version\":\"{COMPONENT_SET}\",\"root\":{{\"type\":\"column\",\"children\":[\
+        "{{\"version\":\"{COMPONENT_SET}\",\"root\":{{\"type\":\"column\",\"grow\":1,\
+         \"width\":\"100%\",\"align\":\"stretch\",\"children\":[\
          {{\"type\":\"canvas\",\"key\":\"fill\",\"grow\":1,\"role\":\"slider\",\"label\":\"Filler\",\
          \"value\":\"{value}\",\"onResize\":1,\"onKey\":2,\"onPointerDown\":3,\"onPointerUp\":4,\
          \"onPointerMove\":5,\"onPointerEnter\":6,\"onPointerLeave\":7,\"onWheel\":8,\
@@ -818,7 +819,8 @@ fn event_summary(payload: &str) -> String {
     let kind = payload
         .find("\"event\":\"")
         .map(|at| {
-            let rest = &payload[at + 10..];
+            // Past `"event":"`, nine characters.
+            let rest = &payload[at + 9..];
             let end = rest.find('"').unwrap_or(rest.len());
             rest[..end].to_owned()
         })
