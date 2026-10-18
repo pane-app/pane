@@ -1146,11 +1146,26 @@ impl LauncherWindow {
     ) {
         // Enter in a single-line field of a form submits it (#241): the
         // form's primary action, not the field's own commit — the
-        // submission carries the field's value.
+        // submission carries the field's value. A blur does not: leaving
+        // a field is not the form's action, or opening its select would
+        // submit the half of it already typed.
         if self.field_in_form(path) {
             self.submit_designed_form(window, cx);
             return;
         }
+        self.designed_field_value_committed(path, window, cx);
+    }
+
+    /// A field's commit as a blur makes it: the live value is the value
+    /// the tree names, told to the field's own change handler — never
+    /// the form's submission, which only Enter and the submit button
+    /// run. A field in a form commits its value alone.
+    fn designed_field_value_committed(
+        &mut self,
+        path: &str,
+        window: &mut gpui::Window,
+        cx: &mut Context<Self>,
+    ) {
         let send = self.designed.as_mut().and_then(|controls| {
             let entry = controls.state.get_mut(path)?;
             let (render, key) = (entry.render, entry.key.clone());
@@ -1196,7 +1211,7 @@ impl LauncherWindow {
         cx: &mut Context<Self>,
     ) {
         if !focused {
-            self.designed_field_committed(path, window, cx);
+            self.designed_field_value_committed(path, window, cx);
         }
         let send = self.designed.as_ref().and_then(|controls| {
             let entry = controls.state.get(path)?;
@@ -1284,10 +1299,20 @@ impl LauncherWindow {
             let Held::Select { on_change, .. } = &entry.held else {
                 return None;
             };
-            let callback = *on_change;
-            Some((callback?, entry.render, entry.key.clone()))
+            Some((*on_change, entry.render, entry.key.clone()))
         });
         let Some((callback, render, key)) = send else {
+            return;
+        };
+        // The chosen value is what the trigger names and a submission of
+        // the form reads, whether or not the tree named a change handler
+        // for the select: noted as sent, the tree that carries it not
+        // having landed (#241).
+        if !key.is_empty() {
+            self.note_sent(&key, value.to_owned());
+            cx.notify();
+        }
+        let Some(callback) = callback else {
             return;
         };
         let payload = payload(value);
@@ -1370,6 +1395,7 @@ impl LauncherWindow {
                         })
                         .collect::<Vec<_>>(),
                     select.value.clone(),
+                    node.key.clone(),
                 )),
                 pane_core::NodeKind::ListDropdown(dropdown) => Some((
                     dropdown
@@ -1389,10 +1415,21 @@ impl LauncherWindow {
                         })
                         .collect::<Vec<_>>(),
                     dropdown.value.clone(),
+                    node.key.clone(),
                 )),
                 _ => None,
             });
-        let (choices, committed) = read.unwrap_or_default();
+        let (choices, committed, key) = read.unwrap_or_default();
+        // A choice the window holds as sent, the tree that carries it not
+        // having landed: the trigger names it, as a submission reads it
+        // (#241).
+        let committed = self
+            .designed
+            .as_ref()
+            .and_then(|controls| {
+                key.as_deref().and_then(|key| controls.sent.get(key).cloned())
+            })
+            .or(committed);
         crate::ui::select::Model {
             theme: visuals.theme,
             material: visuals.material,

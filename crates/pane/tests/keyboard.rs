@@ -181,7 +181,18 @@ fn open_launcher<'a>(
     cx.executor().allow_parking();
     init_settings(data, cx);
     cx.update(pane::bind_keys);
-    cx.add_window_view(|window, cx| LauncherWindow::new(launcher, window, cx))
+    // The window learns what the launcher changed in the background — a
+    // launch's open among it, which runs on a thread of its own after the
+    // reply the launch was dispatched with — as the binary's window does;
+    // without the channel a launched command's view never reaches the
+    // window's controls, and a settle can pass on the screen before it.
+    let (sender, changes) = pane_core::changes::channel();
+    let launcher = launcher.with_changes(sender);
+    cx.add_window_view(|window, cx| {
+        let mut launcher_window = LauncherWindow::new(launcher, window, cx);
+        launcher_window.follow_changes(changes, window, cx);
+        launcher_window
+    })
 }
 
 /// The launcher window over the Rust sample alone.
@@ -194,6 +205,34 @@ fn open_sample<'a>(
         Launcher::new(Runtime::start(), samples::sample_commands()),
         data,
     )
+}
+
+/// The launcher window over the JavaScript sample installed as a package
+/// into `data`, as a user installs one: its items can launch its other
+/// commands (#241's form among them), which a command registered without
+/// a package cannot — a launch names a command of its caller's own
+/// package, and a registered command has none.
+fn open_installed_sample<'a>(
+    cx: &'a mut TestAppContext,
+    data: &Path,
+) -> (gpui::Entity<LauncherWindow>, &'a mut VisualTestContext) {
+    let folder =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/guests/packages/sample-js");
+    assert!(
+        folder.exists(),
+        "{} is missing; run `cargo xtask guests`",
+        folder.display()
+    );
+    let source = data.join("sample-js");
+    std::fs::create_dir_all(&source).unwrap();
+    for entry in std::fs::read_dir(&folder).unwrap() {
+        let entry = entry.unwrap();
+        std::fs::copy(entry.path(), source.join(entry.file_name())).unwrap();
+    }
+    let launcher =
+        Launcher::with_packages(Runtime::start(), vec![], data.join("extensions"));
+    futures::executor::block_on(launcher.install_package(&source));
+    open_launcher(cx, launcher, Some(data))
 }
 
 /// Moves the selection to the root row titled `title`, with the down
@@ -1067,15 +1106,20 @@ fn the_back_key_dismisses_an_open_menu_before_it_acts(cx: &mut TestAppContext) {
 #[gpui::test]
 fn return_to_root_leaves_whatever_screen_is_open(cx: &mut TestAppContext) {
     let data = tempfile::tempdir().unwrap();
-    let (window, cx) = open_sample(cx, Some(data.path()));
+    let (window, cx) = open_installed_sample(cx, data.path());
 
-    // Deep in the launcher: a command's form.
+    // Deep in the launcher: a command's form, the designed tree its
+    // command answers with (#241). The sample is installed as a package,
+    // as a user installs one: its items launch its other commands, which
+    // a command registered without a package cannot.
+    cx.simulate_input("sample");
+    settle(&window, cx);
     cx.simulate_keystrokes("enter");
     settle(&window, cx);
     cx.simulate_keystrokes("down down down down enter");
     let view = settle(&window, cx);
     assert!(
-        matches!(view.screen, Screen::PaneForm(_)),
+        matches!(view.screen, Screen::DesignedView(_)),
         "{:?}",
         view.screen
     );

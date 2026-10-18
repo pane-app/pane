@@ -626,8 +626,11 @@ fn clicking_a_choice_and_the_submit_button_submits_the_form(cx: &mut TestAppCont
         .expect("the choices are listed");
     cx.simulate_click(welcome.center(), Modifiers::none());
     settle(&window, cx);
+    // The exposure: the trigger is a combo box whose value is the chosen
+    // option, as the settings' selects' triggers carry theirs.
     let nodes = accessible_nodes(cx);
-    node(&nodes, "ComboBox", "Welcome");
+    let trigger = node(&nodes, "ComboBox", "Hello");
+    assert_eq!(trigger["value"].as_str(), Some("Welcome"));
     let submit = cx.debug_bounds("submit").expect("submit button rendered");
     cx.simulate_click(submit.center(), Modifiers::none());
 
@@ -2825,9 +2828,15 @@ fn a_click_that_opens_nothing_leaves_the_next_keyboard_open_settled(cx: &mut Tes
     settle_frames(cx);
 
     cx.simulate_keystrokes("down down down down enter");
-    let view = settle(&window, cx);
+    // The form the row launches opens on a thread of its own after the
+    // reply the launch was dispatched with, and the list's publication
+    // can hold the Enter while the click's action is still answering:
+    // waited for, not settled past, as a settle on an unchanged view can.
+    let view = until(&window, cx, |view| {
+        matches!(view.screen, Screen::DesignedView(_))
+    });
     assert!(
-        matches!(view.screen, Screen::PaneForm(_)),
+        matches!(view.screen, Screen::DesignedView(_)),
         "{:?}",
         view.screen
     );
