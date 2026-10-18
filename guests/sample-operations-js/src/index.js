@@ -98,6 +98,9 @@ async function openForm(which) {
  */
 function CallForm({ waiting = false }) {
   const [answer, setAnswer] = useState("");
+  // Whether the call failed: its answer is drawn in the danger colour
+  // then, and a greeting in the success colour.
+  const [failed, setFailed] = useState(false);
   const [error, setError] = useState(/** @type {string | null} */ (null));
   /** @type {Record<string, string>} */
   const values = { source: "", name: "", times: "once" };
@@ -111,9 +114,11 @@ function CallForm({ waiting = false }) {
     if (waiting) {
       try {
         await call(source, "wait", 1, "{}");
+        setFailed(false);
         setAnswer("Waited in the other extension");
       } catch (/** @type {any} */ problem) {
         const { kind, message } = problem.payload ?? {};
+        setFailed(true);
         setAnswer(kind && message ? `${kind}: ${message}` : String(problem));
       }
       return;
@@ -128,9 +133,11 @@ function CallForm({ waiting = false }) {
       );
       const answers = await Promise.all(calls);
       const greetings = answers.map((answer) => JSON.parse(answer).greeting);
+      setFailed(false);
       setAnswer(greetings.join(" / "));
     } catch (/** @type {any} */ problem) {
       const { kind, message } = problem.payload ?? {};
+      setFailed(true);
       setAnswer(kind && message ? `${kind}: ${message}` : String(problem));
     }
   };
@@ -169,7 +176,14 @@ function CallForm({ waiting = false }) {
   }
   return jsxs(Column, {
     gap: "m",
-    children: [jsxs(Text, { style: "title", children: [answer] }), form],
+    children: [
+      jsxs(Text, {
+        style: "title",
+        color: failed ? "danger" : "success",
+        children: [answer],
+      }),
+      form,
+    ],
   });
 }
 

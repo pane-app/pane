@@ -591,13 +591,6 @@ impl Launcher {
                 let Some((callback, key, seen)) = pair else {
                     return;
                 };
-                // [diag-ff22] Diagnostic scaffolding for the query changes
-                // that never re-render: the search-text event's send, and
-                // its outcome. fix-forward-23 removes it with the root
-                // fix.
-                crate::diagnostic!(
-                    "[diag-ff22] search send: callback={callback} key={key:?} payload={payload}"
-                );
                 let sent = launcher.send_designed_seen(
                     DesignedHandler::Input,
                     callback,
@@ -606,7 +599,6 @@ impl Launcher {
                     payload,
                 );
                 futures::executor::block_on(sent);
-                crate::diagnostic!("[diag-ff22] search sent");
                 launcher.changed();
                 link.left();
             });
@@ -820,11 +812,6 @@ impl Launcher {
         let started = std::thread::Builder::new()
             .name("pane-designed-list".into())
             .spawn(move || {
-                // [diag-ff23] Diagnostic scaffolding for the back-out's
-                // clear, whose answer never returns: the send and its
-                // completion. fix-forward-24 removes it with the root
-                // fix.
-                crate::diagnostic!("[diag-ff23] clear send: callback={callback} key={key:?}");
                 let sent = launcher.send_designed_seen(
                     DesignedHandler::Input,
                     callback,
@@ -833,7 +820,6 @@ impl Launcher {
                     value_payload(""),
                 );
                 futures::executor::block_on(sent);
-                crate::diagnostic!("[diag-ff23] clear sent");
                 launcher.changed();
             });
         let _ = started;
