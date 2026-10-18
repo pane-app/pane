@@ -100,14 +100,15 @@ class ScreenshotChecks(unittest.TestCase):
             check.same(first, self.save(image, "two-levels.png"))
         # A handful of one-level pixels — one glyph's antialiased edge —
         # is rounding noise too (CI 37054210836 saw 11 on Windows, 2 on
-        # macOS): the panel behind them is #16171a, so +1 on one channel
-        # is one level. More than the handful is not noise anymore.
+        # macOS, and CI 39165753328 18 on macOS): the panel behind them is
+        # #16171a, so +1 on one channel is one level. More than the
+        # handful is not noise anymore.
         baseline, _ = self.panel()
         plain = self.save(baseline, "plain.png")
-        for x in range(330, 346):
+        for x in range(330, 394):
             baseline.putpixel((x, 300), (23, 23, 26))
         check.same(plain, self.save(baseline, "edge-rounding.png"))
-        baseline.putpixel((346, 300), (23, 23, 26))
+        baseline.putpixel((394, 300), (23, 23, 26))
         with self.assertRaises(SystemExit):
             check.same(plain, self.save(baseline, "too-many.png"))
 
