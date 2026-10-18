@@ -1517,6 +1517,13 @@ impl LauncherWindow {
         }
     }
 
+    /// Whether the designed list's field holds text the view has not been
+    /// told yet: typed while the throttle waits, or while another search
+    /// event is in flight.
+    pub(crate) fn designed_search_pending(&self) -> bool {
+        self.designed_search.pending.is_some()
+    }
+
     /// The designed list's search field changed to `text`, as the user
     /// typed it: the text waits to be told to the view, one event in
     /// flight at a time and none before the throttle's time has passed.
