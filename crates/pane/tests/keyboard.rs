@@ -42,7 +42,7 @@ mod samples;
 #[path = "../../pane-core/tests/support/service.rs"]
 mod service;
 
-use settle::{settle, settle_shown};
+use settle::{settle, until_state};
 
 #[path = "support/a11y.rs"]
 mod a11y;
@@ -248,18 +248,23 @@ fn select_row(
         .iter()
         .position(|row| row.title == title)
         .unwrap_or_else(|| panic!("the {title} row is listed"));
-    for _ in 0..index {
-        cx.simulate_keystrokes("down");
+    // The walk starts from the row already selected: an install shows
+    // root search with the package's first command selected.
+    let from = view.selected.unwrap_or(0);
+    let key = if index >= from { "down" } else { "up" };
+    for _ in 0..index.abs_diff(from) {
+        cx.simulate_keystrokes(key);
     }
+    let settled = settle(window, cx);
     assert_eq!(
-        settle(window, cx)
+        settled
             .selected
-            .and_then(|selected| view.rows.get(selected))
+            .and_then(|selected| settled.rows.get(selected))
             .map(|row| row.title.as_str()),
         Some(title),
-        "the down keys selected the {title} row"
+        "the keys selected the {title} row"
     );
-    view
+    settled
 }
 
 /// The launcher window's handle, for liveness checks.
@@ -293,8 +298,9 @@ fn keyboard_page(cx: &mut VisualTestContext) -> (WindowHandle<SettingsWindow>, V
     cx.run_until_parked();
     let (settings, mut settings_cx) = open_settings(cx);
     // A tall window, so every action's row is in view below the Behavior
-    // section.
-    settings_cx.simulate_resize(gpui::size(gpui::px(860.), gpui::px(1000.)));
+    // section — Windows' page holds rows of its own above them, which a
+    // 1000 px window leaves the last rows below the fold of.
+    settings_cx.simulate_resize(gpui::size(gpui::px(860.), gpui::px(1400.)));
     settings_cx.run_until_parked();
     click(&mut settings_cx, "section-Keyboard");
     settings_cx.run_until_parked();
@@ -1230,31 +1236,50 @@ fn a_form_still_submits_with_the_rebound_key_and_the_footer_button(cx: &mut Test
         "ctrl-j",
     );
 
-    // The rebound key submits the form, as Enter did.
+    // The rebound key submits the form, as Enter did. The sample draws
+    // the submission's answer over the form, as its first child (#241):
+    // the answer is what the form shows, not a toast.
     cx.simulate_input("Ada");
     cx.simulate_keystrokes("ctrl-j");
-    // The form's answer is a toast in the footer, not the status line
-    // (#141).
-    assert_eq!(
-        settle_shown(&window, cx),
-        Status::Result("Hello, Ada, from the Rust guest".into())
-    );
+    until_answered(&window, cx, "Hello, Ada, from the Rust guest");
 
     // The footer's button, the pointer's path to the same action, still
     // does: back out, reopen the form with the rebound key, and submit
     // with the button — while the launcher is idle, so the action strip
-    // is the button.
+    // is the button. The form is a command of its own (#241): leaving
+    // it shows root search, where the form's command is a row of its
+    // own, reached by its title. The reopened form remembers the name it
+    // was given (the field's `remember`), so it is replaced.
     cx.simulate_keystrokes("escape");
     settle(&window, cx);
+    select_row(&window, cx, "Greet someone");
     cx.simulate_keystrokes("ctrl-j");
     settle(&window, cx);
+    cx.simulate_keystrokes("ctrl-a");
     cx.simulate_input("Grace");
     click(cx, "primary-action");
-    assert_eq!(
-        settle(&window, cx).status,
-        Status::Result("Hello, Grace, from the Rust guest".into()),
-        "the button still submits"
-    );
+    until_answered(&window, cx, "Hello, Grace, from the Rust guest");
+}
+
+/// Runs the window until the open form shows `answer`, the text its
+/// submission drew over it, as assistive technology reads it.
+fn until_answered(window: &gpui::Entity<LauncherWindow>, cx: &mut VisualTestContext, answer: &str) {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        settle(window, cx);
+        let nodes = accessible_nodes(cx);
+        if nodes
+            .iter()
+            .any(|node| node["role"] == "Label" && node["label"] == answer)
+        {
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the form never answered {answer:?}: {nodes:#?}"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
 }
 
 #[gpui::test]
@@ -1336,51 +1361,54 @@ fn the_rebound_back_key_clears_a_command_search_before_leaving_it(cx: &mut TestA
     settle(&window, cx);
     cx.simulate_keystrokes("enter");
     settle(&window, cx);
+    // The service's address is the package's preference, written as
+    // Settings writes it, before the command opens.
+    let identity = cx.read_entity(&window, |window, _| {
+        window
+            .launcher()
+            .packages()
+            .into_iter()
+            .next()
+            .expect("the search sample is installed")
+            .identity
+    });
+    let saved = window.update(cx, |window, _| window.launcher().clone());
+    cx.foreground_executor()
+        .block_on(saved.set_preference(&identity, "service", Some(&service.url())))
+        .expect("saved");
+    settle(&window, cx);
     cx.simulate_input("package search");
     settle(&window, cx);
     cx.simulate_keystrokes("enter");
     settle(&window, cx);
-    cx.simulate_keystrokes("down enter");
-    let view = settle(&window, cx);
-    assert!(
-        matches!(view.screen, Screen::PaneForm(_)),
-        "{:?}",
-        view.screen
-    );
-    cx.simulate_input(&service.url());
-    cx.simulate_keystrokes("enter");
-    settle(&window, cx);
-    // The rebound back key leaves the form, as Escape did.
-    cx.simulate_keystrokes("ctrl-b");
-    settle(&window, cx);
 
-    // A search in the command's own field.
+    // A search in the command's own field: the designed List's (#240),
+    // whose field's text waits out the throttle on the window's clock.
     cx.simulate_input("aurora");
-    let view = settle(&window, cx);
-    assert_eq!(
-        view.screen,
-        Screen::CommandSearch {
-            query: "aurora".into()
-        }
-    );
-    assert_eq!(
-        service.requests().last().map(String::as_str),
-        Some("/search?q=aurora")
-    );
+    cx.executor().advance_clock(Duration::from_millis(300));
+    let searched = |view: &pane_core::LauncherView, text: &str| {
+        matches!(
+            &view.screen,
+            Screen::DesignedView(designed) if designed
+                .list
+                .as_ref()
+                .is_some_and(|list| list.search == text)
+        )
+    };
+    until_state(&window, cx, |view| {
+        searched(view, "aurora")
+            && service.requests().last().map(String::as_str) == Some("/search?q=aurora")
+    });
 
     // The rebound back key clears the command's search first, then
     // leaves it — as Escape always did.
     cx.simulate_keystrokes("ctrl-b");
-    let view = settle(&window, cx);
-    assert_eq!(
-        view.screen,
-        Screen::CommandSearch {
-            query: String::new()
-        },
-        "the search was cleared first"
-    );
+    let view = until_state(&window, cx, |view| searched(view, ""));
+    assert!(searched(&view, ""), "the search was cleared first");
     cx.simulate_keystrokes("ctrl-b");
-    let view = settle(&window, cx);
+    let view = until_state(&window, cx, |view| {
+        matches!(view.screen, Screen::Root { .. })
+    });
     assert!(matches!(view.screen, Screen::Root { .. }), "then it left");
 }
 

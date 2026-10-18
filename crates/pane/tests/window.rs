@@ -1051,9 +1051,13 @@ fn the_mouse_wheel_scrolls_away_until_the_rows_reload(cx: &mut TestAppContext) {
     // places it at — and the list holds the installed command.
     assert!(view.selected.is_some(), "the reload kept a selected row");
     assert!(view.rows.iter().any(|row| row.title == "Say hello"));
+    // The row kept selected is the one shown again, wherever the rows the
+    // install added moved it: the wheel's scroll is the list's until the
+    // rows change, and the reload brings the selection back into view.
+    let selected = format!("row-{}", view.rows[view.selected.unwrap()].title);
     assert!(
-        row_is_visible(cx, "row-Install extension from folder…"),
-        "the reloaded list shows the selected row again"
+        row_is_visible(cx, &selected),
+        "the reloaded list shows the selected row again: {selected}"
     );
 }
 
@@ -1234,7 +1238,17 @@ fn an_extension_view_has_no_heading_and_the_footer_names_it(cx: &mut TestAppCont
     assert_eq!(view.screen, Screen::Command);
     assert_named_in_the_footer(cx, "the command's list");
 
-    open_form(&window, cx);
+    // The list's form item opens the form: Enter on the typed "sample"
+    // would run the list's first item instead, whose toast takes the
+    // footer's left over the command's name (#249).
+    cx.simulate_keystrokes("down down down down enter");
+    let view = settle(&window, cx);
+    assert!(
+        matches!(view.screen, Screen::DesignedView(_)),
+        "{:?}",
+        view.screen
+    );
+    assert_eq!(view.title, "Greet someone");
     assert_named_in_the_footer(cx, "a form");
 }
 
@@ -1444,6 +1458,10 @@ fn a_release_outside_the_window_ends_the_drag(cx: &mut TestAppContext) {
 #[gpui::test]
 fn leaving_the_window_during_a_drag_ends_it(cx: &mut TestAppContext) {
     let (window, _data, origin, cx) = open_counter(cx);
+    // Only an active window can lose the focus: the test platform opens
+    // none active.
+    cx.update(|window, _| window.activate_window());
+    cx.run_until_parked();
     let at = origin + gpui::point(px(10.0), px(10.0));
     cx.simulate_mouse_down(at, MouseButton::Left, Modifiers::none());
     wait_for_color(&window, cx, "1 events");

@@ -19,7 +19,7 @@ use pane_core::{Launcher, LauncherView, Runtime, Screen, Status};
 #[path = "support/settle.rs"]
 mod settle;
 
-use settle::{settle, settle_shown, settle_state};
+use settle::{settle, settle_shown, settle_state, until_state};
 
 #[path = "support/packages.rs"]
 mod packages;
@@ -58,6 +58,15 @@ fn bar(
     cx.read_entity(window, |window, _| window.loading_presentation())
 }
 
+/// The navigation title of the designed view `view` shows, if it shows
+/// one.
+fn title_of(view: &LauncherView) -> Option<String> {
+    match &view.screen {
+        Screen::DesignedView(shown) => shown.tree.root.navigation_title.clone(),
+        _ => None,
+    }
+}
+
 /// The titles of the rows `view` lists.
 fn titles(view: &LauncherView) -> Vec<&str> {
     view.rows.iter().map(|row| row.title.as_str()).collect()
@@ -80,9 +89,15 @@ fn slow(
     cx.update(pane::bind_keys);
     let launcher =
         Launcher::with_packages(Runtime::start(), vec![], data.path().join("extensions"));
+    // The window learns what the launcher changed in the background — a
+    // view's answer to its own ask to be drawn again, landing on the
+    // refresh thread — as the binary's window does.
+    let (sender, changes) = pane_core::changes::channel();
+    let launcher = launcher.with_changes(sender);
     let preview = folder;
     let (window, cx) = cx.add_window_view(move |window, cx| {
         let mut launcher = LauncherWindow::new(launcher, window, cx);
+        launcher.follow_changes(changes, window, cx);
         launcher.preview_package(&preview, window, cx);
         launcher
     });
@@ -109,9 +124,15 @@ fn quick(
     cx.update(pane::bind_keys);
     let launcher =
         Launcher::with_packages(Runtime::start(), vec![], data.path().join("extensions"));
+    // The window learns what the launcher changed in the background — a
+    // view's answer to its own ask to be drawn again, landing on the
+    // refresh thread — as the binary's window does.
+    let (sender, changes) = pane_core::changes::channel();
+    let launcher = launcher.with_changes(sender);
     let preview = folder;
     let (window, cx) = cx.add_window_view(move |window, cx| {
         let mut launcher = LauncherWindow::new(launcher, window, cx);
+        launcher.follow_changes(changes, window, cx);
         launcher.preview_package(&preview, window, cx);
         launcher
     });
@@ -331,9 +352,15 @@ fn a_slow_command_search_shows_the_line_under_its_own_rule(cx: &mut TestAppConte
     cx.update(pane::bind_keys);
     let launcher =
         Launcher::with_packages(Runtime::start(), vec![], data.path().join("extensions"));
+    // The window learns what the launcher changed in the background — a
+    // view's answer to its own ask to be drawn again, landing on the
+    // refresh thread — as the binary's window does.
+    let (sender, changes) = pane_core::changes::channel();
+    let launcher = launcher.with_changes(sender);
     let preview = folder;
     let (window, cx) = cx.add_window_view(move |window, cx| {
         let mut launcher = LauncherWindow::new(launcher, window, cx);
+        launcher.follow_changes(changes, window, cx);
         launcher.preview_package(&preview, window, cx);
         launcher
     });
@@ -362,12 +389,38 @@ fn a_slow_command_search_shows_the_line_under_its_own_rule(cx: &mut TestAppConte
     // Service address button, reached by Tab from the search field and
     // pressed with Enter (the button's own key) — the designed era's
     // focus path, where the typed-form era's list rows were selected
-    // with Down.
-    cx.simulate_keystrokes("tab enter");
-    // The state-reading settle: the button's pressed view reaches the
-    // launcher while the frame that would draw it lags, and the settle's
-    // drawn==view demand false-fails on that (the settle family's note).
-    let view = settle_state(&window, cx);
+    // with Down. The button is waited for on screen first, and the Tab
+    // until it holds the keyboard: a Tab given before the view's first
+    // drawing lands has no button to reach.
+    {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while cx.debug_bounds("designed-button-Service address").is_none() {
+            assert!(Instant::now() < deadline, "the button never drew");
+            cx.run_until_parked();
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+    cx.simulate_keystrokes("tab");
+    {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while a11y::focused_label(cx).as_deref() != Some("Service address") {
+            assert!(
+                Instant::now() < deadline,
+                "the Tab never reached the button: {:?}",
+                a11y::focused_label(cx)
+            );
+            cx.run_until_parked();
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+    cx.simulate_keystrokes("enter");
+    // The press's answer pushes the view: waited for in the launcher's
+    // state, as the push lands on the runtime's answer — not the frame,
+    // which lags it (the settle family's note), and not the bare settle,
+    // which a press that runs no action of the launcher's never holds.
+    let view = until_state(&window, cx, |view| {
+        title_of(view).as_deref() == Some("Service address")
+    });
     let Screen::DesignedView(shown) = &view.screen else {
         panic!("the Service address view opened: {:?}", view.screen)
     };
@@ -427,51 +480,46 @@ fn a_slow_command_search_shows_the_line_under_its_own_rule(cx: &mut TestAppConte
             std::thread::sleep(Duration::from_millis(5));
         }
     }
-    // The state-reading settle: the pop's view change reaches the
-    // launcher while the frame lags, and the horizon moves the clock so
-    // the typing below lands.
-    settle_state(&window, cx);
+    // The pop lands on its answer, as the push did: the list is the
+    // screen again before the typing below, which would otherwise reach
+    // the address view's field. The wait's horizon moves the clock so the
+    // typing lands.
+    until_state(&window, cx, |view| {
+        title_of(view).as_deref() == Some("Package search")
+    });
 
     // A search the service holds for ten seconds: the command is asked,
     // the wait is on and the field is on screen.
     cx.simulate_input("slow");
     // The typed search settles into its ask: the designed list's field
-    // holds the keys typed toward it until its list publishes or the
-    // hold's own time ends (the throttle, #240, the hold 300 ms on the
-    // clock), so the clock moves past the hold to land the typing —
-    // before the search itself starts, which is what the bar's
-    // threshold below is measured from, so the horizon cannot reach it.
-    // The typed-form era's run_until_parked caught the search starting
-    // because its field published at once.
+    // tells the view what was typed no faster than its throttle (#240,
+    // on the window's clock), so the clock moves past it to send the
+    // text the typing stopped at.
     cx.executor().advance_clock(Duration::from_millis(310));
-    // The search is waited for as the designed era reads it: the list's
-    // own search (the view handling it, #240) reports its pending
-    // through the core's `pending_since`, not the status line the
-    // typed-form era's CommandSearch set — the quiet period the search
-    // waits out is real time (#202), so this waits in real time.
+    // The search is waited for as the designed era reads it: the view
+    // handling its own search says it is loading on its List (#240), and
+    // the core keeps when that began — the designed list's `loading`,
+    // which its bar is measured from, not the root search's
+    // `pending_since`, which the typed-form era's CommandSearch set.
+    let loading = |view: &LauncherView| match &view.screen {
+        Screen::DesignedView(shown) => shown
+            .list
+            .as_ref()
+            .and_then(|list| list.loading.is_some().then(|| list.search.clone())),
+        _ => None,
+    };
     {
         let deadline = Instant::now() + Duration::from_secs(10);
         loop {
             cx.run_until_parked();
-            if cx
-                .read_entity(&window, |window, _| window.launcher().pending_since())
-                .is_some()
-            {
+            let view = cx.read_entity(&window, |window, _| window.launcher().view());
+            if loading(&view).as_deref() == Some("slow") {
                 break;
             }
             assert!(Instant::now() < deadline, "the search never started");
             std::thread::sleep(Duration::from_millis(5));
         }
     }
-    assert!(
-        cx.read_entity(&window, |window, _| window.launcher().pending_since())
-            .is_some(),
-        "the core says the work is pending"
-    );
-    assert!(
-        cx.debug_bounds("loading-bar").is_none(),
-        "beneath the threshold"
-    );
 
     // The request the search makes reaches the service before the test
     // goes on: the service holds the answer ten seconds, and a search
@@ -486,47 +534,46 @@ fn a_slow_command_search_shows_the_line_under_its_own_rule(cx: &mut TestAppConte
             .then_some(())
     });
 
-    // Past it, the same line along the command's own rule — and the
-    // footer's strip says nothing for such work (#248): no "Running…"
-    // text, though the strip keeps its selector.
-    frame(cx, PAST);
-    let search = cx
-        .debug_bounds("search")
-        .expect("the command's search field");
-    let line = cx.debug_bounds("loading-bar").expect("the line is drawn");
-    assert_eq!(line.size.height, px(1.));
+    // Past the threshold — measured on the core's clock, which is real
+    // time — the line is drawn along the command's own rule, under the
+    // search header and above the list, and the footer's strip says
+    // nothing for such work (#248): no "Running…" text.
+    std::thread::sleep(Duration::from_millis(350));
+    window.update(cx, |_, cx| cx.notify());
+    cx.run_until_parked();
+    let title = cx
+        .debug_bounds("designed-title")
+        .expect("the command's title row");
+    let line = cx
+        .debug_bounds("designed-loading-bar")
+        .expect("the line is drawn");
+    assert_eq!(line.size.height, px(2.));
     assert_eq!(
-        line.bottom(),
-        search.origin.y + px(64.),
-        "along its own rule"
+        line.origin.y,
+        title.bottom() + px(64.),
+        "along its own rule, under the search header"
     );
     assert!(
         cx.debug_bounds("status-message").is_none(),
         "no message in the strip"
     );
-    assert!(
-        cx.debug_bounds("status-running").is_some(),
-        "the strip keeps its selector"
-    );
 
-    // The search is cleared: the wait ends, and the line fades away.
+    // The search is cleared: the wait ends, and the line goes with it.
     cx.simulate_keystrokes("escape");
-    let view = settle(&window, cx);
-    assert_eq!(
-        (view.screen, view.status),
-        (
-            Screen::CommandSearch {
-                query: String::new()
-            },
-            Status::Idle
-        )
-    );
-    frame(cx, PAST);
-    assert!(cx.debug_bounds("loading-bar").is_none(), "the line is gone");
-    assert_eq!(
-        frame(cx, Duration::from_millis(25)),
-        0,
-        "the window is idle"
+    cx.executor().advance_clock(Duration::from_millis(310));
+    let view = settle_state(&window, cx);
+    let Screen::DesignedView(shown) = &view.screen else {
+        panic!("the command's search stays open: {:?}", view.screen)
+    };
+    let list = shown.list.as_ref().expect("the search's own list");
+    assert_eq!(list.search, "", "the search was cleared");
+    assert_eq!(list.loading, None, "the wait ended");
+    assert_eq!(view.status, Status::Idle);
+    window.update(cx, |_, cx| cx.notify());
+    cx.run_until_parked();
+    assert!(
+        cx.debug_bounds("designed-loading-bar").is_none(),
+        "the line is gone"
     );
     assert_eq!(
         service.requests().last().map(String::as_str),

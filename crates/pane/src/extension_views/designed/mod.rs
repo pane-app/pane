@@ -299,6 +299,7 @@ impl LauncherWindow {
             let width = geometry.search_text_inset * 40.;
             div()
                 .id("designed-loading")
+                .debug_selector(|| "designed-loading-bar".into())
                 .flex_none()
                 .overflow_hidden()
                 .h(px(2.))
@@ -1514,6 +1515,13 @@ impl LauncherWindow {
             }
             _ => false,
         }
+    }
+
+    /// Whether the designed list's field holds text the view has not been
+    /// told yet: typed while the throttle waits, or while another search
+    /// event is in flight.
+    pub(crate) fn designed_search_pending(&self) -> bool {
+        self.designed_search.pending.is_some()
     }
 
     /// The designed list's search field changed to `text`, as the user

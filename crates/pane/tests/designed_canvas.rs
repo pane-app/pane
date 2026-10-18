@@ -213,9 +213,25 @@ fn the_canvas_is_one_node_with_a_role_a_label_and_a_value(cx: &mut TestAppContex
         1,
         "one canvas node: {roles:?}"
     );
-    // The canvas, the menu button, the status line, the announcer and the
-    // window: the drawing adds no nodes of its own.
-    assert_eq!(roles.len(), 5, "{roles:?}");
+    // The canvas, the tree's column, the menu button, the window's scroll
+    // container, the status line, the announcer and the window, as the
+    // window's own count of a designed view reads them (#121): the
+    // drawing adds no nodes of its own beside its one canvas node.
+    let mut sorted = roles.clone();
+    sorted.sort();
+    assert_eq!(
+        sorted,
+        [
+            "Button",
+            "GenericContainer",
+            "Group",
+            "Label",
+            "Slider",
+            "Status",
+            "Window"
+        ],
+        "{roles:?}"
+    );
     let value: Option<String> =
         cx.update(|_, cx| canvas_value_of(&window.read(cx).launcher().view().screen));
     assert!(value.is_some(), "the canvas names its value");

@@ -228,7 +228,13 @@ impl LauncherWindow {
         match query {
             Some(query) => {
                 let input = self.query.input.clone();
-                if input.read(cx).as_str() != query {
+                // A designed List's field holds text the view has not been
+                // told yet while the throttle waits (#240): the launcher's
+                // search is still the text sent before it, and an answer
+                // landing meanwhile — the view's first, say — must not put
+                // that back over what the user typed.
+                let typed_ahead = self.designed_list_searches() && self.designed_search_pending();
+                if !typed_ahead && input.read(cx).as_str() != query {
                     input.update(cx, |input, cx| input.emplace(&query, cx));
                 }
                 if !was_shown {
