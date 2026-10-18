@@ -246,9 +246,20 @@ pub(super) fn node_at<'a>(tree: &'a DesignedTree, path: &str) -> Option<&'a Node
 /// Whether the node at `path` sits inside a form of `tree` (#241): its
 /// ancestors from the root include a `form` node.
 pub(super) fn inside_form(tree: &DesignedTree, path: &str) -> bool {
+    let mut segments = path.trim_start_matches('/').split('/');
+    // The path's first segment is the root's own place, as `node_at`
+    // reads it — not one of its children's.
+    let root = segments.next().unwrap_or_default();
+    let named = match tree.root.key.as_deref() {
+        Some(key) => key == root,
+        None => root == "0",
+    };
+    if !named {
+        return false;
+    }
     let mut node = &tree.root;
-    let mut inside = false;
-    for segment in path.trim_start_matches('/').split('/') {
+    let mut inside = matches!(node.kind, NodeKind::Form(_));
+    for segment in segments {
         if segment.is_empty() {
             continue;
         }

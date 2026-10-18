@@ -2175,13 +2175,11 @@ pub(super) fn select(
     // The select's trigger carries its own focus and keys; the field's
     // group carries its title, note and error.
     let trigger = div().child(select_entity.clone());
+    // The field's key, as its tests find it and its state keys it — the
+    // group's selector is `field-{key}`, the title the label it draws —
+    // the path's last segment, as a text input's group is keyed.
     fields::field_group(
-        select
-            .field
-            .title
-            .as_deref()
-            .or(select.label.as_deref())
-            .unwrap_or(path.rsplit('/').next().unwrap_or("field")),
+        path.rsplit('/').next().unwrap_or("field"),
         &select.field,
         select.label.as_deref(),
         trigger,

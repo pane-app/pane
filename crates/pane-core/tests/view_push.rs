@@ -246,13 +246,18 @@ fn the_loading_sample_shows_its_loading_state_then_its_data_without_a_timer() {
         // What the load answered is drawn the moment it arrives: the
         // arrival asks for the drawing itself. No clock is advanced and
         // no key pressed for it — the pane's clock is the system's, which
-        // this test never moves.
-        pane.settled();
-        assert_eq!(
-            pane.texts(),
-            ["Loaded", "Pane drew this the moment it arrived"],
-            "the {language} sample's data, pushed as it arrived"
-        );
+        // this test never moves. The load takes its own time (a moment,
+        // as work from a service would), so the drawing is waited for as
+        // every designed answer is, not read at once.
+        let deadline = Instant::now() + PROMPTLY;
+        while pane.texts() != ["Loaded", "Pane drew this the moment it arrived"] {
+            assert!(
+                Instant::now() < deadline,
+                "the {language} sample's data never arrived: {:?}",
+                pane.texts()
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
 
         // And the view asks for nothing further: the arrival is the whole
         // story.

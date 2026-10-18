@@ -525,7 +525,7 @@ impl LauncherWindow {
             while changes.next().await.is_some() {
                 let shown = this.update_in(cx, |this, window, cx| {
                     if this.launcher.take_window_request() {
-                        this.unhide(window, cx);
+                        this.show(window, cx);
                         window.activate_window();
                         cx.activate(true);
                     }
@@ -608,7 +608,7 @@ impl LauncherWindow {
         if !self.presence.hidden() {
             return false;
         }
-        self.unhide(window, cx);
+        self.show(window, cx);
         window.activate_window();
         cx.activate(true);
         self.motion.land_at_once();
@@ -1320,7 +1320,7 @@ impl LauncherWindow {
     /// installation: `pane-ext dev`'s first run of a folder Pane has not
     /// installed, which the author confirms here (#217).
     pub fn present_package(&mut self, folder: &Path, window: &mut Window, cx: &mut Context<Self>) {
-        self.unhide(window, cx);
+        self.show(window, cx);
         window.activate_window();
         cx.activate(true);
         self.preview_package(folder, window, cx);
@@ -1337,7 +1337,7 @@ impl LauncherWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.unhide(window, cx);
+        self.show(window, cx);
         window.activate_window();
         cx.activate(true);
         self.preview_collection(folder, id, window, cx);
@@ -1533,7 +1533,7 @@ impl LauncherWindow {
             return;
         };
         if shows_window {
-            self.unhide(window, cx);
+            self.show(window, cx);
             window.activate_window();
             cx.activate(true);
             // A hotkey is a keyboard open: the command's view lands at once.
@@ -1546,7 +1546,17 @@ impl LauncherWindow {
     /// of the launcher — the hotkey's show path, a command's hotkey, an
     /// entry point that reaches the launcher from Settings — must find a
     /// visible window, opened on the display the placement resolves.
-    pub(crate) fn unhide(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    /// Test support: shows the window again after the Open Pane key hid
+    /// it, as a press does. Test and debug builds only.
+    #[cfg(any(test, debug_assertions))]
+    #[doc(hidden)]
+    pub fn show_again(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.show(window, cx)
+    }
+
+    /// Shows the window if the Open Pane hotkey hid it, as
+    /// [`LauncherWindow::show_again`] does for tests.
+    pub(crate) fn show(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.launcher.set_window_presence(WindowPresence::Shown);
         // A pending HUD is over once the launcher is active again (#250).
         self.close_pending_hud(cx);
@@ -1735,7 +1745,7 @@ impl LauncherWindow {
             NextShowing::BySetting => self.presence.pops_to_root(reopening.pops_after(), now),
             NextShowing::Restore => false,
         };
-        self.unhide(window, cx);
+        self.show(window, cx);
         window.activate_window();
         cx.activate(true);
         if pops || !self.launcher.restorable_view() {
