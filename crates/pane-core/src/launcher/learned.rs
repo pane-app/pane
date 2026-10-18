@@ -194,12 +194,6 @@ impl LearnedChoices {
     /// What ranking sees of the learned uses as of `now`, by the row id
     /// of the result each was recorded for: its decayed frecency, and
     /// its queries while they still count.
-    /// How many results have uses recorded, as the diagnostics bracket
-    /// what the comparator is given.
-    pub(super) fn counted(&self) -> usize {
-        self.uses.len()
-    }
-
     pub(super) fn ranked(&self, now: u64) -> HashMap<String, Learned> {
         self.uses
             .iter()
@@ -282,14 +276,6 @@ pub(super) fn use_of(state: &State, entry: &Entry) -> Option<(String, String)> {
 /// dropped — they rank nothing. Whether anything changed: nothing is
 /// recorded while the record cannot be read, or is kept nowhere.
 pub(super) fn record(state: &mut State, id: &str, query: Option<&str>, now: u64) -> bool {
-    // [diag-ff64] Diagnostic scaffolding: the use's arrival, and what the
-    // record holds after it. fix-forward-65 removes it with the root fix.
-    crate::diagnostic!(
-        "[diag-ff64] record: id={} query={:?} held_before={}",
-        id.split('#').next_back().unwrap_or(id),
-        query,
-        state.learned.chosen.counted()
-    );
     let record = &mut state.learned;
     if record.unreadable().is_some() || !record.kept() {
         return false;
@@ -311,12 +297,6 @@ pub(super) fn record(state: &mut State, id: &str, query: Option<&str>, now: u64)
         use_.queries.insert(0, query);
         use_.queries.truncate(KEPT_QUERIES);
     }
-    let held = uses.len();
-    crate::diagnostic!(
-        "[diag-ff64] recorded: id={} held_after={}",
-        id.split('#').next_back().unwrap_or(id),
-        held
-    );
     true
 }
 

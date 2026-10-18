@@ -1209,6 +1209,14 @@ impl LauncherWindow {
         if self.clipboard_query_focused(window, cx) {
             return false;
         }
+        // The open designed view's field or select holds the keyboard:
+        // its editing keys are its own, Backspace deleting with them, and
+        // the view pops only from what does not edit with it — the same
+        // guard the key's own branch below runs, which this gate runs
+        // ahead of.
+        if self.designed_takes_backspace(window) {
+            return false;
+        }
         // No text field in focus: the command's own list, a package
         // preview, a confirmation, the details screens, a custom view.
         true

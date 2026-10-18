@@ -6046,15 +6046,6 @@ fn kept_ranking(state: &State, query: &str) -> bool {
 /// Ranks root search's static rows for `query` (see [`Ranked`]): every
 /// row but the results computed for it, in root search order.
 fn rank_statics(state: &State, query: &str) -> Ranked {
-    // [diag-ff64] Diagnostic scaffolding for the ranking root: what the
-    // comparator was given, per query ranked. fix-forward-65 removes it
-    // with the root fix.
-    crate::diagnostic!(
-        "[diag-ff64] rank statics: query={:?} learned={} statics={}",
-        query,
-        state.learned.chosen.counted(),
-        state.statics
-    );
     let blank = query.trim().is_empty();
     // What the comparator ranks: the root results — Pane's own rows and
     // every package's commands, one provider in the order root search

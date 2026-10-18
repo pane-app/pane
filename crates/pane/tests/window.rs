@@ -320,11 +320,20 @@ fn the_keyboard_fills_in_and_submits_the_form(cx: &mut TestAppContext, sample: &
         )),
         "{nodes:?}"
     );
-    // Escape leaves the form's view for the command's list, the selection
-    // kept on the row that launched it.
+    // Escape leaves the form's command for root search, as the designed
+    // tree's own back leaves any command when its stack holds only the
+    // root view (docs/designed-tree.md): the launch that opened the form
+    // made way for it as a hotkey's does, so its back leaves for root
+    // search rather than the list it was dispatched from — the model
+    // #241's tree replaced, where the form was the launching command's
+    // own screen and its back returned to that command's list.
     cx.simulate_keystrokes("escape");
     let view = settle(&window, cx);
-    assert_eq!((view.screen, view.selected), (Screen::Command, Some(4)));
+    assert!(
+        matches!(view.screen, Screen::Root { .. }),
+        "{:?}",
+        view.screen
+    );
 }
 
 fn a_rejected_field_shows_its_error_and_takes_focus(cx: &mut TestAppContext, sample: &Sample) {
@@ -617,8 +626,11 @@ fn clicking_a_choice_and_the_submit_button_submits_the_form(cx: &mut TestAppCont
         .expect("the choices are listed");
     cx.simulate_click(welcome.center(), Modifiers::none());
     settle(&window, cx);
+    // The exposure: the trigger is a combo box whose value is the chosen
+    // option, as the settings' selects' triggers carry theirs.
     let nodes = accessible_nodes(cx);
-    node(&nodes, "ComboBox", "Welcome");
+    let trigger = node(&nodes, "ComboBox", "Hello");
+    assert_eq!(trigger["value"].as_str(), Some("Welcome"));
     let submit = cx.debug_bounds("submit").expect("submit button rendered");
     cx.simulate_click(submit.center(), Modifiers::none());
 
@@ -2809,16 +2821,25 @@ fn opening_with_the_keyboard_lands_at_once(cx: &mut TestAppContext) {
 /// open (Enter into the command's form) still lands at once.
 #[gpui::test]
 fn a_click_that_opens_nothing_leaves_the_next_keyboard_open_settled(cx: &mut TestAppContext) {
-    let (window, cx) = open(cx, &RUST);
+    // Installed as a package, as a user installs one: the item its row
+    // runs launches the form command, which a command registered without
+    // a package cannot (as open_installed's own comment says).
+    let (window, _data, cx) = open_installed(cx, &RUST.component.replace("_", "-"));
     settle(&window, cx);
     let view = click_row(&window, cx, "row-Say hello");
     assert_eq!(view.screen, Screen::Command, "the click opened nothing");
     settle_frames(cx);
 
     cx.simulate_keystrokes("down down down down enter");
-    let view = settle(&window, cx);
+    // The form the row launches opens on a thread of its own after the
+    // reply the launch was dispatched with, and the list's publication
+    // can hold the Enter while the click's action is still answering:
+    // waited for, not settled past, as a settle on an unchanged view can.
+    let view = until(&window, cx, |view| {
+        matches!(view.screen, Screen::DesignedView(_))
+    });
     assert!(
-        matches!(view.screen, Screen::PaneForm(_)),
+        matches!(view.screen, Screen::DesignedView(_)),
         "{:?}",
         view.screen
     );
@@ -5269,6 +5290,20 @@ fn a_dynamic_root_items_row_and_its_action_run(cx: &mut TestAppContext) {
         cx.debug_bounds("row-Registrations: counting").is_some(),
         "the dynamic item's row is rendered"
     );
+
+    // The item's row is moved to before Enter runs its first action:
+    // Enter runs whatever the selection holds, and the blank query's
+    // order (#199) starts it elsewhere.
+    let at = view
+        .rows
+        .iter()
+        .position(|row| row.title == "Registrations: counting")
+        .unwrap();
+    for _ in 0..at.saturating_sub(view.selected.unwrap_or(0)) {
+        cx.simulate_keystrokes("down");
+    }
+    let view = settle(&window, cx);
+    assert_eq!(view.selected, Some(at), "the dynamic row is selected");
 
     // Enter runs its first action: the count rises in the row.
     let before = ticks_of(&view);
