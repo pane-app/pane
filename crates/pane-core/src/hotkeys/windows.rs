@@ -399,9 +399,13 @@ fn recorded_text(report: Recorded) -> Option<String> {
 }
 
 /// Packs what a recording session recognized into a posted message's
-/// word: the kind, and for a chord the modifiers' sides and the key, for
-/// a tap or a double tap the modifier and its side. The hook's callback
-/// may not allocate, so the report crosses the threads packed (#260).
+/// word: the kind in its low four bits, and for a chord the modifiers'
+/// sides above them, the numpad flag and the key, for a tap or a double
+/// tap the modifier and its side. The hook's callback may not allocate,
+/// so the report crosses the threads packed (#260). The sides start at
+/// bit 4: from bit 2 they ran into the bits [`unpack`] reads the kind
+/// from, and a chord recorded with Ctrl held came back a tap or a double
+/// tap.
 fn pack(report: Recorded) -> usize {
     let kind = match report {
         Recorded::Chord { .. } => 0,
@@ -421,9 +425,9 @@ fn pack(report: Recorded) -> usize {
                     Some(Side::Left) => 2,
                     Some(Side::Right) => 3,
                 };
-                packed | (side << (2 + 2 * at))
+                packed | (side << (4 + 2 * at))
             });
-            kind | sides | ((numpad as usize) << 10) | ((key as usize) << 16)
+            kind | sides | ((numpad as usize) << 12) | ((key as usize) << 16)
         }
         Recorded::Tap { modifier, side } | Recorded::Double { modifier, side } => {
             let side = match side {
@@ -443,7 +447,7 @@ fn unpack(word: usize) -> Recorded {
         0 => {
             let mut modifiers = [None; 4];
             for (at, side) in modifiers.iter_mut().enumerate() {
-                *side = match (word >> (2 + 2 * at)) & 3 {
+                *side = match (word >> (4 + 2 * at)) & 3 {
                     0 => None,
                     1 => Some(Side::Any),
                     2 => Some(Side::Left),
@@ -453,7 +457,7 @@ fn unpack(word: usize) -> Recorded {
             Recorded::Chord {
                 modifiers,
                 key: ((word >> 16) & 0xFFFF) as u32,
-                numpad: (word >> 10) & 1 != 0,
+                numpad: (word >> 12) & 1 != 0,
             }
         }
         1 => Recorded::Tap {
@@ -1686,4 +1690,44 @@ fn raise_working_set(by: usize) -> Result<(), String> {
         )
     };
     raised.map_err(|error| error.message())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_recorded_report_crosses_the_threads_unchanged() {
+        let sides = [None, Some(Side::Any), Some(Side::Left), Some(Side::Right)];
+        let mut reports = Vec::new();
+        for control in sides {
+            for alt in sides {
+                for shift in sides {
+                    for windows in sides {
+                        for numpad in [false, true] {
+                            reports.push(Recorded::Chord {
+                                modifiers: [control, alt, shift, windows],
+                                key: 0x0D,
+                                numpad,
+                            });
+                        }
+                    }
+                }
+            }
+        }
+        reports.push(Recorded::Chord {
+            modifiers: [Some(Side::Right); 4],
+            key: 0xFE,
+            numpad: false,
+        });
+        for modifier in 0..4 {
+            for side in [Side::Any, Side::Left, Side::Right] {
+                reports.push(Recorded::Tap { modifier, side });
+                reports.push(Recorded::Double { modifier, side });
+            }
+        }
+        for report in reports {
+            assert_eq!(unpack(pack(report)), report);
+        }
+    }
 }
