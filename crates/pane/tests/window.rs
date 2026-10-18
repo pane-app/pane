@@ -2821,7 +2821,10 @@ fn opening_with_the_keyboard_lands_at_once(cx: &mut TestAppContext) {
 /// open (Enter into the command's form) still lands at once.
 #[gpui::test]
 fn a_click_that_opens_nothing_leaves_the_next_keyboard_open_settled(cx: &mut TestAppContext) {
-    let (window, cx) = open(cx, &RUST);
+    // Installed as a package, as a user installs one: the item its row
+    // runs launches the form command, which a command registered without
+    // a package cannot (as open_installed's own comment says).
+    let (window, _data, cx) = open_installed(cx, &RUST.component.replace("_", "-"));
     settle(&window, cx);
     let view = click_row(&window, cx, "row-Say hello");
     assert_eq!(view.screen, Screen::Command, "the click opened nothing");
@@ -5287,6 +5290,20 @@ fn a_dynamic_root_items_row_and_its_action_run(cx: &mut TestAppContext) {
         cx.debug_bounds("row-Registrations: counting").is_some(),
         "the dynamic item's row is rendered"
     );
+
+    // The item's row is moved to before Enter runs its first action:
+    // Enter runs whatever the selection holds, and the blank query's
+    // order (#199) starts it elsewhere.
+    let at = view
+        .rows
+        .iter()
+        .position(|row| row.title == "Registrations: counting")
+        .unwrap();
+    for _ in 0..at.saturating_sub(view.selected.unwrap_or(0)) {
+        cx.simulate_keystrokes("down");
+    }
+    let view = settle(&window, cx);
+    assert_eq!(view.selected, Some(at), "the dynamic row is selected");
 
     // Enter runs its first action: the count rises in the row.
     let before = ticks_of(&view);
