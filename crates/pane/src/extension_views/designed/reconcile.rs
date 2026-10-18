@@ -884,6 +884,9 @@ pub(crate) struct CanvasDrag {
     /// modifiers held when it happened: sent when the moves in flight are
     /// answered.
     pub waiting: Option<((f32, f32), gpui::Modifiers)>,
+    /// Whether the view was last told the pointer is over the canvas:
+    /// its enter and leave are sent only as this changes.
+    pub inside: bool,
 }
 
 impl Default for CanvasDrag {
@@ -893,6 +896,7 @@ impl Default for CanvasDrag {
             last: (0., 0.),
             in_flight: 0,
             waiting: None,
+            inside: false,
         }
     }
 }
