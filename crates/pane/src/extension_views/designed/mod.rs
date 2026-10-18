@@ -1427,7 +1427,8 @@ impl LauncherWindow {
             .designed
             .as_ref()
             .and_then(|controls| {
-                key.as_deref().and_then(|key| controls.sent.get(key).cloned())
+                key.as_deref()
+                    .and_then(|key| controls.sent.get(key).cloned())
             })
             .or(committed);
         crate::ui::select::Model {

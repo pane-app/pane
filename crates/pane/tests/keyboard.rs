@@ -229,8 +229,7 @@ fn open_installed_sample<'a>(
         let entry = entry.unwrap();
         std::fs::copy(entry.path(), source.join(entry.file_name())).unwrap();
     }
-    let launcher =
-        Launcher::with_packages(Runtime::start(), vec![], data.join("extensions"));
+    let launcher = Launcher::with_packages(Runtime::start(), vec![], data.join("extensions"));
     futures::executor::block_on(launcher.install_package(&source));
     open_launcher(cx, launcher, Some(data))
 }
