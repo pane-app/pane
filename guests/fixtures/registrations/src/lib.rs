@@ -25,7 +25,7 @@
 
 use core::cell::RefCell;
 
-use pane_extension::alloc::{format, string::String, string::ToString};
+use pane_extension::alloc::{format, string::String, string::ToString, vec::Vec};
 use pane_extension::feedback::{Toast, show_toast};
 use pane_extension::registrations::{self, Change, Events, Item};
 use pane_extension::{Command, List, content, publish, settings};
@@ -143,9 +143,15 @@ fn outcome(item_id: &str) -> Result<String, String> {
         "items" => {
             let many = count(MANY);
             let mut registered = 0;
+            // Each handle is held while the rest register: a dropped handle
+            // drops its registration, so the count would never grow.
+            let mut held = Vec::new();
             for index in 0..=many {
                 match registrations::root_item(COMMAND, held_item(&format!("many{index}"))) {
-                    Ok(_) => registered += 1,
+                    Ok(handle) => {
+                        held.push(handle);
+                        registered += 1;
+                    }
                     Err(refusal) => return Ok(format!("{registered} then refused: {refusal}")),
                 }
             }
@@ -154,11 +160,16 @@ fn outcome(item_id: &str) -> Result<String, String> {
         "timers" => {
             let many = count(MANY);
             let mut registered = 0;
+            // Held while the rest register, as the items are.
+            let mut held = Vec::new();
             for _ in 0..=many {
                 // The component exports the events entry point, so the
                 // refusal, when one comes, is the limit's.
                 match registrations::every(60, || async { Ok(()) }) {
-                    Ok(_) => registered += 1,
+                    Ok(handle) => {
+                        held.push(handle);
+                        registered += 1;
+                    }
                     Err(refusal) => return Ok(format!("{registered} then refused: {refusal}")),
                 }
             }

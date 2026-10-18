@@ -504,12 +504,20 @@ fn a_command_launches_another_of_its_own_package_with_context(fixture: &Fixture)
         pane.send(&format!("ln {nowhere}#report")),
         answered_error(&format!("no installed extension has the source {nowhere}"))
     );
-    assert_eq!(
-        pane.send("ln report"),
-        Status::Result("Launched report".into()),
-        "the caller still runs"
-    );
+    // The caller still runs after those refusals: its own toast says it
+    // launched, and the launched command's toast replaces it once that
+    // launch runs on its own thread — which may be before the caller's
+    // status is read, so either is what the launch shows at once.
+    let caller = pane.send("ln report");
     pane.launched();
+    assert!(
+        matches!(
+            &caller,
+            Status::Result(text)
+                if text == "Launched report" || text.starts_with("Report: user-initiated")
+        ),
+        "the caller still runs: {caller:?}"
+    );
 }
 
 fn a_command_launches_one_of_another_package_but_not_a_disabled_one(fixture: &Fixture) {

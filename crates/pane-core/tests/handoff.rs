@@ -658,37 +658,22 @@ fn the_open_screen_of_a_package_that_does_not_opt_in_reopens() {
     block_on(launcher.install_package(&folder));
     let identity = PackageIdentity::local(&folder).unwrap();
 
-    // The sample's screen, with a view it pushed: the command's root view
-    // is reopened, not the pushed one. The row the user had selected is
-    // selected again where the new list has it: the host-owned state kept
-    // by key.
+    // The sample's screen: the command's root view is reopened. The row
+    // the user had selected is selected again where the new list has it:
+    // the host-owned state kept by key.
     open(&launcher, "Rust sample");
     launcher.select(1);
     select_title(&launcher, "Choose a color");
-    // The root list's selection as the view is pushed: the row the user
-    // chose, which the reopened screen keeps by key.
     let view = launcher.view();
     let selected = view
         .selected
         .and_then(|at| view.rows.get(at))
         .map(|row| row.id.clone())
         .unwrap_or_default();
-    block_on(launcher.activate_selected());
-    // The view the press pushes opens on the launch thread: waited for,
-    // as every pushed view here is.
-    let deadline = Instant::now() + Duration::from_secs(10);
-    while !matches!(launcher.view().screen, Screen::DesignedView(_)) {
-        assert!(
-            Instant::now() < deadline,
-            "the color view never opened: {:?}",
-            launcher.view().screen
-        );
-        thread::sleep(Duration::from_millis(10));
-    }
 
     block_on(launcher.reload(&identity));
-    // The reopened screen, waited for as the push that opened the view
-    // was: the reload's reopen is its own launch.
+    // The reopened screen, waited for: the reload's reopen is its own
+    // launch.
     let deadline = Instant::now() + Duration::from_secs(10);
     while !matches!(launcher.view().screen, Screen::Command) {
         assert!(
@@ -699,12 +684,6 @@ fn the_open_screen_of_a_package_that_does_not_opt_in_reopens() {
         thread::sleep(Duration::from_millis(10));
     }
     assert_eq!(
-        launcher.view().screen,
-        Screen::Command,
-        "the command's root view reopens: {:?}",
-        launcher.view().status
-    );
-    assert_eq!(
         launcher.view().status,
         Status::Result("Reloaded Rust sample".into())
     );
@@ -712,4 +691,36 @@ fn the_open_screen_of_a_package_that_does_not_opt_in_reopens() {
     let view = launcher.view();
     let at = view.selected.unwrap_or_default();
     assert_eq!(view.rows[at].id, selected, "the selection is kept by key");
+
+    // "Choose a color" launches the sample's designed color command
+    // (#242): reloaded while it shows, that command's own root view
+    // reopens fresh (#406), as the list's did.
+    block_on(launcher.activate_selected());
+    assert!(launcher.wait_for_launches(Duration::from_secs(20)));
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !matches!(launcher.view().screen, Screen::DesignedView(_)) {
+        assert!(
+            Instant::now() < deadline,
+            "the color view never opened: {:?}",
+            launcher.view().screen
+        );
+        thread::sleep(Duration::from_millis(10));
+    }
+    block_on(launcher.reload(&identity));
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let view = launcher.view();
+        if matches!(view.screen, Screen::DesignedView(_))
+            && view.status == Status::Result("Reloaded Rust sample".into())
+        {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the color command's view never reopened: {:?} {:?}",
+            view.screen,
+            view.status
+        );
+        thread::sleep(Duration::from_millis(10));
+    }
 }

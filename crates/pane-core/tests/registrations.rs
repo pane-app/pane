@@ -452,7 +452,18 @@ fn a_folder_watcher_delivers_coalesced_changes() {
             .iter()
             .any(|row| row.id.ends_with(":counted"))
     });
-    assert!(launcher.undo_list(&identity).contains(&"folder watcher"));
+    // The activation registers the watcher beside the item: the row can
+    // be listed before the watcher is held.
+    pane.until("the folder watcher", true, || {
+        launcher.undo_list(&identity).contains(&"folder watcher")
+    });
+    // The watchers thread has looked at the registration — its native
+    // watcher watching — before the files are written: a change made
+    // before anything watches is no change it could see.
+    assert!(
+        launcher.wait_for_watchers(PROMPTLY),
+        "the watchers did not settle"
+    );
     // Two files written at once: one coalesced event, both paths in it.
     fs::write(watched.path().join("one.txt"), "one").unwrap();
     fs::write(watched.path().join("two.txt"), "two").unwrap();
@@ -605,16 +616,18 @@ fn a_waiting_package_runs_no_timer_code_until_the_provision_comes() {
 #[test]
 fn beyond_the_limits_bounds_and_declarations_is_refused() {
     let pane = Pane::new();
-    let launcher = pane.start();
     // The fixture declares the capability unmarked, so providing it at
     // run time is refused, and its activation entry point is declared.
+    // Its settings are written before the launcher starts, which reads
+    // the settings record as it starts.
     let fixture = pane.fixture_package(
         "edges",
         r#"{ "id": "fixture", "title": "Registrations fixture", "component": "fixture.wasm" }"#,
-        r#","provides": [{{ "capability": "fixture:held@1", "component": "fixture.wasm",
-             "operations": ["greet"] }}], "activate": "fixture.wasm""#,
+        r#","provides": [{ "capability": "fixture:held@1", "component": "fixture.wasm",
+             "operations": ["greet"] }], "activate": "fixture.wasm""#,
         &[("many", "1000")],
     );
+    let launcher = pane.start();
     block_on(launcher.install_package(&fixture));
     let identity = PackageIdentity::local(&fixture).unwrap();
     pane.until("the activation's timer", true, || {
@@ -703,13 +716,15 @@ impl Pane {
 #[test]
 fn a_trapping_activation_counts_towards_pausing() {
     let pane = Pane::new();
-    let launcher = pane.start();
+    // The setting is written before the launcher starts, which reads the
+    // settings record as it starts.
     let fixture = pane.fixture_package(
         "trapping",
         r#"{ "id": "fixture", "title": "Registrations fixture", "component": "fixture.wasm" }"#,
         r#","activate": "fixture.wasm""#,
         &[("trap", "yes")],
     );
+    let launcher = pane.start();
     block_on(launcher.install_package(&fixture));
     // The activation traps, is started again, traps again: three within
     // the window pause the package.

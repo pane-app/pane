@@ -69,6 +69,11 @@ struct Entry {
     /// Whether a firing has been asked for and has not answered: no
     /// second one is asked for meanwhile.
     in_flight: bool,
+    /// When the pending (or last) firing was asked for, in clock
+    /// milliseconds: a tick already due by then is one a clock that jumped
+    /// ahead covered, fired in its turn once the firing answers — only a
+    /// tick that falls due after it, while the firing is pending, is owed.
+    asked: u64,
     /// Whether a firing fell due while one was pending or the package
     /// waited, to be delivered as one when it can: firings are coalesced,
     /// not replayed.
@@ -199,8 +204,11 @@ impl Timers {
             }
             if entry.in_flight {
                 // A tick that came due meanwhile is owed as one firing,
-                // not replayed.
-                entry.owed |= now >= entry.next;
+                // not replayed. One that was due already when the pending
+                // firing was asked for is not owed: a clock that jumped
+                // ahead fires every interval it covered, each in its turn
+                // once the firing before has answered.
+                entry.owed |= now >= entry.next && entry.next > entry.asked;
                 continue;
             }
             // None of a waiting package's code runs: the firing it owes is
@@ -235,6 +243,7 @@ impl Timers {
                 }
                 entry.owed = false;
                 entry.in_flight = true;
+                entry.asked = now;
                 due.push(Run {
                     timer: entry.timer.clone(),
                     component: entry.timer.component.clone(),
@@ -283,6 +292,7 @@ impl Entry {
             started: now,
             next,
             in_flight: false,
+            asked: now,
             owed: false,
             spent: false,
         }
