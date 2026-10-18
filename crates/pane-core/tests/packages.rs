@@ -1540,14 +1540,19 @@ fn an_update_finishing_while_its_view_is_open_closes_the_old_view_and_reopens_th
     block_on(updating);
 
     // The old copy's view closed at once, and the new code's command
-    // opens again on it, with the update said on the status line: the
-    // pushed view itself is not reopened.
-    let view = launcher.view();
-    assert_eq!(
-        (view.query(), &view.status),
-        (Some(""), &Status::Result("Updated Hello to 2.0.0".into()))
+    // opens again on it — its root view, the designed view the color
+    // command opens (#242) — with the update said on the status line: a
+    // view the command had pushed above that is not.
+    assert!(
+        matches!(launcher.view().screen, Screen::DesignedView(_)),
+        "{:?}",
+        launcher.view().screen
     );
-    assert_eq!(block_on(runtime.designed_view_count()), 0);
+    assert_eq!(
+        launcher.view().status,
+        Status::Result("Updated Hello to 2.0.0".into())
+    );
+    assert_eq!(block_on(runtime.designed_view_count()), 1);
 }
 
 #[test]

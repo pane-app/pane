@@ -229,11 +229,14 @@ fn a_program_s_name_finds_its_application_unless_generic_shared_or_given_argumen
     assert!(!titles_for(launcher, "launcher").contains(&"Launch Space Game".to_owned()));
     assert!(titles_for(launcher, "setup").is_empty());
     // A name two applications share picks neither, though their titles
-    // still find them.
+    // still find them. The authoring row matches too: its subtitle's
+    // letters run through the query as #193's matching reads them
+    // ("Write … from" holds w-r-i-t-e-r), as the "wt" search above
+    // already found it.
     assert!(titles_for(launcher, "editor").is_empty());
     assert_eq!(
         titles_for(launcher, "writer"),
-        ["Launch Writer", "Launch Writer Beta"]
+        ["Create Extension…", "Launch Writer", "Launch Writer Beta"]
     );
     // The browser's name finds the browser, not the web app it hosts.
     assert_eq!(titles_for(launcher, "chrome"), ["Launch Google Chrome"]);

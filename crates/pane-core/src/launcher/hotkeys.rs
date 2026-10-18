@@ -283,6 +283,12 @@ fn cannot_coexist(shortcut: &Shortcut, other: &Shortcut) -> bool {
 pub(super) struct Game {
     /// The settings in force: off, with no programs, by default.
     mode: GameMode,
+    /// The record's write queue: one save at a time, in the order the
+    /// changes were made. Two rapid changes otherwise race their
+    /// whole-file atomic replaces, and the older write's rename can land
+    /// after the newer one's, leaving the record holding the state that
+    /// was left behind.
+    writing: Option<std::sync::Arc<tokio::sync::Mutex<()>>>,
     /// The window in front as the foreground source last reported it, if
     /// it ever did; the decision is made on each report and again on
     /// each change of the settings.
@@ -302,6 +308,12 @@ impl Game {
             mode: GameMode::open(dir),
             ..Game::default()
         }
+    }
+
+    /// The record's write queue: held across a save, so changes land in
+    /// order.
+    pub(super) fn queue(&mut self) -> std::sync::Arc<tokio::sync::Mutex<()>> {
+        self.writing.get_or_insert_with(Default::default).clone()
     }
 }
 
@@ -1218,7 +1230,14 @@ impl Launcher {
                 Some(installation) => {
                     let dir = installation.dir.clone();
                     let mode = launcher.lock().game.mode.clone();
-                    off_thread(move || mode.save(&dir)).await
+                    // The save runs under the record's write queue, so it
+                    // lands in the order its change was made: a second
+                    // change's save waits for the first's, and the older
+                    // write's rename cannot land after the newer one's.
+                    let queue = launcher.lock().game.queue();
+                    let _held = queue.lock().await;
+                    let writing = mode.clone();
+                    off_thread(move || writing.save(&dir)).await
                 }
                 None => Err("this launcher keeps no game mode".into()),
             };

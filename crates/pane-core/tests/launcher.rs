@@ -402,8 +402,17 @@ fn an_event_answer_arriving_after_back_is_discarded() {
     );
     assert_eq!(view.status, Status::Idle);
     assert_eq!(block_on(runtime.designed_view_count()), 0);
-    // Events sent with no view open go nowhere.
-    send_key(launcher, "right");
+    // Events sent with no view open go nowhere: the event names the
+    // closed view's canvas and render, and no listener runs for it —
+    // sent straight through the seam, as the window does, not through
+    // the helper that reads an open view's canvas first.
+    block_on(launcher.send_designed_seen(
+        pane_core::DesignedHandler::Key,
+        1,
+        Some("grid"),
+        Some(1),
+        r#"{"key":"right"}"#.to_owned(),
+    ));
     assert_eq!(launcher.view().status, Status::Idle);
 }
 
@@ -543,12 +552,46 @@ fn a_component_of_an_older_api_shape_is_refused_when_it_loads() {
 
 #[test]
 fn a_view_the_guest_refuses_to_open_is_an_error() {
-    let launcher = launcher(vec![command("faulty", guest("faulty"))]);
-    open_faulty_item(&launcher, "no-view");
-
+    let runtime = Runtime::start().unwrap();
+    let data = tempfile::tempdir().unwrap();
+    let launcher =
+        Launcher::with_packages(Ok(runtime.clone()), vec![], data.path().join("extensions"));
+    // The faulty component, installed with a designed command whose id it
+    // refuses: `open_designed_view` answers an error for any command but
+    // "counter" (#242's shape — the fixture's own manifest declares the
+    // counter command, so the refusal needs one of another id).
+    let component = guest("faulty");
+    let source = data.path().join("faulty");
+    std::fs::create_dir_all(&source).unwrap();
+    std::fs::write(
+        source.join("pane.json"),
+        r#"{"manifestVersion":1,"title":"Faulty","version":"0.1.0","apiVersion":"0.1",
+            "commands":[{"id":"refused","title":"Faulty refusal",
+            "subtitle":"A command the guest refuses to open",
+            "component":"faulty.wasm","mode":"designed"}]}"#,
+    )
+    .unwrap();
+    std::fs::copy(&component, source.join("faulty.wasm")).unwrap();
+    block_on(launcher.install_package(&source));
+    assert!(matches!(launcher.view().status, Status::Result(_)));
+    block_on(launcher.set_query("refusal"));
+    let index = launcher
+        .view()
+        .rows
+        .iter()
+        .position(|row| row.id.ends_with("#refused"))
+        .expect("the refused command is listed");
+    launcher.select(index);
     block_on(launcher.activate_selected());
 
-    assert_eq!(launcher.view().screen, Screen::Command);
+    // The refusal opens nothing: the screen the launch left stays, and
+    // no view is held.
+    assert!(
+        !matches!(launcher.view().screen, Screen::DesignedView(_)),
+        "a designed view is open, not {:?}",
+        launcher.view().screen
+    );
+    assert_eq!(block_on(runtime.designed_view_count()), 0);
     // The guest's refusal is shown once its answer reaches the launcher.
     let deadline = Instant::now() + Duration::from_secs(10);
     while !matches!(launcher.view().status, Status::Error(_)) {

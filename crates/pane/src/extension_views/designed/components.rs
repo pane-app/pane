@@ -1844,11 +1844,11 @@ pub(super) fn text_input(
             INPUT_CONTEXT
         })
         .child(fields::field_group(
-            input
-                .field
-                .title
-                .as_deref()
-                .unwrap_or(path.rsplit('/').next().unwrap_or("field")),
+            // The field's key, as its tests find it and its state keys
+            // it: the group's selector is `field-{key}`, the label's and
+            // error's under it — the title is the label the group draws
+            // and the name assistive technology reads, not its id.
+            path.rsplit('/').next().unwrap_or("field"),
             &input.field,
             input.label.as_deref(),
             well,
@@ -1881,7 +1881,11 @@ pub(super) fn field_well(
         .or_else(|| input.placeholder.clone())
         .unwrap_or_else(|| "field".into())
         .into();
-    let debug = format!("designed-input-{}", short(&label));
+    // The field's key, as the tree's tests find the well: `field-{key}`
+    // is the well, as the typed form's fields wore it — the group around
+    // it carries the label and the error, keyed the same way, and the
+    // well paints inside it so its bounds are the ones the name finds.
+    let debug = format!("field-{}", path.rsplit('/').next().unwrap_or("field"));
     let area = kind == FieldKind::Area;
     let password = kind == FieldKind::Password;
     // The password's text is drawn transparent, a dot for each character
@@ -2171,13 +2175,11 @@ pub(super) fn select(
     // The select's trigger carries its own focus and keys; the field's
     // group carries its title, note and error.
     let trigger = div().child(select_entity.clone());
+    // The field's key, as its tests find it and its state keys it — the
+    // group's selector is `field-{key}`, the title the label it draws —
+    // the path's last segment, as a text input's group is keyed.
     fields::field_group(
-        select
-            .field
-            .title
-            .as_deref()
-            .or(select.label.as_deref())
-            .unwrap_or(path.rsplit('/').next().unwrap_or("field")),
+        path.rsplit('/').next().unwrap_or("field"),
         &select.field,
         select.label.as_deref(),
         trigger,

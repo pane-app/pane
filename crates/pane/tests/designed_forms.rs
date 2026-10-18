@@ -75,7 +75,18 @@ fn open_installed<'a>(
     // scheduler's deterministic control.
     cx.executor().allow_parking();
     cx.update(pane::bind_keys);
-    let (window, cx) = cx.add_window_view(|window, cx| LauncherWindow::new(launcher, window, cx));
+    // The window learns what the launcher changed in the background — a
+    // launch's open among it, which runs on a thread of its own after the
+    // reply the launch was dispatched with — as the binary's window does;
+    // without the channel the form's controls follow only that reply,
+    // which can land before the open does, leaving the view drawn empty.
+    let (sender, changes) = pane_core::changes::channel();
+    let launcher = launcher.with_changes(sender);
+    let (window, cx) = cx.add_window_view(|window, cx| {
+        let mut launcher_window = LauncherWindow::new(launcher, window, cx);
+        launcher_window.follow_changes(changes, window, cx);
+        launcher_window
+    });
     (window, data, cx)
 }
 

@@ -1566,22 +1566,28 @@ fn every_way_a_collection_index_is_refused_saying_what_is_wrong() {
             &dirs.identity("tools")[4..]
         )
     );
-    // An id only the `renamed` map names is not one the collection lists
-    // as an extension; following it is #310's.
+    // An id the `renamed` map names is followed to the extension it maps
+    // to (#310): the root pane.json the `both` commit added goes first —
+    // a commit only adds, so the leftover would keep the "one extension
+    // or a collection" refusal standing — and the old id opens the
+    // extension's own choice.
     let index = r#"{ "extensions": [ { "id": "clock", "path": "extensions/clock" } ],
         "renamed": { "old-clock": "clock", "retired": null } }"#;
-    let commit = repo.commit(&collection_files(&guests(), index, true), "renamed");
+    let commit = {
+        repo.git(&["rm", "--quiet", "pane.json"]);
+        repo.commit(&collection_files(&guests(), index, true), "renamed")
+    };
     repo.tag("renamed");
-    let error = refusal(&launcher, &format!("{url}#old-clock@renamed"));
+    let _ = commit;
+    block_on(launcher.preview_git(&format!("{url}#old-clock@renamed")));
+    // The single extension's own preview, as every single-extension
+    // preview shows: the Install screen.
     assert_eq!(
-        error,
-        format!(
-            "Tag renamed (commit {}) of the Git repository {} lists no extension \
-             `old-clock` in its pane-collection.json",
-            short(&commit),
-            &dirs.identity("tools")[4..]
-        )
+        titles(&launcher),
+        ["Install"],
+        "the renamed id's extension is offered"
     );
+    launcher.back();
     assert!(launcher.packages().is_empty());
     dirs.wait_for_no_downloads();
 }

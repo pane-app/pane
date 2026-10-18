@@ -324,7 +324,7 @@ mod tests {
         while !matches!(launcher.view().screen, Screen::Root { .. }) {
             launcher.back();
         }
-        block_on(launcher.set_query("choose a color"));
+        block_on(launcher.set_query("color picker"));
         // The color command, found by its id: its row is titled as its
         // manifest titles it, not as the query that finds it.
         let color = launcher

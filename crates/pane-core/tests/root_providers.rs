@@ -325,8 +325,10 @@ fn a_provider_declaring_no_root_results_is_refused_with_the_reason() {
 
 #[test]
 fn a_provider_asking_for_what_only_a_launched_command_uses_is_refused() {
+    // `search` went with the command-search module it named (#240): no
+    // such field is read, so only the fields a manifest still holds name
+    // what a launched command alone can use.
     for (field, value, reason) in [
-        ("search", serde_json::json!(true), "`search`"),
         ("takesQuery", serde_json::json!(true), "`takesQuery`"),
         (
             "schedule",

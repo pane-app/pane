@@ -379,6 +379,19 @@ impl SettingsWindow {
         self.arriving
     }
 
+    /// Test support: whether the Keyboard page's game mode section is
+    /// busy writing its record. A change's write lands in the record
+    /// file before the task that ends the busy state is woken, so a wait
+    /// on the record alone can return while the section's controls are
+    /// still drawn busy — clickless. The window tests wait on this after
+    /// a record, so the click that follows acts. Test and debug builds
+    /// only.
+    #[cfg(any(test, debug_assertions))]
+    #[doc(hidden)]
+    pub fn game_record_busy(&self) -> bool {
+        self.keyboard.game.busy
+    }
+
     fn focus_previous(&mut self, _: &FocusPrevious, window: &mut Window, cx: &mut Context<Self>) {
         window.focus_prev(cx);
     }

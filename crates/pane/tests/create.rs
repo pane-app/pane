@@ -122,15 +122,6 @@ fn package(folder: &Path) -> PathBuf {
     folder.to_path_buf()
 }
 
-/// The value the open form holds in field `id`.
-fn field_value(window: &Entity<LauncherWindow>, cx: &mut VisualTestContext, id: &str) -> String {
-    window.update(cx, |window, cx| {
-        window
-            .designed_field_text(id, cx)
-            .expect("the field exists")
-    })
-}
-
 /// Selects the row titled `title` and presses Enter.
 fn press_enter_on(
     window: &Entity<LauncherWindow>,
@@ -177,16 +168,40 @@ fn the_create_row_opens_the_form_and_creates_builds_and_develops(cx: &mut TestAp
         assert!(cx.debug_bounds(field).is_some(), "{field} is drawn");
     }
 
-    // The language's choice is picked with its own keys.
+    // The language's choice is picked with its own keys: the trigger's
+    // Enter or Down opens the popup, the popup's Down moves the choice,
+    // and its Enter commits it.
     cx.simulate_keystrokes("tab");
     cx.simulate_keystrokes("down");
-    assert_eq!(field_value(&window, cx, "language"), "rust");
+    cx.simulate_keystrokes("down");
+    cx.simulate_keystrokes("enter");
+    let language = window.update(cx, |window, _| {
+        window
+            .designed_select_text("language")
+            .expect("the language field exists")
+    });
+    assert_eq!(language, "rust");
 
     // A name typed and submitted: the package is written, built once and
-    // previewed.
-    cx.simulate_keystrokes("shift-tab");
+    // previewed. The name field is focused again — the select's popup
+    // took the focus its keys used — as the keyboard's traversal does.
+    window.update_in(cx, |window, window_cx, cx| {
+        window.focus_designed_field("name", window_cx, cx)
+    });
+    let live = window.update(cx, |window, cx| {
+        window.designed_field_text("name", cx).unwrap_or_default()
+    });
+    eprintln!("[PROBE] live name after focus: {live:?}");
     cx.simulate_input("Word Count");
+    let live = window.update(cx, |window, cx| {
+        window.designed_field_text("name", cx).unwrap_or_default()
+    });
+    eprintln!("[PROBE] live name after input: {live:?}");
     cx.simulate_keystrokes("enter");
+    let live = window.update(cx, |window, cx| {
+        window.designed_field_text("name", cx).unwrap_or_default()
+    });
+    eprintln!("[PROBE] live name after enter: {live:?}");
     let folder = sources.path().join("word-count");
     let view = until(&window, cx, |view| {
         matches!(view.screen, Screen::Package { .. })
@@ -251,7 +266,7 @@ fn a_name_that_names_no_package_marks_the_field(cx: &mut TestAppContext) {
     cx.simulate_keystrokes("enter");
     let view = settle(&window, cx);
     assert!(view.form().is_some(), "the form stays");
-    assert!(matches!(view.status, Status::Error(_)));
+    assert!(matches!(view.status, Status::Error(_)), "{:?}", view.status);
     assert!(cx.debug_bounds("field-error-name").is_some());
 
     // A name typed and submitted again: it works.

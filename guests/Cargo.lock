@@ -29,6 +29,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4e7648175b45a9a48536d676f68d918270699102aa8dab5496df06904c914600"
 
 [[package]]
+name = "designed-fixture"
+version = "0.1.0"
+dependencies = [
+ "dlmalloc",
+ "wasip3",
+ "wit-bindgen",
+]
+
+[[package]]
 name = "dlmalloc"
 version = "0.2.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -279,12 +288,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "previous-api"
+version = "0.1.0"
+dependencies = [
+ "dlmalloc",
+ "wit-bindgen",
+]
+
+[[package]]
 name = "proc-macro2"
 version = "1.0.107"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "985e7ec9bb745e6ce6535b544d84d6cd6f7ad8bd711c398938ae983b91a766d9"
 dependencies = [
  "unicode-ident",
+]
+
+[[package]]
+name = "quick"
+version = "0.1.0"
+dependencies = [
+ "pane-extension",
 ]
 
 [[package]]
@@ -297,7 +321,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "quick"
+name = "refusing-view"
 version = "0.1.0"
 dependencies = [
  "pane-extension",
@@ -308,21 +332,6 @@ name = "registrations-fixture"
 version = "0.1.0"
 dependencies = [
  "pane-extension",
-]
-
-[[package]]
-name = "refusing-view"
-version = "0.1.0"
-dependencies = [
- "pane-extension",
-]
-
-[[package]]
-name = "previous-api"
-version = "0.1.0"
-dependencies = [
- "dlmalloc",
- "wit-bindgen",
 ]
 
 [[package]]
@@ -402,6 +411,13 @@ dependencies = [
 
 [[package]]
 name = "sample-matches"
+version = "0.1.0"
+dependencies = [
+ "pane-extension",
+]
+
+[[package]]
+name = "sample-nav"
 version = "0.1.0"
 dependencies = [
  "pane-extension",
@@ -510,6 +526,22 @@ name = "sample-system-commands"
 version = "0.1.0"
 dependencies = [
  "pane-extension",
+]
+
+[[package]]
+name = "sample-timer"
+version = "0.1.0"
+dependencies = [
+ "pane-extension",
+ "wasip3",
+]
+
+[[package]]
+name = "sample-view"
+version = "0.1.0"
+dependencies = [
+ "pane-extension",
+ "wasip3",
 ]
 
 [[package]]
@@ -752,35 +784,3 @@ name = "zmij"
 version = "1.0.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "29666d0abbfad1e3dc4dcf6144730dd3a3ab225bbbdac83319345b1b44ccfc1b"
-[[package]]
-name = "designed-fixture"
-version = "0.1.0"
-dependencies = [
- "dlmalloc",
- "wasip3",
- "wit-bindgen",
-]
-
-[[package]]
-name = "sample-nav"
-version = "0.1.0"
-dependencies = [
- "pane-extension",
-]
-
-[[package]]
-name = "sample-timer"
-version = "0.1.0"
-dependencies = [
- "pane-extension",
- "wasip3",
-]
-
-[[package]]
-name = "sample-view"
-version = "0.1.0"
-dependencies = [
- "pane-extension",
- "wasip3",
-]
-

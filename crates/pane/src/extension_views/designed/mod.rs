@@ -379,7 +379,17 @@ impl LauncherWindow {
             }
             return;
         }
-        let closed = shown.is_none();
+        // A view whose controls are gone closed: the keyboard goes with
+        // them, and the list takes it back on the screens whose list
+        // holds it, as `sync_root_search` then gives the field its own
+        // on the search screens. Only the closing itself: the sync runs
+        // over every change the launcher reports, and a screen that
+        // holds no view of its own leaves the keyboard where the user
+        // put it — the search field, a toast's open details — while the
+        // root handle resolves to no node on the search screens, so a
+        // sync-time focus there would leave every key falling through
+        // to nothing.
+        let closed = self.designed.is_some() && shown.is_none();
         // A view whose List searches as the user types opens on its
         // search field: the field the header shows is the window's own,
         // and typing into it is the view's first act — a tree that asks
@@ -398,6 +408,10 @@ impl LauncherWindow {
             self.query.focus(window, cx);
         }
         if closed {
+            // The view's focused control is gone: the list's handle is
+            // the keyboard's back on a screen whose list tracks it, and
+            // a search screen's field re-focuses over this in
+            // `sync_root_search`.
             window.focus(&self.focus_handle, cx);
         }
     }
@@ -427,6 +441,27 @@ impl LauncherWindow {
     pub fn designed_field_text(&self, key: &str, cx: &gpui::App) -> Option<String> {
         self.designed_field_at(key)
             .map(|(entity, _, _)| entity.read(cx).as_str().to_owned())
+    }
+
+    /// Test support: the value the open designed view's select keyed
+    /// `key` committed — the value a form's submission collects for it,
+    /// as a field's live text is what it collects for a text field.
+    #[doc(hidden)]
+    pub fn designed_select_text(&self, key: &str) -> Option<String> {
+        let controls = self.designed.as_ref()?;
+        let (_, entry) = controls
+            .state
+            .iter()
+            .find(|(path, _)| path.ends_with(&format!("/{key}")))?;
+        let Held::Select { .. } = &entry.held else {
+            return None;
+        };
+        // What the control last reported, else the value its tree names.
+        controls
+            .sent
+            .get(key)
+            .cloned()
+            .or_else(|| select_value_of(&self.launcher, key))
     }
 
     /// The editing state, the focus and the bookkeeping of the open
@@ -1132,11 +1167,26 @@ impl LauncherWindow {
     ) {
         // Enter in a single-line field of a form submits it (#241): the
         // form's primary action, not the field's own commit — the
-        // submission carries the field's value.
+        // submission carries the field's value. A blur does not: leaving
+        // a field is not the form's action, or opening its select would
+        // submit the half of it already typed.
         if self.field_in_form(path) {
             self.submit_designed_form(window, cx);
             return;
         }
+        self.designed_field_value_committed(path, window, cx);
+    }
+
+    /// A field's commit as a blur makes it: the live value is the value
+    /// the tree names, told to the field's own change handler — never
+    /// the form's submission, which only Enter and the submit button
+    /// run. A field in a form commits its value alone.
+    fn designed_field_value_committed(
+        &mut self,
+        path: &str,
+        window: &mut gpui::Window,
+        cx: &mut Context<Self>,
+    ) {
         let send = self.designed.as_mut().and_then(|controls| {
             let entry = controls.state.get_mut(path)?;
             let (render, key) = (entry.render, entry.key.clone());
@@ -1182,7 +1232,7 @@ impl LauncherWindow {
         cx: &mut Context<Self>,
     ) {
         if !focused {
-            self.designed_field_committed(path, window, cx);
+            self.designed_field_value_committed(path, window, cx);
         }
         let send = self.designed.as_ref().and_then(|controls| {
             let entry = controls.state.get(path)?;
@@ -1270,16 +1320,33 @@ impl LauncherWindow {
             let Held::Select { on_change, .. } = &entry.held else {
                 return None;
             };
-            let callback = *on_change;
-            Some((callback?, entry.render, entry.key.clone()))
+            Some((*on_change, entry.render, entry.key.clone()))
         });
         let Some((callback, render, key)) = send else {
             return;
         };
+        // The chosen value is what the trigger names and a submission of
+        // the form reads, whether or not the tree named a change handler
+        // for the select: noted as sent, the tree that carries it not
+        // having landed (#241). A select of a form Pane itself asks —
+        // which names no change handler of its own — still commits its
+        // choice into the tree the screen holds, as `designed_event`
+        // would take an extension's change into the tree its answer
+        // holds (#241).
+        if !key.is_empty() {
+            self.note_sent(&key, value.to_owned());
+            cx.notify();
+        }
+        if callback.is_none() {
+            if matches!(self.launcher.screen(), pane_core::Screen::PaneForm(_)) && !key.is_empty() {
+                self.launcher.pane_form_changed(&key, value);
+            }
+            return;
+        }
         let payload = payload(value);
         self.designed_event(
             DesignedHandler::Change,
-            callback,
+            callback.unwrap_or_default(),
             key,
             render,
             payload,
@@ -1356,6 +1423,7 @@ impl LauncherWindow {
                         })
                         .collect::<Vec<_>>(),
                     select.value.clone(),
+                    node.key.clone(),
                 )),
                 pane_core::NodeKind::ListDropdown(dropdown) => Some((
                     dropdown
@@ -1375,10 +1443,22 @@ impl LauncherWindow {
                         })
                         .collect::<Vec<_>>(),
                     dropdown.value.clone(),
+                    node.key.clone(),
                 )),
                 _ => None,
             });
-        let (choices, committed) = read.unwrap_or_default();
+        let (choices, committed, key) = read.unwrap_or_default();
+        // A choice the window holds as sent, the tree that carries it not
+        // having landed: the trigger names it, as a submission reads it
+        // (#241).
+        let committed = self
+            .designed
+            .as_ref()
+            .and_then(|controls| {
+                key.as_deref()
+                    .and_then(|key| controls.sent.get(key).cloned())
+            })
+            .or(committed);
         crate::ui::select::Model {
             theme: visuals.theme,
             material: visuals.material,
@@ -1386,6 +1466,25 @@ impl LauncherWindow {
             committed: committed.map(gpui::SharedString::from),
         }
     }
+}
+
+/// The value the tree of the open screen names for the select keyed
+/// `key`, when one does.
+fn select_value_of(launcher: &pane_core::Launcher, key: &str) -> Option<String> {
+    let tree = match launcher.screen() {
+        pane_core::Screen::DesignedView(view) => Some(view.tree),
+        pane_core::Screen::PaneForm(form) => Some(form.tree),
+        _ => None,
+    }?;
+    fn of(node: &pane_core::Node, key: &str) -> Option<String> {
+        if node.key.as_deref() == Some(key)
+            && let pane_core::NodeKind::Select(select) = &node.kind
+        {
+            return select.value.clone();
+        }
+        node.children.iter().find_map(|child| of(child, key))
+    }
+    of(&tree.root, key)
 }
 
 /// The least time between the search events of a designed List whose view

@@ -191,21 +191,37 @@ fn until_record_clears(cx: &mut VisualTestContext, records: &Path, held: &str) {
 }
 
 /// Runs `cx` until the game mode record holds `held`, or does not when
-/// `held` is false.
+/// `held` is false. The write lands in the record file before the task
+/// that ends the section's busy state is woken, so the record alone can
+/// hold while the section's controls are still drawn busy — clickless;
+/// the wait also holds until that flag clears, so the click that follows
+/// a record acts (the file's write and the busy clear are what a user
+/// sees as one thing, but a test can land between them).
 fn until_record_holds(cx: &mut VisualTestContext, records: &Path, held: &str, want: bool) {
     let record = records.join("game-mode.json");
+    let settings = cx
+        .cx
+        .update(|app| {
+            app.windows()
+                .into_iter()
+                .find_map(|window| window.downcast::<SettingsWindow>())
+        })
+        .expect("the Settings window");
     let deadline = Instant::now() + LIMIT;
     loop {
         cx.run_until_parked();
         let holds = fs::read_to_string(&record)
             .map(|text| text.contains(held))
             .unwrap_or(false);
-        if holds == want {
+        let busy = settings
+            .read_with(&cx.cx, |settings, _| settings.game_record_busy())
+            .expect("the Settings window lives");
+        if holds == want && !busy {
             return;
         }
         assert!(
             Instant::now() < deadline,
-            "game-mode.json never {} {held:?}",
+            "game-mode.json never {} {held:?} (busy: {busy})",
             if want { "held" } else { "dropped" }
         );
         std::thread::sleep(Duration::from_millis(5));

@@ -72,8 +72,11 @@ export const indexedResults: IndexedResults = {
       title: `Launch ${app.name}`,
       subtitle: SAMPLE,
       // Found by its other names (its program's, untranslated) and its
-      // keywords too, as Pane's own Applications results are.
-      alternateTitles: app.alternateTitles.map((name) => `Launch ${name}`),
+      // keywords too, as Pane's own Applications results are. An
+      // alternate title is a name the result is found by, never shown:
+      // the name itself, unadorned — a prefix on it would score a
+      // program's exact name ("wt") as a mere word inside it.
+      alternateTitles: app.alternateTitles,
       keywords: app.keywords,
       action: { tag: "open-application", val: app.id },
     }));
