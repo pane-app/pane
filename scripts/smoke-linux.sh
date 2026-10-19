@@ -967,11 +967,16 @@ focus_launcher
 "$xdotool" key Return; sleep 2   # Install; Greeting is selected
 "$xdotool" key Return; sleep 2   # open Greeting
 for ((i = 0; i < 7; i++)); do "$xdotool" key Down; done   # Crash
-for ((i = 0; i < 3; i++)); do "$xdotool" key Return; sleep 2; done
+# The third crash's answer is a failure toast, which leaves 3 seconds after
+# it shows (#249): it is captured as it shows, once the second crash's has
+# left, and the Greeting row's reason after the typing in a capture of its own.
+for ((i = 0; i < 2; i++)); do "$xdotool" key Return; sleep 2; done
+until_toast_gone error 15
+"$xdotool" key Return   # the third crash
+capture_until 59-paused.png error 15   # "Settings sample crashed 3 times within 5 minutes and is paused ..."
 "$xdotool" type --delay 50 greet; sleep 1   # Greeting and its reason at the top on any window height
-capture 59-paused.png
-check 59-paused.png error   # "Settings sample crashed 3 times within 5 minutes and is paused ..."
-check 59-paused.png warning   # Greeting: "Settings sample is paused after an error; ..."
+capture 59-paused-reason.png
+check 59-paused-reason.png warning   # Greeting: "Settings sample is paused after an error; ..."
 stop_pane
 grep -q '"paused"' "$PANE_DATA_DIR/extensions/installed.json" || { echo "pause not recorded"; exit 1; }
 start_pane
@@ -1117,9 +1122,11 @@ start_pane --install target/guests/packages/sample-dependencies
 focus_launcher
 capture 75-dependencies-preview.png
 check 75-dependencies-preview.png details   # "Requires: JavaScript operations sample, installed with it ..."
-"$xdotool" key Return; sleep 3   # Install; Greet through dependencies is selected
-capture 76-dependencies-installed.png
-check 76-dependencies-installed.png success   # "Installed Dependencies sample with JavaScript operations sample, which it requires"
+# The answer is a toast, which leaves 3 seconds after it shows (#249): it is
+# captured as it shows, and the settle the fixed wait gave follows it.
+"$xdotool" key Return   # Install; Greet through dependencies is selected
+capture_until 76-dependencies-installed.png success 15   # "Installed Dependencies sample with JavaScript operations sample, which it requires"
+sleep 2
 "$xdotool" key Return; sleep 3   # open Greet through dependencies
 "$xdotool" key Return; sleep 0.5   # Greet through the required greeter
 capture_until 77-dependency-answer.png success 20   # the JavaScript guest's answer, in a toast
@@ -1547,9 +1554,11 @@ if grep -q '"helper-wait": "finished"' "$PANE_DATA_DIR/extensions/settings.json"
 "$xdotool" key Return; sleep 2   # open Greeting in the restarted runtime
 for ((i = 0; i < 8; i++)); do "$xdotool" key Down; done   # Count
 inject crash-before-answer:count
-"$xdotool" key Return; sleep 3   # counts, then the runtime crashes before answering
-capture 203-runtime-stopped.png
-check 203-runtime-stopped.png error   # the runtime stopped; its answer is lost
+# The answer is a toast, which leaves 3 seconds after it shows (#249): it is
+# captured as it shows, and the settle the fixed wait gave follows it.
+"$xdotool" key Return   # counts, then the runtime crashes before answering
+capture_until 203-runtime-stopped.png error 15   # the runtime stopped; its answer is lost
+sleep 2
 [ "$(count)" = 2 ] || { echo "Count did not run once before the crash"; exit 1; }
 "$xdotool" key Escape; sleep 1
 "$xdotool" type --delay 50 greet; sleep 1
@@ -1642,14 +1651,19 @@ close_settings   # its answer is not shown here
 "$xdotool" type --delay 50 greet; sleep 1
 "$xdotool" key Return; sleep 2   # open Greeting
 for ((i = 0; i < 9; i++)); do "$xdotool" key Down; done   # Stop responding
-"$xdotool" key Return; sleep 8
-capture 241-unresponsive-stopped.png
-check 241-unresponsive-stopped.png error   # "The extension stopped responding: it computed for 2 seconds ..."
-"$xdotool" key Return; sleep 8   # the third time
+# The answer is a toast, which leaves 3 seconds after it shows (#249): it is
+# captured as it shows, and the settle the fixed wait gave follows it.
+"$xdotool" key Return
+capture_until 241-unresponsive-stopped.png error 20   # "The extension stopped responding: it computed for 2 seconds ..."
+sleep 2
+# The third stop's answer is a failure toast too: captured as it shows, once
+# the second's has left, and the Greeting row's reason in a capture of its own.
+until_toast_gone error 15
+"$xdotool" key Return   # the third time
+capture_until 242-unresponsive-paused.png error 20   # "Settings sample stopped responding 3 times within 5 minutes and is paused ..."
 "$xdotool" type --delay 50 greet; sleep 1   # Greeting and its reason at the top
-capture 242-unresponsive-paused.png
-check 242-unresponsive-paused.png error   # "Settings sample stopped responding 3 times within 5 minutes and is paused ..."
-check 242-unresponsive-paused.png warning   # Greeting: "Settings sample is paused after an error; ..."
+capture 242-unresponsive-paused-reason.png
+check 242-unresponsive-paused-reason.png warning   # Greeting: "Settings sample is paused after an error; ..."
 [ "$(saved busy)" = started ] || { echo "Stop responding finished or was lost"; exit 1; }
 "$xdotool" key Escape; sleep 1   # clears the query
 open_extension "Settings sample"
@@ -1665,9 +1679,9 @@ inject hang
 "$xdotool" key Return; sleep 4   # open Greeting: the stuck runtime is not responding yet
 capture 245-unresponsive-not-yet.png
 check 245-unresponsive-not-yet.png progress   # "Pane's extension runtime is not responding yet. ..."
-sleep 14   # Pane gives up on it
-capture 246-unresponsive-runtime.png
-check 246-unresponsive-runtime.png error   # the runtime stopped responding and was started again
+# Pane gives up on it within 15 seconds of the press, and says so in a
+# failure toast, which leaves 3 seconds after it shows (#249).
+capture_until 246-unresponsive-runtime.png error 25   # the runtime stopped responding and was started again
 "$xdotool" key Escape; sleep 1   # clears the query
 manage_extensions
 a11y press "Why the extension runtime stopped"   # a row of the group's page
@@ -1756,9 +1770,11 @@ start_pane --install target/guests/packages/sample-dependencies-npm
 focus_launcher
 capture 260-npm-dependency-preview.png
 check 260-npm-dependency-preview.png details   # "Requires: Greeter from npm, installed with it from npm:@pane-samples/greeter"
-"$xdotool" key Return; sleep 3   # Install; Greet through an npm dependency is selected
-capture 261-npm-dependency-installed.png
-check 261-npm-dependency-installed.png success   # "Installed Dependencies from npm sample with Greeter from npm, which it requires"
+# The answer is a toast, which leaves 3 seconds after it shows (#249): it is
+# captured as it shows, and the settle the fixed wait gave follows it.
+"$xdotool" key Return   # Install; Greet through an npm dependency is selected
+capture_until 261-npm-dependency-installed.png success 15   # "Installed Dependencies from npm sample with Greeter from npm, which it requires"
+sleep 2
 "$xdotool" key Return; sleep 3   # open it
 "$xdotool" key Return; sleep 0.5   # "Greet through the required greeter"
 capture_until 262-npm-dependency-called.png success 20   # its toast: "Hello, Pane, from the npm package"
@@ -1882,9 +1898,11 @@ tracked=http://127.0.0.1:$(cat "$out/repository-server.port")/greeter-tracked.gi
 start_pane --install "git:$tracked@release"
 focus_launcher
 capture_until 305-git-tracked-preview.png details 60   # "Revision: branch release, tracked: an update fetches that branch again"
-"$xdotool" key Return; sleep 3   # Install; Greeter from Git is selected
-capture 306-git-tracked-installed.png
-check 306-git-tracked-installed.png success   # "Installed Greeter from Git"
+# The answer is a toast, which leaves 3 seconds after it shows (#249): it is
+# captured as it shows, and the settle the fixed wait gave follows it.
+"$xdotool" key Return   # Install; Greeter from Git is selected
+capture_until 306-git-tracked-installed.png success 15   # "Installed Greeter from Git"
+sleep 2
 python3 "$(dirname "$0")/repository_server.py" move-sample "$out/git-repositories/greeter-tracked" 0.2.0
 moved=$(python3 "$(dirname "$0")/repository_server.py" commit "$out/git-repositories/greeter-tracked" release)
 stop_pane
@@ -1961,9 +1979,11 @@ fi
 export PANE_TEST_FILE_INDEX_HOME=$files_folder
 start_pane --install target/guests/packages/sample-files
 focus_launcher
-"$xdotool" key Return; sleep 3   # Install; the index walks the fixture
-capture 220-files-installed.png
-check 220-files-installed.png success   # "Installed Rust files sample"
+# The answer is a toast, which leaves 3 seconds after it shows (#249): it is
+# captured as it shows, and the settle the fixed wait gave follows it.
+"$xdotool" key Return   # Install; the index walks the fixture
+capture_until 220-files-installed.png success 15   # "Installed Rust files sample"
+sleep 2
 # The install lands on a blank root search, where Escape hides the
 # launcher (release run 37698693722's Windows frame 221 was the desktop):
 # the return to root key keeps it.

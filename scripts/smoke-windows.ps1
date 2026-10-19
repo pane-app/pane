@@ -1004,11 +1004,16 @@ $process = Start-Pane "stderr-pausing.log" @("--install", "target/guests/package
 Send "{ENTER}"; Start-Sleep -Seconds 2   # Install; Greeting is selected
 Send "{ENTER}"; Start-Sleep -Seconds 2   # open Greeting
 Send "{DOWN 7}"   # Crash
-for ($i = 0; $i -lt 3; $i++) { Send "{ENTER}"; Start-Sleep -Seconds 2 }
+# The third crash's answer is a failure toast, which leaves 3 seconds after
+# it shows (#249): it is captured as it shows, once the second crash's has
+# left, and the Greeting row's reason after the typing in a capture of its own.
+for ($i = 0; $i -lt 2; $i++) { Send "{ENTER}"; Start-Sleep -Seconds 2 }
+Until-Toast-Gone "error" 15
+Send "{ENTER}"   # the third crash
+Capture-Until "59-paused.png" "error" 15   # "Settings sample crashed 3 times within 5 minutes and is paused ..."
 Send "greet"; Start-Sleep -Seconds 1   # Greeting and its reason at the top on any window height
-Capture "59-paused.png"
-Check "59-paused.png" "error"   # "Settings sample crashed 3 times within 5 minutes and is paused ..."
-Check "59-paused.png" "warning"   # Greeting: "Settings sample is paused after an error; ..."
+Capture "59-paused-reason.png"
+Check "59-paused-reason.png" "warning"   # Greeting: "Settings sample is paused after an error; ..."
 Stop-Pane $process
 if (-not (Select-String -Quiet -SimpleMatch '"paused"' (Join-Path $data "extensions/installed.json"))) { throw "pause not recorded" }
 $process = Start-Pane "stderr-pausing-restart.log"
@@ -1166,9 +1171,11 @@ $env:PANE_DATA_DIR = $data
 $process = Start-Pane "stderr-dependencies.log" @("--install", "target/guests/packages/sample-dependencies")
 Capture "75-dependencies-preview.png"
 Check "75-dependencies-preview.png" "details"   # "Requires: JavaScript operations sample, installed with it ..."
-Send "{ENTER}"; Start-Sleep -Seconds 3   # Install; Greet through dependencies is selected
-Capture "76-dependencies-installed.png"
-Check "76-dependencies-installed.png" "success"   # "Installed Dependencies sample with JavaScript operations sample, which it requires"
+# The answer is a toast, which leaves 3 seconds after it shows (#249): it is
+# captured as it shows, and the settle the fixed wait gave follows it.
+Send "{ENTER}"   # Install; Greet through dependencies is selected
+Capture-Until "76-dependencies-installed.png" "success" 15   # "Installed Dependencies sample with JavaScript operations sample, which it requires"
+Start-Sleep -Seconds 2
 Send "{ENTER}"; Start-Sleep -Seconds 3   # open Greet through dependencies
 Send "{ENTER}"; Start-Sleep -Milliseconds 500   # Greet through the required greeter
 Capture-Until "77-dependency-answer.png" "success" 20   # the JavaScript guest's answer, in a toast
@@ -1616,9 +1623,11 @@ Send "greet"; Start-Sleep -Seconds 1
 Send "{ENTER}"; Start-Sleep -Seconds 2   # open Greeting in the restarted runtime
 Send "{DOWN 8}"   # Count
 Inject-Fault "crash-before-answer:count"
-Send "{ENTER}"; Start-Sleep -Seconds 3   # counts, then the runtime crashes before answering
-Capture "203-runtime-stopped.png"
-Check "203-runtime-stopped.png" "error"   # the runtime stopped; its answer is lost
+# The answer is a toast, which leaves 3 seconds after it shows (#249): it is
+# captured as it shows, and the settle the fixed wait gave follows it.
+Send "{ENTER}"   # counts, then the runtime crashes before answering
+Capture-Until "203-runtime-stopped.png" "error" 15   # the runtime stopped; its answer is lost
+Start-Sleep -Seconds 2
 if ((Saved-Count) -ne "2") { throw "Count did not run once before the crash" }
 Send "{ESC}"; Start-Sleep -Seconds 1
 Send "greet"; Start-Sleep -Seconds 1
@@ -1714,14 +1723,19 @@ Close-Settings   # its answer is not shown here
 Send "greet"; Start-Sleep -Seconds 1
 Send "{ENTER}"; Start-Sleep -Seconds 2   # open Greeting
 Send "{DOWN 9}"   # Stop responding
-Send "{ENTER}"; Start-Sleep -Seconds 8
-Capture "241-unresponsive-stopped.png"
-Check "241-unresponsive-stopped.png" "error"   # "The extension stopped responding: it computed for 2 seconds ..."
-Send "{ENTER}"; Start-Sleep -Seconds 8   # the third time
+# The answer is a toast, which leaves 3 seconds after it shows (#249): it is
+# captured as it shows, and the settle the fixed wait gave follows it.
+Send "{ENTER}"
+Capture-Until "241-unresponsive-stopped.png" "error" 20   # "The extension stopped responding: it computed for 2 seconds ..."
+Start-Sleep -Seconds 2
+# The third stop's answer is a failure toast too: captured as it shows, once
+# the second's has left, and the Greeting row's reason in a capture of its own.
+Until-Toast-Gone "error" 15
+Send "{ENTER}"   # the third time
+Capture-Until "242-unresponsive-paused.png" "error" 20   # "Settings sample stopped responding 3 times within 5 minutes and is paused ..."
 Send "greet"; Start-Sleep -Seconds 1   # Greeting and its reason at the top
-Capture "242-unresponsive-paused.png"
-Check "242-unresponsive-paused.png" "error"   # "Settings sample stopped responding 3 times within 5 minutes and is paused ..."
-Check "242-unresponsive-paused.png" "warning"   # Greeting: "Settings sample is paused after an error; ..."
+Capture "242-unresponsive-paused-reason.png"
+Check "242-unresponsive-paused-reason.png" "warning"   # Greeting: "Settings sample is paused after an error; ..."
 if ((Saved-Setting "busy") -ne "started") { throw "Stop responding finished or was lost" }
 Send "{ESC}"; Start-Sleep -Seconds 1   # clears the query
 Open-Extension "Settings sample"
@@ -1737,9 +1751,9 @@ Send "greet"; Start-Sleep -Seconds 1
 Send "{ENTER}"; Start-Sleep -Seconds 4   # open Greeting: the stuck runtime is not responding yet
 Capture "245-unresponsive-not-yet.png"
 Check "245-unresponsive-not-yet.png" "progress"   # "Pane's extension runtime is not responding yet. ..."
-Start-Sleep -Seconds 14   # Pane gives up on it
-Capture "246-unresponsive-runtime.png"
-Check "246-unresponsive-runtime.png" "error"   # the runtime stopped responding and was started again
+# Pane gives up on it within 15 seconds of the press, and says so in a
+# failure toast, which leaves 3 seconds after it shows (#249).
+Capture-Until "246-unresponsive-runtime.png" "error" 25   # the runtime stopped responding and was started again
 Send "{ESC}"; Start-Sleep -Seconds 1   # clears the query
 Manage-Extensions
 Press-Named "Why the extension runtime stopped"   # a row of the group's page
@@ -1830,9 +1844,11 @@ try {
     $process = Start-Pane "stderr-npm.log" @("--install", "target/guests/packages/sample-dependencies-npm")
     Capture "260-npm-dependency-preview.png"
     Check "260-npm-dependency-preview.png" "details"   # "Requires: Greeter from npm, installed with it from npm:@pane-samples/greeter"
-    Send "{ENTER}"; Start-Sleep -Seconds 3   # Install; Greet through an npm dependency is selected
-    Capture "261-npm-dependency-installed.png"
-    Check "261-npm-dependency-installed.png" "success"   # "Installed Dependencies from npm sample with Greeter from npm, which it requires"
+    # The answer is a toast, which leaves 3 seconds after it shows (#249): it is
+    # captured as it shows, and the settle the fixed wait gave follows it.
+    Send "{ENTER}"   # Install; Greet through an npm dependency is selected
+    Capture-Until "261-npm-dependency-installed.png" "success" 15   # "Installed Dependencies from npm sample with Greeter from npm, which it requires"
+    Start-Sleep -Seconds 2
     Send "{ENTER}"; Start-Sleep -Seconds 3   # open it
     Send "{ENTER}"; Start-Sleep -Milliseconds 500   # "Greet through the required greeter"
     Capture-Until "262-npm-dependency-called.png" "success" 20   # its toast: "Hello, Pane, from the npm package"
@@ -1992,9 +2008,11 @@ try {
     $process = Start-Pane "stderr-git-update.log" @("--install", "git:$tracked@release")
     # The fetch runs after the window shows: capture until its preview does.
     Capture-Until "305-git-tracked-preview.png" "details" 60   # "Revision: branch release, tracked: an update fetches that branch again"
-    Send "{ENTER}"; Start-Sleep -Seconds 3   # Install; Greeter from Git is selected
-    Capture "306-git-tracked-installed.png"
-    Check "306-git-tracked-installed.png" "success"   # "Installed Greeter from Git"
+    # The answer is a toast, which leaves 3 seconds after it shows (#249): it is
+    # captured as it shows, and the settle the fixed wait gave follows it.
+    Send "{ENTER}"   # Install; Greeter from Git is selected
+    Capture-Until "306-git-tracked-installed.png" "success" 15   # "Installed Greeter from Git"
+    Start-Sleep -Seconds 2
     python "$PSScriptRoot/repository_server.py" move-sample (Join-Path $repositories "greeter-tracked") 0.2.0
     if ($LASTEXITCODE -ne 0) { throw "the tracked branch did not move" }
     $moved = (python "$PSScriptRoot/repository_server.py" commit (Join-Path $repositories "greeter-tracked") release)
@@ -2068,9 +2086,11 @@ if (Test-Path $openLog) { Remove-Item -Force $openLog }
 $env:PANE_TEST_FILE_INDEX_HOME = (Resolve-Path -LiteralPath $filesFolder).Path
 $env:PANE_TEST_OPEN_FILE_LOG = $openLog
 $process = Start-Pane "stderr-files.log" @("--install", "target/guests/packages/sample-files")
-Send "{ENTER}"; Start-Sleep -Seconds 3   # Install; the index walks the fixture
-Capture "220-files-installed.png"
-Check "220-files-installed.png" "success"   # "Installed Rust files sample"
+# The answer is a toast, which leaves 3 seconds after it shows (#249): it is
+# captured as it shows, and the settle the fixed wait gave follows it.
+Send "{ENTER}"   # Install; the index walks the fixture
+Capture-Until "220-files-installed.png" "success" 15   # "Installed Rust files sample"
+Start-Sleep -Seconds 2
 # The install lands on a blank root search, where Escape hides the
 # launcher (release run 37698693722's frame 221 was the desktop): the
 # return to root key keeps it.
