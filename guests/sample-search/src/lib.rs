@@ -30,7 +30,7 @@ use pane_extension::http;
 use pane_extension::view::{
     Cx, IntoAnswer, Pending, Space, View, button, column, empty_state, item, list, text_input,
 };
-use pane_extension::{Command, LaunchRecord, preferences, settings};
+use pane_extension::{Command, Icon, LaunchRecord, Tone, preferences, settings};
 use serde::Deserialize;
 
 /// The address used until the user sets another.
@@ -308,16 +308,23 @@ impl View for Search {
                     );
                 }
                 if results.is_empty() {
-                    list = list.child(
-                        empty_state(match failed {
-                            Some(why) => why.clone(),
-                            None => "Type to search the package registry".into(),
-                        })
-                        .description(
-                            "Results come from the service as you type; Enter shows a \
-                             package's details",
-                        )
-                        .child(button("Service address").on_click(cx.push(|this| {
+                    let state = empty_state(match failed {
+                        Some(why) => why.clone(),
+                        None => "Type to search the package registry".into(),
+                    })
+                    .description(
+                        "Results come from the service as you type; Enter shows a \
+                         package's details",
+                    );
+                    // A failed search draws as one: the warning sign, in the
+                    // theme's danger colour, beside the service's answer.
+                    let state = if failed.is_some() {
+                        state.icon(Icon::filled("warning").tint(Tone::Danger))
+                    } else {
+                        state
+                    };
+                    list = list.child(state.child(button("Service address").on_click(cx.push(
+                        |this| {
                             let held = match this {
                                 Search::Rows { query, .. } => query.clone(),
                                 _ => String::new(),
@@ -326,8 +333,8 @@ impl View for Search {
                             Search::Address {
                                 address: service().unwrap_or_default(),
                             }
-                        }))),
-                    );
+                        },
+                    ))));
                 }
                 list.into_answer()
             }
