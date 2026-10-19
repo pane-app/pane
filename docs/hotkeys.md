@@ -111,7 +111,10 @@ recorder, the Shortcuts page's hotkey cells and the extension page's — asks
 the hook adapter for a recording session while it listens. The hook holds
 the keys back from Windows and reports what was pressed, so the Windows key
 alone, a double tap and the side of a modifier are recorded without the
-Start menu opening. What the session reports takes the same checks a
+Start menu opening. A left-hand modifier — the one a keyboard with a single
+key of the kind has — is recorded as the modifier, which either side then
+presses (Ctrl+Alt+G, the Windows key alone); a right-hand one is recorded by
+its side (Right Ctrl). What the session reports takes the same checks a
 keystroke does, with the same explanations. Escape and Tab still cancel.
 The session ends when the recorder stops listening, the window loses focus
 or Pane quits. On macOS and Linux the recorder is unchanged and offers none
