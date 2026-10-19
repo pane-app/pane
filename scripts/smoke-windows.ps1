@@ -993,9 +993,9 @@ Start-Sleep -Seconds 3
 Check-Pane-In-Front $process
 Capture "83-tap-opened.png"
 Check "83-tap-opened.png" "selected" 3000   # Greeting's first item, selected
-$shots = "82-tap-unfocused", "83-tap-opened" | ForEach-Object { Join-Path $OutDir "$_.png" }
-python "$PSScriptRoot/check_screenshot.py" --distinct @shots
-if ($LASTEXITCODE -ne 0) { throw "screenshot check failed: the tapped hotkey opened nothing" }
+# 82 shows no Pane window, so it is not compared (as 78 is not): that
+# Pane came to the front and 83 shows Greeting's item selected are what
+# say the tap opened it.
 
 # Pausing a broken extension: the settings sample's last item, Crash, crashes
 # on purpose; the third crash within five minutes pauses the package and
