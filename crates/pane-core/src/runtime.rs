@@ -3630,8 +3630,14 @@ impl Code {
         // world's shape check runs: the current one's, or the previous
         // one's while its window lasts (see `previous`).
         match previous::Which::of(&component, &self.engine) {
-            previous::Which::Current => self.check_exports(&component)?,
-            previous::Which::Previous => previous::check_exports(&component, &self.engine)?,
+            previous::Which::Current => {
+                self.check_exports(&component)?;
+                self.check_root_results(&component)?;
+            }
+            previous::Which::Previous => {
+                previous::check_exports(&component, &self.engine)?;
+                previous::check_root_results(&component, &self.engine)?;
+            }
         }
         Ok(component)
     }
@@ -3717,6 +3723,43 @@ impl Code {
             func(handle_event)?,
             &cx,
         )
+    }
+
+    /// Type-checks the component's root results' `results-for` against the
+    /// call Pane makes, when it exports them, from its type alone, as
+    /// [`Code::check_exports`] does its command's. The bindings an instance
+    /// takes the interface through are made without a word when they do
+    /// not fit, and a component that has the interface in another shape
+    /// would install and then fail when root search asks it ("it does not
+    /// export …"): a build of an older shape is refused here instead, saying
+    /// so (ADR 0046).
+    fn check_root_results(&self, component: &Component) -> Result<(), CallError> {
+        use wasmtime::component::types::ComponentItem;
+
+        let ty = component.component_type();
+        let Some(ComponentItem::ComponentInstance(interface)) = ty
+            .get_export(&self.engine, ROOT_RESULTS_INTERFACE)
+            .map(|export| export.ty)
+        else {
+            return Ok(());
+        };
+        let older = |reason: String| CallError::OlderApiShape {
+            api: crate::packages::EXTENSION_API,
+            reason,
+        };
+        let Some(ComponentItem::ComponentFunc(func)) = interface
+            .get_export(&self.engine, "results-for")
+            .map(|export| export.ty)
+        else {
+            return Err(older(
+                "its root results have no function `results-for`".into(),
+            ));
+        };
+        func.typecheck::<
+            (String, root_results::WallTime),
+            (Result<Vec<root_results::RootResult>, String>,),
+        >(&ty.instance_type())
+            .map_err(|error| older(format!("`results-for`: {error:#}")))
     }
 
     /// Type-checks `path` against the linker and the extension world, and

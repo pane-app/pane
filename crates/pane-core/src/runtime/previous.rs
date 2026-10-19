@@ -821,6 +821,39 @@ pub(crate) fn check_exports(component: &Component, engine: &Engine) -> Result<()
     )
 }
 
+/// The previous world's twin of `Code::check_root_results`: type-checks the
+/// component's root results' `results-for` against the call Pane makes,
+/// when it exports them, so a component of another shape of the version it
+/// names — the default extensions released before 0.1 was frozen answered
+/// the query alone — is refused when it is installed, not when root search
+/// asks it (ADR 0046).
+pub(crate) fn check_root_results(component: &Component, engine: &Engine) -> Result<(), CallError> {
+    use wasmtime::component::types::ComponentItem;
+
+    let ty = component.component_type();
+    let Some(ComponentItem::ComponentInstance(interface)) = ty
+        .get_export(engine, ROOT_RESULTS_INTERFACE)
+        .map(|export| export.ty)
+    else {
+        return Ok(());
+    };
+    let api = crate::packages::EXTENSION_API_PREVIOUS.unwrap_or(crate::packages::EXTENSION_API);
+    let older = |reason: String| CallError::OlderApiShape { api, reason };
+    let Some(ComponentItem::ComponentFunc(func)) = interface
+        .get_export(engine, "results-for")
+        .map(|export| export.ty)
+    else {
+        return Err(older(
+            "its root results have no function `results-for`".into(),
+        ));
+    };
+    func.typecheck::<
+        (String, root_results::WallTime),
+        (Result<Vec<root_results::RootResult>, String>,),
+    >(&ty.instance_type())
+        .map_err(|error| older(format!("`results-for`: {error:#}")))
+}
+
 /// The previous world's twin of `Code::check`: type-checks `component`
 /// against the linker and the previous extension world, and against each
 /// interface `exports` names too, without instantiating it, so no guest

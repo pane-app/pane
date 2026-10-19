@@ -43,6 +43,7 @@ members = [
     "fixtures/old-api",
     "fixtures/mismatched-api",
     "fixtures/previous-api",
+    "fixtures/old-root-results",
     "fixtures/designed",
     "fixtures/failing-start",
     "fixtures/refusing-view",

@@ -493,7 +493,7 @@ fn built_for_previous(folder: &Path, guest_name: &str) -> PathBuf {
     folder
 }
 
-const UNSUPPORTED: [(&str, Unsupported, &str); 12] = [
+const UNSUPPORTED: [(&str, Unsupported, &str); 13] = [
     ("no folder", |_| {}, "Cannot open"),
     (
         "no manifest",
@@ -565,6 +565,16 @@ const UNSUPPORTED: [(&str, Unsupported, &str); 12] = [
         "mismatched API shape",
         |folder| {
             built_for_previous(folder, "mismatched_api");
+        },
+        OLDER_SHAPE,
+    ),
+    (
+        // Its root results' `results-for` answers the query alone, as the
+        // default extensions released before 0.1 was frozen did: refused
+        // when it is installed, not when root search asks it.
+        "older root results shape",
+        |folder| {
+            built_for_previous(folder, "old_root_results");
         },
         OLDER_SHAPE,
     ),
