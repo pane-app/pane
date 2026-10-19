@@ -927,11 +927,10 @@ key 36; sleep 0.5
 capture_until 69-alias-answer.png success 15   # "Echo heard “hello”"
 key 53; sleep 1   # clears the query
 type_text zqx; sleep 1
-capture 70-fallback-listed.png   # "No results for “zqx”", then Echo, not selected
-key 125; sleep 1
-capture 71-fallback-chosen.png
-check 71-fallback-chosen.png selected 3000   # Echo, now selected
-python3 "$(dirname "$0")/check_screenshot.py" --distinct "$out"/{70-fallback-listed,71-fallback-chosen}.png
+# Nothing but the fallbacks is listed, so the first is selected already
+# (ADR 0031): Enter sends the text to it, as the empty state says.
+capture 70-fallback-listed.png   # "Nothing matches “zqx”", then Echo, selected
+check 70-fallback-listed.png selected 3000
 key 36; sleep 0.5
 capture_until 72-fallback-answer.png success 15   # Echo's toast: "Echo heard “zqx”"
 python3 "$(dirname "$0")/check_screenshot.py" --distinct "$out"/{69-alias-answer,72-fallback-answer}.png

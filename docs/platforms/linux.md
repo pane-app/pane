@@ -465,8 +465,8 @@ Xvfb/lavapipe setup): all checks of the whole smoke passed.
 | --- | --- |
 | "ec hello": the alias row selected, the fallback below | [68-alias-row.png](evidence/linux-x11/68-alias-row.png) |
 | Enter: Echo's answer | [69-alias-answer.png](evidence/linux-x11/69-alias-answer.png) |
-| "zqx": no results, the fallback not selected | [70-fallback-listed.png](evidence/linux-x11/70-fallback-listed.png) |
-| Down and Enter: Echo's answer to "zqx" | [72-fallback-answer.png](evidence/linux-x11/72-fallback-answer.png) |
+| "zqx": nothing matches, the first fallback selected (ADR 0031) | [70-fallback-listed.png](evidence/linux-x11/70-fallback-listed.png) |
+| Enter: Echo's answer to "zqx" | [72-fallback-answer.png](evidence/linux-x11/72-fallback-answer.png) |
 | Extension disabled: "ec hello" lists nothing | [73-alias-disabled.png](evidence/linux-x11/73-alias-disabled.png) |
 
 (Screenshots 66 and 67, the extension list after saving the alias and the

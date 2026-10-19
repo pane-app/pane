@@ -1123,13 +1123,10 @@ Send "{ENTER}"; Start-Sleep -Milliseconds 500
 Capture-Until "69-alias-answer.png" "success" 15   # Echo's toast: "Echo heard “hello”"
 Send "{ESC}"; Start-Sleep -Seconds 1   # clears the query
 Send "zqx"; Start-Sleep -Seconds 1
-Capture "70-fallback-listed.png"   # "No results for “zqx”", then Echo, not selected
-Send "{DOWN}"; Start-Sleep -Seconds 1
-Capture "71-fallback-chosen.png"
-Check "71-fallback-chosen.png" "selected" 3000   # Echo, now selected
-$shots = "70-fallback-listed", "71-fallback-chosen" | ForEach-Object { Join-Path $OutDir "$_.png" }
-python "$PSScriptRoot/check_screenshot.py" --distinct @shots
-if ($LASTEXITCODE -ne 0) { throw "screenshot check failed: Down did not select the fallback" }
+# Nothing but the fallbacks is listed, so the first is selected already
+# (ADR 0031): Enter sends the text to it, as the empty state says.
+Capture "70-fallback-listed.png"   # "Nothing matches “zqx”", then Echo, selected
+Check "70-fallback-listed.png" "selected" 3000
 Send "{ENTER}"; Start-Sleep -Milliseconds 500
 Capture-Until "72-fallback-answer.png" "success" 15   # Echo's toast: "Echo heard “zqx”"
 $shots = "69-alias-answer", "72-fallback-answer" | ForEach-Object { Join-Path $OutDir "$_.png" }
