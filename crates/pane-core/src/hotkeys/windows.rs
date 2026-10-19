@@ -41,7 +41,12 @@
 //! the pages are not pinned. A watchdog window that receives raw keyboard
 //! input notices when key events stop reaching the hook — Windows has
 //! silently removed it — and installs it again, giving up with a
-//! diagnostic after repeated failures within a short time. The
+//! diagnostic after repeated failures within a short time. The raw input
+//! is registered only while no window of Pane's is in front: while the
+//! process that registered it has the foreground, Windows calls none of
+//! that process's low-level hooks, so a recording session would hear
+//! nothing and the watchdog would take every key typed into Pane for a
+//! removed hook. The
 //! recognizer's modifiers are re-read from the system on a session
 //! unlock, on a resume and when an event contradicts them, so a release
 //! missed while the secure desktop had the keyboard never leaves a
@@ -67,18 +72,22 @@ use ::windows::Win32::System::Threading::{
     GetCurrentProcess, GetCurrentProcessId, GetCurrentThread, GetCurrentThreadId,
     SetThreadPriority, THREAD_PRIORITY_TIME_CRITICAL,
 };
+use ::windows::Win32::UI::Accessibility::{HWINEVENTHOOK, SetWinEventHook, UnhookWinEvent};
 use ::windows::Win32::UI::Input::KeyboardAndMouse::{
     GetAsyncKeyState, HOT_KEY_MODIFIERS, INPUT, INPUT_KEYBOARD, KEYBD_EVENT_FLAGS, KEYBDINPUT,
     KEYEVENTF_KEYUP, MOD_ALT, MOD_CONTROL, MOD_NOREPEAT, MOD_SHIFT, MOD_WIN, RegisterHotKey,
     SendInput, UnregisterHotKey, VIRTUAL_KEY, VK_ESCAPE, VK_LCONTROL, VK_LMENU, VK_LSHIFT, VK_LWIN,
     VK_NONAME, VK_RCONTROL, VK_RMENU, VK_RSHIFT, VK_RWIN, VK_TAB,
 };
-use ::windows::Win32::UI::Input::{RAWINPUTDEVICE, RIDEV_INPUTSINK, RegisterRawInputDevices};
+use ::windows::Win32::UI::Input::{
+    RAWINPUTDEVICE, RIDEV_INPUTSINK, RIDEV_REMOVE, RegisterRawInputDevices,
+};
 use ::windows::Win32::UI::WindowsAndMessaging::{
-    CallNextHookEx, DefWindowProcW, GetForegroundWindow, GetWindowThreadProcessId, HHOOK,
-    KBDLLHOOKSTRUCT, LLKHF_EXTENDED, LLKHF_INJECTED, LLKHF_UP, MSG, PBT_APMRESUMEAUTOMATIC,
-    PBT_APMRESUMESUSPEND, PostThreadMessageW, SetWindowsHookExW, UnhookWindowsHookEx,
-    WH_KEYBOARD_LL, WM_HOTKEY, WM_INPUT, WM_POWERBROADCAST, WM_WTSSESSION_CHANGE,
+    CallNextHookEx, DefWindowProcW, EVENT_SYSTEM_FOREGROUND, GetForegroundWindow,
+    GetWindowThreadProcessId, HHOOK, KBDLLHOOKSTRUCT, LLKHF_EXTENDED, LLKHF_INJECTED, LLKHF_UP,
+    MSG, OBJID_WINDOW, PBT_APMRESUMEAUTOMATIC, PBT_APMRESUMESUSPEND, PostThreadMessageW,
+    SetWindowsHookExW, UnhookWindowsHookEx, WH_KEYBOARD_LL, WINEVENT_OUTOFCONTEXT, WM_HOTKEY,
+    WM_INPUT, WM_POWERBROADCAST, WM_WTSSESSION_CHANGE,
 };
 use ::windows::core::HRESULT;
 
@@ -1052,10 +1061,15 @@ struct Hooked {
     /// The watchdog's window, which receives the raw keyboard input and
     /// the session and power notifications. Held here for as long as the
     /// state lives, so the window — and with it the raw-input registration
-    /// and the session notification — ends with the hook; nothing else
-    /// reads it.
-    #[allow(dead_code)]
+    /// and the session notification — ends with the hook; the raw input
+    /// is registered for it again when Pane leaves the front.
     window: Window,
+    /// Whether the raw keyboard input is registered: only while no window
+    /// of Pane's is in front (see [`follow_raw_input`]).
+    raw: bool,
+    /// The hook on the foreground's changes, which the raw input follows;
+    /// invalid if Windows refused it.
+    foreground: HWINEVENTHOOK,
     /// The adapter's thread, which a recognized chord is posted to.
     adapter: u32,
     /// The hook's state, shared with the adapter.
@@ -1085,6 +1099,10 @@ impl Drop for Hooked {
     fn drop(&mut self) {
         // SAFETY: this thread's own hook.
         let _ = unsafe { UnhookWindowsHookEx(self.hook) };
+        if !self.foreground.is_invalid() {
+            // SAFETY: this thread's own event hook.
+            let _ = unsafe { UnhookWinEvent(self.foreground) };
+        }
         update(&self.report, |report| {
             report.hook = 0;
             report.watchdog = 0;
@@ -1125,12 +1143,38 @@ fn start_hook(adapter: u32, report: Arc<Mutex<Report>>) -> Result<((), Option<HW
         }
     };
     let watchdog = window.handle();
-    if let Err(problem) = watch_input(watchdog) {
+    // The raw input follows the foreground (see `follow_raw_input`): not
+    // registered while a window of Pane's is in front, as when a
+    // recording session starts the hook from Settings.
+    let raw = !is_pane(front());
+    if raw && let Err(problem) = watch_input(watchdog) {
         // SAFETY: this thread's own hook, just installed.
         let _ = unsafe { UnhookWindowsHookEx(hook) };
         return Err(format!(
             "the watchdog could not watch the keyboard: {problem}"
         ));
+    }
+    // SAFETY: no module to load the callback from, every process and
+    // thread's events, out of process: the callback runs on this thread as
+    // it pumps its messages, and never blocks the window that came to the
+    // front.
+    let foreground = unsafe {
+        SetWinEventHook(
+            EVENT_SYSTEM_FOREGROUND,
+            EVENT_SYSTEM_FOREGROUND,
+            None,
+            Some(foreground_changed),
+            0,
+            0,
+            WINEVENT_OUTOFCONTEXT,
+        )
+    };
+    if foreground.is_invalid() {
+        crate::diagnostics::report_line(
+            "Windows did not tell Pane's keyboard hook of the foreground's changes; its watchdog \
+             keeps the keyboard's raw input as it started, and the hook may miss keys while \
+             Pane is in front",
+        );
     }
     // A session notification that fails is a lost resync, not a lost hook:
     // the resume and contradiction re-reads still cover it.
@@ -1148,6 +1192,8 @@ fn start_hook(adapter: u32, report: Arc<Mutex<Report>>) -> Result<((), Option<HW
             recognizer: Recognizer::default(),
             hook,
             window,
+            raw,
+            foreground,
             adapter,
             report: report.clone(),
             recording: false,
@@ -1412,19 +1458,86 @@ fn post(adapter: u32, message: u32, word: usize) {
 /// window of any other process in front ends the session, whoever it
 /// belongs to — the keys are that application's to take.
 fn pane_in_front() -> bool {
+    is_pane(front())
+}
+
+/// The window in front.
+fn front() -> HWND {
     // SAFETY: no arguments; the front window's handle is only read.
-    let front = unsafe { GetForegroundWindow() };
-    if front.is_invalid() {
+    unsafe { GetForegroundWindow() }
+}
+
+/// Whether `window` is one of Pane's own process.
+fn is_pane(window: HWND) -> bool {
+    if window.is_invalid() {
         return false;
     }
     let mut process = 0;
     // SAFETY: a window handle; the window's process id is written to it.
     // The call's answer is the thread that made the window, not the
     // process — the id the comparison needs is the one written.
-    let thread = unsafe { GetWindowThreadProcessId(front, Some(&mut process)) };
+    let thread = unsafe { GetWindowThreadProcessId(window, Some(&mut process)) };
     // SAFETY: no arguments; it reads this process's own id.
     let ours = unsafe { GetCurrentProcessId() };
     thread != 0 && process == ours
+}
+
+/// The foreground hook's callback, on the hook thread: called once for
+/// each window that comes to the front, whose owner the watchdog's raw
+/// input follows. A panic must not unwind into Windows, which would end
+/// Pane, so it catches one.
+unsafe extern "system" fn foreground_changed(
+    _hook: HWINEVENTHOOK,
+    event: u32,
+    window: HWND,
+    object: i32,
+    child: i32,
+    _thread: u32,
+    _moment: u32,
+) {
+    let _ = std::panic::catch_unwind(|| {
+        if event != EVENT_SYSTEM_FOREGROUND || object != OBJID_WINDOW.0 || child != 0 {
+            return;
+        }
+        let _ = HOOKED.try_with(|hooked| {
+            let Ok(mut held) = hooked.try_borrow_mut() else {
+                return;
+            };
+            if let Some(state) = held.as_mut() {
+                follow_raw_input(state, window);
+            }
+        });
+    });
+}
+
+/// Registers the watchdog's raw keyboard input while `front`, the window
+/// in front, is another program's, and removes it while it is Pane's:
+/// while the process that registered the keyboard's raw input has the
+/// foreground, Windows calls none of that process's low-level hooks — a
+/// recording session started from Settings heard nothing, and the
+/// watchdog took every key typed into Pane for a removed hook. While
+/// Pane is in front its own windows have the keys, so the watchdog has
+/// nothing to watch for; it counts afresh when Pane leaves the front.
+fn follow_raw_input(state: &mut Hooked, front: HWND) {
+    let wanted = !is_pane(front);
+    if wanted == state.raw {
+        return;
+    }
+    let changed = if wanted {
+        watch_input(state.window.handle())
+    } else {
+        unwatch_input()
+    };
+    match changed {
+        Ok(()) => {
+            state.raw = wanted;
+            state.unseen = 0;
+        }
+        Err(problem) => crate::diagnostics::report_line(&format!(
+            "the keyboard hook's watchdog could not {} the keyboard's raw input: {problem}",
+            if wanted { "register" } else { "remove" }
+        )),
+    }
 }
 
 /// The adapter's thread, to post the presses to; `None` if the hook
@@ -1639,6 +1752,20 @@ fn watch_input(window: HWND) -> Result<(), String> {
         hwndTarget: window,
     };
     // SAFETY: one device, registered for this window.
+    unsafe { RegisterRawInputDevices(&[device], size_of::<RAWINPUTDEVICE>() as u32) }
+        .map_err(|error| error.message())
+}
+
+/// Removes the keyboard's raw input [`watch_input`] registered.
+fn unwatch_input() -> Result<(), String> {
+    let device = RAWINPUTDEVICE {
+        usUsagePage: 0x01,
+        usUsage: 0x06,
+        // A removal names no window.
+        dwFlags: RIDEV_REMOVE,
+        hwndTarget: HWND::default(),
+    };
+    // SAFETY: one device, whose registration this process holds.
     unsafe { RegisterRawInputDevices(&[device], size_of::<RAWINPUTDEVICE>() as u32) }
         .map_err(|error| error.message())
 }
