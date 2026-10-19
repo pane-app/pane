@@ -2491,9 +2491,10 @@ try {
 # in Settings), also after a restart, and once enabled again it is kept
 # again, also after a restart. The command opens Pane's split view: the
 # records by day, a type dropdown and the selected record's Information.
-# Enter on a record runs Paste (#150): Pane cannot paste on Windows yet,
-# so it copies the record again instead, closes the window and says so in
-# a HUD; Pane is then started again. The smoke copies only text of its own
+# Enter on a record runs Paste (#150): Pane pastes it into the
+# application that was in front before it (#125) -- a Notepad of the
+# smoke's own -- closing the window, and the record stays on the
+# clipboard; Pane is then started again. The smoke copies only text of its own
 # ("pane-smoke-...") and a file of its own folder, and so replaces what
 # was on the clipboard without reading or putting it back: run it on CI's
 # runner or a desktop given to it, as the rest of the smoke already takes
@@ -2654,15 +2655,44 @@ try {
     Wait-For $history '"capture":"on"' $true
     Copy-Text "pane-smoke-resumed" $null
     Wait-Kept "pane-smoke-resumed" $true
+    # Paste reaches the application that was in front before Pane (#125):
+    # a Notepad of the smoke's own, on an empty file, brought to the front
+    # while Pane runs, so Pane's foreground watcher records it as the
+    # target. Pane started straight into its own window has none, and
+    # Paste says "There is no application in front to paste into".
+    $pasteFile = Join-Path $OutDir "paste-here.txt"
+    Set-Content -Path $pasteFile -Value "" -NoNewline
+    $pasteTarget = Start-Process notepad -PassThru -ArgumentList @("`"$pasteFile`"")
+    for ($i = 0; $i -lt 100 -and $pasteTarget.MainWindowHandle -eq 0; $i++) {
+        Start-Sleep -Milliseconds 100; $pasteTarget.Refresh()
+    }
+    if ($pasteTarget.MainWindowHandle -eq 0) { throw "the smoke's Notepad window did not appear" }
+    [Win]::SetForegroundWindow($pasteTarget.MainWindowHandle) | Out-Null
+    for ($i = 0; $i -lt 50 -and [Win]::GetForegroundWindow() -ne $pasteTarget.MainWindowHandle; $i++) {
+        Start-Sleep -Milliseconds 100
+    }
+    if ([Win]::GetForegroundWindow() -ne $pasteTarget.MainWindowHandle) { throw "the smoke's Notepad did not come to the front" }
+    Start-Sleep -Seconds 1
     Open-History
     Capture "282-clipboard-kept.png"   # evidence only: the three records, newest first
     Send "pane-smoke-second"; Start-Sleep -Seconds 1   # the filter leaves that record, selected
-    Send "{ENTER}"; Start-Sleep -Seconds 2   # Paste: not available yet, so it copies it again (#150)
-    Capture "283-clipboard-copied.png"   # evidence only: the HUD "Copied — paste is not available here yet", Pane hidden
-    if ([PaneClip]::GetText() -ne "pane-smoke-second") { throw "Enter did not copy the record" }
-    if ([Win]::GetForegroundWindow() -eq $process.MainWindowHandle) { throw "Paste left Pane's window in front" }
+    Send "{ENTER}"   # Paste: into Notepad, closing Pane's window
+    $pasted = $false
+    for ($i = 0; $i -lt 100; $i++) {
+        if ([Win]::GetForegroundWindow() -eq $pasteTarget.MainWindowHandle) { $pasted = $true; break }
+        Start-Sleep -Milliseconds 100
+    }
+    if (-not $pasted) { throw "Paste did not bring the application it pastes into to the front" }
+    Start-Sleep -Seconds 2
+    Capture "283-clipboard-pasted.png"   # evidence only: Notepad holding "pane-smoke-second", Pane hidden
+    # What Pane put on the clipboard to paste stays there.
+    if ([PaneClip]::GetText() -ne "pane-smoke-second") { throw "Paste did not put the record on the clipboard" }
     Start-Sleep -Seconds 1
-    if ((Kept-Texts)[0] -ne "pane-smoke-second") { throw "the copied record did not move to the front" }
+    if ((Kept-Texts)[0] -ne "pane-smoke-second") { throw "the pasted record did not move to the front" }
+    # Notepad saves what was pasted, and the file says it arrived.
+    Send "^s"; Start-Sleep -Seconds 2
+    if (-not (Select-String -Quiet -SimpleMatch "pane-smoke-second" $pasteFile)) { throw "Paste did not reach Notepad" }
+    [void]$pasteTarget.CloseMainWindow()
     Stop-Pane $process
     $process = Start-Pane "stderr-clipboard-pasted.log"
     Open-Extension "Clipboard History"
