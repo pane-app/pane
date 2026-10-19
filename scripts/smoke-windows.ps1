@@ -2185,14 +2185,20 @@ try {
     Send "{ESC}"; Start-Sleep -Seconds 1   # clears the query
     Send "package search"; Start-Sleep -Seconds 1
     Send "{ENTER}"; Start-Sleep -Seconds 3   # open Package search
-    Capture "162-command-opened.png"   # its own list, its search field empty
-    Check "162-command-opened.png" "selected" 3000   # its first row, selected
-    Send "{DOWN}"; Start-Sleep -Milliseconds 120; Send "{ENTER}"; Start-Sleep -Seconds 2   # Service address: its form
-    Send "http://127.0.0.1:$servicePort"
-    Send "{ENTER}"; Start-Sleep -Seconds 2   # Save
-    Capture "163-service-set.png"   # "Searching http://127.0.0.1:<port> from now on"
-    Check "163-service-set.png" "success"
-    Send "{ESC}"; Start-Sleep -Seconds 1   # back to the command, its search field empty
+    Capture "162-command-opened.png"   # its search field empty, the empty state's Service address button below
+    # The designed view (#240): the command opens on its empty state, whose
+    # Service address button Tab reaches; Enter opens the address view, whose
+    # field holds the address in use, so Select All and the typing replace it;
+    # Tab and Enter press Save, which writes the setting the search reads and
+    # returns to the search, its field empty. The answer is the setting, not a
+    # line of text: the designed view's pop says nothing.
+    Send "{TAB}"; Start-Sleep -Milliseconds 500
+    Send "{ENTER}"; Start-Sleep -Seconds 2   # Service address: its view
+    Send "^a"
+    Send "http://127.0.0.1:$servicePort"; Start-Sleep -Seconds 1
+    Capture "163-service-set.png"   # the address view, holding the new address
+    Send "{TAB}"; Start-Sleep -Milliseconds 120; Send "{ENTER}"; Start-Sleep -Seconds 1   # Save
+    Wait-For (Join-Path $env:PANE_DATA_DIR "extensions/settings.json") "`"service`": `"http://127.0.0.1:$servicePort`"" $true
     Send "aurora"; Start-Sleep -Seconds 3
     Capture "164-search-results.png"   # aurora-charts, selected, and aurora-cli
     Check "164-search-results.png" "selected" 3000

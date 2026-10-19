@@ -2075,14 +2075,20 @@ if grep -q '^GET' "$service_log"; then echo "root search reached the service"; e
 "$xdotool" key Escape; sleep 1   # clears the query
 "$xdotool" type --delay 50 'package search'; sleep 1
 "$xdotool" key Return; sleep 3   # open Package search
-capture 162-command-opened.png   # its own list, its search field empty
-check 162-command-opened.png selected 3000   # its first row, selected
-"$xdotool" key Down Return; sleep 2   # Service address: its form
-"$xdotool" type --delay 20 "http://127.0.0.1:$service_port"
-"$xdotool" key Return; sleep 2   # Save
-capture 163-service-set.png   # "Searching http://127.0.0.1:<port> from now on"
-check 163-service-set.png success
-"$xdotool" key Escape; sleep 1   # back to the command, its search field empty
+capture 162-command-opened.png   # its search field empty, the empty state's Service address button below
+# The designed view (#240): the command opens on its empty state, whose
+# Service address button Tab reaches; Enter opens the address view, whose
+# field holds the address in use, so Select All and the typing replace it;
+# Tab and Enter press Save, which writes the setting the search reads and
+# returns to the search, its field empty. The answer is the setting, not a
+# line of text: the designed view's pop says nothing.
+"$xdotool" key Tab; sleep 0.5
+"$xdotool" key Return; sleep 2   # Service address: its view
+"$xdotool" key ctrl+a
+"$xdotool" type --delay 20 "http://127.0.0.1:$service_port"; sleep 1
+capture 163-service-set.png   # the address view, holding the new address
+"$xdotool" key Tab Return; sleep 1   # Save
+wait_for "$PANE_DATA_DIR/extensions/settings.json" "\"service\": \"http://127.0.0.1:$service_port\"" present
 "$xdotool" type --delay 50 aurora; sleep 3
 capture 164-search-results.png   # aurora-charts, selected, and aurora-cli
 check 164-search-results.png selected 3000

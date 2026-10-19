@@ -1895,14 +1895,20 @@ if grep -q '^GET' "$service_log"; then echo "root search reached the service"; e
 key 53; sleep 1   # clears the query
 type_text 'package search'; sleep 1
 key 36; sleep 3   # open Package search
-capture 162-command-opened.png   # its own list, its search field empty
-check 162-command-opened.png selected 3000   # its first row, selected
-key 125; key 36; sleep 2   # Service address: its form
-type_text "http://127.0.0.1:$service_port"
-key 36; sleep 2   # Save
-capture 163-service-set.png   # "Searching http://127.0.0.1:<port> from now on"
-check 163-service-set.png success
-key 53; sleep 1   # back to the command, its search field empty
+capture 162-command-opened.png   # its search field empty, the empty state's Service address button below
+# The designed view (#240): the command opens on its empty state, whose
+# Service address button Tab reaches; Enter opens the address view, whose
+# field holds the address in use, so Select All and the typing replace it;
+# Tab and Enter press Save, which writes the setting the search reads and
+# returns to the search, its field empty. The answer is the setting, not a
+# line of text: the designed view's pop says nothing.
+key 48; sleep 0.5
+key 36; sleep 2   # Service address: its view
+command_key a
+type_text "http://127.0.0.1:$service_port"; sleep 1
+capture 163-service-set.png   # the address view, holding the new address
+key 48; key 36; sleep 1   # Save
+wait_for "$PANE_DATA_DIR/extensions/settings.json" "\"service\": \"http://127.0.0.1:$service_port\"" present
 type_text aurora; sleep 3
 capture 164-search-results.png   # aurora-charts, selected, and aurora-cli
 check 164-search-results.png selected 3000
