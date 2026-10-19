@@ -1290,7 +1290,7 @@ wait_reloaded() {   # wait_reloaded <built component> <component before the save
   for _ in $(seq 600); do
     managed=$(find "$PANE_DATA_DIR/extensions/packages" -name "$(basename "$1")" | head -1)
     if [ -n "$managed" ] && ! cmp -s "$1" "$2" && cmp -s "$1" "$managed"; then
-      sleep 3; return
+      return
     fi
     sleep 0.5
   done
@@ -1304,7 +1304,14 @@ wait_failed() {   # wait_failed <failures before>
   done
   echo "Pane did not report the failed build"; exit 1
 }
-say_hello() {   # from root: open the developed command, the first row, and run its item
+# From root: open the developed command $1 by its title, and run its item.
+# The blank query's order (#199) ranks Pane's own rows among the commands,
+# so the command is not root's first row; Select All first replaces a query
+# a previous visit left in the field, where an Escape on a blank field would
+# hide the launcher.
+say_hello() {   # say_hello <title>
+  "$xdotool" key ctrl+a
+  "$xdotool" type --delay 50 "$1"; sleep 1
   "$xdotool" key Return; sleep 3
   "$xdotool" key Return; sleep 2
 }
@@ -1337,7 +1344,7 @@ PY
   a11y shown "Developing $title:" prefix   # "Developing <title>: each save in ..."
   capture "$n-$sample-develop-started.png"
   close_settings
-  say_hello
+  say_hello "$title"
   capture "$((n + 1))-$sample-greeting-before.png"
   check "$((n + 1))-$sample-greeting-before.png" success   # "Hello from ..."
   "$xdotool" key Escape; sleep 1
@@ -1346,9 +1353,8 @@ PY
   cp "$built" "$before"
   set_greeting "$copy/$source" "$(printf "$greeting" "Hello again")"
   wait_reloaded "$built" "$before"
-  capture "$((n + 2))-$sample-rebuilt.png"
-  check "$((n + 2))-$sample-rebuilt.png" success   # "Reloaded <title>"
-  say_hello
+  capture_until "$((n + 2))-$sample-rebuilt.png" success 15   # "Reloaded <title>", a toast that leaves after 3 seconds (#249)
+  say_hello "$title"
   capture "$((n + 3))-$sample-greeting-after.png"
   check "$((n + 3))-$sample-greeting-after.png" success   # "Hello again"
   python3 "$(dirname "$0")/check_screenshot.py" --distinct "$out/$((n + 1))-$sample-greeting-before.png" "$out/$((n + 3))-$sample-greeting-after.png"
@@ -1361,7 +1367,7 @@ PY
   wait_failed "$failures"
   capture "$((n + 4))-$sample-build-failed.png"
   check "$((n + 4))-$sample-build-failed.png" error   # "<title> did not build: ..."
-  say_hello
+  say_hello "$title"
   capture "$((n + 5))-$sample-kept.png"
   check "$((n + 5))-$sample-kept.png" success   # still "Hello again"
   python3 "$(dirname "$0")/check_screenshot.py" --same "$out/$((n + 3))-$sample-greeting-after.png" "$out/$((n + 5))-$sample-kept.png"
@@ -1373,9 +1379,8 @@ PY
   sleep 0.5
   set_greeting "$copy/$source" "$(printf "$greeting" "Hello at last")"
   wait_reloaded "$built" "$before"
-  capture "$((n + 6))-$sample-rebuilt-again.png"
-  check "$((n + 6))-$sample-rebuilt-again.png" success   # "Reloaded <title>"
-  say_hello
+  capture_until "$((n + 6))-$sample-rebuilt-again.png" success 15   # "Reloaded <title>", a toast that leaves after 3 seconds (#249)
+  say_hello "$title"
   capture "$((n + 7))-$sample-greeting-fixed.png"
   check "$((n + 7))-$sample-greeting-fixed.png" success   # "Hello at last"
   python3 "$(dirname "$0")/check_screenshot.py" --distinct "$out/$((n + 3))-$sample-greeting-after.png" "$out/$((n + 7))-$sample-greeting-fixed.png"

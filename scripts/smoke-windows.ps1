@@ -1339,7 +1339,7 @@ function Wait-Reloaded($built, $before) {
     for ($i = 0; $i -lt 600; $i++) {
         $managed = Get-ChildItem -Recurse -File -Filter (Split-Path -Leaf $built) (Join-Path $env:PANE_DATA_DIR "extensions/packages") -ErrorAction SilentlyContinue | Select-Object -First 1
         if ($managed -and -not (Same-File $built $before) -and (Same-File $built $managed.FullName)) {
-            Start-Sleep -Seconds 3; return
+            return
         }
         Start-Sleep -Milliseconds 500
     }
@@ -1357,7 +1357,14 @@ function Wait-Failed($log, $before) {
     throw "Pane did not report the failed build"
 }
 # From root: open the developed command, the first row, and run its item.
-function Say-Hello {
+# From root: open the developed command $title by its title, and run its
+# item. The blank query's order (#199) ranks Pane's own rows among the
+# commands, so the command is not root's first row; Select All first
+# replaces a query a previous visit left in the field, where an Escape on a
+# blank field would hide the launcher.
+function Say-Hello($title) {
+    Send "^a"
+    Send $title; Start-Sleep -Seconds 1
     Send "{ENTER}"; Start-Sleep -Seconds 3
     Send "{ENTER}"; Start-Sleep -Seconds 2
 }
@@ -1398,7 +1405,7 @@ function Develop-Sample($sample, $title, $component, $source, $n, $greeting, $br
     Wait-Shown "Developing ${title}:" -Prefix   # "Developing <title>: each save in ..."
     Capture "$n-$sample-develop-started.png"
     Close-Settings
-    Say-Hello
+    Say-Hello $title
     Capture "$($n + 1)-$sample-greeting-before.png"
     Check "$($n + 1)-$sample-greeting-before.png" "success"   # "Hello from ..."
     Send "{ESC}"; Start-Sleep -Seconds 1
@@ -1407,9 +1414,8 @@ function Develop-Sample($sample, $title, $component, $source, $n, $greeting, $br
     Copy-Item -Force $built $before
     Set-Greeting (Join-Path $copy $source) ($greeting -f "Hello again")
     Wait-Reloaded $built $before
-    Capture "$($n + 2)-$sample-rebuilt.png"
-    Check "$($n + 2)-$sample-rebuilt.png" "success"   # "Reloaded <title>"
-    Say-Hello
+    Capture-Until "$($n + 2)-$sample-rebuilt.png" "success" 15   # "Reloaded <title>", a toast that leaves after 3 seconds (#249)
+    Say-Hello $title
     Capture "$($n + 3)-$sample-greeting-after.png"
     Check "$($n + 3)-$sample-greeting-after.png" "success"   # "Hello again"
     Shots-Differ "$($n + 1)-$sample-greeting-before.png" "$($n + 3)-$sample-greeting-after.png" "the edit changed nothing"
@@ -1421,7 +1427,7 @@ function Develop-Sample($sample, $title, $component, $source, $n, $greeting, $br
     Wait-Failed $log $failures
     Capture "$($n + 4)-$sample-build-failed.png"
     Check "$($n + 4)-$sample-build-failed.png" "error"   # "<title> did not build: ..."
-    Say-Hello
+    Say-Hello $title
     Capture "$($n + 5)-$sample-kept.png"
     Check "$($n + 5)-$sample-kept.png" "success"   # still "Hello again"
     $shots = "$($n + 3)-$sample-greeting-after", "$($n + 5)-$sample-kept" | ForEach-Object { Join-Path $OutDir "$_.png" }
@@ -1435,9 +1441,8 @@ function Develop-Sample($sample, $title, $component, $source, $n, $greeting, $br
     Start-Sleep -Milliseconds 500
     Set-Greeting (Join-Path $copy $source) ($greeting -f "Hello at last")
     Wait-Reloaded $built $before
-    Capture "$($n + 6)-$sample-rebuilt-again.png"
-    Check "$($n + 6)-$sample-rebuilt-again.png" "success"   # "Reloaded <title>"
-    Say-Hello
+    Capture-Until "$($n + 6)-$sample-rebuilt-again.png" "success" 15   # "Reloaded <title>", a toast that leaves after 3 seconds (#249)
+    Say-Hello $title
     Capture "$($n + 7)-$sample-greeting-fixed.png"
     Check "$($n + 7)-$sample-greeting-fixed.png" "success"   # "Hello at last"
     Shots-Differ "$($n + 3)-$sample-greeting-after.png" "$($n + 7)-$sample-greeting-fixed.png" "the fix changed nothing"
