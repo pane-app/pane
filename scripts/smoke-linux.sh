@@ -2547,7 +2547,7 @@ done
 wait_for "$update_registry" '"default": "calculator"' present 6000
 wait_for "$update_registry" '"default": "clipboard-history"' present 6000
 # The check has told the user what it found; nothing has been downloaded.
-capture_until 600-notification.png success 30   # "Pane 99.0.0 is available" (or the setup's own outcome)
+capture 600-notification.png   # evidence only: the toast ("Pane 99.0.0 is available", or the setup's own outcome) leaves after 3 s, and may have left while the defaults were waited for; 601's offer row is what says the check found the update
 "$xdotool" key ctrl+a; "$xdotool" type --delay 50 update; sleep 1
 capture_until 601-offered.png subtitle 30   # the offer row: "Your extensions and settings are kept; ..."
 check 601-offered.png selected 3000   # the row, selected

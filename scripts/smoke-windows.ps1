@@ -2865,8 +2865,7 @@ try {
     }
     if ((Select-String -SimpleMatch "pane-defaults.json" $serverLog).Count -lt 1) { throw "Pane never checked for its own update" }
     Start-Sleep -Seconds 2
-    Capture "600-notification.png"
-    Check "600-notification.png" "success"   # "Pane 99.0.0 is available" (or the setup's own outcome)
+    Capture "600-notification.png"   # evidence only: the toast ("Pane 99.0.0 is available", or the setup's own outcome) leaves after 3 s, and may have left while the defaults were waited for; 601's offer row is what says the check found the update
     Send "^a"; Send "update"; Start-Sleep -Seconds 1
     Capture "601-offered.png"
     Check "601-offered.png" "subtitle"   # the offer row: "Your extensions and settings are kept; ..."

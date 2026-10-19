@@ -2376,8 +2376,7 @@ done
 [ "$(grep -c pane-defaults.json "$out/update-artifact-server.log")" -ge 1 ] \
   || { echo "Pane never checked for its own update"; exit 1; }
 sleep 2
-capture 600-notification.png
-check 600-notification.png success   # "Pane 99.0.0 is available" (or the setup's own outcome)
+capture 600-notification.png   # evidence only: the toast ("Pane 99.0.0 is available", or the setup's own outcome) leaves after 3 s, and may have left while the defaults were waited for; 601's offer row is what says the check found the update
 command_key a; type_text update; sleep 1
 capture 601-offered.png
 check 601-offered.png subtitle   # the offer row: "Your extensions and settings are kept; ..."
