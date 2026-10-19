@@ -966,6 +966,12 @@ Remove-Item -Force $holderScript -ErrorAction SilentlyContinue
 $data = Join-Path $OutDir "tap-hotkeys-data"
 if (Test-Path $data) { Remove-Item -Recurse -Force $data }
 $env:PANE_DATA_DIR = $data
+# A settings record makes the folder no fresh install: a fresh one's Open
+# Pane hotkey is the Windows key alone (#268), which the Greeting
+# assignment below would collide with. The record keeps the Open Pane
+# default, Ctrl+Alt+Space.
+New-Item -ItemType Directory -Force -Path $data | Out-Null
+Set-Content -Path (Join-Path $data "settings.json") -Value '{ "version": 1 }' -Encoding ascii
 $process = Start-Pane "stderr-tap.log" @("--install", "target/guests/packages/sample-settings")
 Send "{ENTER}"; Start-Sleep -Seconds 2   # Install; Greeting is selected
 Open-Extension "Settings sample"
