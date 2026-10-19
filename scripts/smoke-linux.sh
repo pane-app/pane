@@ -1856,10 +1856,16 @@ repository_server_pid=$!
 for _ in $(seq 600); do [ -s "$out/repository-server.port" ] && break; kill -0 "$repository_server_pid" 2>/dev/null || break; sleep 0.1; done
 [ -s "$out/repository-server.port" ] || { echo "the local repository server did not start (see $out/repository-server.log)"; exit 1; }
 repository=http://127.0.0.1:$(cat "$out/repository-server.port")/greeter.git
-start_pane --install "git:$repository"
-focus_launcher
-# The fetch runs after the window shows: capture until its explanation does.
+# The fetch runs after the window shows, and its refusal is a failure toast,
+# which leaves 3 seconds after it shows (#249): start_pane's settle and
+# preview wait outlasted it against the local server, so Pane is started
+# here and the toast captured as it shows, then the launcher focused.
+"$pane" --install "git:$repository" 2>>"$out/stderr.log" &
+pane_pid=$!
 capture_until 300-git-source-only.png error 60   # "The default branch, main (commit …) of the Git repository … holds only the source of …"
+window=$("$xdotool" search --onlyvisible --pid "$pane_pid" 2>/dev/null | head -1)
+[ -n "$window" ] || { echo "Pane window did not appear"; exit 1; }
+focus_launcher
 "$xdotool" key Escape; sleep 1
 "$xdotool" key ctrl+a; "$xdotool" type --delay 50 'install git'; sleep 1
 "$xdotool" key Return; sleep 2   # Install extension from Git…: Settings, its Git field

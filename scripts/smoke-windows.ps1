@@ -1940,9 +1940,15 @@ try {
     for ($i = 0; $i -lt 600 -and -not (Test-Path $portFile) -and -not $server.HasExited; $i++) { Start-Sleep -Milliseconds 100 }
     if (-not (Test-Path $portFile)) { throw "the local repository server did not start" }
     $repository = "http://127.0.0.1:$((Get-Content $portFile).Trim())/greeter.git"
-    $process = Start-Pane "stderr-git.log" @("--install", "git:$repository")
-    # The fetch runs after the window shows: capture until its explanation does.
+    # The fetch runs after the window shows, and its refusal is a failure toast,
+    # which leaves 3 seconds after it shows (#249): start_pane's settle and
+    # preview wait outlasted it against the local server, so Pane is started
+    # here and the toast captured as it shows, then the launcher focused.
+    $process = Start-Process -FilePath "target/debug/pane.exe" -PassThru -RedirectStandardError (Join-Path $OutDir "stderr-git.log") -ArgumentList @("--install", "git:$repository")
     Capture-Until "300-git-source-only.png" "error" 60   # "The default branch, main (commit ...) of the Git repository ... holds only the source of ..."
+    $process.Refresh()
+    if ($process.MainWindowHandle -eq 0) { throw "Pane window did not appear" }
+    Focus-Pane $process
     Send "{ESC}"; Start-Sleep -Seconds 1
     Send "^a"; Send "install git"; Start-Sleep -Seconds 1
     Send "{ENTER}"; Start-Sleep -Seconds 2   # Install extension from Git...: Settings, its Git field
