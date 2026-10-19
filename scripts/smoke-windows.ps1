@@ -2402,9 +2402,11 @@ try {
 # is; Pane's window opens over it, so Notepad is the front application
 # and its window is the first row, selected, and one Enter switches to
 # it. Pane's window closed as the switch happened: the open-pane hotkey
-# brings it back, and typing in the command's search field filters by
-# title, so the second switch finds the window by what is typed. A data
-# folder of its own.
+# brings it back on the Switch Windows list again (the switch closes the
+# window by the reopening setting, whose default restores the view it was
+# left on), and typing in its search field filters by title, so the
+# second switch finds the window by what is typed. A data folder of its
+# own.
 $data = Join-Path $OutDir "switch-windows-data"
 if (Test-Path $data) { Remove-Item -Recurse -Force $data }
 $env:PANE_DATA_DIR = $data
@@ -2447,11 +2449,10 @@ try {
     if (-not $switched) { throw "Switch Windows did not bring the smoke's window to the front" }
     Capture "612-switch-in-front.png"   # evidence only: Notepad is in front, Pane hidden
     # The open-pane hotkey brings the launcher back over Notepad, whose
-    # window is the front application's again; typing filters the list by
-    # title before the second switch.
+    # window is the front application's again, on the restored Switch
+    # Windows list; typing filters it by title before the second switch.
     Send "^% "; Start-Sleep -Seconds 2
-    Send "switch"; Start-Sleep -Seconds 2
-    Send "{ENTER}"; Start-Sleep -Seconds 2
+    Check-Pane-In-Front $process
     Send "switch-me"; Start-Sleep -Seconds 2   # the command's search field filters by title
     Capture "613-switch-filtered.png"
     Check "613-switch-filtered.png" "selected" 3000   # the filtered window's row, selected
