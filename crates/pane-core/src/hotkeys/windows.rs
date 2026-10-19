@@ -367,13 +367,15 @@ fn key_name_of(key: u32, numpad: bool) -> Option<&'static str> {
 }
 
 /// The name of the modifier at `at` — control, alt, shift, the Windows
-/// key — as the record writes it for the tap kinds, with the side prefix
-/// where the session recognized one side (#260).
+/// key — as the record writes it for the tap kinds: the right-hand key by
+/// its side, as the user picked it (#260), and the left-hand one — the
+/// one a keyboard with a single key of the kind has, and the one the
+/// generic codes tools inject are read as — as the modifier, either side
+/// of which the binding takes.
 fn modifier_name(at: usize, side: Side) -> String {
     let name = ["ctrl", "alt", "shift", "win"][at];
     match side {
-        Side::Any => name.into(),
-        Side::Left => format!("l{name}"),
+        Side::Any | Side::Left => name.into(),
         Side::Right => format!("r{name}"),
     }
 }
@@ -392,8 +394,11 @@ fn recorded_text(report: Recorded) -> Option<String> {
                 .enumerate()
                 .filter_map(|(at, side)| {
                     side.map(|side| match side {
-                        Side::Any => ["ctrl", "alt", "shift", "super"][at].into(),
-                        _ => modifier_name(at, side),
+                        // As the tap kinds name them (see `modifier_name`):
+                        // Ctrl+Alt+G recorded with the left-hand keys is
+                        // the chord either side presses.
+                        Side::Any | Side::Left => ["ctrl", "alt", "shift", "super"][at].into(),
+                        Side::Right => modifier_name(at, side),
                     })
                 })
                 .collect();
@@ -1855,6 +1860,52 @@ mod tests {
         }
         for report in reports {
             assert_eq!(unpack(pack(report)), report);
+        }
+    }
+
+    #[test]
+    fn a_recorded_left_hand_modifier_names_no_side_and_a_right_hand_one_does() {
+        const G: u32 = 0x47;
+        let chord = |modifiers| {
+            recorded_text(Recorded::Chord {
+                modifiers,
+                key: G,
+                numpad: false,
+            })
+        };
+        assert_eq!(
+            chord([Some(Side::Left), Some(Side::Left), None, None]).as_deref(),
+            Some("ctrl+alt+g")
+        );
+        assert_eq!(
+            chord([Some(Side::Right), Some(Side::Left), None, None]).as_deref(),
+            Some("rctrl+alt+g")
+        );
+        assert_eq!(
+            chord([None, None, None, Some(Side::Any)]).as_deref(),
+            Some("super+g")
+        );
+        let tap = |modifier, side| recorded_text(Recorded::Tap { modifier, side });
+        assert_eq!(tap(3, Side::Left).as_deref(), Some("tap:win"));
+        assert_eq!(tap(0, Side::Right).as_deref(), Some("tap:rctrl"));
+        assert_eq!(
+            recorded_text(Recorded::Double {
+                modifier: 0,
+                side: Side::Left,
+            })
+            .as_deref(),
+            Some("double:ctrl")
+        );
+        // Each parses as the binding it names.
+        for text in [
+            "ctrl+alt+g",
+            "rctrl+alt+g",
+            "super+g",
+            "tap:win",
+            "tap:rctrl",
+            "double:ctrl",
+        ] {
+            assert!(Shortcut::parse(text).is_ok(), "{text}");
         }
     }
 }
