@@ -970,12 +970,12 @@ $process = Start-Pane "stderr-tap.log" @("--install", "target/guests/packages/sa
 Send "{ENTER}"; Start-Sleep -Seconds 2   # Install; Greeting is selected
 Open-Extension "Settings sample"
 Press-Named "Hotkey for Greeting:" -Prefix   # the recorder listens, holding the keys back
-Wait-Shown "Recording; Hotkey for Greeting"
+Wait-Shown "Recording; Hotkey for Greeting" -Prefix   # "...: none" while it listens
 Capture "80-tap-recording.png"
 # VK_LWIN, pressed and released alone: a lone tap, held back from Windows.
 Press-Key 0x5B
 Wait-For (Join-Path $data "extensions/hotkeys.json") '"tap:win"' $true
-Wait-Shown "through Pane's keyboard hook" -Prefix
+Wait-Shown "Dispatched through Pane's keyboard hook" -Prefix
 Capture "81-tap-assigned.png"   # the row says the binding's dispatch route
 Close-Settings   # root search
 Minimize-Pane $process
