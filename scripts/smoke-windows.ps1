@@ -2890,7 +2890,7 @@ try {
     $at = [int]($bytes.Length / 2)
     $bytes[$at] = $bytes[$at] -bxor 1
     [IO.File]::WriteAllBytes($served, $bytes)
-    Send "^a"; Send "update"; Start-Sleep -Seconds 1
+    Send "^a"; Send "update pane"; Start-Sleep -Seconds 1
     Send "{ENTER}"; Start-Sleep -Seconds 10
     Capture "602-corrupt-package.png"
     Check "602-corrupt-package.png" "error"   # "Could not update Pane to 99.0.0: ... does not match the sha512 integrity"
@@ -2903,8 +2903,11 @@ try {
     # The source works again; the row that stays tries again, and the
     # update is installed: the new program takes the old one's name and
     # place, the old one is renamed out of its way.
+    # The row leaves the list while an install runs, so the failed attempt
+    # moved the selection to the next row ("Check for Extension Updates"),
+    # where it stays: "update pane" matches the offer row alone.
     Copy-Item $newer.FullName $served -Force
-    Send "^a"; Send "update"; Start-Sleep -Seconds 1
+    Send "^a"; Send "update pane"; Start-Sleep -Seconds 1
     Send "{ENTER}"
     for ($i = 0; $i -lt 1200 -and -not (Test-Path (Join-Path $install "pane.exe.old")); $i++) {
         if ($process.HasExited) { throw "Pane exited while updating itself" }

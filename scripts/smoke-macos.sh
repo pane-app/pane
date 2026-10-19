@@ -2407,7 +2407,7 @@ package[len(package) // 2] ^= 1
 with open(sys.argv[1], "wb") as f:
     f.write(package)
 PY
-command_key a; type_text update; sleep 1
+command_key a; type_text "update pane"; sleep 1
 key 36   # the offer, tried: the damaged package is explained
 capture_until 602-corrupt-package.png error 60   # "Could not update Pane to 99.0.0: ... does not match the sha512 integrity"
 [ -e "$binary.old" ] && { echo "a failed install replaced the program"; exit 1; }
@@ -2417,8 +2417,11 @@ cmp -s "$binary" "$unpack_old/pane/pane" || { echo "a failed install changed the
 # The source works again; the row that stays tries again, and the update
 # is installed: the new binary takes the old one's name and place inside
 # the bundle, the old one renamed out of its way.
+# The row leaves the list while an install runs, so the failed attempt
+# moved the selection to the next row ("Check for Extension Updates"),
+# where it stays: "update pane" matches the offer row alone.
 cp "$newer" "$served"
-command_key a; type_text update; sleep 1
+command_key a; type_text "update pane"; sleep 1
 key 36
 for _ in $(seq 1200); do
   [ -e "$binary.old" ] && break

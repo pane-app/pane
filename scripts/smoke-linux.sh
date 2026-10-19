@@ -2574,7 +2574,7 @@ package[len(package) // 2] ^= 1
 with open(sys.argv[1], "wb") as file:
     file.write(package)
 EOF
-"$xdotool" key ctrl+a; "$xdotool" type --delay 50 update; sleep 1
+"$xdotool" key ctrl+a; "$xdotool" type --delay 50 "update pane"; sleep 1
 "$xdotool" key Return
 capture_until 602-corrupt-package.png error 60   # "Could not update Pane to 99.0.0: ... does not match the sha512 integrity"
 [ ! -e "$update_home/.local/bin/pane.old" ] || { echo "a failed install replaced the program"; exit 1; }
@@ -2584,8 +2584,11 @@ cmp -s "$update_program" "$unpack_old/pane/pane" || { echo "a failed install cha
 # The source works again; the row that stays tries again, and the update
 # is installed: the new program takes the old one's name and place, the
 # old one is renamed out of its way.
+# The row leaves the list while an install runs, so the failed attempt
+# moved the selection to the next row ("Check for Extension Updates"),
+# where it stays: "update pane" matches the offer row alone.
 cp "$newer" "$served"
-"$xdotool" key ctrl+a; "$xdotool" type --delay 50 update; sleep 1
+"$xdotool" key ctrl+a; "$xdotool" type --delay 50 "update pane"; sleep 1
 "$xdotool" key Return
 for _ in $(seq 1200); do
   kill -0 "$pane_pid" 2>/dev/null || { echo "Pane exited while updating itself"; exit 1; }
