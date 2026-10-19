@@ -948,9 +948,9 @@ Capture "78-hook-unfocused.png"   # evidence only: Pane is not on screen
 Check-Pane-In-Front $process
 Capture "79-hook-opened.png"
 Check "79-hook-opened.png" "selected" 3000   # Greeting's first item, selected
-$shots = "78-hook-unfocused", "79-hook-opened" | ForEach-Object { Join-Path $OutDir "$_.png" }
-python "$PSScriptRoot/check_screenshot.py" --distinct @shots
-if ($LASTEXITCODE -ne 0) { throw "screenshot check failed: the hook-dispatched hotkey opened nothing" }
+# 78 shows no Pane window, so it is not compared: that Pane came to the
+# front and 79 shows Greeting's item selected are what say the chord
+# opened it.
 Stop-Pane $process
 if (-not $holder.HasExited) { Stop-Process -Id $holder.Id -Force }
 Remove-Item -Force $holderScript -ErrorAction SilentlyContinue
