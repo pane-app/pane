@@ -2401,6 +2401,11 @@ try {
 $data = Join-Path $OutDir "switch-windows-data"
 if (Test-Path $data) { Remove-Item -Recurse -Force $data }
 $env:PANE_DATA_DIR = $data
+# A settings record makes the folder no fresh install, so the Open Pane
+# hotkey that brings the launcher back below is Ctrl+Alt+Space, not a
+# fresh install's Windows key alone (#268).
+New-Item -ItemType Directory -Force -Path $data | Out-Null
+Set-Content -Path (Join-Path $data "settings.json") -Value '{ "version": 1 }' -Encoding ascii
 $notes = Join-Path $OutDir "switch-me.txt"
 Set-Content -Path $notes -Value "switch to me"
 $notepad = Start-Process notepad -PassThru -ArgumentList @("`"$notes`"")
@@ -2450,9 +2455,9 @@ try {
         Start-Sleep -Milliseconds 100
     }
     if (-not $switched) { throw "the filtered window did not come to the front" }
-    $shots = "610-switch-listed", "612-switch-in-front" | ForEach-Object { Join-Path $OutDir "$_.png" }
-    python "$PSScriptRoot/check_screenshot.py" --distinct @shots
-    if ($LASTEXITCODE -ne 0) { throw "screenshot check failed: switching changed nothing on screen" }
+    # 612 shows no Pane window (Pane hid as Notepad came to the front), so
+    # it is not compared with 610: the foreground window is what says each
+    # switch happened.
     [void]$notepad.CloseMainWindow()
     Stop-Pane $process
 } finally {
