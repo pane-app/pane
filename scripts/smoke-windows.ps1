@@ -996,6 +996,7 @@ Check "83-tap-opened.png" "selected" 3000   # Greeting's first item, selected
 # 82 shows no Pane window, so it is not compared (as 78 is not): that
 # Pane came to the front and 83 shows Greeting's item selected are what
 # say the tap opened it.
+Stop-Pane $process
 
 # Pausing a broken extension: the settings sample's last item, Crash, crashes
 # on purpose; the third crash within five minutes pauses the package and
@@ -2263,6 +2264,12 @@ try {
 # records, not the program.)
 # The task's own output goes to CI's log, as the smoke's other cargo runs'
 # do (the runner's console), not to a file of the smoke's.
+# Every phase stops the Pane it started: one still running holds
+# target/debug/pane.exe, which the build must replace (round 12's tap
+# phase left one), so name it rather than fail in the build.
+$debugPane = (Resolve-Path "target/debug/pane.exe").Path
+$left = Get-CimInstance Win32_Process -Filter "Name = 'pane.exe'" | Where-Object { $_.ExecutablePath -eq $debugPane }
+if ($left) { throw "a phase left Pane running: $(($left | ForEach-Object { "$($_.ProcessId) $($_.CommandLine)" }) -join '; ')" }
 cargo xtask package-windows --dev
 if ($LASTEXITCODE -ne 0) { throw "the package was not built" }
 $package = Get-ChildItem "target/dist/pane-*-windows-*-dev.zip" | Select-Object -First 1
