@@ -266,6 +266,7 @@ fn guests() -> Result<(), String> {
                 "old_api",
                 "mismatched_api",
                 "previous_api",
+                "old_root_results",
                 "failing_start",
                 "refusing_view",
                 "designed_fixture",
