@@ -2493,8 +2493,9 @@ try {
 # records by day, a type dropdown and the selected record's Information.
 # Enter on a record runs Paste (#150): Pane pastes it into the
 # application that was in front before it (#125) -- a Notepad of the
-# smoke's own -- closing the window, and the record stays on the
-# clipboard; Pane is then started again. The smoke copies only text of its own
+# smoke's own -- closing the window; the paste is tagged, so the
+# clipboard holds again what it held before and the history keeps no
+# record of it. Pane is then started again. The smoke copies only text of its own
 # ("pane-smoke-...") and a file of its own folder, and so replaces what
 # was on the clipboard without reading or putting it back: run it on CI's
 # runner or a desktop given to it, as the rest of the smoke already takes
@@ -2685,10 +2686,16 @@ try {
     if (-not $pasted) { throw "Paste did not bring the application it pastes into to the front" }
     Start-Sleep -Seconds 2
     Capture "283-clipboard-pasted.png"   # evidence only: Notepad holding "pane-smoke-second", Pane hidden
-    # What Pane put on the clipboard to paste stays there.
-    if ([PaneClip]::GetText() -ne "pane-smoke-second") { throw "Paste did not put the record on the clipboard" }
+    # The paste is Pane's own, tagged: once Notepad has read it, the
+    # clipboard holds again what it held before (the last copy,
+    # pane-smoke-resumed), and the history keeps no record of it, so its
+    # order is as it was.
+    for ($i = 0; $i -lt 100 -and [PaneClip]::GetText() -ne "pane-smoke-resumed"; $i++) {
+        Start-Sleep -Milliseconds 100
+    }
+    if ([PaneClip]::GetText() -ne "pane-smoke-resumed") { throw "Paste did not put back what the clipboard held: $([PaneClip]::GetText())" }
     Start-Sleep -Seconds 1
-    if ((Kept-Texts)[0] -ne "pane-smoke-second") { throw "the pasted record did not move to the front" }
+    if (((Kept-Texts) -join ",") -ne "pane-smoke-resumed,pane-smoke-second,pane-smoke-kept") { throw "the paste changed the history: $(Kept-Texts)" }
     # Notepad saves what was pasted, and the file says it arrived.
     Send "^s"; Start-Sleep -Seconds 2
     if (-not (Select-String -Quiet -SimpleMatch "pane-smoke-second" $pasteFile)) { throw "Paste did not reach Notepad" }
@@ -2724,7 +2731,7 @@ try {
     python "$PSScriptRoot/check_screenshot.py" --distinct @shots
     if ($LASTEXITCODE -ne 0) { throw "screenshot check failed: clipboard history changed nothing" }
     Stop-Pane $process
-    $expected = "pane-smoke-after-restart,pane-smoke-enabled,pane-smoke-second,pane-smoke-resumed,pane-smoke-kept"
+    $expected = "pane-smoke-after-restart,pane-smoke-enabled,pane-smoke-resumed,pane-smoke-second,pane-smoke-kept"
     if (((Kept-Texts) -join ",") -ne $expected) { throw "kept: $(Kept-Texts)" }
     foreach ($never in "secret", "no-history", "no-cloud", "paused", "disabled", "restarted-disabled") {
         if ((Kept-Texts) -contains "pane-smoke-$never") { throw "pane-smoke-$never was kept" }
@@ -2752,7 +2759,7 @@ try {
     if ($LASTEXITCODE -ne 0) { throw "could not backdate the history" }
     $process = Start-Pane "stderr-clipboard-expiry.log"
     Start-Sleep -Seconds 1
-    if ((Kept-Joined) -ne "pane-smoke-after-restart,pane-smoke-enabled,pane-smoke-second,pane-smoke-resumed") { throw "kept after starting: $(Kept-Joined)" }
+    if ((Kept-Joined) -ne "pane-smoke-after-restart,pane-smoke-enabled,pane-smoke-resumed,pane-smoke-second") { throw "kept after starting: $(Kept-Joined)" }
     Open-History
     Capture "400-clipboard-expired.png"
     Check "400-clipboard-expired.png" "hint"   # pane-smoke-kept is no longer listed
