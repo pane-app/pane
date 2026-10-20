@@ -211,6 +211,8 @@ function Find-Named($name, [switch]$Prefix, [switch]$Toggle, [switch]$Quiet, $tr
         Start-Sleep -Milliseconds 100
     }
     if ($Quiet) { return $null }
+    # What was on screen when the name never showed, for the artifact.
+    Capture "find-named-failed.png"
     throw "Settings shows nothing named $name"
 }
 # Invokes the element of the Settings window named $name (see Find-Named):
@@ -919,15 +921,25 @@ public static class Hold {
 }
 "@
 if (-not [Hold]::RegisterHotKey([IntPtr]::Zero, 0x5A4A, 0x4003, 0x4A)) { exit 1 }
+Set-Content -Path (Join-Path $env:TEMP "pane-smoke-hold-hotkey.held") -Value "held"
 Start-Sleep -Seconds 300
 '@
 $holderScript = Join-Path $env:TEMP "pane-smoke-hold-hotkey.ps1"
+$heldMarker = Join-Path $env:TEMP "pane-smoke-hold-hotkey.held"
+Remove-Item -Force $heldMarker -ErrorAction SilentlyContinue
 Set-Content -Path $holderScript -Value $hold
 $holder = Start-Process powershell -PassThru -WindowStyle Hidden -ArgumentList @(
     "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "`"$holderScript`""
 )
-Start-Sleep -Seconds 2
-if ($holder.HasExited) { throw "the smoke could not hold the chord" }
+# The holder compiles its C# first, which can take a runner several
+# seconds: Pane starts only once the chord is held (the marker the
+# holder writes after registering it), else Pane registers the chord
+# itself and the hook never takes it (run 39453976067: hotkeys.json held
+# ctrl+alt+j, the row said nothing of the hook).
+for ($i = 0; $i -lt 600 -and -not (Test-Path $heldMarker) -and -not $holder.HasExited; $i++) {
+    Start-Sleep -Milliseconds 100
+}
+if ($holder.HasExited -or -not (Test-Path $heldMarker)) { throw "the smoke could not hold the chord" }
 $process = Start-Pane "stderr-hook.log" @("--install", "target/guests/packages/sample-settings")
 Send "{ENTER}"; Start-Sleep -Seconds 2   # Install; Greeting is selected
 Open-Extension "Settings sample"
@@ -953,7 +965,7 @@ Check "79-hook-opened.png" "selected" 3000   # Greeting's first item, selected
 # opened it.
 Stop-Pane $process
 if (-not $holder.HasExited) { Stop-Process -Id $holder.Id -Force }
-Remove-Item -Force $holderScript -ErrorAction SilentlyContinue
+Remove-Item -Force $holderScript, $heldMarker -ErrorAction SilentlyContinue
 
 # A lone tap of the Windows key (#260): the recorder's session with the
 # hook holds the keys back from Windows while it listens, so the tap is
