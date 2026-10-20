@@ -14,8 +14,10 @@
 //! a worker with a timeout, waiting until it really is in front, then
 //! sends it a tagged Ctrl+V (`SendInput`, every key Pane injects carries
 //! Pane's own tag) — skipping a window that is gone, not responding or
-//! running as administrator (detected from its process's elevation
-//! before any key is sent, since Windows would drop them), each answered
+//! running at a higher integrity level than Pane's own -- an elevated
+//! application, to a Pane that is not -- (detected from the two
+//! processes' tokens before any key is sent, since Windows would drop
+//! them), each answered
 //! with a failure that leaves what was put on the clipboard there, still
 //! tagged, for the user to paste by hand. The clipboard's earlier
 //! contents are put back after a short delay, unless something else was
@@ -35,12 +37,13 @@ use std::time::{Duration, Instant};
 
 use ::windows::Win32::Foundation::{CloseHandle, HANDLE, HWND, PROPERTYKEY};
 use ::windows::Win32::Security::{
-    GetTokenInformation, TOKEN_ELEVATION, TOKEN_QUERY, TokenElevation,
+    GetSidSubAuthority, GetSidSubAuthorityCount, GetTokenInformation, TOKEN_ELEVATION,
+    TOKEN_MANDATORY_LABEL, TOKEN_QUERY, TokenElevation, TokenIntegrityLevel,
 };
 use ::windows::Win32::System::Com::StructuredStorage::{PropVariantClear, PropVariantToString};
 use ::windows::Win32::System::DataExchange::GetClipboardSequenceNumber;
 use ::windows::Win32::System::Threading::{
-    AttachThreadInput, GetCurrentThreadId, OpenProcess, OpenProcessToken,
+    AttachThreadInput, GetCurrentProcess, GetCurrentThreadId, OpenProcess, OpenProcessToken,
     PROCESS_QUERY_LIMITED_INFORMATION,
 };
 use ::windows::Win32::UI::Input::KeyboardAndMouse::{
@@ -338,7 +341,7 @@ fn paste_into(
     if unsafe { IsHungAppWindow(window) }.as_bool() {
         return Err(refused(PasteRefusal::NotResponding));
     }
-    if elevated(target.process) {
+    if out_of_reach(target.process) {
         return Err(refused(PasteRefusal::Elevated));
     }
     if pasting.superseded(generation) {
@@ -390,9 +393,8 @@ fn token_of(process: u32) -> Option<HANDLE> {
 /// Whether `process` is running elevated, as far as Pane can tell: the
 /// elevation of its token — a process whose token Pane cannot read
 /// counts as elevated, since the keys Pane would send it would be
-/// dropped just the same. Read for the paste target, for each listed
-/// window's record (#263), and for the selected-text read's simulated
-/// copy (#262).
+/// dropped just the same. Read for each listed window's record (#263);
+/// whether keys reach a process is [`out_of_reach`]'s.
 pub(crate) fn elevated(process: u32) -> bool {
     let Some(token) = token_of(process) else {
         return true;
@@ -412,6 +414,79 @@ pub(crate) fn elevated(process: u32) -> bool {
     // SAFETY: opened above.
     let _ = unsafe { CloseHandle(token) };
     read.is_ok() && elevation.TokenIsElevated != 0
+}
+
+/// The integrity level of an ordinary, unelevated process
+/// (`SECURITY_MANDATORY_MEDIUM_RID`); an elevated one runs at the high
+/// level, `0x3000`.
+const MEDIUM_INTEGRITY: u32 = 0x2000;
+
+/// Whether the keys Pane sends `process`'s windows would be dropped:
+/// Windows' User Interface Privilege Isolation drops injected input to a
+/// process of a higher integrity level than the sender's, so an elevated
+/// application is out of reach of a Pane that is not elevated, and within
+/// reach of one that is, as on a session where everything runs as
+/// administrator. A process whose level Pane cannot read counts as out of
+/// reach, as [`elevated`] counts it elevated; were Pane's own level
+/// unreadable, it is taken as an ordinary process's. Read for the paste
+/// target and for the selected-text read's simulated copy (#262).
+pub(crate) fn out_of_reach(process: u32) -> bool {
+    let Some(theirs) = token_of(process).and_then(integrity) else {
+        return true;
+    };
+    theirs > own_integrity().unwrap_or(MEDIUM_INTEGRITY)
+}
+
+/// The integrity level of Pane's own process, read once: it does not
+/// change while Pane runs.
+fn own_integrity() -> Option<u32> {
+    static OWN: OnceLock<Option<u32>> = OnceLock::new();
+    *OWN.get_or_init(|| {
+        let mut token = HANDLE::default();
+        // SAFETY: the pseudo handle of this process needs no closing;
+        // `token` is writable and closed by `integrity`.
+        unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) }.ok()?;
+        integrity(token)
+    })
+}
+
+/// The integrity level `token` carries — the last subauthority of its
+/// mandatory label's SID — or `None` when it cannot be read. Closes
+/// `token`.
+fn integrity(token: HANDLE) -> Option<u32> {
+    let mut length = 0;
+    // SAFETY: `token` is open; asked with no buffer, the call writes only
+    // the size it needs into `length`.
+    let _ = unsafe { GetTokenInformation(token, TokenIntegrityLevel, None, 0, &mut length) };
+    // Pointer-aligned, as the label it holds starts with a SID pointer.
+    let mut buffer = vec![0usize; (length as usize).div_ceil(std::mem::size_of::<usize>())];
+    let read = length as usize >= std::mem::size_of::<TOKEN_MANDATORY_LABEL>()
+        // SAFETY: `token` is open; `buffer` is writable for `length` bytes.
+        && unsafe {
+            GetTokenInformation(
+                token,
+                TokenIntegrityLevel,
+                Some(buffer.as_mut_ptr().cast()),
+                length,
+                &mut length,
+            )
+        }
+        .is_ok();
+    let level = read
+        .then(|| {
+            // SAFETY: the call above filled `buffer` with the label, whose
+            // SID points into the same buffer, alive until it is dropped.
+            let sid = unsafe { (*buffer.as_ptr().cast::<TOKEN_MANDATORY_LABEL>()).Label.Sid };
+            // SAFETY: `sid` is the valid SID read above.
+            let count = unsafe { *GetSidSubAuthorityCount(sid) };
+            // SAFETY: as above, and `count - 1` is one of its
+            // subauthorities.
+            (count > 0).then(|| unsafe { *GetSidSubAuthority(sid, u32::from(count) - 1) })
+        })
+        .flatten();
+    // SAFETY: opened by the caller, closed once here.
+    let _ = unsafe { CloseHandle(token) };
+    level
 }
 
 /// Brings `window` to the front, waiting up to [`FRONT_WAIT`] for it to
@@ -653,5 +728,22 @@ mod tests {
         // A quote is escaped, with the backslashes before it doubled.
         assert_eq!(argument(r#"say "hi""#), r#""say \"hi\"""#);
         assert_eq!(argument(r#"a\"b"#), r#""a\\\"b""#);
+    }
+
+    /// Pane reads its own integrity level, whatever the session — an
+    /// ordinary one runs at the medium level, an administrator's (a CI
+    /// runner's) at the high — and a process at Pane's own level is
+    /// within reach of its keys, elevated or not; one Pane cannot open
+    /// is out of reach.
+    #[test]
+    fn a_process_at_pane_s_own_integrity_level_is_within_reach_of_its_keys() {
+        assert!(
+            matches!(own_integrity(), Some(level) if level >= MEDIUM_INTEGRITY),
+            "{:?}",
+            own_integrity()
+        );
+        assert!(!out_of_reach(std::process::id()));
+        // No process has an id that is not a multiple of four.
+        assert!(out_of_reach(u32::MAX));
     }
 }

@@ -246,7 +246,8 @@ pub(crate) enum PasteRefusal {
     Gone,
     /// The window is not responding, and would not take the keys.
     NotResponding,
-    /// The window's process is running as administrator, which would
+    /// The window's process is running as administrator and Pane is
+    /// not (a higher integrity level than Pane's), which would
     /// drop the keys Pane sends.
     Elevated,
     /// The window did not come back to the front.
@@ -268,8 +269,8 @@ impl PasteRefusal {
                  responding; the text is still on the clipboard"
                 .into(),
             PasteRefusal::Elevated => "The application that was in front is running as \
-                 administrator, which Pane cannot paste into; the text is still on the \
-                 clipboard"
+                 administrator and Pane is not, so Pane cannot paste into it; the text is \
+                 still on the clipboard"
                 .into(),
             PasteRefusal::NotFront => "The application that was in front did not come back \
                  to the front; the text is still on the clipboard"
