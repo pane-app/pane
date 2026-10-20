@@ -167,15 +167,15 @@
     },
     "sample_search_js": {
       "source": "guests/sample-search-js",
-      "inputs_sha256": "b245adf592398d487c7e2b332354580196b6b2a08c967e8a1a8b93e15714b941",
-      "bytes": 4727798,
-      "sha256": "69d65766e9afefe8c5448ea87ed373b5cf16dbe213eb12e84235ea50ba203b98"
+      "inputs_sha256": "0674f6c13761556a0eef08bef7f83cc5c01b0d901956271fd1bfbd7d52339256",
+      "bytes": 4728303,
+      "sha256": "e1787ad1117215fd0d2189d43a0e2bb2ea81e9b21db96b170aff0dfcc272a41e"
     },
     "sample_search_ts": {
       "source": "guests/sample-search-ts",
-      "inputs_sha256": "7eb11572a18bba5c1ecce0ffbd78df6001f4bf216eeeecef4a92d9c727771946",
-      "bytes": 4730929,
-      "sha256": "9bd20adedd657c82d8df99e1d4dfbaf5e95650775b7464b8fce713cd39d10db1"
+      "inputs_sha256": "09ae8d84c6888897ddef8826bade16dde2e1a08938efe8df3c461f37082c8086",
+      "bytes": 4732736,
+      "sha256": "81451c35104ae113c53cb4809da2d250cf434f83f151fbf0bdda57db69601657"
     },
     "sample_helper_js": {
       "source": "guests/sample-helper-js",

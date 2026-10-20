@@ -195,6 +195,9 @@ function Packages() {
       jsxs(EmptyState, {
         title: /** @type {string} */ (failed ?? "Type to search the package registry"),
         description: "Results come from the service as you type; Enter shows a package's details",
+        // A failed search draws as one: the warning sign, in the theme's
+        // danger colour, beside the service's answer.
+        ...(failed ? { icon: { builtin: "warning", filled: true, tint: "danger" } } : {}),
         children: [
           jsxs(Button, {
             onClick: Push(jsxs(AddressView, { children: [] })),

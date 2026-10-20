@@ -76,13 +76,14 @@ and one index serves every package that uses it:
   release pinning its release commits,
   [`crates/pane/defaults.json`](../crates/pane/defaults.json)), its
   package declaring `"fileIndex": true`: its command Search Files (id
-  `files`, `"search": true` and `"rootResults": true`) answers root
+  `files`, `"rootResults": true`) answers root
   search from the index with the entries' ids, and its two commands
   declared `"matches": "file-path"` (#195), Open and Reveal in File
   Explorer, act on a path typed into root search (below). Installed as
   Pane's default extension, its
   screen is Pane's own Search Files view; a copy installed from a folder
-  lists what is searched and answers its own field (the best 50). It is not a
+  lists what is searched, with no field of its own (extension API 0.2
+  retired a command's own `search` export, #240). It is not a
   [root provider](root-search.md#root-providers): it has a row and a
   screen of its own. The [files samples](../guests/packages) hold the same
   contract in this repository's tree.

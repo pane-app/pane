@@ -6,7 +6,7 @@ text. The defaults are the phase's install of the tag v0.1.0 (pinned);
 the automatic-update phase installs.
 
 With `--defaults <pins-file>`, checks every default extension the pins
-file names instead: its record keeps its default identity, and the Git
+file names for this system instead: its record keeps its default identity, and the Git
 source it was fetched from — the repository, the pin's release tag, its
 commit and that it is pinned — as the smokes' first-setup phases install
 them.
@@ -37,9 +37,24 @@ def check_git(record: str, ref: str, pinned: bool, commit: str) -> None:
         sys.exit(f"{record}: expected {expected}, found {wrong} in {package}")
 
 
+def this_platform() -> str:
+    """The name a pin's `platform` gives this system (pane-target's names)."""
+    if sys.platform == "win32":
+        return "windows"
+    if sys.platform == "darwin":
+        return "macos"
+    return "linux"
+
+
 def check_defaults(pins_file: str, record: str) -> None:
+    # A pin naming another system's platform is never set up here (the
+    # pins file's platform gate, ADR 0040), so it has no record to check.
     with open(pins_file, encoding="utf-8") as f:
-        pins = {pin["id"]: pin for pin in json.load(f)}
+        pins = {
+            pin["id"]: pin
+            for pin in json.load(f)
+            if pin.get("platform", this_platform()) == this_platform()
+        }
     with open(record, encoding="utf-8") as f:
         packages = json.load(f)["packages"]
     defaults = {package["default"]: package for package in packages if "default" in package}

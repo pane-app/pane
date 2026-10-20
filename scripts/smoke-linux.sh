@@ -743,6 +743,9 @@ for ((i = 0; i < 3; i++)); do "$xdotool" key Down; done
 "$xdotool" key Return; sleep 2   # "Save a note"
 "$xdotool" key Down key Return; sleep 2   # "Sign in"
 "$xdotool" key Down key Return; sleep 2   # "Show what Pane keeps"
+# The footer cuts the answer short before its cached greeting, the value
+# 43 checks changed: the toast key opens its details, which show it whole.
+"$xdotool" key ctrl+t; sleep 1
 capture 40-kept.png
 check 40-kept.png success   # every value, the cached greeting included
 "$xdotool" key Escape; sleep 1
@@ -768,6 +771,7 @@ close_settings
 "$xdotool" key Return; sleep 3
 for ((i = 0; i < 5; i++)); do "$xdotool" key Down; done
 "$xdotool" key Return; sleep 2   # "Show what Pane keeps"
+"$xdotool" key ctrl+t; sleep 1   # its details, as 40's
 capture 43-kept-after-clear.png
 check 43-kept-after-clear.png success   # "... Cached greeting: none"
 python3 "$(dirname "$0")/check_screenshot.py" --distinct "$out/40-kept.png" "$out/43-kept-after-clear.png"
@@ -799,9 +803,10 @@ focus_launcher
 "$xdotool" type --delay 50 'pane smoke'; sleep 3
 capture 44-application.png
 check 44-application.png selected 3000   # the selected application row
-"$xdotool" key Return; sleep 3
-capture 45-opened.png
-check 45-opened.png success   # "Opened Launch Pane Smoke App"
+# The answer is a toast, which leaves the footer 3 seconds after it shows
+# (#249): it is captured as it shows, not after a fixed wait that outlasts it.
+"$xdotool" key Return
+capture_until 45-opened.png success 10   # "Opened Launch Pane Smoke App"
 for _ in $(seq 50); do [ -f "$apps/launched" ] && break; sleep 0.2; done
 [ -f "$apps/launched" ] || { echo "the application did not run"; exit 1; }
 python3 "$(dirname "$0")/check_screenshot.py" --distinct "$out"/{44-application,45-opened}.png
@@ -962,11 +967,16 @@ focus_launcher
 "$xdotool" key Return; sleep 2   # Install; Greeting is selected
 "$xdotool" key Return; sleep 2   # open Greeting
 for ((i = 0; i < 7; i++)); do "$xdotool" key Down; done   # Crash
-for ((i = 0; i < 3; i++)); do "$xdotool" key Return; sleep 2; done
+# The third crash's answer is a failure toast, which leaves 3 seconds after
+# it shows (#249): it is captured as it shows, once the second crash's has
+# left, and the Greeting row's reason after the typing in a capture of its own.
+for ((i = 0; i < 2; i++)); do "$xdotool" key Return; sleep 2; done
+until_toast_gone error 15
+"$xdotool" key Return   # the third crash
+capture_until 59-paused.png error 15   # "Settings sample crashed 3 times within 5 minutes and is paused ..."
 "$xdotool" type --delay 50 greet; sleep 1   # Greeting and its reason at the top on any window height
-capture 59-paused.png
-check 59-paused.png error   # "Settings sample crashed 3 times within 5 minutes and is paused ..."
-check 59-paused.png warning   # Greeting: "Settings sample is paused after an error; ..."
+capture 59-paused-reason.png
+check 59-paused-reason.png warning   # Greeting: "Settings sample is paused after an error; ..."
 stop_pane
 grep -q '"paused"' "$PANE_DATA_DIR/extensions/installed.json" || { echo "pause not recorded"; exit 1; }
 start_pane
@@ -1068,11 +1078,10 @@ check 68-alias-row.png selected 3000   # Echo, sending “hello”, selected
 capture_until 69-alias-answer.png success 15   # "Echo heard “hello”"
 "$xdotool" key Escape; sleep 1   # clears the query
 "$xdotool" type --delay 50 'zqx'; sleep 1
-capture 70-fallback-listed.png   # "No results for “zqx”", then Echo, not selected
-"$xdotool" key Down; sleep 1
-capture 71-fallback-chosen.png
-check 71-fallback-chosen.png selected 3000   # Echo, now selected
-python3 "$(dirname "$0")/check_screenshot.py" --distinct "$out"/{70-fallback-listed,71-fallback-chosen}.png
+# Nothing but the fallbacks is listed, so the first is selected already
+# (ADR 0031): Enter sends the text to it, as the empty state says.
+capture 70-fallback-listed.png   # "Nothing matches “zqx”", then Echo, selected
+check 70-fallback-listed.png selected 3000
 "$xdotool" key Return; sleep 0.5
 capture_until 72-fallback-answer.png success 15   # Echo's toast: "Echo heard “zqx”"
 python3 "$(dirname "$0")/check_screenshot.py" --distinct "$out"/{69-alias-answer,72-fallback-answer}.png
@@ -1112,9 +1121,11 @@ start_pane --install target/guests/packages/sample-dependencies
 focus_launcher
 capture 75-dependencies-preview.png
 check 75-dependencies-preview.png details   # "Requires: JavaScript operations sample, installed with it ..."
-"$xdotool" key Return; sleep 3   # Install; Greet through dependencies is selected
-capture 76-dependencies-installed.png
-check 76-dependencies-installed.png success   # "Installed Dependencies sample with JavaScript operations sample, which it requires"
+# The answer is a toast, which leaves 3 seconds after it shows (#249): it is
+# captured as it shows, and the settle the fixed wait gave follows it.
+"$xdotool" key Return   # Install; Greet through dependencies is selected
+capture_until 76-dependencies-installed.png success 15   # "Installed Dependencies sample with JavaScript operations sample, which it requires"
+sleep 2
 "$xdotool" key Return; sleep 3   # open Greet through dependencies
 "$xdotool" key Return; sleep 0.5   # Greet through the required greeter
 capture_until 77-dependency-answer.png success 20   # the JavaScript guest's answer, in a toast
@@ -1279,7 +1290,7 @@ wait_reloaded() {   # wait_reloaded <built component> <component before the save
   for _ in $(seq 600); do
     managed=$(find "$PANE_DATA_DIR/extensions/packages" -name "$(basename "$1")" | head -1)
     if [ -n "$managed" ] && ! cmp -s "$1" "$2" && cmp -s "$1" "$managed"; then
-      sleep 3; return
+      return
     fi
     sleep 0.5
   done
@@ -1293,7 +1304,14 @@ wait_failed() {   # wait_failed <failures before>
   done
   echo "Pane did not report the failed build"; exit 1
 }
-say_hello() {   # from root: open the developed command, the first row, and run its item
+# From root: open the developed command $1 by its title, and run its item.
+# The blank query's order (#199) ranks Pane's own rows among the commands,
+# so the command is not root's first row; Select All first replaces a query
+# a previous visit left in the field, where an Escape on a blank field would
+# hide the launcher.
+say_hello() {   # say_hello <title>
+  "$xdotool" key ctrl+a
+  "$xdotool" type --delay 50 "$1"; sleep 1
   "$xdotool" key Return; sleep 3
   "$xdotool" key Return; sleep 2
 }
@@ -1326,7 +1344,7 @@ PY
   a11y shown "Developing $title:" prefix   # "Developing <title>: each save in ..."
   capture "$n-$sample-develop-started.png"
   close_settings
-  say_hello
+  say_hello "$title"
   capture "$((n + 1))-$sample-greeting-before.png"
   check "$((n + 1))-$sample-greeting-before.png" success   # "Hello from ..."
   "$xdotool" key Escape; sleep 1
@@ -1335,9 +1353,8 @@ PY
   cp "$built" "$before"
   set_greeting "$copy/$source" "$(printf "$greeting" "Hello again")"
   wait_reloaded "$built" "$before"
-  capture "$((n + 2))-$sample-rebuilt.png"
-  check "$((n + 2))-$sample-rebuilt.png" success   # "Reloaded <title>"
-  say_hello
+  capture_until "$((n + 2))-$sample-rebuilt.png" success 15   # "Reloaded <title>", a toast that leaves after 3 seconds (#249)
+  say_hello "$title"
   capture "$((n + 3))-$sample-greeting-after.png"
   check "$((n + 3))-$sample-greeting-after.png" success   # "Hello again"
   python3 "$(dirname "$0")/check_screenshot.py" --distinct "$out/$((n + 1))-$sample-greeting-before.png" "$out/$((n + 3))-$sample-greeting-after.png"
@@ -1350,7 +1367,7 @@ PY
   wait_failed "$failures"
   capture "$((n + 4))-$sample-build-failed.png"
   check "$((n + 4))-$sample-build-failed.png" error   # "<title> did not build: ..."
-  say_hello
+  say_hello "$title"
   capture "$((n + 5))-$sample-kept.png"
   check "$((n + 5))-$sample-kept.png" success   # still "Hello again"
   python3 "$(dirname "$0")/check_screenshot.py" --same "$out/$((n + 3))-$sample-greeting-after.png" "$out/$((n + 5))-$sample-kept.png"
@@ -1362,9 +1379,8 @@ PY
   sleep 0.5
   set_greeting "$copy/$source" "$(printf "$greeting" "Hello at last")"
   wait_reloaded "$built" "$before"
-  capture "$((n + 6))-$sample-rebuilt-again.png"
-  check "$((n + 6))-$sample-rebuilt-again.png" success   # "Reloaded <title>"
-  say_hello
+  capture_until "$((n + 6))-$sample-rebuilt-again.png" success 15   # "Reloaded <title>", a toast that leaves after 3 seconds (#249)
+  say_hello "$title"
   capture "$((n + 7))-$sample-greeting-fixed.png"
   check "$((n + 7))-$sample-greeting-fixed.png" success   # "Hello at last"
   python3 "$(dirname "$0")/check_screenshot.py" --distinct "$out/$((n + 3))-$sample-greeting-after.png" "$out/$((n + 7))-$sample-greeting-fixed.png"
@@ -1542,9 +1558,11 @@ if grep -q '"helper-wait": "finished"' "$PANE_DATA_DIR/extensions/settings.json"
 "$xdotool" key Return; sleep 2   # open Greeting in the restarted runtime
 for ((i = 0; i < 8; i++)); do "$xdotool" key Down; done   # Count
 inject crash-before-answer:count
-"$xdotool" key Return; sleep 3   # counts, then the runtime crashes before answering
-capture 203-runtime-stopped.png
-check 203-runtime-stopped.png error   # the runtime stopped; its answer is lost
+# The answer is a toast, which leaves 3 seconds after it shows (#249): it is
+# captured as it shows, and the settle the fixed wait gave follows it.
+"$xdotool" key Return   # counts, then the runtime crashes before answering
+capture_until 203-runtime-stopped.png error 15   # the runtime stopped; its answer is lost
+sleep 2
 [ "$(count)" = 2 ] || { echo "Count did not run once before the crash"; exit 1; }
 "$xdotool" key Escape; sleep 1
 "$xdotool" type --delay 50 greet; sleep 1
@@ -1637,14 +1655,19 @@ close_settings   # its answer is not shown here
 "$xdotool" type --delay 50 greet; sleep 1
 "$xdotool" key Return; sleep 2   # open Greeting
 for ((i = 0; i < 9; i++)); do "$xdotool" key Down; done   # Stop responding
-"$xdotool" key Return; sleep 8
-capture 241-unresponsive-stopped.png
-check 241-unresponsive-stopped.png error   # "The extension stopped responding: it computed for 2 seconds ..."
-"$xdotool" key Return; sleep 8   # the third time
+# The answer is a toast, which leaves 3 seconds after it shows (#249): it is
+# captured as it shows, and the settle the fixed wait gave follows it.
+"$xdotool" key Return
+capture_until 241-unresponsive-stopped.png error 20   # "The extension stopped responding: it computed for 2 seconds ..."
+sleep 2
+# The third stop's answer is a failure toast too: captured as it shows, once
+# the second's has left, and the Greeting row's reason in a capture of its own.
+until_toast_gone error 15
+"$xdotool" key Return   # the third time
+capture_until 242-unresponsive-paused.png error 20   # "Settings sample stopped responding 3 times within 5 minutes and is paused ..."
 "$xdotool" type --delay 50 greet; sleep 1   # Greeting and its reason at the top
-capture 242-unresponsive-paused.png
-check 242-unresponsive-paused.png error   # "Settings sample stopped responding 3 times within 5 minutes and is paused ..."
-check 242-unresponsive-paused.png warning   # Greeting: "Settings sample is paused after an error; ..."
+capture 242-unresponsive-paused-reason.png
+check 242-unresponsive-paused-reason.png warning   # Greeting: "Settings sample is paused after an error; ..."
 [ "$(saved busy)" = started ] || { echo "Stop responding finished or was lost"; exit 1; }
 "$xdotool" key Escape; sleep 1   # clears the query
 open_extension "Settings sample"
@@ -1660,9 +1683,9 @@ inject hang
 "$xdotool" key Return; sleep 4   # open Greeting: the stuck runtime is not responding yet
 capture 245-unresponsive-not-yet.png
 check 245-unresponsive-not-yet.png progress   # "Pane's extension runtime is not responding yet. ..."
-sleep 14   # Pane gives up on it
-capture 246-unresponsive-runtime.png
-check 246-unresponsive-runtime.png error   # the runtime stopped responding and was started again
+# Pane gives up on it within 15 seconds of the press, and says so in a
+# failure toast, which leaves 3 seconds after it shows (#249).
+capture_until 246-unresponsive-runtime.png error 25   # the runtime stopped responding and was started again
 "$xdotool" key Escape; sleep 1   # clears the query
 manage_extensions
 a11y press "Why the extension runtime stopped"   # a row of the group's page
@@ -1751,9 +1774,11 @@ start_pane --install target/guests/packages/sample-dependencies-npm
 focus_launcher
 capture 260-npm-dependency-preview.png
 check 260-npm-dependency-preview.png details   # "Requires: Greeter from npm, installed with it from npm:@pane-samples/greeter"
-"$xdotool" key Return; sleep 3   # Install; Greet through an npm dependency is selected
-capture 261-npm-dependency-installed.png
-check 261-npm-dependency-installed.png success   # "Installed Dependencies from npm sample with Greeter from npm, which it requires"
+# The answer is a toast, which leaves 3 seconds after it shows (#249): it is
+# captured as it shows, and the settle the fixed wait gave follows it.
+"$xdotool" key Return   # Install; Greet through an npm dependency is selected
+capture_until 261-npm-dependency-installed.png success 15   # "Installed Dependencies from npm sample with Greeter from npm, which it requires"
+sleep 2
 "$xdotool" key Return; sleep 3   # open it
 "$xdotool" key Return; sleep 0.5   # "Greet through the required greeter"
 capture_until 262-npm-dependency-called.png success 20   # its toast: "Hello, Pane, from the npm package"
@@ -1831,10 +1856,16 @@ repository_server_pid=$!
 for _ in $(seq 600); do [ -s "$out/repository-server.port" ] && break; kill -0 "$repository_server_pid" 2>/dev/null || break; sleep 0.1; done
 [ -s "$out/repository-server.port" ] || { echo "the local repository server did not start (see $out/repository-server.log)"; exit 1; }
 repository=http://127.0.0.1:$(cat "$out/repository-server.port")/greeter.git
-start_pane --install "git:$repository"
-focus_launcher
-# The fetch runs after the window shows: capture until its explanation does.
+# The fetch runs after the window shows, and its refusal is a failure toast,
+# which leaves 3 seconds after it shows (#249): start_pane's settle and
+# preview wait outlasted it against the local server, so Pane is started
+# here and the toast captured as it shows, then the launcher focused.
+"$pane" --install "git:$repository" 2>>"$out/stderr.log" &
+pane_pid=$!
 capture_until 300-git-source-only.png error 60   # "The default branch, main (commit …) of the Git repository … holds only the source of …"
+window=$("$xdotool" search --onlyvisible --pid "$pane_pid" 2>/dev/null | head -1)
+[ -n "$window" ] || { echo "Pane window did not appear"; exit 1; }
+focus_launcher
 "$xdotool" key Escape; sleep 1
 "$xdotool" key ctrl+a; "$xdotool" type --delay 50 'install git'; sleep 1
 "$xdotool" key Return; sleep 2   # Install extension from Git…: Settings, its Git field
@@ -1877,9 +1908,11 @@ tracked=http://127.0.0.1:$(cat "$out/repository-server.port")/greeter-tracked.gi
 start_pane --install "git:$tracked@release"
 focus_launcher
 capture_until 305-git-tracked-preview.png details 60   # "Revision: branch release, tracked: an update fetches that branch again"
-"$xdotool" key Return; sleep 3   # Install; Greeter from Git is selected
-capture 306-git-tracked-installed.png
-check 306-git-tracked-installed.png success   # "Installed Greeter from Git"
+# The answer is a toast, which leaves 3 seconds after it shows (#249): it is
+# captured as it shows, and the settle the fixed wait gave follows it.
+"$xdotool" key Return   # Install; Greeter from Git is selected
+capture_until 306-git-tracked-installed.png success 15   # "Installed Greeter from Git"
+sleep 2
 python3 "$(dirname "$0")/repository_server.py" move-sample "$out/git-repositories/greeter-tracked" 0.2.0
 moved=$(python3 "$(dirname "$0")/repository_server.py" commit "$out/git-repositories/greeter-tracked" release)
 stop_pane
@@ -1956,9 +1989,11 @@ fi
 export PANE_TEST_FILE_INDEX_HOME=$files_folder
 start_pane --install target/guests/packages/sample-files
 focus_launcher
-"$xdotool" key Return; sleep 3   # Install; the index walks the fixture
-capture 220-files-installed.png
-check 220-files-installed.png success   # "Installed Rust files sample"
+# The answer is a toast, which leaves 3 seconds after it shows (#249): it is
+# captured as it shows, and the settle the fixed wait gave follows it.
+"$xdotool" key Return   # Install; the index walks the fixture
+capture_until 220-files-installed.png success 15   # "Installed Rust files sample"
+sleep 2
 # The install lands on a blank root search, where Escape hides the
 # launcher (release run 37698693722's Windows frame 221 was the desktop):
 # the return to root key keeps it.
@@ -2040,14 +2075,20 @@ if grep -q '^GET' "$service_log"; then echo "root search reached the service"; e
 "$xdotool" key Escape; sleep 1   # clears the query
 "$xdotool" type --delay 50 'package search'; sleep 1
 "$xdotool" key Return; sleep 3   # open Package search
-capture 162-command-opened.png   # its own list, its search field empty
-check 162-command-opened.png selected 3000   # its first row, selected
-"$xdotool" key Down Return; sleep 2   # Service address: its form
-"$xdotool" type --delay 20 "http://127.0.0.1:$service_port"
-"$xdotool" key Return; sleep 2   # Save
-capture 163-service-set.png   # "Searching http://127.0.0.1:<port> from now on"
-check 163-service-set.png success
-"$xdotool" key Escape; sleep 1   # back to the command, its search field empty
+capture 162-command-opened.png   # its search field empty, the empty state's Service address button below
+# The designed view (#240): the command opens on its empty state, whose
+# Service address button Tab reaches; Enter opens the address view, whose
+# field holds the address in use, so Select All and the typing replace it;
+# Tab and Enter press Save, which writes the setting the search reads and
+# returns to the search, its field empty. The answer is the setting, not a
+# line of text: the designed view's pop says nothing.
+"$xdotool" key Tab; sleep 0.5
+"$xdotool" key Return; sleep 2   # Service address: its view
+"$xdotool" key ctrl+a
+"$xdotool" type --delay 20 "http://127.0.0.1:$service_port"; sleep 1
+capture 163-service-set.png   # the address view, holding the new address
+"$xdotool" key Tab Return; sleep 1   # Save
+wait_for "$PANE_DATA_DIR/extensions/settings.json" "\"service\": \"http://127.0.0.1:$service_port\"" present
 "$xdotool" type --delay 50 aurora; sleep 3
 capture 164-search-results.png   # aurora-charts, selected, and aurora-cli
 check 164-search-results.png selected 3000
@@ -2506,7 +2547,7 @@ done
 wait_for "$update_registry" '"default": "calculator"' present 6000
 wait_for "$update_registry" '"default": "clipboard-history"' present 6000
 # The check has told the user what it found; nothing has been downloaded.
-capture_until 600-notification.png success 30   # "Pane 99.0.0 is available" (or the setup's own outcome)
+capture 600-notification.png   # evidence only: the toast ("Pane 99.0.0 is available", or the setup's own outcome) leaves after 3 s, and may have left while the defaults were waited for; 601's offer row is what says the check found the update
 "$xdotool" key ctrl+a; "$xdotool" type --delay 50 update; sleep 1
 capture_until 601-offered.png subtitle 30   # the offer row: "Your extensions and settings are kept; ..."
 check 601-offered.png selected 3000   # the row, selected
@@ -2533,7 +2574,7 @@ package[len(package) // 2] ^= 1
 with open(sys.argv[1], "wb") as file:
     file.write(package)
 EOF
-"$xdotool" key ctrl+a; "$xdotool" type --delay 50 update; sleep 1
+"$xdotool" key ctrl+a; "$xdotool" type --delay 50 "update pane"; sleep 1
 "$xdotool" key Return
 capture_until 602-corrupt-package.png error 60   # "Could not update Pane to 99.0.0: ... does not match the sha512 integrity"
 [ ! -e "$update_home/.local/bin/pane.old" ] || { echo "a failed install replaced the program"; exit 1; }
@@ -2543,8 +2584,11 @@ cmp -s "$update_program" "$unpack_old/pane/pane" || { echo "a failed install cha
 # The source works again; the row that stays tries again, and the update
 # is installed: the new program takes the old one's name and place, the
 # old one is renamed out of its way.
+# The row leaves the list while an install runs, so the failed attempt
+# moved the selection to the next row ("Check for Extension Updates"),
+# where it stays: "update pane" matches the offer row alone.
 cp "$newer" "$served"
-"$xdotool" key ctrl+a; "$xdotool" type --delay 50 update; sleep 1
+"$xdotool" key ctrl+a; "$xdotool" type --delay 50 "update pane"; sleep 1
 "$xdotool" key Return
 for _ in $(seq 1200); do
   kill -0 "$pane_pid" 2>/dev/null || { echo "Pane exited while updating itself"; exit 1; }

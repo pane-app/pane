@@ -1702,8 +1702,11 @@ fn hotkey_cell(
                 theme,
             ))
         })
+        // Read by assistive technology as a status, as the General page's
+        // route note is: the recorder's own description says nothing of
+        // the route, so the note is the only place it is told.
         .when_some(route, |cell, note| {
-            cell.child(cell_note(
+            cell.child(controls::status_note(
                 format!("shortcut-hotkey-route-{}", command.id),
                 note,
                 theme.text_muted,

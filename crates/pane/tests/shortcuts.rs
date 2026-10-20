@@ -24,7 +24,7 @@ use gpui::{
     WindowHandle, prelude::*, px,
 };
 use pane::{LauncherWindow, SettingsWindow};
-use pane_core::hotkeys::{HotkeyError, Hotkeys, Shortcut};
+use pane_core::hotkeys::{HotkeyError, Hotkeys, Route, Shortcut};
 use pane_core::{Launcher, LauncherView, PackageIdentity, Runtime, SavedData, Screen, Status};
 use tempfile::TempDir;
 
@@ -72,6 +72,10 @@ struct FakeHotkeys {
     /// test to feed what the user pressed, as the hook adapter would
     /// report it.
     reporters: Mutex<Vec<pane_core::hotkeys::PressSender>>,
+    /// The shortcuts Pane's own keyboard hook dispatches rather than the
+    /// system's registration, as Windows' adapter does with a binding the
+    /// system refused (#252).
+    hooked: Mutex<Vec<Shortcut>>,
 }
 
 impl FakeHotkeys {
@@ -121,6 +125,14 @@ impl Hotkeys for FakeHotkeys {
             .lock()
             .unwrap()
             .retain(|kept| kept != shortcut);
+    }
+
+    fn route(&self, shortcut: &Shortcut) -> Route {
+        if self.hooked.lock().unwrap().contains(shortcut) {
+            Route::Hook
+        } else {
+            Route::System
+        }
     }
 }
 
@@ -1358,6 +1370,28 @@ fn collisions_with_another_command_and_with_open_pane_are_refused(cx: &mut TestA
     press(&window, &taken, cx);
     let view = settle(&window, cx);
     assert!(matches!(view.screen, Screen::Command), "{:?}", view.screen);
+}
+
+/// A hotkey Pane's own keyboard hook dispatches — the system refused its
+/// registration (Windows, #252) — says its route under its cell, and
+/// assistive technology reads the note as a status, as it reads the
+/// General page's Open Pane route: the recorder's own description says
+/// nothing of it.
+#[gpui::test]
+fn a_hook_dispatched_hotkey_tells_its_route_to_assistive_technology(cx: &mut TestAppContext) {
+    let (sources, data) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let hello = hello_package(&sources.path().join("hello"));
+    seed(&data, &[], &[(command_id(&hello), "ctrl+alt+p")]);
+    let hotkeys = Arc::new(FakeHotkeys::default());
+    hotkeys
+        .hooked
+        .lock()
+        .unwrap()
+        .push(Shortcut::parse("ctrl+alt+p").unwrap());
+    let (_window, settings, _hotkeys, cx) = open_over(hotkeys, cx, &data, &[&hello]);
+    let mut settings_cx = settings_context(&settings, cx);
+    let json = until_text(&mut settings_cx, "Dispatched through Pane's keyboard hook");
+    assert!(json.contains("elevated application"), "{json}");
 }
 
 #[gpui::test]

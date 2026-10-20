@@ -252,6 +252,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "old-root-results"
+version = "0.1.0"
+dependencies = [
+ "dlmalloc",
+ "wit-bindgen",
+]
+
+[[package]]
 name = "operations-fixture"
 version = "0.1.0"
 dependencies = [

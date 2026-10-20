@@ -27,7 +27,7 @@ pointing at this checkout's `guests/pane-extension`, and build it with
 under the path its `pane.json` names on its release branch and tag
 `v<version>`, as its repository's own workflow does. To try a default
 without building it, install it from its repository:
-`pane --install git:https://github.com/pane-app/calculator@v0.5.0`.
+`pane --install git:https://github.com/pane-app/calculator@v0.6.0`.
 
 - `pane-extension`: the Rust SDK, bindings for the contract, made to be
   published on crates.io under that name ([its README](pane-extension/README.md));
