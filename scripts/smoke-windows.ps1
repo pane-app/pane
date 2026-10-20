@@ -2939,9 +2939,8 @@ try {
     $bytes[$at] = $bytes[$at] -bxor 1
     [IO.File]::WriteAllBytes($served, $bytes)
     Send "^a"; Send "update pane"; Start-Sleep -Seconds 1
-    Send "{ENTER}"; Start-Sleep -Seconds 10
-    Capture "602-corrupt-package.png"
-    Check "602-corrupt-package.png" "error"   # "Could not update Pane to 99.0.0: ... does not match the sha512 integrity"
+    Send "{ENTER}"
+    Capture-Until "602-corrupt-package.png" "error" 60   # "Could not update Pane to 99.0.0: ... does not match the sha512 integrity"
     if (Test-Path (Join-Path $install "pane.exe.old")) { throw "a failed install replaced the program" }
     if ((Get-FileHash $installed).Hash -ne (Get-FileHash (Join-Path $unpackOld "pane\pane.exe")).Hash) {
         throw "a failed install changed the program"
@@ -2962,9 +2961,7 @@ try {
         Start-Sleep -Milliseconds 200
     }
     if (-not (Test-Path (Join-Path $install "pane.exe.old"))) { throw "the update was not installed" }
-    Start-Sleep -Seconds 2
-    Capture "603-installed.png"
-    Check "603-installed.png" "success"   # "Installed Pane 99.0.0; the new version is used the next time Pane starts"
+    Capture-Until "603-installed.png" "success" 30   # "Installed Pane 99.0.0; the new version is used the next time Pane starts"
     if ((Get-FileHash $installed).Hash -ne (Get-FileHash (Join-Path $unpackNew "pane\pane.exe")).Hash) {
         throw "the new program was not installed"
     }
@@ -2989,12 +2986,10 @@ try {
     $env:PATH = $realPath
     Wait-For (Join-Path $install "pane.exe.old") "x" $false 100
     if (Test-Path (Join-Path $install "pane.exe.old")) { throw "the old program's file was not removed on the new start" }
-    Send "^a"; Send "6*7"; Start-Sleep -Seconds 2
-    Capture "604-answer-after-update.png"
-    Check "604-answer-after-update.png" "answer"   # "42", the calculator's selected answer card
-    Send "{ENTER}"; Start-Sleep -Seconds 1
-    Capture "605-copied-after-update.png"
-    Check "605-copied-after-update.png" "success"   # "Copied 42 to the clipboard"
+    Send "^a"; Send "6*7"
+    Capture-Until "604-answer-after-update.png" "answer" 30   # "42", the calculator's selected answer card
+    Send "{ENTER}"
+    Capture-Until "605-copied-after-update.png" "success" 10   # "Copied 42 to the clipboard"
     Wait-For $registry '"disabled": true' $true
     $shots = "600-notification", "601-offered", "602-corrupt-package", "603-installed", "604-answer-after-update" |
         ForEach-Object { Join-Path $OutDir "$_.png" }
