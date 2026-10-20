@@ -1115,13 +1115,13 @@ fn a_crash_of_the_runtime_ends_a_search_with_an_error_not_its_results() {
         assert!(service.wait_for_abandoned(Duration::from_secs(5)));
         // The crashed thread held the view, so the view closed with it
         // (#17: back at root search) and the crash is said in the status
-        // line: the search ended with an error, not its results.
-        let view = pane.view();
-        assert!(
-            matches!(view.screen, Screen::Root { .. }),
-            "{}: {:?}",
+        // line: the search ended with an error, not its results. The
+        // launcher hears of the restart after the runtime reports it, so
+        // the return to root search is waited for, not read at once.
+        let view = wait_for_view(
+            &pane,
+            |view| matches!(view.screen, Screen::Root { .. }),
             fixture.package,
-            view.screen
         );
         let Status::Error(message) = view.status else {
             panic!("{}: {:?}", fixture.package, view.status);
