@@ -48,7 +48,7 @@ use crate::clipboard::ignoring::IGNORED;
 use crate::clipboard::windows::{hold_clip, read_clip, restore_clip};
 use crate::process_tree::ProcessTree;
 use crate::system::front::windows::Recorded;
-use crate::system::windows::{bring_to_front, elevated};
+use crate::system::windows::{bring_to_front, out_of_reach};
 use crate::system::{Clip, MAX_CLIPBOARD_TEXT, SystemError};
 use crate::util::lock;
 use crate::windows_shell::Com;
@@ -491,7 +491,7 @@ fn copy_selection(target: &Recorded) -> Result<Option<String>, SystemError> {
     if unsafe { IsHungAppWindow(window) }.as_bool() {
         return Err(refused(CopyRefusal::NotResponding));
     }
-    if elevated(target.process) {
+    if out_of_reach(target.process) {
         return Err(refused(CopyRefusal::Elevated));
     }
     // What the clipboard holds, saved to be put back once the copy is
@@ -589,7 +589,8 @@ enum CopyRefusal {
     /// The target's window is not responding, and would not take the
     /// keys.
     NotResponding,
-    /// The target's process is running as administrator, which would
+    /// The target's process is running as administrator and Pane is
+    /// not (a higher integrity level than Pane's), which would
     /// drop the keys Pane sends.
     Elevated,
     /// The target's window did not come back to the front, so no keys
@@ -610,7 +611,7 @@ impl CopyRefusal {
                  responding, so its selection cannot be read"
                 .into(),
             CopyRefusal::Elevated => "The application that was in front is running as \
-                 administrator, which Pane cannot read the selection of"
+                 administrator and Pane is not, so Pane cannot read its selection"
                 .into(),
             CopyRefusal::NotFront => "The application that was in front did not come back \
                  to the front, so its selection cannot be read"

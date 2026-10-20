@@ -144,24 +144,15 @@ mod windows {
         system.can_paste().expect("a target to paste into");
         let pasted = Clip::Text(PASTED.into());
         system.copy(&pasted, true).expect("the copy to paste");
-        // A CI runner's session runs elevated, so every process the test
-        // can start — the target's included — is an administrator's, and
-        // the paste honestly refuses an elevated target (the spec's own
-        // rule: Windows would silently drop the keys). Where it does, the
-        // refusal is what the test asserts; the arrival below needs a
-        // session that is not elevated, which a runner never is and a
-        // user's desktop is.
-        if let Err(SystemError::Failed(why)) = system.paste_clipboard() {
-            assert!(
-                why.contains("running as administrator"),
-                "the paste's refusal: {why}"
-            );
-            eprintln!(
-                "skipped the arrival: the session is elevated, so the paste \n\
-                 refused its administrator target — {why}"
-            );
-            return;
-        }
+        // The paste honestly refuses a target of a higher integrity level
+        // than its own — an elevated application, to a Pane that is not —
+        // since Windows would silently drop the keys (the spec's own
+        // rule). The test and its target run at the same level, elevated
+        // on a CI runner's administrator session or not on a user's
+        // desktop, so the paste reaches it.
+        system
+            .paste_clipboard()
+            .expect("the paste into a target at the test's own level");
 
         // The text arrived in the target's field, and the clipboard holds
         // what it held.
@@ -753,23 +744,11 @@ $form.Add_KeyDown({ param($sender, $event)\n\
         wait("the selection target to be recorded", || {
             named_for(system.as_ref())
         });
-        // A CI runner's session runs elevated, so the target's process is
-        // an administrator's, and the read honestly refuses an elevated
-        // target (Windows would not deliver its keys, so the simulated
-        // copy could not reach it). Where it does, the refusal is what
-        // the test asserts; the reads below need a session that is not
-        // elevated, which a runner never is and a user's desktop is.
-        if let Err(SystemError::Failed(why)) = system.selected_text() {
-            assert!(
-                why.contains("running as administrator"),
-                "the selection read's refusal: {why}"
-            );
-            eprintln!(
-                "skipped the reads: the session is elevated, so the selection \n\
-                 read refused its administrator target — {why}"
-            );
-            return;
-        }
+        // The read honestly refuses a target of a higher integrity level
+        // than its own (Windows would not deliver its keys, so the
+        // simulated copy could not reach it). The test and its target run
+        // at the same level, elevated on a CI runner or not on a user's
+        // desktop, so the reads below reach it.
         assert_eq!(
             system.selected_text(),
             Ok(Some(SELECTION.into())),
