@@ -35,7 +35,7 @@ use std::sync::mpsc;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
-use ::windows::Win32::Foundation::{CloseHandle, HANDLE, HWND, PROPERTYKEY};
+use ::windows::Win32::Foundation::{CloseHandle, HANDLE, HWND, LPARAM, PROPERTYKEY, WPARAM};
 use ::windows::Win32::Security::{
     GetSidSubAuthority, GetSidSubAuthorityCount, GetTokenInformation, TOKEN_ELEVATION,
     TOKEN_MANDATORY_LABEL, TOKEN_QUERY, TokenElevation, TokenIntegrityLevel,
@@ -44,7 +44,8 @@ use ::windows::Win32::System::Com::StructuredStorage::{PropVariantClear, PropVar
 use ::windows::Win32::System::DataExchange::GetClipboardSequenceNumber;
 use ::windows::Win32::System::Threading::{
     AttachThreadInput, GetCurrentProcess, GetCurrentThreadId, OpenProcess, OpenProcessToken,
-    PROCESS_QUERY_LIMITED_INFORMATION,
+    PROCESS_QUERY_INFORMATION, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE,
+    WaitForInputIdle,
 };
 use ::windows::Win32::UI::Input::KeyboardAndMouse::{
     INPUT, INPUT_0, INPUT_KEYBOARD, KEYBD_EVENT_FLAGS, KEYBDINPUT, KEYEVENTF_KEYUP, SendInput,
@@ -58,7 +59,7 @@ use ::windows::Win32::UI::Shell::{
 };
 use ::windows::Win32::UI::WindowsAndMessaging::{
     GetForegroundWindow, GetWindowTextW, GetWindowThreadProcessId, IsHungAppWindow, IsWindow,
-    SW_SHOWNORMAL, SetForegroundWindow,
+    SMTO_ABORTIFHUNG, SW_SHOWNORMAL, SendMessageTimeoutW, SetForegroundWindow, WM_NULL,
 };
 use ::windows::core::{GUID, HRESULT, PCWSTR};
 
@@ -286,6 +287,9 @@ const INJECTED_TAG: usize = crate::hotkeys::INJECTED_TAG;
 /// clipboard before it is put back, and how long the caller waits for
 /// the worker as a whole (#125's proposed timings).
 const FRONT_WAIT: Duration = Duration::from_millis(500);
+/// How long the paste worker waits, once the target is in front, for the
+/// target to have taken its coming to the front in (see [`settle`]).
+const SETTLE_WAIT: Duration = Duration::from_millis(500);
 const READ_WAIT: Duration = Duration::from_millis(500);
 const PASTE_WAIT: Duration = Duration::from_secs(10);
 /// How often the worker looks while it waits.
@@ -348,6 +352,7 @@ fn paste_into(
         return Err(refused(PasteRefusal::Superseded));
     }
     bring_to_front(window).map_err(refused)?;
+    settle(window, target.process);
     if pasting.superseded(generation) {
         return Err(refused(PasteRefusal::Superseded));
     }
@@ -537,6 +542,48 @@ fn in_front(window: HWND) -> bool {
     // SAFETY: no arguments.
     let front = unsafe { GetForegroundWindow() };
     front == window
+}
+
+/// Waits, at most [`SETTLE_WAIT`] for each step, for the target's
+/// `window` of `process` to have taken its coming to the front in, so the
+/// keys sent next reach it. The launcher hides before it pastes, and
+/// Windows brings the next window to the front by itself as it does: that
+/// window can be in front while its thread is still taking in its
+/// activation, and a Ctrl+V sent then was lost (the Windows smoke's paste
+/// into Notepad, sent 13 ms after Notepad came to the front with its
+/// focus not yet in its edit control, never arrived). A message sent to
+/// the window is handled only once its thread is back in its message
+/// loop, after the activation's own messages; then the process is waited
+/// for until it waits for input with none pending. A target that answers
+/// neither in time is pasted into all the same.
+fn settle(window: HWND, process: u32) {
+    let mut answer = 0usize;
+    // SAFETY: plain values; the answer, unused, is written to `answer`.
+    let _ = unsafe {
+        SendMessageTimeoutW(
+            window,
+            WM_NULL,
+            WPARAM(0),
+            LPARAM(0),
+            SMTO_ABORTIFHUNG,
+            SETTLE_WAIT.as_millis() as u32,
+            Some(&mut answer),
+        )
+    };
+    // SAFETY: plain values; the handle is closed below.
+    let Ok(handle) = (unsafe {
+        OpenProcess(
+            PROCESS_SYNCHRONIZE | PROCESS_QUERY_INFORMATION,
+            false,
+            process,
+        )
+    }) else {
+        return;
+    };
+    // SAFETY: `handle` was opened above with the rights the wait needs.
+    let _ = unsafe { WaitForInputIdle(handle, SETTLE_WAIT.as_millis() as u32) };
+    // SAFETY: opened above.
+    let _ = unsafe { CloseHandle(handle) };
 }
 
 /// Waits until `window` is in front, at most [`FRONT_WAIT`], looking
