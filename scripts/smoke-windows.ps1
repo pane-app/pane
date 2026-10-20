@@ -211,6 +211,8 @@ function Find-Named($name, [switch]$Prefix, [switch]$Toggle, [switch]$Quiet, $tr
         Start-Sleep -Milliseconds 100
     }
     if ($Quiet) { return $null }
+    # What was on screen when the name never showed, for the artifact.
+    Capture "find-named-failed.png"
     throw "Settings shows nothing named $name"
 }
 # Invokes the element of the Settings window named $name (see Find-Named):
@@ -696,6 +698,9 @@ Send "{DOWN 3}"
 Send "{ENTER}"; Start-Sleep -Seconds 2   # "Save a note"
 Send "{DOWN}"; Start-Sleep -Milliseconds 120; Send "{ENTER}"; Start-Sleep -Seconds 2   # "Sign in"
 Send "{DOWN}"; Start-Sleep -Milliseconds 120; Send "{ENTER}"; Start-Sleep -Seconds 2   # "Show what Pane keeps"
+# The footer cuts the answer short before its cached greeting, the value
+# 43 checks changed: the toast key opens its details, which show it whole.
+Send "^t"; Start-Sleep -Seconds 1
 Capture "40-kept.png"
 Check "40-kept.png" "success"   # every value, the cached greeting included
 Send "{ESC}"; Start-Sleep -Seconds 1
@@ -731,6 +736,7 @@ Send "greeting"; Start-Sleep -Seconds 1   # Greeting, wherever the blank order p
 Send "{ENTER}"; Start-Sleep -Seconds 3
 Send "{DOWN 5}"
 Send "{ENTER}"; Start-Sleep -Seconds 2   # "Show what Pane keeps"
+Send "^t"; Start-Sleep -Seconds 1   # its details, as 40's
 Capture "43-kept-after-clear.png"
 Check "43-kept-after-clear.png" "success"   # "... Cached greeting: none"
 python "$PSScriptRoot/check_screenshot.py" --distinct (Join-Path $OutDir "40-kept.png") (Join-Path $OutDir "43-kept-after-clear.png")
@@ -767,10 +773,11 @@ Send "{ENTER}"; Start-Sleep -Seconds 2   # Install
 Send "pane smoke"; Start-Sleep -Seconds 3
 Capture "44-application.png"
 Check "44-application.png" "selected" 3000   # the selected application row
-Send "{ENTER}"; Start-Sleep -Seconds 3
+# The answer is a toast, which leaves the footer 3 seconds after it shows
+# (#249): it is captured as it shows, not after a fixed wait that outlasts it.
+Send "{ENTER}"
 Focus-Pane $process
-Capture "45-opened.png"
-Check "45-opened.png" "success"   # "Opened Launch Pane Smoke App"
+Capture-Until "45-opened.png" "success" 10   # "Opened Launch Pane Smoke App"
 for ($i = 0; $i -lt 50 -and -not (Test-Path $launched); $i++) { Start-Sleep -Milliseconds 200 }
 if (-not (Test-Path $launched)) { throw "the application did not run" }
 $shots = "44-application", "45-opened" | ForEach-Object { Join-Path $OutDir "$_.png" }
@@ -914,15 +921,25 @@ public static class Hold {
 }
 "@
 if (-not [Hold]::RegisterHotKey([IntPtr]::Zero, 0x5A4A, 0x4003, 0x4A)) { exit 1 }
+Set-Content -Path (Join-Path $env:TEMP "pane-smoke-hold-hotkey.held") -Value "held"
 Start-Sleep -Seconds 300
 '@
 $holderScript = Join-Path $env:TEMP "pane-smoke-hold-hotkey.ps1"
+$heldMarker = Join-Path $env:TEMP "pane-smoke-hold-hotkey.held"
+Remove-Item -Force $heldMarker -ErrorAction SilentlyContinue
 Set-Content -Path $holderScript -Value $hold
 $holder = Start-Process powershell -PassThru -WindowStyle Hidden -ArgumentList @(
     "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "`"$holderScript`""
 )
-Start-Sleep -Seconds 2
-if ($holder.HasExited) { throw "the smoke could not hold the chord" }
+# The holder compiles its C# first, which can take a runner several
+# seconds: Pane starts only once the chord is held (the marker the
+# holder writes after registering it), else Pane registers the chord
+# itself and the hook never takes it (run 39453976067: hotkeys.json held
+# ctrl+alt+j, the row said nothing of the hook).
+for ($i = 0; $i -lt 600 -and -not (Test-Path $heldMarker) -and -not $holder.HasExited; $i++) {
+    Start-Sleep -Milliseconds 100
+}
+if ($holder.HasExited -or -not (Test-Path $heldMarker)) { throw "the smoke could not hold the chord" }
 $process = Start-Pane "stderr-hook.log" @("--install", "target/guests/packages/sample-settings")
 Send "{ENTER}"; Start-Sleep -Seconds 2   # Install; Greeting is selected
 Open-Extension "Settings sample"
@@ -943,12 +960,12 @@ Capture "78-hook-unfocused.png"   # evidence only: Pane is not on screen
 Check-Pane-In-Front $process
 Capture "79-hook-opened.png"
 Check "79-hook-opened.png" "selected" 3000   # Greeting's first item, selected
-$shots = "78-hook-unfocused", "79-hook-opened" | ForEach-Object { Join-Path $OutDir "$_.png" }
-python "$PSScriptRoot/check_screenshot.py" --distinct @shots
-if ($LASTEXITCODE -ne 0) { throw "screenshot check failed: the hook-dispatched hotkey opened nothing" }
+# 78 shows no Pane window, so it is not compared: that Pane came to the
+# front and 79 shows Greeting's item selected are what say the chord
+# opened it.
 Stop-Pane $process
 if (-not $holder.HasExited) { Stop-Process -Id $holder.Id -Force }
-Remove-Item -Force $holderScript -ErrorAction SilentlyContinue
+Remove-Item -Force $holderScript, $heldMarker -ErrorAction SilentlyContinue
 
 # A lone tap of the Windows key (#260): the recorder's session with the
 # hook holds the keys back from Windows while it listens, so the tap is
@@ -961,16 +978,22 @@ Remove-Item -Force $holderScript -ErrorAction SilentlyContinue
 $data = Join-Path $OutDir "tap-hotkeys-data"
 if (Test-Path $data) { Remove-Item -Recurse -Force $data }
 $env:PANE_DATA_DIR = $data
+# A settings record makes the folder no fresh install: a fresh one's Open
+# Pane hotkey is the Windows key alone (#268), which the Greeting
+# assignment below would collide with. The record keeps the Open Pane
+# default, Ctrl+Alt+Space.
+New-Item -ItemType Directory -Force -Path $data | Out-Null
+Set-Content -Path (Join-Path $data "settings.json") -Value '{ "version": 1 }' -Encoding ascii
 $process = Start-Pane "stderr-tap.log" @("--install", "target/guests/packages/sample-settings")
 Send "{ENTER}"; Start-Sleep -Seconds 2   # Install; Greeting is selected
 Open-Extension "Settings sample"
 Press-Named "Hotkey for Greeting:" -Prefix   # the recorder listens, holding the keys back
-Wait-Shown "Recording; Hotkey for Greeting"
+Wait-Shown "Recording; Hotkey for Greeting" -Prefix   # "...: none" while it listens
 Capture "80-tap-recording.png"
 # VK_LWIN, pressed and released alone: a lone tap, held back from Windows.
 Press-Key 0x5B
 Wait-For (Join-Path $data "extensions/hotkeys.json") '"tap:win"' $true
-Wait-Shown "through Pane's keyboard hook" -Prefix
+Wait-Shown "Dispatched through Pane's keyboard hook" -Prefix
 Capture "81-tap-assigned.png"   # the row says the binding's dispatch route
 Close-Settings   # root search
 Minimize-Pane $process
@@ -982,9 +1005,10 @@ Start-Sleep -Seconds 3
 Check-Pane-In-Front $process
 Capture "83-tap-opened.png"
 Check "83-tap-opened.png" "selected" 3000   # Greeting's first item, selected
-$shots = "82-tap-unfocused", "83-tap-opened" | ForEach-Object { Join-Path $OutDir "$_.png" }
-python "$PSScriptRoot/check_screenshot.py" --distinct @shots
-if ($LASTEXITCODE -ne 0) { throw "screenshot check failed: the tapped hotkey opened nothing" }
+# 82 shows no Pane window, so it is not compared (as 78 is not): that
+# Pane came to the front and 83 shows Greeting's item selected are what
+# say the tap opened it.
+Stop-Pane $process
 
 # Pausing a broken extension: the settings sample's last item, Crash, crashes
 # on purpose; the third crash within five minutes pauses the package and
@@ -999,11 +1023,16 @@ $process = Start-Pane "stderr-pausing.log" @("--install", "target/guests/package
 Send "{ENTER}"; Start-Sleep -Seconds 2   # Install; Greeting is selected
 Send "{ENTER}"; Start-Sleep -Seconds 2   # open Greeting
 Send "{DOWN 7}"   # Crash
-for ($i = 0; $i -lt 3; $i++) { Send "{ENTER}"; Start-Sleep -Seconds 2 }
+# The third crash's answer is a failure toast, which leaves 3 seconds after
+# it shows (#249): it is captured as it shows, once the second crash's has
+# left, and the Greeting row's reason after the typing in a capture of its own.
+for ($i = 0; $i -lt 2; $i++) { Send "{ENTER}"; Start-Sleep -Seconds 2 }
+Until-Toast-Gone "error" 15
+Send "{ENTER}"   # the third crash
+Capture-Until "59-paused.png" "error" 15   # "Settings sample crashed 3 times within 5 minutes and is paused ..."
 Send "greet"; Start-Sleep -Seconds 1   # Greeting and its reason at the top on any window height
-Capture "59-paused.png"
-Check "59-paused.png" "error"   # "Settings sample crashed 3 times within 5 minutes and is paused ..."
-Check "59-paused.png" "warning"   # Greeting: "Settings sample is paused after an error; ..."
+Capture "59-paused-reason.png"
+Check "59-paused-reason.png" "warning"   # Greeting: "Settings sample is paused after an error; ..."
 Stop-Pane $process
 if (-not (Select-String -Quiet -SimpleMatch '"paused"' (Join-Path $data "extensions/installed.json"))) { throw "pause not recorded" }
 $process = Start-Pane "stderr-pausing-restart.log"
@@ -1113,13 +1142,10 @@ Send "{ENTER}"; Start-Sleep -Milliseconds 500
 Capture-Until "69-alias-answer.png" "success" 15   # Echo's toast: "Echo heard “hello”"
 Send "{ESC}"; Start-Sleep -Seconds 1   # clears the query
 Send "zqx"; Start-Sleep -Seconds 1
-Capture "70-fallback-listed.png"   # "No results for “zqx”", then Echo, not selected
-Send "{DOWN}"; Start-Sleep -Seconds 1
-Capture "71-fallback-chosen.png"
-Check "71-fallback-chosen.png" "selected" 3000   # Echo, now selected
-$shots = "70-fallback-listed", "71-fallback-chosen" | ForEach-Object { Join-Path $OutDir "$_.png" }
-python "$PSScriptRoot/check_screenshot.py" --distinct @shots
-if ($LASTEXITCODE -ne 0) { throw "screenshot check failed: Down did not select the fallback" }
+# Nothing but the fallbacks is listed, so the first is selected already
+# (ADR 0031): Enter sends the text to it, as the empty state says.
+Capture "70-fallback-listed.png"   # "Nothing matches “zqx”", then Echo, selected
+Check "70-fallback-listed.png" "selected" 3000
 Send "{ENTER}"; Start-Sleep -Milliseconds 500
 Capture-Until "72-fallback-answer.png" "success" 15   # Echo's toast: "Echo heard “zqx”"
 $shots = "69-alias-answer", "72-fallback-answer" | ForEach-Object { Join-Path $OutDir "$_.png" }
@@ -1161,9 +1187,11 @@ $env:PANE_DATA_DIR = $data
 $process = Start-Pane "stderr-dependencies.log" @("--install", "target/guests/packages/sample-dependencies")
 Capture "75-dependencies-preview.png"
 Check "75-dependencies-preview.png" "details"   # "Requires: JavaScript operations sample, installed with it ..."
-Send "{ENTER}"; Start-Sleep -Seconds 3   # Install; Greet through dependencies is selected
-Capture "76-dependencies-installed.png"
-Check "76-dependencies-installed.png" "success"   # "Installed Dependencies sample with JavaScript operations sample, which it requires"
+# The answer is a toast, which leaves 3 seconds after it shows (#249): it is
+# captured as it shows, and the settle the fixed wait gave follows it.
+Send "{ENTER}"   # Install; Greet through dependencies is selected
+Capture-Until "76-dependencies-installed.png" "success" 15   # "Installed Dependencies sample with JavaScript operations sample, which it requires"
+Start-Sleep -Seconds 2
 Send "{ENTER}"; Start-Sleep -Seconds 3   # open Greet through dependencies
 Send "{ENTER}"; Start-Sleep -Milliseconds 500   # Greet through the required greeter
 Capture-Until "77-dependency-answer.png" "success" 20   # the JavaScript guest's answer, in a toast
@@ -1330,7 +1358,7 @@ function Wait-Reloaded($built, $before) {
     for ($i = 0; $i -lt 600; $i++) {
         $managed = Get-ChildItem -Recurse -File -Filter (Split-Path -Leaf $built) (Join-Path $env:PANE_DATA_DIR "extensions/packages") -ErrorAction SilentlyContinue | Select-Object -First 1
         if ($managed -and -not (Same-File $built $before) -and (Same-File $built $managed.FullName)) {
-            Start-Sleep -Seconds 3; return
+            return
         }
         Start-Sleep -Milliseconds 500
     }
@@ -1348,7 +1376,14 @@ function Wait-Failed($log, $before) {
     throw "Pane did not report the failed build"
 }
 # From root: open the developed command, the first row, and run its item.
-function Say-Hello {
+# From root: open the developed command $title by its title, and run its
+# item. The blank query's order (#199) ranks Pane's own rows among the
+# commands, so the command is not root's first row; Select All first
+# replaces a query a previous visit left in the field, where an Escape on a
+# blank field would hide the launcher.
+function Say-Hello($title) {
+    Send "^a"
+    Send $title; Start-Sleep -Seconds 1
     Send "{ENTER}"; Start-Sleep -Seconds 3
     Send "{ENTER}"; Start-Sleep -Seconds 2
 }
@@ -1389,7 +1424,7 @@ function Develop-Sample($sample, $title, $component, $source, $n, $greeting, $br
     Wait-Shown "Developing ${title}:" -Prefix   # "Developing <title>: each save in ..."
     Capture "$n-$sample-develop-started.png"
     Close-Settings
-    Say-Hello
+    Say-Hello $title
     Capture "$($n + 1)-$sample-greeting-before.png"
     Check "$($n + 1)-$sample-greeting-before.png" "success"   # "Hello from ..."
     Send "{ESC}"; Start-Sleep -Seconds 1
@@ -1398,9 +1433,8 @@ function Develop-Sample($sample, $title, $component, $source, $n, $greeting, $br
     Copy-Item -Force $built $before
     Set-Greeting (Join-Path $copy $source) ($greeting -f "Hello again")
     Wait-Reloaded $built $before
-    Capture "$($n + 2)-$sample-rebuilt.png"
-    Check "$($n + 2)-$sample-rebuilt.png" "success"   # "Reloaded <title>"
-    Say-Hello
+    Capture-Until "$($n + 2)-$sample-rebuilt.png" "success" 15   # "Reloaded <title>", a toast that leaves after 3 seconds (#249)
+    Say-Hello $title
     Capture "$($n + 3)-$sample-greeting-after.png"
     Check "$($n + 3)-$sample-greeting-after.png" "success"   # "Hello again"
     Shots-Differ "$($n + 1)-$sample-greeting-before.png" "$($n + 3)-$sample-greeting-after.png" "the edit changed nothing"
@@ -1412,7 +1446,7 @@ function Develop-Sample($sample, $title, $component, $source, $n, $greeting, $br
     Wait-Failed $log $failures
     Capture "$($n + 4)-$sample-build-failed.png"
     Check "$($n + 4)-$sample-build-failed.png" "error"   # "<title> did not build: ..."
-    Say-Hello
+    Say-Hello $title
     Capture "$($n + 5)-$sample-kept.png"
     Check "$($n + 5)-$sample-kept.png" "success"   # still "Hello again"
     $shots = "$($n + 3)-$sample-greeting-after", "$($n + 5)-$sample-kept" | ForEach-Object { Join-Path $OutDir "$_.png" }
@@ -1426,9 +1460,8 @@ function Develop-Sample($sample, $title, $component, $source, $n, $greeting, $br
     Start-Sleep -Milliseconds 500
     Set-Greeting (Join-Path $copy $source) ($greeting -f "Hello at last")
     Wait-Reloaded $built $before
-    Capture "$($n + 6)-$sample-rebuilt-again.png"
-    Check "$($n + 6)-$sample-rebuilt-again.png" "success"   # "Reloaded <title>"
-    Say-Hello
+    Capture-Until "$($n + 6)-$sample-rebuilt-again.png" "success" 15   # "Reloaded <title>", a toast that leaves after 3 seconds (#249)
+    Say-Hello $title
     Capture "$($n + 7)-$sample-greeting-fixed.png"
     Check "$($n + 7)-$sample-greeting-fixed.png" "success"   # "Hello at last"
     Shots-Differ "$($n + 3)-$sample-greeting-after.png" "$($n + 7)-$sample-greeting-fixed.png" "the fix changed nothing"
@@ -1611,9 +1644,11 @@ Send "greet"; Start-Sleep -Seconds 1
 Send "{ENTER}"; Start-Sleep -Seconds 2   # open Greeting in the restarted runtime
 Send "{DOWN 8}"   # Count
 Inject-Fault "crash-before-answer:count"
-Send "{ENTER}"; Start-Sleep -Seconds 3   # counts, then the runtime crashes before answering
-Capture "203-runtime-stopped.png"
-Check "203-runtime-stopped.png" "error"   # the runtime stopped; its answer is lost
+# The answer is a toast, which leaves 3 seconds after it shows (#249): it is
+# captured as it shows, and the settle the fixed wait gave follows it.
+Send "{ENTER}"   # counts, then the runtime crashes before answering
+Capture-Until "203-runtime-stopped.png" "error" 15   # the runtime stopped; its answer is lost
+Start-Sleep -Seconds 2
 if ((Saved-Count) -ne "2") { throw "Count did not run once before the crash" }
 Send "{ESC}"; Start-Sleep -Seconds 1
 Send "greet"; Start-Sleep -Seconds 1
@@ -1709,14 +1744,19 @@ Close-Settings   # its answer is not shown here
 Send "greet"; Start-Sleep -Seconds 1
 Send "{ENTER}"; Start-Sleep -Seconds 2   # open Greeting
 Send "{DOWN 9}"   # Stop responding
-Send "{ENTER}"; Start-Sleep -Seconds 8
-Capture "241-unresponsive-stopped.png"
-Check "241-unresponsive-stopped.png" "error"   # "The extension stopped responding: it computed for 2 seconds ..."
-Send "{ENTER}"; Start-Sleep -Seconds 8   # the third time
+# The answer is a toast, which leaves 3 seconds after it shows (#249): it is
+# captured as it shows, and the settle the fixed wait gave follows it.
+Send "{ENTER}"
+Capture-Until "241-unresponsive-stopped.png" "error" 20   # "The extension stopped responding: it computed for 2 seconds ..."
+Start-Sleep -Seconds 2
+# The third stop's answer is a failure toast too: captured as it shows, once
+# the second's has left, and the Greeting row's reason in a capture of its own.
+Until-Toast-Gone "error" 15
+Send "{ENTER}"   # the third time
+Capture-Until "242-unresponsive-paused.png" "error" 20   # "Settings sample stopped responding 3 times within 5 minutes and is paused ..."
 Send "greet"; Start-Sleep -Seconds 1   # Greeting and its reason at the top
-Capture "242-unresponsive-paused.png"
-Check "242-unresponsive-paused.png" "error"   # "Settings sample stopped responding 3 times within 5 minutes and is paused ..."
-Check "242-unresponsive-paused.png" "warning"   # Greeting: "Settings sample is paused after an error; ..."
+Capture "242-unresponsive-paused-reason.png"
+Check "242-unresponsive-paused-reason.png" "warning"   # Greeting: "Settings sample is paused after an error; ..."
 if ((Saved-Setting "busy") -ne "started") { throw "Stop responding finished or was lost" }
 Send "{ESC}"; Start-Sleep -Seconds 1   # clears the query
 Open-Extension "Settings sample"
@@ -1732,9 +1772,9 @@ Send "greet"; Start-Sleep -Seconds 1
 Send "{ENTER}"; Start-Sleep -Seconds 4   # open Greeting: the stuck runtime is not responding yet
 Capture "245-unresponsive-not-yet.png"
 Check "245-unresponsive-not-yet.png" "progress"   # "Pane's extension runtime is not responding yet. ..."
-Start-Sleep -Seconds 14   # Pane gives up on it
-Capture "246-unresponsive-runtime.png"
-Check "246-unresponsive-runtime.png" "error"   # the runtime stopped responding and was started again
+# Pane gives up on it within 15 seconds of the press, and says so in a
+# failure toast, which leaves 3 seconds after it shows (#249).
+Capture-Until "246-unresponsive-runtime.png" "error" 25   # the runtime stopped responding and was started again
 Send "{ESC}"; Start-Sleep -Seconds 1   # clears the query
 Manage-Extensions
 Press-Named "Why the extension runtime stopped"   # a row of the group's page
@@ -1825,9 +1865,11 @@ try {
     $process = Start-Pane "stderr-npm.log" @("--install", "target/guests/packages/sample-dependencies-npm")
     Capture "260-npm-dependency-preview.png"
     Check "260-npm-dependency-preview.png" "details"   # "Requires: Greeter from npm, installed with it from npm:@pane-samples/greeter"
-    Send "{ENTER}"; Start-Sleep -Seconds 3   # Install; Greet through an npm dependency is selected
-    Capture "261-npm-dependency-installed.png"
-    Check "261-npm-dependency-installed.png" "success"   # "Installed Dependencies from npm sample with Greeter from npm, which it requires"
+    # The answer is a toast, which leaves 3 seconds after it shows (#249): it is
+    # captured as it shows, and the settle the fixed wait gave follows it.
+    Send "{ENTER}"   # Install; Greet through an npm dependency is selected
+    Capture-Until "261-npm-dependency-installed.png" "success" 15   # "Installed Dependencies from npm sample with Greeter from npm, which it requires"
+    Start-Sleep -Seconds 2
     Send "{ENTER}"; Start-Sleep -Seconds 3   # open it
     Send "{ENTER}"; Start-Sleep -Milliseconds 500   # "Greet through the required greeter"
     Capture-Until "262-npm-dependency-called.png" "success" 20   # its toast: "Hello, Pane, from the npm package"
@@ -1917,9 +1959,15 @@ try {
     for ($i = 0; $i -lt 600 -and -not (Test-Path $portFile) -and -not $server.HasExited; $i++) { Start-Sleep -Milliseconds 100 }
     if (-not (Test-Path $portFile)) { throw "the local repository server did not start" }
     $repository = "http://127.0.0.1:$((Get-Content $portFile).Trim())/greeter.git"
-    $process = Start-Pane "stderr-git.log" @("--install", "git:$repository")
-    # The fetch runs after the window shows: capture until its explanation does.
+    # The fetch runs after the window shows, and its refusal is a failure toast,
+    # which leaves 3 seconds after it shows (#249): start_pane's settle and
+    # preview wait outlasted it against the local server, so Pane is started
+    # here and the toast captured as it shows, then the launcher focused.
+    $process = Start-Process -FilePath "target/debug/pane.exe" -PassThru -RedirectStandardError (Join-Path $OutDir "stderr-git.log") -ArgumentList @("--install", "git:$repository")
     Capture-Until "300-git-source-only.png" "error" 60   # "The default branch, main (commit ...) of the Git repository ... holds only the source of ..."
+    $process.Refresh()
+    if ($process.MainWindowHandle -eq 0) { throw "Pane window did not appear" }
+    Focus-Pane $process
     Send "{ESC}"; Start-Sleep -Seconds 1
     Send "^a"; Send "install git"; Start-Sleep -Seconds 1
     Send "{ENTER}"; Start-Sleep -Seconds 2   # Install extension from Git...: Settings, its Git field
@@ -1987,9 +2035,11 @@ try {
     $process = Start-Pane "stderr-git-update.log" @("--install", "git:$tracked@release")
     # The fetch runs after the window shows: capture until its preview does.
     Capture-Until "305-git-tracked-preview.png" "details" 60   # "Revision: branch release, tracked: an update fetches that branch again"
-    Send "{ENTER}"; Start-Sleep -Seconds 3   # Install; Greeter from Git is selected
-    Capture "306-git-tracked-installed.png"
-    Check "306-git-tracked-installed.png" "success"   # "Installed Greeter from Git"
+    # The answer is a toast, which leaves 3 seconds after it shows (#249): it is
+    # captured as it shows, and the settle the fixed wait gave follows it.
+    Send "{ENTER}"   # Install; Greeter from Git is selected
+    Capture-Until "306-git-tracked-installed.png" "success" 15   # "Installed Greeter from Git"
+    Start-Sleep -Seconds 2
     python "$PSScriptRoot/repository_server.py" move-sample (Join-Path $repositories "greeter-tracked") 0.2.0
     if ($LASTEXITCODE -ne 0) { throw "the tracked branch did not move" }
     $moved = (python "$PSScriptRoot/repository_server.py" commit (Join-Path $repositories "greeter-tracked") release)
@@ -2063,9 +2113,11 @@ if (Test-Path $openLog) { Remove-Item -Force $openLog }
 $env:PANE_TEST_FILE_INDEX_HOME = (Resolve-Path -LiteralPath $filesFolder).Path
 $env:PANE_TEST_OPEN_FILE_LOG = $openLog
 $process = Start-Pane "stderr-files.log" @("--install", "target/guests/packages/sample-files")
-Send "{ENTER}"; Start-Sleep -Seconds 3   # Install; the index walks the fixture
-Capture "220-files-installed.png"
-Check "220-files-installed.png" "success"   # "Installed Rust files sample"
+# The answer is a toast, which leaves 3 seconds after it shows (#249): it is
+# captured as it shows, and the settle the fixed wait gave follows it.
+Send "{ENTER}"   # Install; the index walks the fixture
+Capture-Until "220-files-installed.png" "success" 15   # "Installed Rust files sample"
+Start-Sleep -Seconds 2
 # The install lands on a blank root search, where Escape hides the
 # launcher (release run 37698693722's frame 221 was the desktop): the
 # return to root key keeps it.
@@ -2152,14 +2204,20 @@ try {
     Send "{ESC}"; Start-Sleep -Seconds 1   # clears the query
     Send "package search"; Start-Sleep -Seconds 1
     Send "{ENTER}"; Start-Sleep -Seconds 3   # open Package search
-    Capture "162-command-opened.png"   # its own list, its search field empty
-    Check "162-command-opened.png" "selected" 3000   # its first row, selected
-    Send "{DOWN}"; Start-Sleep -Milliseconds 120; Send "{ENTER}"; Start-Sleep -Seconds 2   # Service address: its form
-    Send "http://127.0.0.1:$servicePort"
-    Send "{ENTER}"; Start-Sleep -Seconds 2   # Save
-    Capture "163-service-set.png"   # "Searching http://127.0.0.1:<port> from now on"
-    Check "163-service-set.png" "success"
-    Send "{ESC}"; Start-Sleep -Seconds 1   # back to the command, its search field empty
+    Capture "162-command-opened.png"   # its search field empty, the empty state's Service address button below
+    # The designed view (#240): the command opens on its empty state, whose
+    # Service address button Tab reaches; Enter opens the address view, whose
+    # field holds the address in use, so Select All and the typing replace it;
+    # Tab and Enter press Save, which writes the setting the search reads and
+    # returns to the search, its field empty. The answer is the setting, not a
+    # line of text: the designed view's pop says nothing.
+    Send "{TAB}"; Start-Sleep -Milliseconds 500
+    Send "{ENTER}"; Start-Sleep -Seconds 2   # Service address: its view
+    Send "^a"
+    Send "http://127.0.0.1:$servicePort"; Start-Sleep -Seconds 1
+    Capture "163-service-set.png"   # the address view, holding the new address
+    Send "{TAB}"; Start-Sleep -Milliseconds 120; Send "{ENTER}"; Start-Sleep -Seconds 1   # Save
+    Wait-For (Join-Path $env:PANE_DATA_DIR "extensions/settings.json") "`"service`": `"http://127.0.0.1:$servicePort`"" $true
     Send "aurora"; Start-Sleep -Seconds 3
     Capture "164-search-results.png"   # aurora-charts, selected, and aurora-cli
     Check "164-search-results.png" "selected" 3000
@@ -2218,6 +2276,12 @@ try {
 # records, not the program.)
 # The task's own output goes to CI's log, as the smoke's other cargo runs'
 # do (the runner's console), not to a file of the smoke's.
+# Every phase stops the Pane it started: one still running holds
+# target/debug/pane.exe, which the build must replace (round 12's tap
+# phase left one), so name it rather than fail in the build.
+$debugPane = (Resolve-Path "target/debug/pane.exe").Path
+$left = Get-CimInstance Win32_Process -Filter "Name = 'pane.exe'" | Where-Object { $_.ExecutablePath -eq $debugPane }
+if ($left) { throw "a phase left Pane running: $(($left | ForEach-Object { "$($_.ProcessId) $($_.CommandLine)" }) -join '; ')" }
 cargo xtask package-windows --dev
 if ($LASTEXITCODE -ne 0) { throw "the package was not built" }
 $package = Get-ChildItem "target/dist/pane-*-windows-*-dev.zip" | Select-Object -First 1
@@ -2350,12 +2414,19 @@ try {
 # is; Pane's window opens over it, so Notepad is the front application
 # and its window is the first row, selected, and one Enter switches to
 # it. Pane's window closed as the switch happened: the open-pane hotkey
-# brings it back, and typing in the command's search field filters by
-# title, so the second switch finds the window by what is typed. A data
-# folder of its own.
+# brings it back on the Switch Windows list again (the switch closes the
+# window by the reopening setting, whose default restores the view it was
+# left on), and typing in its search field filters by title, so the
+# second switch finds the window by what is typed. A data folder of its
+# own.
 $data = Join-Path $OutDir "switch-windows-data"
 if (Test-Path $data) { Remove-Item -Recurse -Force $data }
 $env:PANE_DATA_DIR = $data
+# A settings record makes the folder no fresh install, so the Open Pane
+# hotkey that brings the launcher back below is Ctrl+Alt+Space, not a
+# fresh install's Windows key alone (#268).
+New-Item -ItemType Directory -Force -Path $data | Out-Null
+Set-Content -Path (Join-Path $data "settings.json") -Value '{ "version": 1 }' -Encoding ascii
 $notes = Join-Path $OutDir "switch-me.txt"
 Set-Content -Path $notes -Value "switch to me"
 $notepad = Start-Process notepad -PassThru -ArgumentList @("`"$notes`"")
@@ -2390,11 +2461,10 @@ try {
     if (-not $switched) { throw "Switch Windows did not bring the smoke's window to the front" }
     Capture "612-switch-in-front.png"   # evidence only: Notepad is in front, Pane hidden
     # The open-pane hotkey brings the launcher back over Notepad, whose
-    # window is the front application's again; typing filters the list by
-    # title before the second switch.
+    # window is the front application's again, on the restored Switch
+    # Windows list; typing filters it by title before the second switch.
     Send "^% "; Start-Sleep -Seconds 2
-    Send "switch"; Start-Sleep -Seconds 2
-    Send "{ENTER}"; Start-Sleep -Seconds 2
+    Check-Pane-In-Front $process
     Send "switch-me"; Start-Sleep -Seconds 2   # the command's search field filters by title
     Capture "613-switch-filtered.png"
     Check "613-switch-filtered.png" "selected" 3000   # the filtered window's row, selected
@@ -2405,9 +2475,9 @@ try {
         Start-Sleep -Milliseconds 100
     }
     if (-not $switched) { throw "the filtered window did not come to the front" }
-    $shots = "610-switch-listed", "612-switch-in-front" | ForEach-Object { Join-Path $OutDir "$_.png" }
-    python "$PSScriptRoot/check_screenshot.py" --distinct @shots
-    if ($LASTEXITCODE -ne 0) { throw "screenshot check failed: switching changed nothing on screen" }
+    # 612 shows no Pane window (Pane hid as Notepad came to the front), so
+    # it is not compared with 610: the foreground window is what says each
+    # switch happened.
     [void]$notepad.CloseMainWindow()
     Stop-Pane $process
 } finally {
@@ -2433,9 +2503,11 @@ try {
 # in Settings), also after a restart, and once enabled again it is kept
 # again, also after a restart. The command opens Pane's split view: the
 # records by day, a type dropdown and the selected record's Information.
-# Enter on a record runs Paste (#150): Pane cannot paste on Windows yet,
-# so it copies the record again instead, closes the window and says so in
-# a HUD; Pane is then started again. The smoke copies only text of its own
+# Enter on a record runs Paste (#150): Pane pastes it into the
+# application that was in front before it (#125) -- a Notepad of the
+# smoke's own -- closing the window; the paste is tagged, so the
+# clipboard holds again what it held before and the history keeps no
+# record of it. Pane is then started again. The smoke copies only text of its own
 # ("pane-smoke-...") and a file of its own folder, and so replaces what
 # was on the clipboard without reading or putting it back: run it on CI's
 # runner or a desktop given to it, as the rest of the smoke already takes
@@ -2596,15 +2668,50 @@ try {
     Wait-For $history '"capture":"on"' $true
     Copy-Text "pane-smoke-resumed" $null
     Wait-Kept "pane-smoke-resumed" $true
+    # Paste reaches the application that was in front before Pane (#125):
+    # a Notepad of the smoke's own, on an empty file, brought to the front
+    # while Pane runs, so Pane's foreground watcher records it as the
+    # target. Pane started straight into its own window has none, and
+    # Paste says "There is no application in front to paste into".
+    $pasteFile = Join-Path $OutDir "paste-here.txt"
+    Set-Content -Path $pasteFile -Value "" -NoNewline
+    $pasteTarget = Start-Process notepad -PassThru -ArgumentList @("`"$pasteFile`"")
+    for ($i = 0; $i -lt 100 -and $pasteTarget.MainWindowHandle -eq 0; $i++) {
+        Start-Sleep -Milliseconds 100; $pasteTarget.Refresh()
+    }
+    if ($pasteTarget.MainWindowHandle -eq 0) { throw "the smoke's Notepad window did not appear" }
+    [Win]::SetForegroundWindow($pasteTarget.MainWindowHandle) | Out-Null
+    for ($i = 0; $i -lt 50 -and [Win]::GetForegroundWindow() -ne $pasteTarget.MainWindowHandle; $i++) {
+        Start-Sleep -Milliseconds 100
+    }
+    if ([Win]::GetForegroundWindow() -ne $pasteTarget.MainWindowHandle) { throw "the smoke's Notepad did not come to the front" }
+    Start-Sleep -Seconds 1
     Open-History
     Capture "282-clipboard-kept.png"   # evidence only: the three records, newest first
     Send "pane-smoke-second"; Start-Sleep -Seconds 1   # the filter leaves that record, selected
-    Send "{ENTER}"; Start-Sleep -Seconds 2   # Paste: not available yet, so it copies it again (#150)
-    Capture "283-clipboard-copied.png"   # evidence only: the HUD "Copied — paste is not available here yet", Pane hidden
-    if ([PaneClip]::GetText() -ne "pane-smoke-second") { throw "Enter did not copy the record" }
-    if ([Win]::GetForegroundWindow() -eq $process.MainWindowHandle) { throw "Paste left Pane's window in front" }
+    Send "{ENTER}"   # Paste: into Notepad, closing Pane's window
+    $pasted = $false
+    for ($i = 0; $i -lt 100; $i++) {
+        if ([Win]::GetForegroundWindow() -eq $pasteTarget.MainWindowHandle) { $pasted = $true; break }
+        Start-Sleep -Milliseconds 100
+    }
+    if (-not $pasted) { throw "Paste did not bring the application it pastes into to the front" }
+    Start-Sleep -Seconds 2
+    Capture "283-clipboard-pasted.png"   # evidence only: Notepad holding "pane-smoke-second", Pane hidden
+    # The paste is Pane's own, tagged: once Notepad has read it, the
+    # clipboard holds again what it held before (the last copy,
+    # pane-smoke-resumed), and the history keeps no record of it, so its
+    # order is as it was.
+    for ($i = 0; $i -lt 100 -and [PaneClip]::GetText() -ne "pane-smoke-resumed"; $i++) {
+        Start-Sleep -Milliseconds 100
+    }
+    if ([PaneClip]::GetText() -ne "pane-smoke-resumed") { throw "Paste did not put back what the clipboard held: $([PaneClip]::GetText())" }
     Start-Sleep -Seconds 1
-    if ((Kept-Texts)[0] -ne "pane-smoke-second") { throw "the copied record did not move to the front" }
+    if (((Kept-Texts) -join ",") -ne "pane-smoke-resumed,pane-smoke-second,pane-smoke-kept") { throw "the paste changed the history: $(Kept-Texts)" }
+    # Notepad saves what was pasted, and the file says it arrived.
+    Send "^s"; Start-Sleep -Seconds 2
+    if (-not (Select-String -Quiet -SimpleMatch "pane-smoke-second" $pasteFile)) { throw "Paste did not reach Notepad" }
+    [void]$pasteTarget.CloseMainWindow()
     Stop-Pane $process
     $process = Start-Pane "stderr-clipboard-pasted.log"
     Open-Extension "Clipboard History"
@@ -2636,7 +2743,7 @@ try {
     python "$PSScriptRoot/check_screenshot.py" --distinct @shots
     if ($LASTEXITCODE -ne 0) { throw "screenshot check failed: clipboard history changed nothing" }
     Stop-Pane $process
-    $expected = "pane-smoke-after-restart,pane-smoke-enabled,pane-smoke-second,pane-smoke-resumed,pane-smoke-kept"
+    $expected = "pane-smoke-after-restart,pane-smoke-enabled,pane-smoke-resumed,pane-smoke-second,pane-smoke-kept"
     if (((Kept-Texts) -join ",") -ne $expected) { throw "kept: $(Kept-Texts)" }
     foreach ($never in "secret", "no-history", "no-cloud", "paused", "disabled", "restarted-disabled") {
         if ((Kept-Texts) -contains "pane-smoke-$never") { throw "pane-smoke-$never was kept" }
@@ -2664,7 +2771,7 @@ try {
     if ($LASTEXITCODE -ne 0) { throw "could not backdate the history" }
     $process = Start-Pane "stderr-clipboard-expiry.log"
     Start-Sleep -Seconds 1
-    if ((Kept-Joined) -ne "pane-smoke-after-restart,pane-smoke-enabled,pane-smoke-second,pane-smoke-resumed") { throw "kept after starting: $(Kept-Joined)" }
+    if ((Kept-Joined) -ne "pane-smoke-after-restart,pane-smoke-enabled,pane-smoke-resumed,pane-smoke-second") { throw "kept after starting: $(Kept-Joined)" }
     Open-History
     Capture "400-clipboard-expired.png"
     Check "400-clipboard-expired.png" "hint"   # pane-smoke-kept is no longer listed
@@ -2807,8 +2914,7 @@ try {
     }
     if ((Select-String -SimpleMatch "pane-defaults.json" $serverLog).Count -lt 1) { throw "Pane never checked for its own update" }
     Start-Sleep -Seconds 2
-    Capture "600-notification.png"
-    Check "600-notification.png" "success"   # "Pane 99.0.0 is available" (or the setup's own outcome)
+    Capture "600-notification.png"   # evidence only: the toast ("Pane 99.0.0 is available", or the setup's own outcome) leaves after 3 s, and may have left while the defaults were waited for; 601's offer row is what says the check found the update
     Send "^a"; Send "update"; Start-Sleep -Seconds 1
     Capture "601-offered.png"
     Check "601-offered.png" "subtitle"   # the offer row: "Your extensions and settings are kept; ..."
@@ -2832,10 +2938,9 @@ try {
     $at = [int]($bytes.Length / 2)
     $bytes[$at] = $bytes[$at] -bxor 1
     [IO.File]::WriteAllBytes($served, $bytes)
-    Send "^a"; Send "update"; Start-Sleep -Seconds 1
-    Send "{ENTER}"; Start-Sleep -Seconds 10
-    Capture "602-corrupt-package.png"
-    Check "602-corrupt-package.png" "error"   # "Could not update Pane to 99.0.0: ... does not match the sha512 integrity"
+    Send "^a"; Send "update pane"; Start-Sleep -Seconds 1
+    Send "{ENTER}"
+    Capture-Until "602-corrupt-package.png" "error" 60   # "Could not update Pane to 99.0.0: ... does not match the sha512 integrity"
     if (Test-Path (Join-Path $install "pane.exe.old")) { throw "a failed install replaced the program" }
     if ((Get-FileHash $installed).Hash -ne (Get-FileHash (Join-Path $unpackOld "pane\pane.exe")).Hash) {
         throw "a failed install changed the program"
@@ -2845,17 +2950,18 @@ try {
     # The source works again; the row that stays tries again, and the
     # update is installed: the new program takes the old one's name and
     # place, the old one is renamed out of its way.
+    # The row leaves the list while an install runs, so the failed attempt
+    # moved the selection to the next row ("Check for Extension Updates"),
+    # where it stays: "update pane" matches the offer row alone.
     Copy-Item $newer.FullName $served -Force
-    Send "^a"; Send "update"; Start-Sleep -Seconds 1
+    Send "^a"; Send "update pane"; Start-Sleep -Seconds 1
     Send "{ENTER}"
     for ($i = 0; $i -lt 1200 -and -not (Test-Path (Join-Path $install "pane.exe.old")); $i++) {
         if ($process.HasExited) { throw "Pane exited while updating itself" }
         Start-Sleep -Milliseconds 200
     }
     if (-not (Test-Path (Join-Path $install "pane.exe.old"))) { throw "the update was not installed" }
-    Start-Sleep -Seconds 2
-    Capture "603-installed.png"
-    Check "603-installed.png" "success"   # "Installed Pane 99.0.0; the new version is used the next time Pane starts"
+    Capture-Until "603-installed.png" "success" 30   # "Installed Pane 99.0.0; the new version is used the next time Pane starts"
     if ((Get-FileHash $installed).Hash -ne (Get-FileHash (Join-Path $unpackNew "pane\pane.exe")).Hash) {
         throw "the new program was not installed"
     }
@@ -2880,12 +2986,10 @@ try {
     $env:PATH = $realPath
     Wait-For (Join-Path $install "pane.exe.old") "x" $false 100
     if (Test-Path (Join-Path $install "pane.exe.old")) { throw "the old program's file was not removed on the new start" }
-    Send "^a"; Send "6*7"; Start-Sleep -Seconds 2
-    Capture "604-answer-after-update.png"
-    Check "604-answer-after-update.png" "answer"   # "42", the calculator's selected answer card
-    Send "{ENTER}"; Start-Sleep -Seconds 1
-    Capture "605-copied-after-update.png"
-    Check "605-copied-after-update.png" "success"   # "Copied 42 to the clipboard"
+    Send "^a"; Send "6*7"
+    Capture-Until "604-answer-after-update.png" "answer" 30   # "42", the calculator's selected answer card
+    Send "{ENTER}"
+    Capture-Until "605-copied-after-update.png" "success" 10   # "Copied 42 to the clipboard"
     Wait-For $registry '"disabled": true' $true
     $shots = "600-notification", "601-offered", "602-corrupt-package", "603-installed", "604-answer-after-update" |
         ForEach-Object { Join-Path $OutDir "$_.png" }
