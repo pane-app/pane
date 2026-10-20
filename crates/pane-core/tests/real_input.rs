@@ -109,6 +109,63 @@ mod windows {
     const WAIT: Duration = Duration::from_secs(30);
     const LOOK: Duration = Duration::from_millis(10);
 
+    /// A paste arrives while Pane's own keyboard hook is installed, as it
+    /// is on a fresh Windows install, whose Open Pane hotkey is a lone tap
+    /// of the Windows key (#268): the hook passes Pane's tagged Ctrl+V
+    /// through. The Windows smoke's paste into Notepad never arrived with
+    /// the hook installed, and did without it.
+    #[test]
+    fn a_paste_arrives_while_pane_s_keyboard_hook_is_installed() {
+        use pane_core::hotkeys::{Hotkeys, Shortcut, WindowsHotkeys, channel};
+        if !opted_in() {
+            eprintln!("skipped: set PANE_TEST_REAL_INPUT=1 to paste with real input");
+            return;
+        }
+        let _serial = serial();
+        let folder = tempfile::tempdir().unwrap();
+        // Pane's hotkeys, in this process as in Pane's: the tap takes the
+        // keyboard hook.
+        let (sender, _presses) = channel();
+        let hotkeys = WindowsHotkeys::start(sender).expect("the hotkeys adapter");
+        let tap = Shortcut::parse("tap:win").unwrap();
+        hotkeys.register(&tap).expect("the hook takes the tap");
+        assert!(hotkeys.hook_handle().is_some(), "the hook is installed");
+
+        let system = native();
+        let own = own_window();
+        let target = TargetForm::start(folder.path()).expect("the paste target");
+        take_front(target.window());
+        wait("the target to be recorded", || named_for(system.as_ref()));
+        system
+            .copy(&Clip::Text(BEFORE.into()), true)
+            .expect("the setup copy");
+        // Pane's own window in front, as the launcher is when the user
+        // chooses Paste.
+        take_front(own);
+        system.can_paste().expect("a target to paste into");
+        system
+            .copy(&Clip::Text(PASTED.into()), true)
+            .expect("the copy to paste");
+        system
+            .paste_clipboard()
+            .expect("the paste with Pane's hook installed");
+        wait("the paste to bring the target back", || {
+            front_is(target.window())
+        });
+        // The target reads the paste as it pumps its messages.
+        let pasted = Instant::now();
+        wait("a moment for the target to read the paste", || {
+            pasted.elapsed() > Duration::from_secs(2)
+        });
+        take_front(own);
+        assert_eq!(
+            target.close(),
+            PASTED,
+            "the paste arrived with Pane's keyboard hook installed"
+        );
+        hotkeys.unregister(&tap);
+    }
+
     #[test]
     fn paste_arrives_the_clipboard_is_put_back_and_only_tagged_writes_are_seen() {
         if !opted_in() {
