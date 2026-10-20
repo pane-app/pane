@@ -209,9 +209,10 @@ def clone_defaults(committed, repositories, pins_file, url):
     committed pins file names (crates/pane/defaults.json) — their real
     addresses, as the smoke's own setup on the runner; the Pane under test
     fetches only from the URL it is served at — and writes the pins file
-    naming them: a JSON array of { id, title, repository, tag, commit,
-    platform } pointing each at the URL the smoke serves them from, with
-    the same ids, titles, tags and commits as the committed pins, and the
+    naming them: a JSON array of { id, title, description, repository,
+    tag, commit, platform } pointing each at the URL the smoke serves them
+    from, with the same ids, titles, descriptions (what first setup lists
+    each with, #283), tags and commits as the committed pins, and the
     same platform: an entry that names one is served as it is committed,
     so a Pane whose system is not that one never fetches it."""
     with open(committed, encoding="utf-8") as f:
@@ -239,6 +240,8 @@ def clone_defaults(committed, repositories, pins_file, url):
             "tag": pin["tag"],
             "commit": pin["commit"],
         }
+        if "description" in pin:
+            served["description"] = pin["description"]
         if "platform" in pin:
             served["platform"] = pin["platform"]
         pins.append(served)

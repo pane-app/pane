@@ -14,7 +14,9 @@
 //!
 //! The pins are committed to the build as a JSON array
 //! ([`pane::default_extensions`] reads it): each entry names the default
-//! extension's id, its title, its repository, its release tag and that
+//! extension's id, its title, what it does (its `description`, which
+//! first setup lists it with before anything is fetched, #283), its
+//! repository, its release tag and that
 //! tag's commit, and, optionally, the only system the default is set up
 //! on (`platform`, as `pane.json` names one: absent, every system — a
 //! Windows-only default's pin names `windows`, and the gate
@@ -168,7 +170,8 @@ impl ArtifactSource {
 /// One default extension this build of Pane sets up at first setup: its
 /// `id` names it everywhere (the identity of the package installed,
 /// `default:<id>`), `title` is its name in Pane's messages about setting
-/// it up, and the rest is its pin — the repository it is fetched from,
+/// it up and on first setup's list, `description` what that list says it
+/// does, and the rest is its pin — the repository it is fetched from,
 /// the release tag this Pane release was tested with, and that tag's
 /// commit, which Pane fetches exactly ([`crate::git`]: a commit id pins
 /// the bytes). A package's own manifest is what its commands are finally
@@ -177,6 +180,11 @@ impl ArtifactSource {
 pub struct DefaultExtension {
     pub id: String,
     pub title: String,
+    /// What it does, in one line: what first setup's list says of it
+    /// (#283), before its repository is fetched. Optional in the pins
+    /// file — the tests' and smokes' own pins may name none — while every
+    /// committed pin has one.
+    pub description: Option<String>,
     /// The repository the pinned revision is fetched from, as a Git
     /// address is written (`https://github.com/pane-app/calculator`).
     pub repository: String,
@@ -216,8 +224,9 @@ impl DefaultExtension {
 }
 
 /// The pins this build sets its default extensions up from, as the pins
-/// file holds them: a JSON array of `{ "id", "title", "repository",
-/// "tag", "commit", "platform" }` — the `platform` optional, naming the
+/// file holds them: a JSON array of `{ "id", "title", "description",
+/// "repository", "tag", "commit", "platform" }` — the `description`
+/// optional, and the `platform` optional, naming the
 /// only system the default is set up on (absent, every system). Each id
 /// appears once, each repository is a Git address Pane fetches, each tag
 /// is a `v…` release tag, each commit a full id and each platform one
@@ -246,6 +255,9 @@ pub fn parse_pins(text: &str) -> Result<Vec<DefaultExtension>, String> {
             if title.trim().is_empty() {
                 return Err(format!("{} is empty", named("title")));
             }
+            let description = pin
+                .description
+                .filter(|description| !description.trim().is_empty());
             let repository = pin
                 .repository
                 .ok_or_else(|| named("repository is missing"))?;
@@ -281,6 +293,7 @@ pub fn parse_pins(text: &str) -> Result<Vec<DefaultExtension>, String> {
             Ok(DefaultExtension {
                 id,
                 title,
+                description,
                 repository,
                 tag,
                 commit,
@@ -574,6 +587,7 @@ struct IndexJson {
 struct PinJson {
     id: Option<String>,
     title: Option<String>,
+    description: Option<String>,
     repository: Option<String>,
     tag: Option<String>,
     commit: Option<String>,
@@ -626,6 +640,7 @@ mod tests {
         let pins = parse_pins(
             r#"[
                 { "id": "calculator", "title": "Calculator",
+                  "description": "Answers arithmetic typed into root search",
                   "repository": "https://github.com/pane-app/calculator",
                   "tag": "v0.5.0",
                   "commit": "0123456789012345678901234567890123456789" },
@@ -643,6 +658,7 @@ mod tests {
                 DefaultExtension {
                     id: "calculator".into(),
                     title: "Calculator".into(),
+                    description: Some("Answers arithmetic typed into root search".into()),
                     repository: "https://github.com/pane-app/calculator".into(),
                     tag: "v0.5.0".into(),
                     commit: "0123456789012345678901234567890123456789".into(),
@@ -651,6 +667,7 @@ mod tests {
                 DefaultExtension {
                     id: "run".into(),
                     title: "Run".into(),
+                    description: None,
                     repository: "https://github.com/pane-app/run".into(),
                     tag: "v0.2.0".into(),
                     commit: "0123456789012345678901234567890123456789".into(),

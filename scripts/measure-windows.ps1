@@ -519,6 +519,14 @@ try {
     $pins = Join-Path $OutDir "hidden-pins.json"
     python "$PSScriptRoot/repository_server.py" clone-defaults "crates/pane/defaults.json" "$repositories" "$pins" "http://127.0.0.1:$((Get-Content -LiteralPath $portFile).Trim())/"
     if ($LASTEXITCODE -ne 0) { throw "the default extensions' repositories were not cloned (see hidden-repository-server.log)" }
+    # First setup's choice made, nothing declined (#283): a fresh data
+    # folder would open on the choice of the official extensions and fetch
+    # nothing until Set Up is chosen; the phase starts where a user who
+    # chose it stands, so Pane sets every default up by itself.
+    $scratchExtensions = Join-Path $scratchData "extensions"
+    New-Item -ItemType Directory -Force -Path $scratchExtensions | Out-Null
+    Set-Content -Path (Join-Path $scratchExtensions "installed.json") -Encoding ascii `
+        -Value '{ "version": 1, "next": 1, "packages": [], "firstSetupChosen": true }'
 
     # The scratch Pane's environment, for its start only: every PANE_
     # variable of this shell is left out, the scratch ones are set, and

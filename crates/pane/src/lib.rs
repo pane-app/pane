@@ -432,7 +432,8 @@ mod tests {
     }
 
     /// The committed pins are well-formed: every default extension named
-    /// exactly once, with a title, its own repository in Pane's
+    /// exactly once, with a title, a description — what first setup's
+    /// list says it does (#283) — its own repository in Pane's
     /// organization, a `v…` release tag and a full commit id that is not
     /// the placeholder all-zero one: the pins name the repositories'
     /// initial release revisions (#282), which the placeholders stood in
@@ -442,6 +443,12 @@ mod tests {
         let pins = default_extensions();
         for pin in &pins {
             assert!(!pin.title.trim().is_empty(), "{pin:?}");
+            assert!(
+                pin.description
+                    .as_ref()
+                    .is_some_and(|description| !description.trim().is_empty()),
+                "{pin:?}"
+            );
             assert_eq!(
                 pin.repository,
                 format!("https://github.com/pane-app/{}", pin.id),

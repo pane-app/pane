@@ -10,9 +10,26 @@
 //! takes — read and checked, planned, claimed and written into a managed
 //! copy — with the identity of its default extension, so the normal
 //! mechanisms (disable, uninstall, extension data) apply to it unchanged.
-//! A default extension the user uninstalled, whose data Pane keeps, is
-//! not acquired again: the user's choice, with disabling the documented
-//! opt-out; one never installed is.
+//! First setup asks first (#283, ADR 0045): on a data folder whose first
+//! setup has not chosen, [`Launcher::first_setup`] lists the official
+//! extensions this system sets up, by their pins' titles and
+//! descriptions, with the defaults ticked (the choice screen, `choice`),
+//! and nothing is fetched until the user chooses Set Up. The choice is
+//! recorded with the packages: a default the user unticked is declined,
+//! as an uninstall declines one, and a declined default is never acquired
+//! by itself; Settings' Extensions group offers every official extension
+//! not installed ([`Launcher::official_extensions`], and an Install
+//! operation each), and installing one drops it from the declined. Once
+//! the choice is made, first setup never asks again: a default that is
+//! missing and not declined — one whose acquisition failed, or one a
+//! later Pane added — is acquired by itself at each start. An install
+//! set up before the choice existed, holding a default already, is not
+//! asked either.
+//!
+//! A default extension the user uninstalled is not acquired again: the
+//! user's choice — whether its data was kept or not, the uninstall
+//! declines it — with disabling the other opt-out; one never installed
+//! is, once first setup's choice is made.
 //!
 //! A default extension's pinned revision is never re-acquired as an
 //! update: the pin is the release's tested revision, and what a later
@@ -23,7 +40,7 @@ use std::future::Future;
 use std::sync::Arc;
 
 use super::install::Stopped;
-use super::{DOWNLOADS_DIR, Launcher, Mode, Status, off_thread};
+use super::{DOWNLOADS_DIR, Entry, Launcher, Mode, Row, Screen, State, Status, off_thread};
 use crate::defaults::DefaultExtension;
 use crate::packages::{PackageIdentity, SourcePackage};
 
@@ -51,6 +68,77 @@ impl Defaults {
                 .collect(),
         }
     }
+}
+
+/// First setup's choice of the official extensions (#283), as the
+/// launcher holds it: the store's record of it, and whether this session
+/// asked.
+#[derive(Default)]
+pub(in crate::launcher) struct FirstSetup {
+    /// Whether the user made the choice (the store's record).
+    chosen: bool,
+    /// The ids of the default extensions the user declined: unticked at
+    /// first setup, or uninstalled (the store's record).
+    declined: Vec<String>,
+    /// Whether this session showed the choice: while it is not made, root
+    /// search then offers it again (the user may have left it).
+    asked: bool,
+}
+
+impl FirstSetup {
+    /// The choice as the store records it.
+    pub(in crate::launcher) fn recorded(chosen: bool, declined: Vec<String>) -> FirstSetup {
+        FirstSetup {
+            chosen,
+            declined,
+            asked: false,
+        }
+    }
+
+    /// Whether the user declined the default extension `id`.
+    fn declines(&self, id: &str) -> bool {
+        self.declined.iter().any(|declined| declined == id)
+    }
+
+    /// Holds the choice as made, the defaults `declined` declined, while
+    /// the store records it ([`Launcher::finish_first_setup`]).
+    pub(in crate::launcher) fn choose(&mut self, declined: &[String]) {
+        self.chosen = true;
+        for id in declined {
+            if !self.declines(id) {
+                self.declined.push(id.clone());
+            }
+        }
+    }
+
+    /// Records, as the store has, that the default extension `id` was
+    /// installed again: no longer declined.
+    pub(in crate::launcher) fn installed(&mut self, id: &str) {
+        self.declined.retain(|declined| declined != id);
+    }
+
+    /// Takes the store's record again, after it changed (an uninstall
+    /// declines a default).
+    pub(in crate::launcher) fn reread(&mut self, chosen: bool, declined: Vec<String>) {
+        self.chosen = chosen;
+        self.declined = declined;
+    }
+}
+
+/// One of Pane's official extensions as Settings' Extensions group lists
+/// it (#283): each default extension this system sets up, by its pin,
+/// and whether it is installed. One not installed — declined, or never
+/// acquired — is offered there to install.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OfficialExtension {
+    /// Its id: its identity is the default's, `default:<id>`.
+    pub id: String,
+    /// Its title, as its pin names it.
+    pub title: String,
+    /// What it does, as its pin says.
+    pub description: Option<String>,
+    /// Whether it is installed.
+    pub installed: bool,
 }
 
 /// A default extension Pane could not acquire.
@@ -175,15 +263,186 @@ impl Launcher {
         async move { launcher.acquire_missing().await }
     }
 
+    /// First setup, as Pane starts (#283): while the user has not made
+    /// first setup's choice of the official extensions, shows it — the
+    /// official extensions this system sets up, the defaults ticked, the
+    /// Set Up row selected — and acquires nothing; Set Up records the
+    /// choice and acquires what is ticked. Once the choice is made, it
+    /// acquires each default extension that is missing and not declined,
+    /// as [`Launcher::acquire_defaults`] does. The choice shows only over
+    /// root search: over another screen (an install preview Pane was
+    /// started with), root search offers it instead, as it does once the
+    /// user leaves it. Await the returned future to apply each result.
+    pub fn first_setup(&self) -> impl Future<Output = ()> + Send + 'static {
+        let asks = {
+            let mut state = self.lock();
+            let asks = self.first_setup_pending(&state);
+            if asks {
+                // Root search offers it from now on, while it is not
+                // made, whatever screen it was asked over.
+                state.first_setup.asked = true;
+                if matches!(state.view.screen, Screen::Root { .. }) {
+                    self.show_first_setup(&mut state);
+                }
+            }
+            asks
+        };
+        if asks {
+            self.changed();
+        }
+        let launcher = self.clone();
+        async move {
+            if !asks {
+                launcher.acquire_missing().await;
+            }
+        }
+    }
+
+    /// Whether first setup's choice is still to be made (#283): this
+    /// launcher installs packages and sets default extensions up, the
+    /// store records no choice, and no default extension is installed or
+    /// has data kept — an install set up before the choice existed, which
+    /// has its defaults already, is never asked.
+    pub(in crate::launcher) fn first_setup_pending(&self, state: &State) -> bool {
+        let offers = self
+            .defaults
+            .as_ref()
+            .is_some_and(|defaults| !defaults.extensions.is_empty());
+        let has_default = state
+            .packages
+            .iter()
+            .map(|package| &package.identity)
+            .chain(state.retained.iter().map(|retained| &retained.identity))
+            .any(|identity| identity.default_id().is_some());
+        self.installation.is_some() && offers && !state.first_setup.chosen && !has_default
+    }
+
+    /// Whether root search offers first setup's choice again: it was
+    /// shown this session and is still to be made.
+    pub(in crate::launcher) fn offers_first_setup(&self, state: &State) -> bool {
+        state.first_setup.asked && self.first_setup_pending(state)
+    }
+
+    /// Shows first setup's choice (#283): the official extensions this
+    /// system sets up, by their pins, the defaults ticked, and the Set Up
+    /// row selected.
+    pub(in crate::launcher) fn show_first_setup(&self, state: &mut State) {
+        let Some(defaults) = self.defaults.clone() else {
+            return;
+        };
+        let listed = super::choice::Listed::first_setup(&defaults.extensions);
+        self.show_choice(state, listed);
+    }
+
+    /// Records first setup's choice — the ids of the defaults the user
+    /// unticked, `declined` — and acquires the ticked ones, as first
+    /// setup always acquired the defaults: in the background, the status
+    /// line saying what is being set up, each failure offered again as a
+    /// row. The launcher already shows the choice as made; a choice that
+    /// cannot be recorded is explained, and first setup is offered again.
+    pub(in crate::launcher) async fn finish_first_setup(&self, declined: Vec<String>) {
+        let Some(installation) = self.installation.as_ref() else {
+            return;
+        };
+        let store = installation.store.clone();
+        let recorded = off_thread(move || {
+            let mut store = store.lock().unwrap_or_else(|p| p.into_inner());
+            store
+                .choose_first_setup(&declined)
+                .map(|()| (store.first_setup_chosen(), store.declined_defaults()))
+        })
+        .await;
+        match recorded {
+            Ok((chosen, declined)) => {
+                {
+                    let mut state = self.lock();
+                    state.first_setup.reread(chosen, declined);
+                }
+                self.acquire_missing().await;
+            }
+            Err(error) => {
+                let mut state = self.lock();
+                state.first_setup.chosen = false;
+                state.first_setup.declined.clear();
+                state.view.status = Status::Error(format!(
+                    "Could not record which official extensions to set up: {error}"
+                ));
+                self.refresh(&mut state);
+                drop(state);
+                self.changed();
+            }
+        }
+    }
+
+    /// Pane's official extensions as Settings' Extensions group lists
+    /// them (#283): each default extension this system sets up, in the
+    /// pins' order, with whether it is installed. One not installed is
+    /// offered there to install, declined or not.
+    pub fn official_extensions(&self) -> Vec<OfficialExtension> {
+        let Some(defaults) = self.defaults.clone() else {
+            return Vec::new();
+        };
+        let state = self.lock();
+        defaults
+            .extensions
+            .iter()
+            .map(|extension| {
+                let identity = PackageIdentity::default_extension(&extension.id);
+                OfficialExtension {
+                    id: extension.id.clone(),
+                    title: extension.title.clone(),
+                    description: extension.description.clone(),
+                    installed: state.packages.iter().any(|p| p.identity == identity),
+                }
+            })
+            .collect()
+    }
+
     /// Whether the default extension `extension` is missing: not
-    /// installed, and with no retained data of an uninstall the user
-    /// chose. A disabled default extension is installed, so it is never
-    /// re-acquired: disabling is the opt-out.
+    /// installed, not declined (unticked at first setup, or uninstalled),
+    /// and with no retained data of an uninstall the user chose (as an
+    /// earlier Pane recorded one). A disabled default extension is
+    /// installed, so it is never re-acquired: disabling is the other
+    /// opt-out.
     fn default_missing(&self, extension: &DefaultExtension) -> bool {
         let identity = PackageIdentity::default_extension(&extension.id);
         let state = self.lock();
         !state.packages.iter().any(|p| p.identity == identity)
             && !state.retained.iter().any(|r| r.identity == identity)
+            && !state.first_setup.declines(&extension.id)
+    }
+
+    /// Settings' rows that install each official extension not installed
+    /// (#283), in the pins' order: declined at first setup or by an
+    /// uninstall, or never acquired. Each is acquired from its pin, as the
+    /// row that tries a failed one again acquires it, and installing it
+    /// drops it from the declined.
+    pub(in crate::launcher) fn official_rows(&self, state: &State) -> Vec<(Row, Entry)> {
+        let Some(defaults) = self.defaults.as_ref() else {
+            return Vec::new();
+        };
+        defaults
+            .extensions
+            .iter()
+            .filter(|extension| {
+                let identity = PackageIdentity::default_extension(&extension.id);
+                !state.packages.iter().any(|p| p.identity == identity)
+            })
+            .map(|extension| {
+                let row = Row {
+                    id: format!("install-official:{}", extension.id),
+                    title: format!("Install {}", extension.title),
+                    subtitle: Some(
+                        extension
+                            .description
+                            .clone()
+                            .unwrap_or_else(|| "One of Pane's official extensions".into()),
+                    ),
+                    unavailable: None,
+                };
+                (row, Entry::InstallOfficial(extension.id.clone()))
+            })
+            .collect()
     }
 
     /// Acquires every missing default extension in turn; the status line

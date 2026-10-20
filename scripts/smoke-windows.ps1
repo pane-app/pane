@@ -25,6 +25,17 @@ $env:PANE_DATA_DIR = $data
 $NoDefaultPins = Join-Path $OutDir "no-default-pins.json"
 Set-Content -Path $NoDefaultPins -Value "[]"
 $env:PANE_DEFAULTS = $NoDefaultPins
+# Records first setup's choice as made, nothing declined, in the
+# extensions folder $extensions (#283): a fresh data folder with default
+# pins opens on the choice of the official extensions and fetches nothing
+# until Set Up is chosen. The #51 phase drives that screen; the other
+# phases that set the defaults up start where a user who chose Set Up
+# stands, so Pane sets every default up by itself as it starts.
+function Choose-First-Setup($extensions) {
+    New-Item -ItemType Directory -Force -Path $extensions | Out-Null
+    Set-Content -Path (Join-Path $extensions "installed.json") -Encoding ascii `
+        -Value '{ "version": 1, "next": 1, "packages": [], "firstSetupChosen": true }'
+}
 # The tested OS version and architecture
 "$([System.Environment]::OSVersion.VersionString) $env:PROCESSOR_ARCHITECTURE" | Set-Content (Join-Path $OutDir "system.txt")
 'theme=dark material=opaque (behavior smoke; not blur evidence)' | Add-Content (Join-Path $OutDir "system.txt")
@@ -2355,6 +2366,23 @@ try {
     # Generous: a slow runner may take a while to check every revision's
     # components (120 s each).
     if ($process.HasExited) { throw "the installed Pane exited during setup" }
+    # First setup's choice (#283): the official extensions, by the lines
+    # under its title (waited for as an --install preview's are), the Set
+    # Up row selected; nothing is set up before Enter chooses it.
+    $choiceShown = $false
+    for ($i = 0; $i -lt 60; $i++) {
+        Capture "497-first-setup.png"
+        $null = python "$PSScriptRoot/check_screenshot.py" --preview (Join-Path $OutDir "497-first-setup.png")
+        if ($LASTEXITCODE -eq 0) { $choiceShown = $true; break }
+        Start-Sleep -Milliseconds 500
+    }
+    if (-not $choiceShown) { throw "first setup's choice did not appear" }
+    Check "497-first-setup.png" "selected"   # the Set Up row, selected
+    $registryFile = Join-Path $extensions "installed.json"
+    if ((Test-Path $registryFile) -and (Select-String -Quiet -SimpleMatch '"default"' $registryFile)) {
+        throw "a default was set up before first setup's choice"
+    }
+    Send "{ENTER}"
     # The default extensions: on Windows all eight -- the five of #60
     # plus Run, System Commands and Switch Windows (ADR 0040), pinned
     # "platform": "windows" so only a Windows first setup acquires them
@@ -2380,7 +2408,7 @@ try {
     if ($LASTEXITCODE -ne 0) { throw "a default's record does not keep its Git source" }
     $downloads = Join-Path $extensions "downloads"
     if ((Test-Path $downloads) -and (Get-ChildItem $downloads)) { throw "downloads were left behind" }
-    $shots = "500-installed-root", "501-calculator-answer" | ForEach-Object { Join-Path $OutDir "$_.png" }
+    $shots = "497-first-setup", "500-installed-root", "501-calculator-answer" | ForEach-Object { Join-Path $OutDir "$_.png" }
     python "$PSScriptRoot/check_screenshot.py" --distinct @shots
     if ($LASTEXITCODE -ne 0) { throw "screenshot check failed: the installed Pane changed nothing" }
     Stop-Pane $process
@@ -2427,6 +2455,8 @@ $env:PANE_DATA_DIR = $data
 # fresh install's Windows key alone (#268).
 New-Item -ItemType Directory -Force -Path $data | Out-Null
 Set-Content -Path (Join-Path $data "settings.json") -Value '{ "version": 1 }' -Encoding ascii
+# First setup's choice made, as the #51 phase makes it (#283).
+Choose-First-Setup (Join-Path $data "extensions")
 $notes = Join-Path $OutDir "switch-me.txt"
 Set-Content -Path $notes -Value "switch to me"
 $notepad = Start-Process notepad -PassThru -ArgumentList @("`"$notes`"")
@@ -2523,6 +2553,8 @@ if (Test-Path $clipboardHome) { Remove-Item -Recurse -Force $clipboardHome }
 New-Item -ItemType Directory -Force -Path $clipboardHome | Out-Null
 $env:PANE_TEST_FILE_INDEX_HOME = (Resolve-Path $clipboardHome).Path
 $env:PANE_DEFAULTS = $DefaultPins
+# First setup's choice made, as the #51 phase makes it (#283).
+Choose-First-Setup $extensions
 Add-Type @"
 using System; using System.Runtime.InteropServices; using System.Text; using System.Threading;
 public static class PaneClip {
@@ -2886,6 +2918,8 @@ try {
     $installed = Join-Path $install "pane.exe"
     $extensions = Join-Path $install "data\extensions"
     $registry = Join-Path $extensions "installed.json"
+    # First setup's choice made, as the #51 phase makes it (#283).
+    Choose-First-Setup $extensions
     # A PATH that holds nothing, and the controlled artifact source.
     $cleanBin = Join-Path $OutDir "update-clean-bin"
     if (Test-Path $cleanBin) { Remove-Item -Recurse -Force $cleanBin }

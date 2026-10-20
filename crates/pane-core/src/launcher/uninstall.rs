@@ -290,10 +290,20 @@ impl Launcher {
             let store = installation.store.clone();
             off_thread(move || {
                 let mut store = store.lock().unwrap_or_else(|p| p.into_inner());
-                store.uninstall_all(&removals)
+                // A default uninstalled is declined with it (#283): the
+                // launcher takes the store's record of first setup's
+                // choice again.
+                store.uninstall_all(&removals).map(|leftovers| {
+                    let chosen = store.first_setup_chosen();
+                    (leftovers, chosen, store.declined_defaults())
+                })
             })
             .await
         };
+        let recorded = recorded.map(|(leftovers, chosen, declined)| {
+            self.lock().first_setup.reread(chosen, declined);
+            leftovers
+        });
         let leftovers = match recorded {
             Err(error) => {
                 let mut state = self.lock();

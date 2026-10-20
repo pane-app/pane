@@ -997,6 +997,7 @@ impl Updates {
         let request = install::Request::Default(DefaultExtension {
             id: id.to_owned(),
             title: package.title(),
+            description: None,
             repository: default.repository.clone(),
             tag: found.tag.clone(),
             commit: found.commit.clone(),

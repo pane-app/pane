@@ -46,6 +46,7 @@ mod feedback;
 mod file_actions;
 mod file_index;
 mod files;
+mod first_setup;
 mod game_mode;
 mod handoff;
 mod helpers;
