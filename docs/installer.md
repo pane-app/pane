@@ -390,8 +390,11 @@ with why, which tries again.
 3. **What a failure leaves.** A failed check or install explains itself
    on the status line and leaves everything untouched: the program still
    the one running, no staging, nothing renamed. The row stays — the
-   offer, or the check — and the user can try again. The old version's
-   data is never touched: Pane's data and caches live where each system
+   offer, or the check — and the user can try again. The offer's row
+   leaves root search while its install runs, so it cannot be started
+   twice, and comes back selected once the install failed, so Enter
+   tries again ([#424](https://github.com/pane-app/pane/issues/424)).
+   The old version's data is never touched: Pane's data and caches live where each system
    keeps them (`data\` and `cache\` under the install folder on
    Windows; `~/Library/Application Support/Pane` and
    `~/Library/Caches/Pane` on macOS; `~/.local/share/pane` on Linux,

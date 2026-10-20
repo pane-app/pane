@@ -2416,11 +2416,9 @@ cmp -s "$binary" "$unpack_old/pane/pane" || { echo "a failed install changed the
 # The source works again; the row that stays tries again, and the update
 # is installed: the new binary takes the old one's name and place inside
 # the bundle, the old one renamed out of its way.
-# The row leaves the list while an install runs, so the failed attempt
-# moved the selection to the next row ("Check for Extension Updates"),
-# where it stays: "update pane" matches the offer row alone.
+# The row leaves the list while an install runs, and comes back selected
+# once it failed (#424): Enter alone tries again.
 cp "$newer" "$served"
-command_key a; type_text "update pane"; sleep 1
 key 36
 for _ in $(seq 1200); do
   [ -e "$binary.old" ] && break
