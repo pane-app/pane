@@ -413,6 +413,25 @@ impl LauncherWindow {
             }
         })
         .detach();
+        // A request to close the launcher's window (#439) — a
+        // window-management tool, an accessibility client's close button —
+        // hides the launcher on macOS, as Escape and the dismiss binding
+        // do: a menu-bar app keeps running with no window shown, and the
+        // Open Pane hotkey shows the same window again. On Windows and
+        // Linux the request is let through, and closing the launcher's
+        // window quits Pane (see `main.rs`), which their smokes rely on
+        // to quit it.
+        let closing = cx.weak_entity();
+        window.on_window_should_close(cx, move |window, cx| {
+            if !cfg!(target_os = "macos") {
+                return true;
+            }
+            // A launcher already gone has nothing to hide: the window may
+            // close.
+            closing
+                .update(cx, |this, cx| this.hide(window, cx))
+                .is_err()
+        });
         // What the launcher asks of the window for the host functions
         // commands call (#141): hiding it, showing a HUD, drawing a
         // confirmation (#146).

@@ -284,6 +284,48 @@ fn the_default_hotkey_registers_at_startup_and_toggles_the_launcher(cx: &mut Tes
     assert!(hidden(&window, cx));
 }
 
+/// Asking the launcher's window to close (#439) — a window-management
+/// tool, an accessibility client's close button — hides the launcher on
+/// macOS, as Escape and the Open Pane hotkey do: the window stays, Pane
+/// keeps running and the hotkey shows it again. On Windows and Linux the
+/// request is let through, and closing the window quits Pane, as the
+/// smokes quit it there.
+#[gpui::test]
+fn asking_the_launcher_window_to_close_hides_it_on_macos(cx: &mut TestAppContext) {
+    let data = tempfile::tempdir().unwrap();
+    let system = Arc::new(FakeSystem::default());
+    let launcher = Launcher::new(Runtime::start(), Vec::new()).with_hotkeys(system.clone());
+    init_settings(Some(data.path()), cx);
+    cx.executor().allow_parking();
+    cx.update(pane::bind_keys);
+    let (window, cx) = cx.add_window_view(|window, cx| LauncherWindow::new(launcher, window, cx));
+    let handle = handle_of(cx);
+    let default = Shortcut::open_pane_default();
+
+    let closes = cx.simulate_close();
+    cx.run_until_parked();
+    if cfg!(target_os = "macos") {
+        assert!(!closes, "the close request was refused");
+        assert!(hidden(&window, cx), "the launcher hid");
+        assert!(
+            cx.cx
+                .update(|cx| cx.windows().contains(&AnyWindowHandle::from(handle))),
+            "the hidden window is still the live launcher window"
+        );
+        assert_eq!(
+            registered(&system),
+            vec![default.clone()],
+            "the Open Pane hotkey stayed registered"
+        );
+        press(&window, &default, cx);
+        cx.run_until_parked();
+        assert!(!hidden(&window, cx), "the hotkey shows the launcher again");
+    } else {
+        assert!(closes, "the close request was let through");
+        assert!(!hidden(&window, cx), "the launcher was not hidden");
+    }
+}
+
 #[gpui::test]
 fn a_held_key_does_not_toggle_the_launcher_repeatedly(cx: &mut TestAppContext) {
     let data = tempfile::tempdir().unwrap();
