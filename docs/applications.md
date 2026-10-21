@@ -376,9 +376,13 @@ The host extracts and keeps the icons (ADR 0038,
   64 MiB and 10,000 icons, the least recently drawn going first. Deleting
   it loses nothing but the time to extract the icons again.
 - **Refreshing**: a single worker thread at low priority (Windows'
-  background mode, a lower `nice` on Linux, the background band on macOS)
-  looks at eight icons at a time. After each start it looks once at every
-  application root search lists and extracts its icon again only when it
+  background mode, a lower `nice` on Linux, the utility quality-of-service
+  class on macOS) looks at eight icons at a time. macOS's background band
+  is not used: it throttles a thread's processor and disk for as long as
+  anything else is busy, which held the worker, and an icon a row on
+  screen was waiting for, for half a minute on a loaded Mac. After each
+  start it looks once at every application root search lists and
+  extracts its icon again only when it
   is missing, its fingerprint changed, or its picture is older than the
   refresh age, 7 days (to catch a change no fingerprint sees); an
   unchanged, younger icon is drawn from the cache and not extracted. An
