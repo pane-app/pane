@@ -762,21 +762,31 @@ $ready = [Action]{ [System.IO.File]::WriteAllText($env:PANE_READY_MARK, 'ready')
     /// pattern for UI Automation to read — which copies the text
     /// `PANE_COPIED_TEXT` names when Ctrl+C reaches it, marking
     /// `PANE_COPIED_MARK` that it did. Its title comes from the
-    /// environment.
+    /// environment. Its key handling is compiled C#: a PowerShell
+    /// handler first ran 0.7 s after the keys reached it on CI's runner,
+    /// past the simulated copy's wait (#421).
     const COPY_FORM: &str = "\n\
 Add-Type -AssemblyName System.Windows.Forms\n\
-$form = New-Object System.Windows.Forms.Form\n\
+Add-Type -ReferencedAssemblies System.Windows.Forms -TypeDefinition @'\n\
+using System;\n\
+using System.Windows.Forms;\n\
+public class PaneCopyTarget : Form {\n\
+  protected override void OnKeyDown(KeyEventArgs key) {\n\
+    if (key.Control && key.KeyCode == Keys.C) {\n\
+      try {\n\
+        Clipboard.SetText(Environment.GetEnvironmentVariable(\"PANE_COPIED_TEXT\"));\n\
+        System.IO.File.WriteAllText(Environment.GetEnvironmentVariable(\"PANE_COPIED_MARK\"), \"copied\");\n\
+      } catch (Exception) { }\n\
+      key.Handled = true;\n\
+      key.SuppressKeyPress = true;\n\
+      return;\n\
+    }\n\
+    base.OnKeyDown(key);\n\
+  }\n\
+}\n\
+'@\n\
+$form = New-Object PaneCopyTarget\n\
 $form.Text = $env:PANE_TARGET_TITLE\n\
-$form.KeyPreview = $true\n\
-$form.Add_KeyDown({ param($sender, $event)\n\
-  if ($event.Control -and $event.KeyCode -eq 'C') {\n\
-    try {\n\
-      [System.Windows.Forms.Clipboard]::SetText($env:PANE_COPIED_TEXT)\n\
-      [System.IO.File]::WriteAllText($env:PANE_COPIED_MARK, 'copied')\n\
-    } catch { }\n\
-    $event.Handled = $true\n\
-    $event.SuppressKeyPress = $true\n\
-  } })\n\
 $script:ready = $false\n\
 [System.Windows.Forms.Application]::add_Idle({ param($sender, $event)\n\
   if (-not $script:ready) {\n\
@@ -959,9 +969,8 @@ $script:ready = $false\n\
     /// Its script writes the file `PANE_READY_MARK` names once the form is
     /// set up and its thread first has nothing left to do: its window
     /// exists before that, and on a fresh runner a read of it then found
-    /// no selection yet, a window not responding while PowerShell was
-    /// still loading, or a copy target that copied 1 to 2 s after the
-    /// keys, past the wait of the simulated copy (#421).
+    /// no selection yet, or a window not responding while PowerShell was
+    /// still loading (#421).
     struct Form {
         window: HWND,
         child: std::process::Child,
