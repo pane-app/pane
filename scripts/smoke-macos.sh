@@ -2148,10 +2148,10 @@ not_kept() { sleep 2; if kept_one "$1"; then echo "$1 was kept"; exit 1; fi; }
 # copying text would (the watcher notices within its poll).
 copy() { osascript -e "set the clipboard to \"$1\""; sleep 1; }
 # Copies the file at path $1, as Finder's Copy does (a file URL). The copy's
-# process stays alive past the watcher's file-ready wait (FILE_READY_WAIT, 2 s):
-# the pasteboard serves a declared file URL's data from its living owner, and an
-# osascript that exits at once can leave the type declared but its data never
-# readable (#231).
+# process stays alive past the watcher's file-ready wait (FILE_READY_WAIT, 2 s),
+# as Finder does: an osascript that exits as soon as it has copied sometimes
+# leaves the pasteboard cleared and the file never written, the change count
+# moved but no type on it for any process to read (#231).
 copy_file() { osascript -e "set the clipboard to (POSIX file \"$1\")" -e "delay 2"; sleep 1; }
 # Opens Pane's Clipboard History from wherever the smoke is: its split
 # view, the field ("Type to filter entries…") holding the keyboard.
