@@ -8,7 +8,7 @@
 //! staying on the clipboard, still tagged.
 //!
 //! The selected text (#262) is read the same way: through UI Automation
-//! from a test-owned edit control with a selection and with none
+//! from a test-owned text box with a selection and with none
 //! ("nothing is selected", which is not a failure), and through the
 //! simulated copy from a test-owned window with no text pattern, which
 //! copies when the tagged Ctrl+C reaches it — the clipboard put back
@@ -59,13 +59,6 @@ mod windows {
     /// Whether the real-input test may run here.
     fn opted_in() -> bool {
         std::env::var("PANE_TEST_REAL_INPUT").is_ok_and(|value| value == "1")
-    }
-
-    /// Whether the test runs on CI, whose Windows runner fails the hung
-    /// target's and the selection reads' sections for reasons not yet
-    /// understood (#421): those are checked on a user's desktop.
-    fn on_ci() -> bool {
-        std::env::var_os("CI").is_some()
     }
 
     /// The real-input tests share the session's foreground window and
@@ -259,13 +252,7 @@ mod windows {
         assert_eq!(system.read_clipboard(), Ok(Some(gone)));
 
         // A target that is not responding fails the same way: its window
-        // stops answering, and no key is sent to it. On CI's runner the
-        // window never reads as not responding (#421).
-        if on_ci() {
-            eprintln!("skipped the hung target on CI (#421)");
-            listener.stop();
-            return;
-        }
+        // stops answering, and no key is sent to it.
         let hung = HungForm::start(folder.path()).expect("the hung target");
         take_front(hung.window());
         wait("the watcher to record the hung target", || {
@@ -461,9 +448,18 @@ $form.Add_FormClosing({ param($sender, $event)\n\
         }
     }
 
+    impl Drop for TargetForm {
+        fn drop(&mut self) {
+            ended(&mut self.child);
+        }
+    }
+
     /// A form whose thread keeps its window responsive for a while and
     /// then stops answering messages: a target that is not responding,
-    /// which a paste must skip.
+    /// which a paste must skip. Its thread blocks in `Thread.Sleep`, which
+    /// pumps nothing: PowerShell's own `Start-Sleep` waits on an STA
+    /// thread the CLR's way, which keeps handling the window's messages,
+    /// so Windows never counts the window as not responding (#421).
     struct HungForm {
         window: HWND,
         child: std::process::Child,
@@ -482,7 +478,7 @@ while ([DateTime]::UtcNow -lt $still) {\n\
   [System.Windows.Forms.Application]::DoEvents()\n\
   Start-Sleep -Milliseconds 100\n\
 }\n\
-Start-Sleep -Seconds 300\n";
+[System.Threading.Thread]::Sleep(300000)\n";
             let file = folder.join("hung.ps1");
             std::fs::write(&file, script).map_err(|error| error.to_string())?;
             let child = powershell(&file).spawn();
@@ -493,15 +489,28 @@ Start-Sleep -Seconds 300\n";
 
         /// Ends the hung target's process, which would never answer
         /// again.
-        fn kill(mut self) {
-            let _ = self.child.kill();
-            let _ = self.child.wait();
+        fn kill(self) {
+            drop(self);
         }
 
         /// The form's window, which the paste would reach.
         fn window(&self) -> HWND {
             self.window
         }
+    }
+
+    impl Drop for HungForm {
+        fn drop(&mut self) {
+            ended(&mut self.child);
+        }
+    }
+
+    /// Ends a target's process, if it is still running, and reaps it: a
+    /// failed try leaves no window behind for the next try to find by its
+    /// title (#421).
+    fn ended(child: &mut std::process::Child) {
+        let _ = child.kill();
+        let _ = child.wait();
     }
 
     /// A clipboard listener of the test's own: a message window on a
@@ -724,24 +733,28 @@ Start-Sleep -Seconds 300\n";
         .expect("the test's own window")
     }
 
-    /// The script of a selection target: a form with a multiline text box
-    /// — a Win32 edit control, whose selection UI Automation reads — its
-    /// text selected when `PANE_SELECT_ALL` says so. Its title and text
-    /// come from the environment.
+    /// The script of a selection target: a window whose whole content is a
+    /// WPF text box, its text selected when `PANE_SELECT_ALL` says so. Its
+    /// title and text come from the environment. WPF serves UI Automation
+    /// itself, so the window's element is the text box, with its Text
+    /// pattern, whether the window is in front or not. A Windows Forms
+    /// text box or a plain Win32 edit control is read through Windows'
+    /// MSAA proxy, which has no Text pattern (on CI's runner, #421), so
+    /// the read would fall to the simulated copy. The process ends once
+    /// its window is closed.
     const SELECTION_FORM: &str = "\n\
-Add-Type -AssemblyName System.Windows.Forms\n\
-$form = New-Object System.Windows.Forms.Form\n\
-$form.Text = $env:PANE_TARGET_TITLE\n\
-$box = New-Object System.Windows.Forms.TextBox\n\
-$box.Multiline = $true\n\
-$box.Dock = 'Fill'\n\
+Add-Type -AssemblyName PresentationFramework, PresentationCore, WindowsBase\n\
+$box = New-Object System.Windows.Controls.TextBox\n\
 $box.Text = $env:PANE_SELECTION_TEXT\n\
-$form.Controls.Add($box)\n\
-$form.ActiveControl = $box\n\
-$form.Add_Shown({ param($sender, $event)\n\
-  $box.Focus()\n\
-  if ($env:PANE_SELECT_ALL -eq '1') { $box.SelectAll() } })\n\
-[System.Windows.Forms.Application]::Run($form)\n";
+$parameters = New-Object System.Windows.Interop.HwndSourceParameters($env:PANE_TARGET_TITLE, 400, 200)\n\
+$parameters.WindowStyle = 0x10CF0000\n\
+$source = New-Object System.Windows.Interop.HwndSource($parameters)\n\
+$source.add_Disposed({ param($sender, $event)\n\
+  [System.Windows.Threading.Dispatcher]::CurrentDispatcher.BeginInvokeShutdown('Normal') })\n\
+$source.RootVisual = $box\n\
+[void]$box.Focus()\n\
+if ($env:PANE_SELECT_ALL -eq '1') { $box.SelectAll() }\n\
+[System.Windows.Threading.Dispatcher]::Run()\n";
 
     /// The script of a copy target: a form with no control — no text
     /// pattern for UI Automation to read — which copies the text
@@ -768,10 +781,6 @@ $form.Add_KeyDown({ param($sender, $event)\n\
     fn the_selection_is_read_by_uia_and_by_a_copy_that_leaves_no_trace() {
         if !opted_in() {
             eprintln!("skipped: set PANE_TEST_REAL_INPUT=1 to read selections with real input");
-            return;
-        }
-        if on_ci() {
-            eprintln!("skipped on CI: the selection reads fail on its runner (#421)");
             return;
         }
         let _serial = serial();
@@ -801,8 +810,8 @@ $form.Add_KeyDown({ param($sender, $event)\n\
         });
         listener.clear();
 
-        // UI Automation reads an edit control's selection, without
-        // touching the clipboard.
+        // UI Automation reads a text box's selection, without touching
+        // the clipboard.
         let selected = Form::start(
             folder.path(),
             SELECTION_FORM,
@@ -826,7 +835,7 @@ $form.Add_KeyDown({ param($sender, $event)\n\
         assert_eq!(
             system.selected_text(),
             Ok(Some(SELECTION.into())),
-            "UI Automation reads the edit control's selection"
+            "UI Automation reads the text box's selection"
         );
         assert_eq!(system.read_clipboard(), Ok(Some(Clip::Text(BEFORE.into()))));
         assert!(listener.seen().is_empty(), "the read changed nothing");
@@ -865,7 +874,9 @@ $form.Add_KeyDown({ param($sender, $event)\n\
         // Where UI Automation gives nothing — a window with no text
         // pattern — the simulated copy reads the selection: the target
         // copies when the tagged Ctrl+C reaches it, and the clipboard is
-        // put back.
+        // put back. Read while Pane's own window is in front, as a
+        // command's read is: the copy brings the target back to the front
+        // and waits for it to settle before it sends the keys.
         let mark = folder.path().join("copied.txt");
         let marked = mark.to_string_lossy().into_owned();
         let copying = Form::start(
@@ -883,6 +894,7 @@ $form.Add_KeyDown({ param($sender, $event)\n\
         wait("the copy target to be recorded", || {
             named_for(system.as_ref())
         });
+        take_front(own);
         assert_eq!(
             system.selected_text(),
             Ok(Some(COPIED.into())),
@@ -972,7 +984,21 @@ $form.Add_KeyDown({ param($sender, $event)\n\
         fn close(mut self) {
             // SAFETY: the form's own window, closed by its own handler.
             let _ = unsafe { PostMessageW(Some(self.window), WM_CLOSE, WPARAM(0), LPARAM(0)) };
-            let _ = self.child.wait();
+            let child = &mut self.child;
+            let deadline = Instant::now() + WAIT;
+            while !matches!(child.try_wait(), Ok(Some(_))) {
+                assert!(
+                    Instant::now() < deadline,
+                    "timed out waiting for the form to end"
+                );
+                std::thread::sleep(LOOK);
+            }
+        }
+    }
+
+    impl Drop for Form {
+        fn drop(&mut self) {
+            ended(&mut self.child);
         }
     }
 

@@ -563,8 +563,10 @@ fn in_front(window: HWND) -> bool {
 /// target's thread, the top-level one included, since some applications
 /// keep the focus there. Then a message sent to the window is handled only
 /// once its thread is back in its message loop. A target that does
-/// neither in time is pasted into all the same.
-fn settle(window: HWND) {
+/// neither in time is pasted into all the same. The selected-text read's
+/// simulated copy (#262) brings its target to the front the same way
+/// before its Ctrl+C, and waits the same.
+pub(crate) fn settle(window: HWND) {
     // SAFETY: a window handle; the process id is not wanted.
     let thread = unsafe { GetWindowThreadProcessId(window, None) };
     let deadline = Instant::now() + SETTLE_WAIT;
