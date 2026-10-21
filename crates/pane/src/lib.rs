@@ -240,6 +240,47 @@ pub fn prefer_rounded_window_corners(window: &Window) {
     };
 }
 
+/// Hides the close, minimize and zoom buttons AppKit puts on `window`, the
+/// launcher's, so it shows as a panel with no system buttons, as it does on
+/// Windows and Linux. Its titlebar is transparent and its content fills the
+/// window, so the buttons were otherwise drawn over the search field and
+/// the first row (#434). GPUI has no option that hides them, and opening
+/// the window without titlebar options would drop its title while AppKit
+/// still gives a titled window its buttons. The window keeps its title and
+/// its close and minimize keys, and its own drag regions still move it.
+#[cfg(target_os = "macos")]
+pub fn hide_window_buttons(window: &Window) {
+    use objc2::msg_send;
+    use objc2::rc::Retained;
+    use objc2::runtime::NSObject;
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    // AppKit's `NSWindowButton` values for the close, minimize and zoom
+    // buttons.
+    const BUTTONS: [usize; 3] = [0, 1, 2];
+    let handle = match HasWindowHandle::window_handle(window) {
+        Ok(handle) => handle,
+        Err(_) => return,
+    };
+    let RawWindowHandle::AppKit(handle) = handle.as_raw() else {
+        return;
+    };
+    // SAFETY: `view` is the `NSView` GPUI built this window from, and its
+    // `NSWindow` and the window's own buttons are held only for this call,
+    // which changes nothing but whether the buttons show.
+    let view = handle.ns_view.cast::<NSObject>();
+    let ns_window: Option<Retained<NSObject>> = unsafe { msg_send![view, window] };
+    let Some(ns_window) = ns_window else {
+        return;
+    };
+    for kind in BUTTONS {
+        let button: Option<Retained<NSObject>> =
+            unsafe { msg_send![&*ns_window, standardWindowButton: kind] };
+        if let Some(button) = button {
+            let _: () = unsafe { msg_send![&*button, setHidden: true] };
+        }
+    }
+}
+
 /// Makes `window`, a HUD's (see `features::hud`), let the pointer through
 /// to what is under it and never activate, where the system allows: on
 /// Windows a layered, transparent, non-activating window (fully opaque, so
