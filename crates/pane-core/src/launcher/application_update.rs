@@ -9,8 +9,8 @@
 //! and that the user chooses — and as a word on the status line; nothing
 //! is downloaded until the user picks the row. A check that fails is
 //! explained the same way, with a row that tries it again; an install
-//! that fails is explained, everything left as it was, with the row ready
-//! to try again.
+//! that fails is explained, everything left as it was, with the row
+//! selected, so Enter tries again.
 //!
 //! The Settings window's About page (#82) is a second view of the same
 //! flow, not a second flow: `Launcher::application_update` reads the
@@ -27,7 +27,7 @@
 use std::future::Future;
 use std::path::PathBuf;
 
-use super::{Launcher, Status, off_thread};
+use super::{Launcher, Screen, State, Status, off_thread};
 use crate::Target;
 use crate::application_update::{self, Found, Offer, Program};
 use crate::defaults::ArtifactSource;
@@ -424,7 +424,26 @@ impl Launcher {
             state.updates.install_failed = Some(why.clone());
             state.view.status = Status::Error(format!("Could not update Pane to {version}: {why}"));
             self.refresh(&mut state);
+            select_offer(&mut state);
         }
         self.changed();
+    }
+}
+
+/// Selects the offer's row in root search, if it is listed, so Enter
+/// tries a failed install again (#424). The row left the list while the
+/// install ran, so it could not be started twice, and the selection moved
+/// to another row meanwhile; without this, it would stay there when the
+/// row came back, and Enter would run that row instead.
+fn select_offer(state: &mut State) {
+    if !matches!(state.view.screen, Screen::Root { .. }) {
+        return;
+    }
+    if let Some(at) = state
+        .entries
+        .iter()
+        .position(|entry| matches!(entry, Entry::InstallUpdate))
+    {
+        state.view.selected = Some(at);
     }
 }

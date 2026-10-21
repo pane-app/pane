@@ -2950,11 +2950,9 @@ try {
     # The source works again; the row that stays tries again, and the
     # update is installed: the new program takes the old one's name and
     # place, the old one is renamed out of its way.
-    # The row leaves the list while an install runs, so the failed attempt
-    # moved the selection to the next row ("Check for Extension Updates"),
-    # where it stays: "update pane" matches the offer row alone.
+    # The row leaves the list while an install runs, and comes back
+    # selected once it failed (#424): Enter alone tries again.
     Copy-Item $newer.FullName $served -Force
-    Send "^a"; Send "update pane"; Start-Sleep -Seconds 1
     Send "{ENTER}"
     for ($i = 0; $i -lt 1200 -and -not (Test-Path (Join-Path $install "pane.exe.old")); $i++) {
         if ($process.HasExited) { throw "Pane exited while updating itself" }
