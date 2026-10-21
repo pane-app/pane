@@ -1,11 +1,11 @@
 //! The front application and paste against Windows' real input (#253):
 //! the Windows system adapter pastes into a window the test owns — a
-//! form with a text field that a script of the test's runs in a process
-//! of its own, since a window of the test's own process is never the
-//! target — and the clipboard is put back, while a clipboard listener of
-//! the test's own sees only writes tagged as not to be kept. A target
-//! that is gone or not responding fails, saying so, with the text
-//! staying on the clipboard, still tagged.
+//! window with a text field, in a process of its own, since a window of
+//! the test's own process is never the target — and the clipboard is put
+//! back, while a clipboard listener of the test's own sees only writes
+//! tagged as not to be kept. A target that is gone or not responding
+//! fails, saying so, with the text staying on the clipboard, still
+//! tagged.
 //!
 //! The selected text (#262) is read the same way: through UI Automation
 //! from a test-owned text box with a selection and with none
@@ -18,6 +18,12 @@
 //! saying so, and nothing is sent to it. The reads run in this process
 //! (the test binary cannot serve as Pane's worker), on the same code the
 //! worker runs, asked the same way with the same timeout.
+//!
+//! The targets are plain Win32 windows of the test binary itself, started
+//! again as a process of its own ([`target_process`]): no runtime of
+//! another language starts before them. PowerShell's Windows Forms and
+//! WPF windows, the targets before, sometimes stalled 0.7–2.5 s on a
+//! fresh CI runner, which failed a try now and then (#433).
 //!
 //! This needs a session with real input, so the test runs only where
 //! `PANE_TEST_REAL_INPUT=1` is set (CI's Windows runner sets it); without
@@ -46,9 +52,9 @@ mod windows {
     use ::windows::Win32::System::LibraryLoader::GetModuleHandleW;
     use ::windows::Win32::System::Threading::{AttachThreadInput, GetCurrentThreadId};
     use ::windows::Win32::UI::WindowsAndMessaging::{
-        CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, FindWindowW,
-        GetForegroundWindow, GetMessageW, GetWindowThreadProcessId, IsHungAppWindow, PeekMessageW,
-        PostMessageW, PostThreadMessageW, RegisterClassW, SetForegroundWindow,
+        CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetForegroundWindow,
+        GetMessageW, GetWindowThreadProcessId, IsHungAppWindow, PeekMessageW, PostMessageW,
+        PostThreadMessageW, RegisterClassW, SetForegroundWindow,
     };
     use ::windows::Win32::UI::WindowsAndMessaging::{
         HWND_MESSAGE, MSG, PM_NOREMOVE, PM_REMOVE, WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP,
@@ -73,14 +79,13 @@ mod windows {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
-    /// The titles of the target's window and of the hung target's, which
-    /// the test finds them by.
+    /// The titles of the target's window and of the hung target's.
     const TARGET: &str = "Pane real input paste target";
     const HUNG: &str = "Pane real input hung target";
 
-    /// The titles of the selection targets' windows, which the test finds
-    /// them by: one whose text box has a selection, one with none, and one
-    /// with no text control at all, which copies when Ctrl+C reaches it.
+    /// The titles of the selection targets' windows: one whose text box
+    /// has a selection, one with none, and one with no text control at
+    /// all, which copies when Ctrl+C reaches it.
     const SELECTED: &str = "Pane real input selection target";
     const EMPTY: &str = "Pane real input empty selection target";
     const COPYING: &str = "Pane real input copy target";
@@ -126,7 +131,7 @@ mod windows {
 
         let system = native();
         let own = own_window();
-        let target = TargetForm::start(folder.path()).expect("the paste target");
+        let target = Target::paste(folder.path()).expect("the paste target");
         take_front(target.window());
         wait("the target to be recorded", || named_for(system.as_ref()));
         system
@@ -152,8 +157,8 @@ mod windows {
         });
         take_front(own);
         assert_eq!(
-            target.close(),
-            PASTED,
+            target.close().as_deref(),
+            Some(PASTED),
             "the paste arrived with Pane's keyboard hook installed"
         );
         hotkeys.unregister(&tap);
@@ -170,7 +175,7 @@ mod windows {
         let system = native();
         let listener = Listener::start().expect("the clipboard listener");
         let own = own_window();
-        let target = TargetForm::start(folder.path()).expect("the paste target");
+        let target = Target::paste(folder.path()).expect("the paste target");
 
         // The target comes to the front, and the watcher records it: the
         // application in front is the target's, named for its program.
@@ -232,7 +237,7 @@ mod windows {
         // the now gone target, and the front application answers that no
         // target exists.
         take_front(own);
-        assert_eq!(target.close(), PASTED);
+        assert_eq!(target.close().as_deref(), Some(PASTED));
         wait("the gone target to answer none", || {
             system.front_application() == Ok(None)
         });
@@ -253,11 +258,12 @@ mod windows {
 
         // A target that is not responding fails the same way: its window
         // stops answering, and no key is sent to it.
-        let hung = HungForm::start(folder.path()).expect("the hung target");
+        let hung = Target::hung(folder.path()).expect("the hung target");
         take_front(hung.window());
         wait("the watcher to record the hung target", || {
             named_for(system.as_ref())
         });
+        hung.hang();
         wait("the hung target to stop responding", || {
             // SAFETY: the hung target's own window.
             unsafe { IsHungAppWindow(hung.window()) }.as_bool()
@@ -278,19 +284,21 @@ mod windows {
         let seen = listener.seen();
         assert!(seen.iter().all(|tagged| *tagged), "{seen:?}");
 
-        hung.kill();
+        drop(hung);
         listener.stop();
     }
 
     /// Whether the application in front is one of the test's targets,
-    /// which run Windows PowerShell: its icon names their program.
+    /// which run the test's own program: its icon names that program.
     fn named_for(system: &dyn System) -> bool {
         let icon = match system.front_application() {
             Ok(Some(front)) => front.icon,
             _ => None,
         };
-        let icon = icon.unwrap_or_default();
-        icon.to_lowercase().contains("powershell")
+        let icon = icon.unwrap_or_default().to_lowercase();
+        let program = std::env::current_exe().expect("the test's own program");
+        let program = program.to_string_lossy().to_lowercase();
+        icon == program
     }
 
     /// Waits up to [`WAIT`] for `check`, panicking with `what` if it never
@@ -298,19 +306,6 @@ mod windows {
     fn wait(what: &str, check: impl Fn() -> bool) {
         let deadline = Instant::now() + WAIT;
         while !check() {
-            assert!(Instant::now() < deadline, "timed out waiting for {what}");
-            pump();
-        }
-    }
-
-    /// Waits up to [`WAIT`] for `check` to answer something, answering what
-    /// it said; panics with `what` if it never did.
-    fn wait_for<T>(what: &str, check: impl Fn() -> Option<T>) -> T {
-        let deadline = Instant::now() + WAIT;
-        loop {
-            if let Some(answer) = check() {
-                return answer;
-            }
             assert!(Instant::now() < deadline, "timed out waiting for {what}");
             pump();
         }
@@ -364,153 +359,484 @@ mod windows {
         front == window
     }
 
-    /// The top-level window titled `title`, if it exists.
-    fn find_window(title: &str) -> Option<HWND> {
-        let wide: Vec<u16> = title.encode_utf16().chain([0]).collect();
-        // SAFETY: a NUL-terminated title; a plain class asks for any.
-        match unsafe { FindWindowW(PCWSTR::null(), PCWSTR(wide.as_ptr())) } {
-            Ok(window) => (!window.is_invalid()).then_some(window),
-            Err(_) => None,
+    /// The environment variable that makes the test binary one of the
+    /// tests' targets, naming which kind (see [`target::run`]).
+    const TARGET_KIND: &str = "PANE_REAL_INPUT_TARGET";
+
+    /// The test binary started again by [`Target::start`], as a target
+    /// process of the tests: it runs this alone, with [`TARGET_KIND`] set,
+    /// and makes the target's windows. Ignored by every ordinary run, and
+    /// does nothing without the variable.
+    #[test]
+    #[ignore = "the real-input tests' target process, which they start themselves"]
+    fn target_process() {
+        if let Ok(kind) = std::env::var(TARGET_KIND) {
+            target::run(&kind);
         }
     }
 
-    /// The script `file` run by Windows PowerShell, with no console window
-    /// of its own: the test owns the process and the windows it makes.
-    fn powershell(file: &Path) -> std::process::Command {
-        use std::os::windows::process::CommandExt;
-        let mut command = std::process::Command::new("powershell.exe");
-        command
-            .arg("-NoProfile")
-            .arg("-STA")
-            .arg("-ExecutionPolicy")
-            .arg("Bypass")
-            .arg("-File")
-            .arg(file);
-        // CREATE_NO_WINDOW: no console of its own.
-        command.creation_flags(0x0800_0000);
-        command
-    }
-
-    /// A form with a text field, which writes the field's text to a file
-    /// when it closes: the window the paste reaches.
-    struct TargetForm {
+    /// A target the test owns: windows of the test's own program, started
+    /// again in a process of its own (a window of the test's own process
+    /// would never be the target, which Pane skips). It answers its
+    /// windows through a ready mark once they are set up and its thread
+    /// pumps its messages, so the test never reads a window still being
+    /// made. Dropping it ends the process: a failed try leaves no window
+    /// behind (#421).
+    struct Target {
+        /// The target's top-level window, which the paste and the reads
+        /// reach.
         window: HWND,
-        /// Where the form's field's text is written on close.
+        /// Where the target writes its field's text when it closes.
         result: PathBuf,
         child: std::process::Child,
     }
 
-    impl TargetForm {
-        /// Starts the form in a process of its own: a window of the test's
-        /// own process would never be the target, which Pane skips.
-        fn start(folder: &Path) -> Result<TargetForm, String> {
-            let result = folder.join("pasted.txt");
-            let script = "\n\
-Add-Type -AssemblyName System.Windows.Forms\n\
-$form = New-Object System.Windows.Forms.Form\n\
-$form.Text = 'Pane real input paste target'\n\
-$box = New-Object System.Windows.Forms.TextBox\n\
-$box.Dock = 'Fill'\n\
-$form.Controls.Add($box)\n\
-$form.ActiveControl = $box\n\
-$form.Add_FormClosing({ param($sender, $event)\n\
-  [System.IO.File]::WriteAllText($env:PANE_PASTE_RESULT, $box.Text) })\n\
-[System.Windows.Forms.Application]::Run($form)\n";
-            let file = folder.join("target.ps1");
-            std::fs::write(&file, script).map_err(|error| error.to_string())?;
-            let child = powershell(&file)
-                .env("PANE_PASTE_RESULT", &result)
+    impl Target {
+        /// A window with a text field, which writes the field's text to a
+        /// file when it closes: the window the paste reaches.
+        fn paste(folder: &Path) -> Result<Target, String> {
+            Target::start(folder, "frame", TARGET, &[("PANE_FIELD_CLASS", "EDIT")])
+        }
+
+        /// A window that answers its messages until [`Target::hang`] tells
+        /// it to stop: a target that is not responding, which a paste and
+        /// a read must skip.
+        fn hung(folder: &Path) -> Result<Target, String> {
+            Target::start(folder, "frame", HUNG, &[])
+        }
+
+        /// A window whose whole content is a rich edit control (Windows'
+        /// own `RICHEDIT50W`) holding [`SELECTION`], all of it selected
+        /// when `select` says so. The rich edit serves UI Automation
+        /// itself, with its Text pattern, and being the top-level window
+        /// it is read whether it is in front or not. A plain Win32 edit
+        /// control is read through Windows' MSAA proxy, which has no Text
+        /// pattern (on CI's runner, #421), so the read would fall to the
+        /// simulated copy.
+        fn selection(folder: &Path, title: &str, select: bool) -> Result<Target, String> {
+            let select = if select { "1" } else { "0" };
+            Target::start(
+                folder,
+                "field",
+                title,
+                &[
+                    ("PANE_FIELD_CLASS", "RICHEDIT50W"),
+                    ("PANE_FIELD_TEXT", SELECTION),
+                    ("PANE_SELECT_ALL", select),
+                ],
+            )
+        }
+
+        /// A window with no control — no text pattern for UI Automation
+        /// to read — which copies [`COPIED`] when Ctrl+C reaches it, and
+        /// marks `mark` that it did.
+        fn copy(folder: &Path, mark: &Path) -> Result<Target, String> {
+            let mark = mark.to_string_lossy().into_owned();
+            Target::start(
+                folder,
+                "frame",
+                COPYING,
+                &[("PANE_COPIED_TEXT", COPIED), ("PANE_COPIED_MARK", &mark)],
+            )
+        }
+
+        /// Starts the test binary as a target of `kind` titled `title`,
+        /// with `envs` set for it, and waits for it to be ready.
+        fn start(
+            folder: &Path,
+            kind: &str,
+            title: &str,
+            envs: &[(&str, &str)],
+        ) -> Result<Target, String> {
+            use std::os::windows::process::CommandExt;
+            let ready = folder.join(format!("{title}.ready"));
+            let result = folder.join(format!("{title}.result"));
+            let program = std::env::current_exe().map_err(|error| error.to_string())?;
+            let mut command = std::process::Command::new(program);
+            command
+                .args([
+                    "real_input::windows::target_process",
+                    "--exact",
+                    "--ignored",
+                    "--nocapture",
+                ])
+                .env(TARGET_KIND, kind)
+                .env("PANE_TARGET_TITLE", title)
+                .env("PANE_READY_MARK", &ready)
+                .env("PANE_TARGET_RESULT", &result)
+                // The harness's own report is not wanted; a panic's message
+                // still reaches the test's output.
+                .stdout(std::process::Stdio::null());
+            for (name, value) in envs {
+                command.env(name, value);
+            }
+            // CREATE_NO_WINDOW: no console of its own.
+            command.creation_flags(0x0800_0000);
+            let child = command
                 .spawn()
-                .map_err(|error| format!("powershell: {error}"))?;
-            let window = wait_for("the target's window", || find_window(TARGET));
-            Ok(TargetForm {
-                window,
+                .map_err(|error| format!("the target process: {error}"))?;
+            let mut target = Target {
+                window: HWND::default(),
                 result,
                 child,
-            })
+            };
+            let deadline = Instant::now() + WAIT;
+            loop {
+                if let Some(window) = target::ready(&ready) {
+                    target.window = window;
+                    return Ok(target);
+                }
+                if let Ok(Some(status)) = target.child.try_wait() {
+                    return Err(format!("the target ended before it was ready: {status}"));
+                }
+                if Instant::now() >= deadline {
+                    return Err(format!("timed out waiting for the target {title}"));
+                }
+                pump();
+            }
         }
 
-        /// The form's window, which the paste reaches.
+        /// The target's top-level window.
         fn window(&self) -> HWND {
             self.window
         }
 
-        /// Closes the form, answering the text its field ended with.
-        fn close(mut self) -> String {
-            // SAFETY: the form's own window, closed by its own handler,
-            // which writes the field's text to the result file.
+        /// Tells the target to stop answering its messages, as a hung
+        /// application does: its thread sleeps in the message it is sent,
+        /// pumping nothing, until its process is ended.
+        fn hang(&self) {
+            // SAFETY: the target's own window and a plain message.
+            let _ = unsafe { PostMessageW(Some(self.window), target::HANG, WPARAM(0), LPARAM(0)) };
+        }
+
+        /// Closes the target and waits for its process to end, answering
+        /// the text its field ended with, if it has a field.
+        fn close(mut self) -> Option<String> {
+            // SAFETY: the target's own window, closed by its own handler.
             let _ = unsafe { PostMessageW(Some(self.window), WM_CLOSE, WPARAM(0), LPARAM(0)) };
-            let text = wait_for("the target to write its text", || {
-                std::fs::read_to_string(&self.result).ok()
-            });
+            let deadline = Instant::now() + WAIT;
+            while !matches!(self.child.try_wait(), Ok(Some(_))) {
+                assert!(
+                    Instant::now() < deadline,
+                    "timed out waiting for the target to end"
+                );
+                std::thread::sleep(LOOK);
+            }
+            std::fs::read_to_string(&self.result).ok()
+        }
+    }
+
+    impl Drop for Target {
+        /// Ends the target's process, if it is still running, and reaps
+        /// it: a failed try leaves no window behind for the next (#421).
+        fn drop(&mut self) {
+            let _ = self.child.kill();
             let _ = self.child.wait();
-            text
         }
     }
 
-    impl Drop for TargetForm {
-        fn drop(&mut self) {
-            ended(&mut self.child);
+    /// The target process's side: plain Win32 windows on its main thread,
+    /// with no runtime of another language to start.
+    mod target {
+        use std::cell::RefCell;
+        use std::path::{Path, PathBuf};
+        use std::time::Duration;
+
+        use ::windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
+        use ::windows::Win32::System::LibraryLoader::{GetModuleHandleW, LoadLibraryW};
+        use ::windows::Win32::System::Threading::GetCurrentThreadId;
+        use ::windows::Win32::UI::Input::KeyboardAndMouse::{GetKeyState, SetFocus, VK_CONTROL};
+        use ::windows::Win32::UI::WindowsAndMessaging::{
+            CW_USEDEFAULT, CreateWindowExW, DefWindowProcW, DispatchMessageW, ES_AUTOHSCROLL,
+            ES_MULTILINE, GetMessageW, GetWindowTextW, IsWindow, MSG, PostThreadMessageW,
+            RegisterClassW, SW_SHOW, SendMessageW, ShowWindow, TranslateMessage, WINDOW_EX_STYLE,
+            WINDOW_STYLE, WM_APP, WM_CLOSE, WM_KEYDOWN, WM_SETFOCUS, WM_SETTEXT, WNDCLASSW,
+            WS_BORDER, WS_CHILD, WS_OVERLAPPEDWINDOW, WS_VISIBLE,
+        };
+        use ::windows::core::{HSTRING, PCWSTR, w};
+
+        /// The message that tells a target's window to stop answering.
+        pub(super) const HANG: u32 = WM_APP + 3;
+
+        /// The thread message a target posts itself before its loop starts:
+        /// handled, it writes the ready mark, the thread now pumping.
+        const READY: u32 = WM_APP + 4;
+
+        /// An edit control's message selecting a range of its text.
+        const EM_SETSEL: u32 = 0x00B1;
+
+        /// What the target's window procedure works with, on its thread.
+        #[derive(Default)]
+        struct Setup {
+            /// The text field inside the frame, if it has one.
+            field: Option<HWND>,
+            /// Where the field's text is written when the frame closes.
+            result: Option<PathBuf>,
+            /// What Ctrl+C copies, and the file marked when it does.
+            copies: Option<(String, PathBuf)>,
+            /// The clipboard's owner of the last copy, kept while the
+            /// process runs.
+            owner: Option<pane_core::clipboard::testing::Owner>,
         }
-    }
 
-    /// A form whose thread keeps its window responsive for a while and
-    /// then stops answering messages: a target that is not responding,
-    /// which a paste must skip. Its thread blocks in `Thread.Sleep`, which
-    /// pumps nothing: PowerShell's own `Start-Sleep` waits on an STA
-    /// thread the CLR's way, which keeps handling the window's messages,
-    /// so Windows never counts the window as not responding (#421).
-    struct HungForm {
-        window: HWND,
-        child: std::process::Child,
-    }
-
-    impl HungForm {
-        /// Starts the form in a process of its own.
-        fn start(folder: &Path) -> Result<HungForm, String> {
-            let script = "\n\
-Add-Type -AssemblyName System.Windows.Forms\n\
-$form = New-Object System.Windows.Forms.Form\n\
-$form.Text = 'Pane real input hung target'\n\
-$form.Show()\n\
-$still = [DateTime]::UtcNow.AddSeconds(10)\n\
-while ([DateTime]::UtcNow -lt $still) {\n\
-  [System.Windows.Forms.Application]::DoEvents()\n\
-  Start-Sleep -Milliseconds 100\n\
-}\n\
-[System.Threading.Thread]::Sleep(300000)\n";
-            let file = folder.join("hung.ps1");
-            std::fs::write(&file, script).map_err(|error| error.to_string())?;
-            let child = powershell(&file).spawn();
-            let child = child.map_err(|error| format!("powershell: {error}"))?;
-            let window = wait_for("the hung target's window", || find_window(HUNG));
-            Ok(HungForm { window, child })
+        thread_local! {
+            static SETUP: RefCell<Setup> = RefCell::new(Setup::default());
         }
 
-        /// Ends the hung target's process, which would never answer
-        /// again.
-        fn kill(self) {
-            drop(self);
+        /// The target's windows, made from its environment, then its
+        /// message loop until its top-level window is gone. `kind` is
+        /// `frame` — a plain window, with a text field of the class
+        /// `PANE_FIELD_CLASS` filling it if that is set — or `field` — a
+        /// top-level text field of that class.
+        pub(super) fn run(kind: &str) {
+            let variable = |name: &str| std::env::var(name).ok().filter(|value| !value.is_empty());
+            let title = variable("PANE_TARGET_TITLE").unwrap_or_default();
+            let ready = variable("PANE_READY_MARK").map(PathBuf::from);
+            let class = variable("PANE_FIELD_CLASS");
+            if class.as_deref() == Some("RICHEDIT50W") {
+                // SAFETY: a system library, which registers the class.
+                unsafe { LoadLibraryW(w!("msftedit.dll")) }.expect("the rich edit's library");
+            }
+            let (window, field) = match kind {
+                "frame" => {
+                    let frame = frame(&title);
+                    let field = class.as_deref().map(|class| field_in(frame, class));
+                    (frame, field)
+                }
+                "field" => {
+                    let class = class.as_deref().expect("the field's class");
+                    (top_level_field(class, &title), None)
+                }
+                other => panic!("no target of the kind {other}"),
+            };
+            let text_field = field.unwrap_or(window);
+            if let Some(text) = variable("PANE_FIELD_TEXT") {
+                let text = HSTRING::from(text.as_str());
+                // SAFETY: the field is this thread's; the text is
+                // NUL-terminated and outlives the call.
+                unsafe {
+                    SendMessageW(
+                        text_field,
+                        WM_SETTEXT,
+                        None,
+                        Some(LPARAM(text.as_ptr() as isize)),
+                    )
+                };
+            }
+            if variable("PANE_SELECT_ALL").as_deref() == Some("1") {
+                // SAFETY: the field is this thread's; 0 to -1 is all of it.
+                unsafe { SendMessageW(text_field, EM_SETSEL, Some(WPARAM(0)), Some(LPARAM(-1))) };
+            }
+            SETUP.with(|setup| {
+                let mut setup = setup.borrow_mut();
+                setup.field = field;
+                setup.result = variable("PANE_TARGET_RESULT").map(PathBuf::from);
+                setup.copies = variable("PANE_COPIED_TEXT")
+                    .zip(variable("PANE_COPIED_MARK").map(PathBuf::from));
+            });
+            // Shown once set up: a window shown as it is made may be
+            // activated then, before its frame knows the field to give the
+            // focus to, and it would keep the focus itself.
+            // SAFETY: this thread's own window.
+            let _ = unsafe { ShowWindow(window, SW_SHOW) };
+            // SAFETY: no arguments; the thread has its queue, its windows
+            // made.
+            let thread = unsafe { GetCurrentThreadId() };
+            // SAFETY: this thread's own id and a plain message.
+            let _ = unsafe { PostThreadMessageW(thread, READY, WPARAM(0), LPARAM(0)) };
+            let mut message = MSG::default();
+            loop {
+                // SAFETY: `message` is writable for the call.
+                if unsafe { GetMessageW(&mut message, None, 0, 0) }.0 <= 0 {
+                    break;
+                }
+                if message.hwnd.is_invalid() && message.message == READY {
+                    if let Some(ready) = &ready {
+                        mark_ready(ready, window);
+                    }
+                    continue;
+                }
+                // SAFETY: a message this thread's queue returned; the keys
+                // are made into characters, which the fields type and
+                // paste from.
+                unsafe {
+                    let _ = TranslateMessage(&message);
+                    DispatchMessageW(&message);
+                }
+                // SAFETY: plain values.
+                if !unsafe { IsWindow(Some(window)) }.as_bool() {
+                    break;
+                }
+            }
         }
 
-        /// The form's window, which the paste would reach.
-        fn window(&self) -> HWND {
-            self.window
+        /// Writes the ready mark: the top-level window, as a number,
+        /// written whole before the mark appears.
+        fn mark_ready(ready: &Path, window: HWND) {
+            let written = (window.0 as usize).to_string();
+            let partial = ready.with_extension("partial");
+            std::fs::write(&partial, written).expect("the ready mark");
+            std::fs::rename(&partial, ready).expect("the ready mark");
         }
-    }
 
-    impl Drop for HungForm {
-        fn drop(&mut self) {
-            ended(&mut self.child);
+        /// The window a target's ready mark names, once it is there.
+        pub(super) fn ready(ready: &Path) -> Option<HWND> {
+            let written = std::fs::read_to_string(ready).ok()?;
+            let window = written.trim().parse::<usize>().ok()?;
+            Some(HWND(window as *mut _))
         }
-    }
 
-    /// Ends a target's process, if it is still running, and reaps it: a
-    /// failed try leaves no window behind for the next try to find by its
-    /// title (#421).
-    fn ended(child: &mut std::process::Child) {
-        let _ = child.kill();
-        let _ = child.wait();
+        /// A plain top-level window of the target's own class, hidden.
+        fn frame(title: &str) -> HWND {
+            let class = w!("PaneRealInputTarget");
+            // SAFETY: no arguments; the module is this process's.
+            let instance = unsafe { GetModuleHandleW(PCWSTR::null()) }.expect("the module");
+            let registered = WNDCLASSW {
+                lpfnWndProc: Some(procedure),
+                hInstance: instance.into(),
+                lpszClassName: class,
+                ..WNDCLASSW::default()
+            };
+            // SAFETY: `registered` is fully initialized, and its name and
+            // instance live as long as the process.
+            unsafe { RegisterClassW(&registered) };
+            let title = HSTRING::from(title);
+            // SAFETY: the class is registered; a window with no menu or
+            // creation data, shown once it is set up.
+            unsafe {
+                CreateWindowExW(
+                    WINDOW_EX_STYLE::default(),
+                    class,
+                    &title,
+                    WS_OVERLAPPEDWINDOW,
+                    CW_USEDEFAULT,
+                    CW_USEDEFAULT,
+                    400,
+                    200,
+                    None,
+                    None,
+                    Some(instance.into()),
+                    None,
+                )
+            }
+            .expect("the target's window")
+        }
+
+        /// A text field of `class` filling `frame`.
+        fn field_in(frame: HWND, class: &str) -> HWND {
+            let class = HSTRING::from(class);
+            let style = WS_CHILD | WS_VISIBLE | WS_BORDER | style_of(&[ES_AUTOHSCROLL]);
+            // SAFETY: a system class; a child of this thread's window.
+            unsafe {
+                CreateWindowExW(
+                    WINDOW_EX_STYLE::default(),
+                    &class,
+                    PCWSTR::null(),
+                    style,
+                    0,
+                    0,
+                    380,
+                    150,
+                    Some(frame),
+                    None,
+                    None,
+                    None,
+                )
+            }
+            .expect("the target's field")
+        }
+
+        /// A top-level text field of `class`, titled `title`, hidden.
+        fn top_level_field(class: &str, title: &str) -> HWND {
+            let class = HSTRING::from(class);
+            let title = HSTRING::from(title);
+            let style = WS_OVERLAPPEDWINDOW | style_of(&[ES_MULTILINE]);
+            // SAFETY: a system class; a window with no menu or creation
+            // data, shown once it is set up.
+            unsafe {
+                CreateWindowExW(
+                    WINDOW_EX_STYLE::default(),
+                    &class,
+                    &title,
+                    style,
+                    CW_USEDEFAULT,
+                    CW_USEDEFAULT,
+                    400,
+                    200,
+                    None,
+                    None,
+                    None,
+                    None,
+                )
+            }
+            .expect("the target's field")
+        }
+
+        /// An edit control's styles as a window's style.
+        fn style_of(styles: &[i32]) -> WINDOW_STYLE {
+            WINDOW_STYLE(styles.iter().fold(0, |all, style| all | *style as u32))
+        }
+
+        /// The frame's window procedure: the focus goes to its field, its
+        /// field's text is written as it closes, Ctrl+C copies where it is
+        /// to, and [`HANG`] stops its thread.
+        extern "system" fn procedure(
+            window: HWND,
+            message: u32,
+            wparam: WPARAM,
+            lparam: LPARAM,
+        ) -> LRESULT {
+            match message {
+                WM_SETFOCUS => {
+                    if let Some(field) = SETUP.with(|setup| setup.borrow().field) {
+                        // SAFETY: the frame's own field.
+                        let _ = unsafe { SetFocus(Some(field)) };
+                        return LRESULT(0);
+                    }
+                }
+                WM_CLOSE => SETUP.with(|setup| {
+                    let setup = setup.borrow();
+                    if let (Some(field), Some(result)) = (setup.field, &setup.result) {
+                        std::fs::write(result, text_of(field)).expect("the field's text");
+                    }
+                }),
+                WM_KEYDOWN if wparam.0 == usize::from(b'C') && control_down() => {
+                    let copied = SETUP.with(|setup| {
+                        let mut setup = setup.borrow_mut();
+                        let Some((text, mark)) = setup.copies.clone() else {
+                            return false;
+                        };
+                        let owner = pane_core::clipboard::testing::set_text(&text, &[])
+                            .expect("the copy target's copy");
+                        setup.owner = Some(owner);
+                        std::fs::write(mark, "copied").expect("the copy mark");
+                        true
+                    });
+                    if copied {
+                        return LRESULT(0);
+                    }
+                }
+                HANG => std::thread::sleep(Duration::from_secs(300)),
+                _ => {}
+            }
+            // SAFETY: the arguments are those this procedure was called with.
+            unsafe { DefWindowProcW(window, message, wparam, lparam) }
+        }
+
+        /// Whether Ctrl is down as the key being handled was pressed.
+        fn control_down() -> bool {
+            // SAFETY: a plain value.
+            let state = unsafe { GetKeyState(i32::from(VK_CONTROL.0)) };
+            state < 0
+        }
+
+        /// The text of `field`, a window of this thread.
+        fn text_of(field: HWND) -> String {
+            let mut text = vec![0u16; 4096];
+            // SAFETY: `text` is writable for its length.
+            let read = unsafe { GetWindowTextW(field, &mut text) };
+            String::from_utf16_lossy(&text[..read.clamp(0, text.len() as i32) as usize])
+        }
     }
 
     /// A clipboard listener of the test's own: a message window on a
@@ -733,68 +1059,6 @@ while ([DateTime]::UtcNow -lt $still) {\n\
         .expect("the test's own window")
     }
 
-    /// The script of a selection target: a window whose whole content is a
-    /// WPF text box, its text selected when `PANE_SELECT_ALL` says so. Its
-    /// title and text come from the environment. WPF serves UI Automation
-    /// itself, so the window's element is the text box, with its Text
-    /// pattern, whether the window is in front or not. A Windows Forms
-    /// text box or a plain Win32 edit control is read through Windows'
-    /// MSAA proxy, which has no Text pattern (on CI's runner, #421), so
-    /// the read would fall to the simulated copy. The process ends once
-    /// its window is closed.
-    const SELECTION_FORM: &str = "\n\
-Add-Type -AssemblyName PresentationFramework, PresentationCore, WindowsBase\n\
-$box = New-Object System.Windows.Controls.TextBox\n\
-$box.Text = $env:PANE_SELECTION_TEXT\n\
-$parameters = New-Object System.Windows.Interop.HwndSourceParameters($env:PANE_TARGET_TITLE, 400, 200)\n\
-$parameters.WindowStyle = 0x10CF0000\n\
-$source = New-Object System.Windows.Interop.HwndSource($parameters)\n\
-$source.add_Disposed({ param($sender, $event)\n\
-  [System.Windows.Threading.Dispatcher]::CurrentDispatcher.BeginInvokeShutdown('Normal') })\n\
-$source.RootVisual = $box\n\
-[void]$box.Focus()\n\
-if ($env:PANE_SELECT_ALL -eq '1') { $box.SelectAll() }\n\
-$ready = [Action]{ [System.IO.File]::WriteAllText($env:PANE_READY_MARK, 'ready') }\n\
-[void]$source.Dispatcher.BeginInvoke([System.Windows.Threading.DispatcherPriority]::ApplicationIdle, $ready)\n\
-[System.Windows.Threading.Dispatcher]::Run()\n";
-
-    /// The script of a copy target: a form with no control — no text
-    /// pattern for UI Automation to read — which copies the text
-    /// `PANE_COPIED_TEXT` names when Ctrl+C reaches it, marking
-    /// `PANE_COPIED_MARK` that it did. Its title comes from the
-    /// environment. Its key handling is compiled C#: a PowerShell
-    /// handler first ran 0.7 s after the keys reached it on CI's runner,
-    /// past the simulated copy's wait (#421).
-    const COPY_FORM: &str = "\n\
-Add-Type -AssemblyName System.Windows.Forms\n\
-Add-Type -ReferencedAssemblies System.Windows.Forms -TypeDefinition @'\n\
-using System;\n\
-using System.Windows.Forms;\n\
-public class PaneCopyTarget : Form {\n\
-  protected override void OnKeyDown(KeyEventArgs key) {\n\
-    if (key.Control && key.KeyCode == Keys.C) {\n\
-      try {\n\
-        Clipboard.SetText(Environment.GetEnvironmentVariable(\"PANE_COPIED_TEXT\"));\n\
-        System.IO.File.WriteAllText(Environment.GetEnvironmentVariable(\"PANE_COPIED_MARK\"), \"copied\");\n\
-      } catch (Exception) { }\n\
-      key.Handled = true;\n\
-      key.SuppressKeyPress = true;\n\
-      return;\n\
-    }\n\
-    base.OnKeyDown(key);\n\
-  }\n\
-}\n\
-'@\n\
-$form = New-Object PaneCopyTarget\n\
-$form.Text = $env:PANE_TARGET_TITLE\n\
-$script:ready = $false\n\
-[System.Windows.Forms.Application]::add_Idle({ param($sender, $event)\n\
-  if (-not $script:ready) {\n\
-    $script:ready = $true\n\
-    [void][System.Windows.Forms.Clipboard]::ContainsText()\n\
-    [System.IO.File]::WriteAllText($env:PANE_READY_MARK, 'ready') } })\n\
-[System.Windows.Forms.Application]::Run($form)\n";
-
     #[test]
     fn the_selection_is_read_by_uia_and_by_a_copy_that_leaves_no_trace() {
         if !opted_in() {
@@ -830,17 +1094,8 @@ $script:ready = $false\n\
 
         // UI Automation reads a text box's selection, without touching
         // the clipboard.
-        let selected = Form::start(
-            folder.path(),
-            SELECTION_FORM,
-            SELECTED,
-            &[
-                ("PANE_TARGET_TITLE", SELECTED),
-                ("PANE_SELECTION_TEXT", SELECTION),
-                ("PANE_SELECT_ALL", "1"),
-            ],
-        )
-        .expect("the selection target");
+        let selected =
+            Target::selection(folder.path(), SELECTED, true).expect("the selection target");
         take_front(selected.window());
         wait("the selection target to be recorded", || {
             named_for(system.as_ref())
@@ -857,24 +1112,15 @@ $script:ready = $false\n\
         );
         assert_eq!(system.read_clipboard(), Ok(Some(Clip::Text(BEFORE.into()))));
         assert!(listener.seen().is_empty(), "the read changed nothing");
-        // Pane's own window in front, so closing the form changes no
+        // Pane's own window in front, so closing the target changes no
         // foreground the watcher would record.
         take_front(own);
         selected.close();
 
         // Nothing selected is an answer, not a failure — read while
         // Pane's own window is in front, as a command's read is.
-        let empty = Form::start(
-            folder.path(),
-            SELECTION_FORM,
-            EMPTY,
-            &[
-                ("PANE_TARGET_TITLE", EMPTY),
-                ("PANE_SELECTION_TEXT", SELECTION),
-                ("PANE_SELECT_ALL", "0"),
-            ],
-        )
-        .expect("the empty selection target");
+        let empty =
+            Target::selection(folder.path(), EMPTY, false).expect("the empty selection target");
         take_front(empty.window());
         wait("the empty target to be recorded", || {
             named_for(system.as_ref())
@@ -896,18 +1142,7 @@ $script:ready = $false\n\
         // command's read is: the copy brings the target back to the front
         // and waits for it to settle before it sends the keys.
         let mark = folder.path().join("copied.txt");
-        let marked = mark.to_string_lossy().into_owned();
-        let copying = Form::start(
-            folder.path(),
-            COPY_FORM,
-            COPYING,
-            &[
-                ("PANE_TARGET_TITLE", COPYING),
-                ("PANE_COPIED_TEXT", COPIED),
-                ("PANE_COPIED_MARK", marked.as_str()),
-            ],
-        )
-        .expect("the copy target");
+        let copying = Target::copy(folder.path(), &mark).expect("the copy target");
         take_front(copying.window());
         wait("the copy target to be recorded", || {
             named_for(system.as_ref())
@@ -942,11 +1177,12 @@ $script:ready = $false\n\
 
         // A target that is not responding fails, saying so, and nothing
         // is sent to it.
-        let hung = HungForm::start(folder.path()).expect("the hung target");
+        let hung = Target::hung(folder.path()).expect("the hung target");
         take_front(hung.window());
         wait("the hung target to be recorded", || {
             named_for(system.as_ref())
         });
+        hung.hang();
         wait("the hung target to stop responding", || {
             // SAFETY: the hung target's own window.
             unsafe { IsHungAppWindow(hung.window()) }.as_bool()
@@ -959,74 +1195,8 @@ $script:ready = $false\n\
         assert!(why.contains("not responding"), "{why}");
         assert_eq!(system.read_clipboard(), Ok(Some(Clip::Text(BEFORE.into()))));
 
-        hung.kill();
+        drop(hung);
         listener.stop();
-    }
-
-    /// A form the test owns, in a PowerShell process of its own (a window
-    /// of the test's own process would never be the target, which Pane
-    /// skips), found by its window's title and closed by asking it to.
-    /// Its script writes the file `PANE_READY_MARK` names once the form is
-    /// set up and its thread first has nothing left to do: its window
-    /// exists before that, and on a fresh runner a read of it then found
-    /// no selection yet, or a window not responding while PowerShell was
-    /// still loading (#421).
-    struct Form {
-        window: HWND,
-        child: std::process::Child,
-    }
-
-    impl Form {
-        /// Runs `script` in a process of its own, with `envs` set for it,
-        /// waiting for its window titled `title` and for it to be ready.
-        fn start(
-            folder: &Path,
-            script: &str,
-            title: &str,
-            envs: &[(&str, &str)],
-        ) -> Result<Form, String> {
-            let file = folder.join(format!("{}.ps1", title));
-            std::fs::write(&file, script).map_err(|error| error.to_string())?;
-            let ready = folder.join(format!("{}.ready", title));
-            let mut command = powershell(&file);
-            command.env("PANE_READY_MARK", &ready);
-            for (name, value) in envs {
-                command.env(name, value);
-            }
-            let child = command
-                .spawn()
-                .map_err(|error| format!("powershell: {error}"))?;
-            let window = wait_for("the form's window", || find_window(title));
-            let form = Form { window, child };
-            wait("the form to be ready", || ready.exists());
-            Ok(form)
-        }
-
-        /// The form's window, which the read reaches.
-        fn window(&self) -> HWND {
-            self.window
-        }
-
-        /// Closes the form and waits for its process to end.
-        fn close(mut self) {
-            // SAFETY: the form's own window, closed by its own handler.
-            let _ = unsafe { PostMessageW(Some(self.window), WM_CLOSE, WPARAM(0), LPARAM(0)) };
-            let child = &mut self.child;
-            let deadline = Instant::now() + WAIT;
-            while !matches!(child.try_wait(), Ok(Some(_))) {
-                assert!(
-                    Instant::now() < deadline,
-                    "timed out waiting for the form to end"
-                );
-                std::thread::sleep(LOOK);
-            }
-        }
-    }
-
-    impl Drop for Form {
-        fn drop(&mut self) {
-            ended(&mut self.child);
-        }
     }
 
     /// Pane's own clipboard watch of the test's, counting the changes it
