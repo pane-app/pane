@@ -28,6 +28,16 @@ export PANE_DATA_DIR=$out/data
 no_default_pins=$out/no-default-pins.json
 printf '[]\n' >"$no_default_pins"
 export PANE_DEFAULTS=$no_default_pins
+# Records first setup's choice as made, nothing declined, in the
+# extensions folder $1 (#283): a fresh data folder with default pins
+# opens on the choice of the official extensions and fetches nothing until
+# Set Up is chosen. The #52 phase drives that screen; the other phases
+# that set the defaults up start where a user who chose Set Up stands, so
+# Pane sets every default up by itself as it starts.
+choose_first_setup() {
+  mkdir -p "$1"
+  printf '{ "version": 1, "next": 1, "packages": [], "firstSetupChosen": true }\n' >"$1/installed.json"
+}
 { sw_vers; uname -m; } >"$out/system.txt"   # the tested OS version and architecture
 
 printf "%s\n" "theme=dark material=opaque (behavior smoke; not blur evidence)" >>"$out/system.txt"
@@ -2046,6 +2056,21 @@ wait_recorded() {
   exit 1
 }
 kill -0 "$pid" 2>/dev/null || { echo "the installed Pane exited during setup"; exit 1; }
+# First setup's choice (#283): the official extensions, by the lines under
+# its title (waited for as an --install preview's are), the Set Up row
+# selected; nothing is set up before Return chooses it.
+for _ in $(seq 60); do
+  capture 497-first-setup.png
+  python3 "$(dirname "$0")/check_screenshot.py" --preview "$out/497-first-setup.png" >/dev/null 2>&1 && break
+  sleep 0.5
+done
+python3 "$(dirname "$0")/check_screenshot.py" --preview "$out/497-first-setup.png" \
+  || { echo "first setup's choice did not appear"; record_setup_problem; exit 1; }
+check 497-first-setup.png selected   # the Set Up row, selected
+if grep -q '"default"' "$installed/installed.json" 2>/dev/null; then
+  echo "a default was set up before first setup's choice"; exit 1
+fi
+key 36
 # The default set (#60): all five, in every build; no sample is
 # set up (#162).
 for default_ in calculator applications quicklinks files clipboard-history; do
@@ -2108,6 +2133,8 @@ rm -rf "$PANE_DATA_DIR" "$out/clipboard-home"
 mkdir -p "$out/clipboard-home"
 export PANE_TEST_FILE_INDEX_HOME=$(cd "$out/clipboard-home" && pwd)
 export PANE_DEFAULTS=$default_pins
+# First setup's choice made, as the #52 phase makes it (#283).
+choose_first_setup "$PANE_DATA_DIR/extensions"
 extensions=$PANE_DATA_DIR/extensions
 history=$extensions/clipboard-history.json
 # The kept texts, newest first, joined by commas.
@@ -2121,10 +2148,10 @@ not_kept() { sleep 2; if kept_one "$1"; then echo "$1 was kept"; exit 1; fi; }
 # copying text would (the watcher notices within its poll).
 copy() { osascript -e "set the clipboard to \"$1\""; sleep 1; }
 # Copies the file at path $1, as Finder's Copy does (a file URL). The copy's
-# process stays alive past the watcher's file-ready wait (FILE_READY_WAIT, 2 s):
-# the pasteboard serves a declared file URL's data from its living owner, and an
-# osascript that exits at once can leave the type declared but its data never
-# readable (#231).
+# process stays alive past the watcher's file-ready wait (FILE_READY_WAIT, 2 s),
+# as Finder does: an osascript that exits as soon as it has copied sometimes
+# leaves the pasteboard cleared and the file never written, the change count
+# moved but no type on it for any process to read (#231).
 copy_file() { osascript -e "set the clipboard to (POSIX file \"$1\")" -e "delay 2"; sleep 1; }
 # Opens Pane's Clipboard History from wherever the smoke is: its split
 # view, the field ("Type to filter entries…") holding the keyboard.
@@ -2332,6 +2359,8 @@ rm -rf "$update_clean_bin"; mkdir -p "$update_clean_bin"
 # quoted).
 update_installed="$update_home/Library/Application Support/Pane/extensions"
 update_registry=$update_installed/installed.json
+# First setup's choice made, as the #52 phase makes it (#283).
+choose_first_setup "$update_installed"
 start_updated() {
   env -i HOME="$update_home" PATH="$update_clean_bin" \
     PANE_THEME=dark PANE_MATERIAL=opaque \
@@ -2416,11 +2445,9 @@ cmp -s "$binary" "$unpack_old/pane/pane" || { echo "a failed install changed the
 # The source works again; the row that stays tries again, and the update
 # is installed: the new binary takes the old one's name and place inside
 # the bundle, the old one renamed out of its way.
-# The row leaves the list while an install runs, so the failed attempt
-# moved the selection to the next row ("Check for Extension Updates"),
-# where it stays: "update pane" matches the offer row alone.
+# The row leaves the list while an install runs, and comes back selected
+# once it failed (#424): Enter alone tries again.
 cp "$newer" "$served"
-command_key a; type_text "update pane"; sleep 1
 key 36
 for _ in $(seq 1200); do
   [ -e "$binary.old" ] && break

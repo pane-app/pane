@@ -17,7 +17,7 @@ An installable addition that contributes functionality to the launcher.
 _Avoid_: Plugin, add-on
 
 **Default extension**:
-An official extension provided by default to supply an everyday feature: installed at first setup, from the commit of its repository's release tag that the Pane release pins, rather than shipped inside the installer. The choice screen is deferred (#283): every default is installed, and disabling one is the opt-out — one the user uninstalled is not installed again.
+An official extension provided by default to supply an everyday feature: installed at first setup, from the commit of its repository's release tag that the Pane release pins, rather than shipped inside the installer. First setup lists the official extensions with the defaults ticked, and the user unticks what they do not want (#283): an unticked default is declined, as an uninstalled one is, and never installed by itself again, while Settings' Extensions group offers it to install; disabling one is the other opt-out.
 _Avoid_: Mandatory feature, core feature
 
 **Official extension**:

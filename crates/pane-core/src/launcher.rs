@@ -131,6 +131,7 @@ mod update_results;
 mod updates;
 mod watchers;
 
+pub use acquire::OfficialExtension;
 use acquire::{Acquisitions, Defaults};
 use actions::selected_action;
 pub use actions::{DISMISS_NOTICE, ResultAction, ResultActionItem, ResultActions};
@@ -975,6 +976,10 @@ struct State {
     /// the one being acquired, and which failed and can be tried again
     /// (see `acquire`).
     acquisitions: Acquisitions,
+    /// First setup's choice of the official extensions (#283): whether it
+    /// is made, which defaults the user declined, and whether it was asked
+    /// this session (see `acquire`).
+    first_setup: acquire::FirstSetup,
     /// Pane's own update: what the last check found, and what is running
     /// now (see `application_update`).
     updates: Updates,
@@ -1469,6 +1474,19 @@ enum Entry {
     /// Install every ticked extension of the open choice, one after
     /// another, each as its own package (#308).
     InstallChoice,
+    /// Tick or untick this extension of first setup's choice of the
+    /// official extensions (#283), as Space does: its row's activation.
+    TickChoice(String),
+    /// Record first setup's choice and set the ticked defaults up (#283):
+    /// its Set Up row.
+    SetUpDefaults,
+    /// Show first setup's choice again (#283): root search's row while it
+    /// is not made, after the user left it.
+    FirstSetup,
+    /// Install this official extension, by its default's id, from the
+    /// commit this release pins (#283): Settings' Extensions group offers
+    /// each one not installed, declined or never acquired.
+    InstallOfficial(String),
     /// Pane's "Manage Extensions" command (root): the launcher window
     /// opens Settings at the extensions instead (see
     /// [`Launcher::selected_settings_target`]); activated here, it enters
@@ -1627,6 +1645,9 @@ enum Pending {
     PreviewChoice(install::Request),
     /// The run of the open choice's ticked extensions (#308).
     ChoiceRun(choice::Begun),
+    /// First setup's choice, made (#283): recorded, declining these
+    /// defaults, then the ticked ones set up.
+    FirstSetup(Vec<String>),
     Acquire(String),
     InstallUpdate,
     CheckUpdate,
@@ -1740,6 +1761,17 @@ impl Launcher {
                 Record::default(),
             ),
         };
+        // First setup's choice, as the store records it (#283).
+        let first_setup =
+            installation
+                .as_ref()
+                .map_or_else(acquire::FirstSetup::default, |installation| {
+                    let store = installation.store.lock().unwrap_or_else(|p| p.into_inner());
+                    acquire::FirstSetup::recorded(
+                        store.first_setup_chosen(),
+                        store.declined_defaults(),
+                    )
+                });
         let subtitles = installation
             .as_ref()
             .map_or_else(Record::default, |installation| {
@@ -1859,6 +1891,7 @@ impl Launcher {
             arguments: argument_fields::Typed::default(),
             quick_slots: quick_slots::Kept::default(),
             acquisitions: Acquisitions::default(),
+            first_setup,
             updates: Updates::default(),
             crash: crash_notice::Notice::default(),
             clipboard_records: clipboard_view::Projected::default(),
@@ -3690,6 +3723,7 @@ impl Launcher {
                 Pending::PreviewChoice(request) => launcher.preview_after(epoch, request).await,
                 Pending::ChoiceRun(begun) => launcher.run_choice(epoch, begun).await,
                 Pending::Acquire(id) => launcher.retry_acquiring(&id).await,
+                Pending::FirstSetup(declined) => launcher.finish_first_setup(declined).await,
                 Pending::InstallUpdate => launcher.install_application_update().await,
                 Pending::CheckUpdate => launcher.check_application_update_again().await,
                 Pending::CheckExtensionUpdates => launcher.check_extension_updates().await,
@@ -3897,7 +3931,16 @@ impl Launcher {
                 .map_or(Pending::Nothing, Pending::Install),
             Entry::PreviewChoice(id) => self.preview_choice(state, &id),
             Entry::InstallChoice => self.begin_choice_run(state),
-            Entry::Acquire(id) => {
+            Entry::TickChoice(id) => {
+                self.tick_choice(state, &id);
+                Pending::Nothing
+            }
+            Entry::SetUpDefaults => self.set_up_chosen(state),
+            Entry::FirstSetup => {
+                self.show_first_setup(state);
+                Pending::Nothing
+            }
+            Entry::Acquire(id) | Entry::InstallOfficial(id) => {
                 state.view.status = Status::Running {
                     since: Instant::now(),
                 };
@@ -4203,6 +4246,11 @@ impl Launcher {
             state
                 .retained
                 .retain(|retained| retained.identity != installed.identity);
+            // A default the user declined and installs now is no longer
+            // declined, as the store records it (#283).
+            if let Some(id) = installed.identity.default_id() {
+                state.first_setup.installed(id);
+            }
             if let Some(installation) = &self.installation {
                 installation
                     .data
@@ -4973,6 +5021,25 @@ impl Launcher {
             add(
                 row,
                 Entry::ImportExtension,
+                None,
+                None,
+                &[],
+                CommandWhen::Always,
+                CommandMatches::Title,
+            );
+        }
+        // First setup's choice of the official extensions, once the user
+        // left it unmade (#283): the row shows it again.
+        if self.offers_first_setup(state) {
+            let row = Row {
+                id: "pane.first-setup".into(),
+                title: "Set Up Official Extensions…".into(),
+                subtitle: Some("Choose which of Pane's official extensions to set up".into()),
+                unavailable: None,
+            };
+            add(
+                row,
+                Entry::FirstSetup,
                 None,
                 None,
                 &[],

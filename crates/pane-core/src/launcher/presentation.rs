@@ -541,6 +541,8 @@ pub(super) fn kind(entry: &Entry) -> Option<RowKind> {
         | Entry::CreateExtension
         | Entry::ImportExtension
         | Entry::Acquire(_)
+        | Entry::FirstSetup
+        | Entry::InstallOfficial(_)
         | Entry::InstallUpdate
         | Entry::CheckUpdate
         | Entry::CheckExtensionUpdates

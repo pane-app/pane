@@ -32,6 +32,16 @@ export PANE_DATA_DIR=$out/data
 no_default_pins=$out/no-default-pins.json
 printf '[]\n' >"$no_default_pins"
 export PANE_DEFAULTS=$no_default_pins
+# Records first setup's choice as made, nothing declined, in the
+# extensions folder $1 (#283): a fresh data folder with default pins
+# opens on the choice of the official extensions and fetches nothing until
+# Set Up is chosen. The #53 phase drives that screen; the other phases
+# that set the defaults up start where a user who chose Set Up stands, so
+# Pane sets every default up by itself as it starts.
+choose_first_setup() {
+  mkdir -p "$1"
+  printf '{ "version": 1, "next": 1, "packages": [], "firstSetupChosen": true }\n' >"$1/installed.json"
+}
 { grep PRETTY_NAME /etc/os-release; uname -srm; } >"$out/system.txt"   # the tested OS and architecture
 
 printf "%s\n" "theme=dark material=opaque (behavior smoke; not blur evidence)" >>"$out/system.txt"
@@ -2129,7 +2139,10 @@ stop_service
 # (scripts/repository_server.py; the Pane under test reaches no network
 # address and no real Git host), named by the pins file the development
 # build reads through PANE_DEFAULTS (a release build uses the committed
-# pins, which no controlled source may replace). The clones hold the
+# pins, which no controlled source may replace). First setup asks first
+# (#283): the window opens on the official extensions, the defaults
+# ticked and Set Up selected, with nothing fetched, and Enter sets them
+# up. The clones hold the
 # release revisions' built components, so the first setup installs
 # exactly what a release installs; the calculator answers "6*7" with 42,
 # with no developer tool anywhere. The package is the development
@@ -2229,6 +2242,21 @@ wait_recorded() {
   exit 1
 }
 kill -0 "$pane_pid" 2>/dev/null || { echo "the installed Pane exited during setup"; exit 1; }
+# First setup's choice (#283): the official extensions, by the lines under
+# its title (waited for as an --install preview's are), the Set Up row
+# selected; nothing is set up before Enter chooses it.
+for _ in $(seq 60); do
+  capture 497-first-setup.png
+  python3 "$(dirname "$0")/check_screenshot.py" --preview "$out/497-first-setup.png" >/dev/null 2>&1 && break
+  sleep 0.5
+done
+python3 "$(dirname "$0")/check_screenshot.py" --preview "$out/497-first-setup.png" \
+  || { echo "first setup's choice did not appear"; record_setup_problem; exit 1; }
+check 497-first-setup.png selected   # the Set Up row, selected
+if grep -q '"default"' "$installed/installed.json" 2>/dev/null; then
+  echo "a default was set up before first setup's choice"; exit 1
+fi
+"$xdotool" key Return
 # The default set (#60): all five, in every build; no sample is
 # set up (#162).
 for default_ in calculator applications quicklinks files clipboard-history; do
@@ -2251,7 +2279,7 @@ fi
 python3 "$(dirname "$0")/check_git_record.py" --defaults "$default_pins" "$installed/installed.json" \
   || { echo "a default's record does not keep its Git source"; exit 1; }
 [ -z "$(ls -A "$installed/downloads" 2>/dev/null)" ] || { echo "downloads were left behind"; exit 1; }
-python3 "$(dirname "$0")/check_screenshot.py" --distinct "$out"/{500-installed-root,501-calculator-answer}.png
+python3 "$(dirname "$0")/check_screenshot.py" --distinct "$out"/{497-first-setup,500-installed-root,501-calculator-answer}.png
 stop_pane
 kill "$artifact_server_pid"; wait "$artifact_server_pid" 2>/dev/null || true; artifact_server_pid=
 # The program files go again: the evidence is the screenshots, the
@@ -2292,6 +2320,8 @@ rm -rf "$PANE_DATA_DIR" "$out/clipboard-home"
 mkdir -p "$out/clipboard-home"
 export PANE_TEST_FILE_INDEX_HOME=$(cd "$out/clipboard-home" && pwd)
 export PANE_DEFAULTS=$default_pins
+# First setup's choice made, as the #53 phase makes it (#283).
+choose_first_setup "$PANE_DATA_DIR/extensions"
 
 extensions=$PANE_DATA_DIR/extensions
 history=$extensions/clipboard-history.json
@@ -2511,6 +2541,8 @@ env -i HOME="$update_home" PATH="/usr/bin:/bin" bash "$unpack_old/pane/install.s
 update_program=$update_home/.local/bin/pane
 update_registry=$update_home/.local/share/pane/extensions/installed.json
 update_log=$out/update-artifact-server.log
+# First setup's choice made, as the #53 phase makes it (#283).
+choose_first_setup "$(dirname "$update_registry")"
 # Starts the installed Pane of the update home, with the PATH that holds
 # nothing and the controlled artifact source, as the #53 phase's
 # start_installed does for its own home.
@@ -2584,11 +2616,9 @@ cmp -s "$update_program" "$unpack_old/pane/pane" || { echo "a failed install cha
 # The source works again; the row that stays tries again, and the update
 # is installed: the new program takes the old one's name and place, the
 # old one is renamed out of its way.
-# The row leaves the list while an install runs, so the failed attempt
-# moved the selection to the next row ("Check for Extension Updates"),
-# where it stays: "update pane" matches the offer row alone.
+# The row leaves the list while an install runs, and comes back selected
+# once it failed (#424): Enter alone tries again.
 cp "$newer" "$served"
-"$xdotool" key ctrl+a; "$xdotool" type --delay 50 "update pane"; sleep 1
 "$xdotool" key Return
 for _ in $(seq 1200); do
   kill -0 "$pane_pid" 2>/dev/null || { echo "Pane exited while updating itself"; exit 1; }

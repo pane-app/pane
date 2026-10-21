@@ -497,6 +497,13 @@ python3 "$here/repository_server.py" clone-defaults crates/pane/defaults.json \
   "$hidden_repositories" "$out/hidden-pins.json" \
   "http://127.0.0.1:$(cat "$out/hidden-repository-server.port")/"
 export PANE_DEFAULTS=$out/hidden-pins.json
+# First setup's choice made, nothing declined (#283): a fresh data folder
+# would open on the choice of the official extensions and fetch nothing
+# until Set Up is chosen; the phase starts where a user who chose it
+# stands, so Pane sets every default up by itself, hidden.
+mkdir -p "$PANE_DATA_DIR/extensions"
+printf '{ "version": 1, "next": 1, "packages": [], "firstSetupChosen": true }\n' \
+  >"$PANE_DATA_DIR/extensions/installed.json"
 start_pane
 hide_launcher
 # Generous, as the smoke's: a slow runner may take a while to check every

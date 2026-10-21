@@ -3642,6 +3642,28 @@ struct RegistryJson {
     /// uses that data and drops the record.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     retained: Vec<RetainedJson>,
+    /// Whether the user made first setup's choice of the official
+    /// extensions (#283): once made, first setup never asks again, and a
+    /// default extension missing then — one whose setting up failed, or
+    /// one a later Pane added — is set up by itself unless it is
+    /// declined.
+    #[serde(
+        default,
+        rename = "firstSetupChosen",
+        skip_serializing_if = "std::ops::Not::not"
+    )]
+    first_setup_chosen: bool,
+    /// The ids of the default extensions the user chose not to have: the
+    /// ones unticked at first setup, and the ones uninstalled — the same
+    /// record for both (#283). A declined default is never set up by
+    /// itself again; installing it, from Settings' Extensions group or a
+    /// row that sets it up, drops it from here.
+    #[serde(
+        default,
+        rename = "declinedDefaults",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    declined_defaults: Vec<String>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -4228,6 +4250,48 @@ impl Store {
             .collect()
     }
 
+    /// Whether the user made first setup's choice of the official
+    /// extensions (#283).
+    pub fn first_setup_chosen(&self) -> bool {
+        self.registry
+            .as_ref()
+            .is_ok_and(|registry| registry.first_setup_chosen)
+    }
+
+    /// The ids of the default extensions the user chose not to have:
+    /// unticked at first setup or uninstalled (#283).
+    pub fn declined_defaults(&self) -> Vec<String> {
+        self.registry
+            .as_ref()
+            .map(|registry| registry.declined_defaults.clone())
+            .unwrap_or_default()
+    }
+
+    /// Records first setup's choice (#283): the choice is made, and the
+    /// default extensions `declined` — the ones the user unticked — are
+    /// declined, as an uninstall declines one. `installed.json` is read
+    /// again first and only those fields change in it, so what another
+    /// Pane on the same data folder recorded since is kept. A failure
+    /// records nothing.
+    pub fn choose_first_setup(&mut self, declined: &[String]) -> Result<(), PackageError> {
+        let registry = self
+            .registry
+            .as_mut()
+            .map_err(|reason| PackageError::Storage(reason.clone()))?;
+        let mut on_disk = read_registry(&self.dir).map_err(PackageError::Storage)?;
+        let mut updated = registry.clone();
+        for registry in [&mut on_disk, &mut updated] {
+            registry.first_setup_chosen = true;
+            for id in declined {
+                decline(registry, id);
+            }
+        }
+        write_registry(&self.dir, &on_disk)
+            .map_err(|error| PackageError::Storage(error.to_string()))?;
+        *registry = updated;
+        Ok(())
+    }
+
     /// Removes again the package with `identity` that an install added,
     /// putting back, at its place among them, the record that Pane kept its
     /// data under `title` if it had one (`(title, index)`).
@@ -4240,7 +4304,10 @@ impl Store {
             title,
             at: Some(at),
         });
-        self.remove(identity, retain)
+        // Undoing an install is not the user's uninstall: a default
+        // extension it removes is not declined.
+        let mut left = self.remove_all(&[(identity.clone(), retain)], false)?;
+        Ok(left.pop().unwrap_or(Leftover::None))
     }
 
     /// Uninstalls the packages of `removals`, in one write: each record
@@ -4248,7 +4315,10 @@ impl Store {
     /// data under that title. `installed.json` is read again first and only
     /// those records change in it, so what another Pane on the same data
     /// folder recorded since is kept. If one is not installed or the record
-    /// cannot be written, nothing changes. Then each managed copy is removed; a
+    /// cannot be written, nothing changes. A default extension uninstalled
+    /// is declined in the same write, as one unticked at first setup is
+    /// (#283): it is never set up by itself again, whether its saved data
+    /// is kept or not. Then each managed copy is removed; a
     /// managed folder that cannot be (one in use on Windows) is listed so
     /// that the next start removes it, as an update's replaced copy is.
     /// Returns what is left of each managed copy, in the order given.
@@ -4263,26 +4333,17 @@ impl Store {
                 (identity.clone(), retain)
             })
             .collect();
-        self.remove_all(&removals)
-    }
-
-    /// Uninstalls one package as [`Store::uninstall_all`] does, recording
-    /// retained data under a title, at a position among the retained records
-    /// if given, else last.
-    fn remove(
-        &mut self,
-        identity: &PackageIdentity,
-        retain: Option<Retain>,
-    ) -> Result<Leftover, PackageError> {
-        let mut left = self.remove_all(&[(identity.clone(), retain)])?;
-        Ok(left.pop().unwrap_or(Leftover::None))
+        self.remove_all(&removals, true)
     }
 
     /// Uninstalls as [`Store::uninstall_all`] does, each retained record
-    /// under a title at a position among them if given, else last.
+    /// under a title at a position among them if given, else last, and,
+    /// where `declines` (the user's uninstall), each default extension
+    /// declined.
     fn remove_all(
         &mut self,
         removals: &[(PackageIdentity, Option<Retain>)],
+        declines: bool,
     ) -> Result<Vec<Leftover>, PackageError> {
         let registry = self
             .registry
@@ -4304,6 +4365,10 @@ impl Store {
             if let Some(Retain { title, at }) = retain {
                 put_retained(&mut updated, local, title.clone(), *at);
                 put_retained(&mut on_disk, local, title.clone(), *at);
+            }
+            if declines && let Some(id) = identity.default_id() {
+                decline(&mut updated, id);
+                decline(&mut on_disk, id);
             }
         }
         write_registry(&self.dir, &on_disk)
@@ -4462,6 +4527,11 @@ impl Store {
                 // Data kept from an earlier installation of this identity
                 // is its own again.
                 updated.retained.retain(|record| &record.source != local);
+                // A default extension the user declined and installs now
+                // is no longer declined (#283).
+                if let Some(id) = package.identity.default_id() {
+                    updated.declined_defaults.retain(|declined| declined != id);
+                }
                 updated.packages.push(RecordJson {
                     source: local.clone(),
                     npm: npm.clone(),
@@ -4515,6 +4585,21 @@ impl Store {
 fn take_record(registry: &mut RegistryJson, source: &Source) -> Option<RecordJson> {
     let index = registry.packages.iter().position(|r| r.source == *source)?;
     Some(registry.packages.remove(index))
+}
+
+/// Records in `registry` that the user declined the default extension
+/// `id` (#283), once. A default declined is a choice made: an install
+/// that set its defaults up before first setup asked, and uninstalls one,
+/// is never asked afterwards, whatever it uninstalls.
+fn decline(registry: &mut RegistryJson, id: &str) {
+    registry.first_setup_chosen = true;
+    if !registry
+        .declined_defaults
+        .iter()
+        .any(|declined| declined == id)
+    {
+        registry.declined_defaults.push(id.to_owned());
+    }
 }
 
 fn put_retained(registry: &mut RegistryJson, source: &Source, title: String, at: Option<usize>) {
@@ -4683,6 +4768,8 @@ fn read_registry(dir: &Path) -> Result<RegistryJson, String> {
             packages: Vec::new(),
             leftovers: Vec::new(),
             retained: Vec::new(),
+            first_setup_chosen: false,
+            declined_defaults: Vec::new(),
         }),
         Err(error) => Err(error.to_string()),
     }

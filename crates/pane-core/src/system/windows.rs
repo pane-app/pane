@@ -44,8 +44,7 @@ use ::windows::Win32::System::Com::StructuredStorage::{PropVariantClear, PropVar
 use ::windows::Win32::System::DataExchange::GetClipboardSequenceNumber;
 use ::windows::Win32::System::Threading::{
     AttachThreadInput, GetCurrentProcess, GetCurrentThreadId, OpenProcess, OpenProcessToken,
-    PROCESS_QUERY_INFORMATION, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE,
-    WaitForInputIdle,
+    PROCESS_QUERY_LIMITED_INFORMATION,
 };
 use ::windows::Win32::UI::Input::KeyboardAndMouse::{
     INPUT, INPUT_0, INPUT_KEYBOARD, KEYBD_EVENT_FLAGS, KEYBDINPUT, KEYEVENTF_KEYUP, SendInput,
@@ -58,8 +57,9 @@ use ::windows::Win32::UI::Shell::{
     SHFILEOPSTRUCTW, SHFileOperationW, SHOpenFolderAndSelectItems, ShellExecuteExW,
 };
 use ::windows::Win32::UI::WindowsAndMessaging::{
-    GetForegroundWindow, GetWindowTextW, GetWindowThreadProcessId, IsHungAppWindow, IsWindow,
-    SMTO_ABORTIFHUNG, SW_SHOWNORMAL, SendMessageTimeoutW, SetForegroundWindow, WM_NULL,
+    GUITHREADINFO, GetForegroundWindow, GetGUIThreadInfo, GetWindowTextW, GetWindowThreadProcessId,
+    IsHungAppWindow, IsWindow, SMTO_ABORTIFHUNG, SW_SHOWNORMAL, SendMessageTimeoutW,
+    SetForegroundWindow, WM_NULL,
 };
 use ::windows::core::{GUID, HRESULT, PCWSTR};
 
@@ -287,11 +287,14 @@ const INJECTED_TAG: usize = crate::hotkeys::INJECTED_TAG;
 /// clipboard before it is put back, and how long the caller waits for
 /// the worker as a whole (#125's proposed timings).
 const FRONT_WAIT: Duration = Duration::from_millis(500);
+const READ_WAIT: Duration = Duration::from_millis(500);
+const PASTE_WAIT: Duration = Duration::from_secs(10);
 /// How long the paste worker waits, once the target is in front, for the
 /// target to have taken its coming to the front in (see [`settle`]).
 const SETTLE_WAIT: Duration = Duration::from_millis(500);
-const READ_WAIT: Duration = Duration::from_millis(500);
-const PASTE_WAIT: Duration = Duration::from_secs(10);
+/// How long the target's keyboard focus must have stayed where it is for
+/// the worker to take the target as settled (see [`settle`]).
+const SETTLED_FOR: Duration = Duration::from_millis(50);
 /// How often the worker looks while it waits.
 const LOOK_EVERY: Duration = Duration::from_millis(10);
 
@@ -352,7 +355,7 @@ fn paste_into(
         return Err(refused(PasteRefusal::Superseded));
     }
     bring_to_front(window).map_err(refused)?;
-    settle(window, target.process);
+    settle(window);
     if pasting.superseded(generation) {
         return Err(refused(PasteRefusal::Superseded));
     }
@@ -545,18 +548,40 @@ fn in_front(window: HWND) -> bool {
 }
 
 /// Waits, at most [`SETTLE_WAIT`] for each step, for the target's
-/// `window` of `process` to have taken its coming to the front in, so the
-/// keys sent next reach it. The launcher hides before it pastes, and
-/// Windows brings the next window to the front by itself as it does: that
-/// window can be in front while its thread is still taking in its
-/// activation, and a Ctrl+V sent then was lost (the Windows smoke's paste
-/// into Notepad, sent 13 ms after Notepad came to the front with its
-/// focus not yet in its edit control, never arrived). A message sent to
-/// the window is handled only once its thread is back in its message
-/// loop, after the activation's own messages; then the process is waited
-/// for until it waits for input with none pending. A target that answers
-/// neither in time is pasted into all the same.
-fn settle(window: HWND, process: u32) {
+/// `window` to have taken its coming to the front in, so the keys sent
+/// next reach it. The launcher hides before it pastes, and Windows brings
+/// the next window to the front by itself as it does: that window can be
+/// in front while its thread is still taking in its activation, moving
+/// its keyboard focus from the window to the control that keeps it, and
+/// a Ctrl+V sent then was lost. The Windows smoke's paste into Notepad
+/// was, sent 13 ms after Notepad came to the front with its focus still
+/// on its frame; and, once the worker waited for Notepad's thread to
+/// answer a message, sent 1 ms after the focus reached its edit control,
+/// where pastes sent 3 to 5 ms after it arrived. So the worker waits for
+/// the target thread's focus — the window that has it, the caret's — to
+/// have stayed where it is for [`SETTLED_FOR`]: any window of the
+/// target's thread, the top-level one included, since some applications
+/// keep the focus there. Then a message sent to the window is handled only
+/// once its thread is back in its message loop. A target that does
+/// neither in time is pasted into all the same. The selected-text read's
+/// simulated copy (#262) brings its target to the front the same way
+/// before its Ctrl+C, and waits the same.
+pub(crate) fn settle(window: HWND) {
+    // SAFETY: a window handle; the process id is not wanted.
+    let thread = unsafe { GetWindowThreadProcessId(window, None) };
+    let deadline = Instant::now() + SETTLE_WAIT;
+    let mut seen = focus_of(thread);
+    let mut since = Instant::now();
+    while Instant::now() < deadline {
+        std::thread::sleep(LOOK_EVERY);
+        let focus = focus_of(thread);
+        if focus != seen {
+            seen = focus;
+            since = Instant::now();
+        } else if seen.is_some() && since.elapsed() >= SETTLED_FOR {
+            break;
+        }
+    }
     let mut answer = 0usize;
     // SAFETY: plain values; the answer, unused, is written to `answer`.
     let _ = unsafe {
@@ -570,20 +595,23 @@ fn settle(window: HWND, process: u32) {
             Some(&mut answer),
         )
     };
-    // SAFETY: plain values; the handle is closed below.
-    let Ok(handle) = (unsafe {
-        OpenProcess(
-            PROCESS_SYNCHRONIZE | PROCESS_QUERY_INFORMATION,
-            false,
-            process,
-        )
-    }) else {
-        return;
+}
+
+/// Where the keyboard focus of `thread` is: the window that has it, and
+/// the caret's window and state, or `None` when no window of the thread
+/// has it (or the thread is gone).
+fn focus_of(thread: u32) -> Option<(usize, usize, u32)> {
+    let mut info = GUITHREADINFO {
+        cbSize: std::mem::size_of::<GUITHREADINFO>() as u32,
+        ..Default::default()
     };
-    // SAFETY: `handle` was opened above with the rights the wait needs.
-    let _ = unsafe { WaitForInputIdle(handle, SETTLE_WAIT.as_millis() as u32) };
-    // SAFETY: opened above.
-    let _ = unsafe { CloseHandle(handle) };
+    // SAFETY: `info` is writable, its size given in `cbSize`.
+    unsafe { GetGUIThreadInfo(thread, &mut info) }.ok()?;
+    (!info.hwndFocus.is_invalid()).then_some((
+        info.hwndFocus.0 as usize,
+        info.hwndCaret.0 as usize,
+        info.flags.0,
+    ))
 }
 
 /// Waits until `window` is in front, at most [`FRONT_WAIT`], looking

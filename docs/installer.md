@@ -268,9 +268,39 @@ acquires each in turn in the background:
    manifest version and extension API this Pane reads, the platforms it
    declares, the components it names present, and, where it ships
    helpers, the file for this system a real program for it. A default
-   extension the user uninstalled, whose data Pane keeps, is not acquired
-   again — the user's choice, with disabling the documented opt-out; one
-   never installed is.
+   extension the user declined — unticked at first setup, or uninstalled,
+   whether its data was kept or not — is not acquired again: the user's
+   choice, with disabling the other opt-out; one never installed is, once
+   first setup's choice is made.
+
+### First setup's choice
+
+Before anything is fetched, first setup asks
+([#283](https://github.com/pane-app/pane/issues/283),
+[ADR 0045](adr/0045-official-extensions-live-in-their-own-repositories.md)):
+on a data folder whose first setup has not chosen, the launcher opens on
+**Pane's Official Extensions** — each default extension this system sets
+up, listed by its pin's title and description (the pins file's
+`description`; nothing is fetched to list them) and the release it sets
+up, every one ticked, the **Set Up** row after them selected. The arrows
+move the selection, and Space, the row itself or its check mark ticks or
+unticks one; Enter on Set Up records the choice in `installed.json`
+(`"firstSetupChosen": true`, and each unticked default's id under
+`"declinedDefaults"`, the record an uninstall of a default writes too)
+and returns to root search, where the ticked ones are acquired as
+described above. Unticking every one sets up none. Leaving the screen
+(Escape) chooses nothing: root search offers **Set Up Official
+Extensions…** to open it again, and the next start asks again. Once the
+choice is made it is never asked again: each default that is missing and
+not declined — one whose acquisition failed, or one a later Pane adds —
+is acquired by itself at every start. An install that set its defaults
+up before the choice existed holds a default already, and is never asked.
+
+Settings' Extensions group lists, under **Official Extensions**, each
+official extension this system sets up that is not installed — declined,
+or never acquired — with what it does and an **Install** button, which
+acquires it from its pin as the row that tries again does; installing it
+drops it from `"declinedDefaults"`. The choice holds across restarts.
 
 ### What the user sees
 
@@ -286,8 +316,8 @@ not set up the Calculator: Could not reach the Git repository …
 install rows, **Set up Calculator**, which tries again; the row goes once
 what it asked for is there. Starting Pane tries again by itself, so a
 Pane stopped mid-setup recovers, and disabling a default extension (in
-Settings › Extensions) is the opt-out: a disabled default extension is
-installed, so it is never re-acquired or re-enabled.
+Settings › Extensions) is an opt-out beside declining it: a disabled
+default extension is installed, so it is never re-acquired or re-enabled.
 
 ## Updating the default extensions
 
@@ -305,7 +335,7 @@ default identity, the saved data, the disabled state, the hotkeys and the
 aliases, waiting for the same safe activation boundary. Nothing is
 fetched while the newest tag names the version installed, and a tag older
 than it is never followed down. An update never re-enables a disabled
-default, and one the user uninstalled is never re-acquired (acquisition's
+default, and one the user declined is never re-acquired (acquisition's
 rule); one whose record keeps no repository — an older Pane acquired it
 from Pane's own downloads — is skipped with that said and never updated.
 
@@ -390,8 +420,11 @@ with why, which tries again.
 3. **What a failure leaves.** A failed check or install explains itself
    on the status line and leaves everything untouched: the program still
    the one running, no staging, nothing renamed. The row stays — the
-   offer, or the check — and the user can try again. The old version's
-   data is never touched: Pane's data and caches live where each system
+   offer, or the check — and the user can try again. The offer's row
+   leaves root search while its install runs, so it cannot be started
+   twice, and comes back selected once the install failed, so Enter
+   tries again ([#424](https://github.com/pane-app/pane/issues/424)).
+   The old version's data is never touched: Pane's data and caches live where each system
    keeps them (`data\` and `cache\` under the install folder on
    Windows; `~/Library/Application Support/Pane` and
    `~/Library/Caches/Pane` on macOS; `~/.local/share/pane` on Linux,
@@ -490,8 +523,9 @@ python3 scripts/repository_server.py clone-defaults crates/pane/defaults.json \
 PANE_DATA_DIR=/tmp/fresh PANE_DEFAULTS=/tmp/pins.json cargo run -p pane
 ```
 
-A fresh data folder (`PANE_DATA_DIR=/tmp/fresh`) shows the acquisition
-and the calculator's answer to "6*7". (The clone step reaches GitHub
+A fresh data folder (`PANE_DATA_DIR=/tmp/fresh`) opens on first setup's
+choice of the official extensions; Enter on Set Up shows the acquisition,
+and then the calculator's answer to "6*7". (The clone step reaches GitHub
 once, as the smokes' own setup does; the Pane under test fetches only
 from 127.0.0.1. A development build with no `PANE_ARTIFACTS` checks for
 no application update.)
@@ -563,6 +597,24 @@ On macOS, the same as on Linux (`python3`, the server backgrounded with
   run on every system, so the Windows and macOS acquisitions need no
   test of their own: it is the same code (the one Windows-only piece is
   the `.exe` helper-name rule, checked by the runner's unit tests).
+- `crates/pane-core/tests/first_setup.rs`: first setup's choice (#283)
+  through the launcher's public interface, over the same loopback
+  repositories — the official extensions listed by their pins' titles and
+  descriptions, every default ticked and Set Up selected, nothing fetched
+  before the choice; an unticked default not fetched and recorded as
+  declined, the choice holding across a restart; a default left out
+  offered by Settings' Install operation and installed from it, no longer
+  declined; an uninstalled default declined whether its data was kept or
+  not; without a connection, the failure explained and each default
+  offered again as a row, with nothing asked again at the next start;
+  leaving the screen choosing nothing, with root search's row opening it
+  again; every default unticked setting up none; and an install set up
+  before the choice existed, or a build with no defaults, never asked.
+  `crates/pane/tests/first_setup.rs` draws the screen in the native
+  window (the rows with their descriptions and check marks, Space, the
+  row and the check mark ticking, Enter on Set Up setting up what stays
+  ticked), and `crates/pane/tests/settings.rs` installs a default left
+  out from the Extensions group's Official Extensions section.
 - `crates/pane-core/tests/update.rs`: the default extensions' updates
   through the launcher's public interface, over the same loopback
   repositories — a newer release tag updating a default by itself with

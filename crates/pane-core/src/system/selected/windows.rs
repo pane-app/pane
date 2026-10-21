@@ -5,7 +5,8 @@
 //! standard input and output, waiting [`WORKER_WAIT`] and replaced with a
 //! fresh one when it takes longer — and, wherever UI Automation gives
 //! nothing or fails, a simulated copy: the clipboard is held, the target
-//! is brought back to the front, a tagged Ctrl+C is sent, the clipboard's
+//! is brought back to the front and its focus left to settle, as the
+//! paste's is, a tagged Ctrl+C is sent, the clipboard's
 //! sequence number is waited for, the text read and the clipboard put
 //! back, tagged, with the changes of that window kept from Pane's own
 //! history — Windows' own history may keep the target's copy, which Pane
@@ -48,7 +49,7 @@ use crate::clipboard::ignoring::IGNORED;
 use crate::clipboard::windows::{hold_clip, read_clip, restore_clip};
 use crate::process_tree::ProcessTree;
 use crate::system::front::windows::Recorded;
-use crate::system::windows::{bring_to_front, out_of_reach};
+use crate::system::windows::{bring_to_front, out_of_reach, settle};
 use crate::system::{Clip, MAX_CLIPBOARD_TEXT, SystemError};
 use crate::util::lock;
 use crate::windows_shell::Com;
@@ -506,6 +507,10 @@ fn copy_selection(target: &Recorded) -> Result<Option<String>, SystemError> {
         if bring_to_front(window).is_err() {
             return Err(refused(CopyRefusal::NotFront));
         }
+        // In front is not yet ready for keys: its thread may still be
+        // taking its activation in, and the paste's keys sent then were
+        // lost (#429), as these would be.
+        settle(window);
         send_copy_keys()?;
         let copied = waited_sequence(sequence);
         let text = copied

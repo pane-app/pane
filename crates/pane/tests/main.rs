@@ -32,6 +32,7 @@ mod extension_log;
 mod feedback;
 mod file_actions;
 mod file_search_settings;
+mod first_setup;
 mod game_mode;
 mod held_keys;
 mod history;

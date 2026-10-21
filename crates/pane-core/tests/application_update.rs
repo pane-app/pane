@@ -534,6 +534,54 @@ fn a_failed_download_leaves_the_old_state_and_can_be_tried_again() {
 }
 
 #[test]
+fn after_a_failed_install_enter_tries_it_again() {
+    let dirs = Dirs::new();
+    dirs.publish_update("99.0.0", b"the 99.0.0 program");
+    dirs.running(b"the 0.1.0 program");
+    let launcher = dirs.launcher("0.1.0");
+    block_on(launcher.check_application_update());
+    dirs.artifacts.corrupt_application();
+
+    // The user chooses the update among root search's other rows. The row
+    // leaves the list while the install runs, so it cannot be started
+    // twice, and the selection moves to another row meanwhile.
+    let others = titles(&launcher)
+        .into_iter()
+        .filter(|title| title != "Update Pane to 99.0.0")
+        .count();
+    assert!(others > 0, "no other row matches: {:?}", titles(&launcher));
+    select_title(&launcher, "Update Pane to 99.0.0");
+    block_on(launcher.activate_selected());
+
+    // The install failed: the status line says why, and the row is back
+    // and selected, so the next Enter is the retry.
+    let error = error_of(&launcher);
+    assert!(
+        error.starts_with("Could not update Pane to 99.0.0: "),
+        "{error}"
+    );
+    let view = launcher.view();
+    let selected = view.selected.map(|index| view.rows[index].title.clone());
+    assert_eq!(
+        selected.as_deref(),
+        Some("Update Pane to 99.0.0"),
+        "the rows: {:?}",
+        titles(&launcher)
+    );
+
+    // The source works again; Enter alone, choosing nothing else, installs.
+    dirs.publish_update("99.0.0", b"the 99.0.0 program");
+    block_on(launcher.activate_selected());
+    assert_eq!(
+        launcher.view().status,
+        Status::Result(
+            "Installed Pane 99.0.0; the new version is used the next time Pane starts".into()
+        )
+    );
+    assert_eq!(fs::read(dirs.program()).unwrap(), b"the 99.0.0 program");
+}
+
+#[test]
 fn an_interrupted_download_is_tried_again() {
     let dirs = Dirs::new();
     dirs.publish_update("99.0.0", b"the 99.0.0 program");

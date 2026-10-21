@@ -244,25 +244,40 @@ fn the_watcher_reports_this_tests_changes_until_dropped() {
 
     // A different process supplies the same format, as the native smoke
     // does. Repeating crosses the watcher's polling boundary while
-    // AppleScript declares and fills the pasteboard.
+    // AppleScript declares and fills the pasteboard. The copying process
+    // stays alive until its copy is reported, as Finder does: an
+    // osascript that exits as soon as it has copied sometimes leaves the
+    // pasteboard cleared and its file never written, the change count
+    // moved but no type on it for any process to read (#231).
     for iteration in 0..20 {
         std::thread::sleep(Duration::from_millis(iteration * 13));
-        let copied = std::process::Command::new("osascript")
+        let mut copier = std::process::Command::new("osascript")
             .args([
                 "-e",
-                "on run argv\nset the clipboard to (POSIX file (item 1 of argv))\nend run",
+                "on run argv\nset the clipboard to (POSIX file (item 1 of argv))\ndelay 10\nend run",
             ])
             .arg(&files[0])
-            .output()
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
             .unwrap();
+        let reported = loop {
+            match reports.recv_timeout(REPORTED) {
+                Ok(report) if report.content == Content::Files(vec![files[0].clone()]) => {
+                    break true;
+                }
+                Ok(_) => {}
+                Err(_) => break false,
+            }
+        };
+        let _ = copier.kill();
+        let copier = copier.wait_with_output().unwrap();
         assert!(
-            copied.status.success(),
-            "{}",
-            String::from_utf8_lossy(&copied.stderr)
+            reported,
+            "the externally copied file is reported (osascript: {}, {})",
+            copier.status,
+            String::from_utf8_lossy(&copier.stderr)
         );
-        next("the externally copied file", &|report| {
-            report.content == Content::Files(vec![files[0].clone()])
-        });
     }
 
     // Writing is a change too, reported like any other.
