@@ -754,6 +754,7 @@ $source.add_Disposed({ param($sender, $event)\n\
 $source.RootVisual = $box\n\
 [void]$box.Focus()\n\
 if ($env:PANE_SELECT_ALL -eq '1') { $box.SelectAll() }\n\
+[System.IO.File]::WriteAllText($env:PANE_READY_MARK, 'ready')\n\
 [System.Windows.Threading.Dispatcher]::Run()\n";
 
     /// The script of a copy target: a form with no control — no text
@@ -775,6 +776,8 @@ $form.Add_KeyDown({ param($sender, $event)\n\
     $event.Handled = $true\n\
     $event.SuppressKeyPress = $true\n\
   } })\n\
+$form.Add_Shown({ param($sender, $event)\n\
+  [System.IO.File]::WriteAllText($env:PANE_READY_MARK, 'ready') })\n\
 [System.Windows.Forms.Application]::Run($form)\n";
 
     #[test]
@@ -948,6 +951,10 @@ $form.Add_KeyDown({ param($sender, $event)\n\
     /// A form the test owns, in a PowerShell process of its own (a window
     /// of the test's own process would never be the target, which Pane
     /// skips), found by its window's title and closed by asking it to.
+    /// Its script writes the file `PANE_READY_MARK` names once the form is
+    /// set up and about to handle its messages: its window exists before
+    /// that, and a read of it then found no selection yet, or a window
+    /// not responding while PowerShell was still loading (#421).
     struct Form {
         window: HWND,
         child: std::process::Child,
@@ -955,7 +962,7 @@ $form.Add_KeyDown({ param($sender, $event)\n\
 
     impl Form {
         /// Runs `script` in a process of its own, with `envs` set for it,
-        /// waiting for its window titled `title`.
+        /// waiting for its window titled `title` and for it to be ready.
         fn start(
             folder: &Path,
             script: &str,
@@ -964,7 +971,9 @@ $form.Add_KeyDown({ param($sender, $event)\n\
         ) -> Result<Form, String> {
             let file = folder.join(format!("{}.ps1", title));
             std::fs::write(&file, script).map_err(|error| error.to_string())?;
+            let ready = folder.join(format!("{}.ready", title));
             let mut command = powershell(&file);
+            command.env("PANE_READY_MARK", &ready);
             for (name, value) in envs {
                 command.env(name, value);
             }
@@ -972,7 +981,9 @@ $form.Add_KeyDown({ param($sender, $event)\n\
                 .spawn()
                 .map_err(|error| format!("powershell: {error}"))?;
             let window = wait_for("the form's window", || find_window(title));
-            Ok(Form { window, child })
+            let form = Form { window, child };
+            wait("the form to be ready", || ready.exists());
+            Ok(form)
         }
 
         /// The form's window, which the read reaches.
