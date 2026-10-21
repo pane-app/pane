@@ -15,7 +15,9 @@
 //! after, with the changes of the window kept from every history: Pane's
 //! own clipboard watch of the test's, running beside the read, reports
 //! nothing while it happens. A target that is not responding fails,
-//! saying so, and nothing is sent to it. The reads run in this process
+//! saying so, and nothing is sent to it. A text control focused in an
+//! application's window is read by UI Automation from behind Pane's
+//! window too (#432). The reads run in this process
 //! (the test binary cannot serve as Pane's worker), on the same code the
 //! worker runs, asked the same way with the same timeout.
 //!
@@ -89,6 +91,10 @@ mod windows {
     const SELECTED: &str = "Pane real input selection target";
     const EMPTY: &str = "Pane real input empty selection target";
     const COPYING: &str = "Pane real input copy target";
+
+    /// The title of the window whose text control is read from behind
+    /// Pane's window.
+    const EDITOR: &str = "Pane real input editor";
 
     /// What the selection targets' text boxes hold, selected and not.
     const SELECTION: &str = "Selected by the real-input test";
@@ -423,6 +429,24 @@ mod windows {
                     ("PANE_FIELD_CLASS", "RICHEDIT50W"),
                     ("PANE_FIELD_TEXT", SELECTION),
                     ("PANE_SELECT_ALL", select),
+                ],
+            )
+        }
+
+        /// An application's window with a rich edit control inside it,
+        /// as WordPad's is, holding [`SELECTION`], all of it selected; the
+        /// window gives the control the focus whenever it has it. The
+        /// window itself has no text for UI Automation to read: only the
+        /// control does.
+        fn editor(folder: &Path) -> Result<Target, String> {
+            Target::start(
+                folder,
+                "frame",
+                EDITOR,
+                &[
+                    ("PANE_FIELD_CLASS", "RICHEDIT50W"),
+                    ("PANE_FIELD_TEXT", SELECTION),
+                    ("PANE_SELECT_ALL", "1"),
                 ],
             )
         }
@@ -1197,6 +1221,72 @@ mod windows {
 
         drop(hung);
         listener.stop();
+    }
+
+    /// With Pane's window in front, as it is when a command asks for the
+    /// selection, the target's thread names no focused window. The read
+    /// once looked at the target's top-level window then, which has no
+    /// text of its own in most applications, and fell to the simulated
+    /// copy (#432). The control focused in the target before Pane came to
+    /// the front is read instead, through UI Automation: the clipboard
+    /// never changes, and the target stays behind Pane's window.
+    #[test]
+    fn the_control_focused_behind_pane_s_window_is_read_by_uia() {
+        if !opted_in() {
+            eprintln!("skipped: set PANE_TEST_REAL_INPUT=1 to read selections with real input");
+            return;
+        }
+        let _serial = serial();
+        let folder = tempfile::tempdir().unwrap();
+        let listener = Listener::start().expect("the clipboard listener");
+        let own = own_window();
+        let system = native_selected_text_in_process();
+        system
+            .copy(&Clip::Text(BEFORE.into()), false)
+            .expect("the setup copy");
+        wait("the listener to see the setup copy", || {
+            !listener.seen().is_empty()
+        });
+        listener.clear();
+
+        // The user was in the editor, its control focused, and opened
+        // Pane over it.
+        let editor = Target::editor(folder.path()).expect("the editor");
+        take_front(editor.window());
+        wait("the editor to be recorded", || named_for(system.as_ref()));
+        wait("the editor's control to take the focus", || {
+            focus_of(editor.window()).is_some_and(|focus| focus != editor.window())
+        });
+        take_front(own);
+
+        assert_eq!(
+            system.selected_text(),
+            Ok(Some(SELECTION.into())),
+            "the focused control's selection is read"
+        );
+        assert_eq!(system.read_clipboard(), Ok(Some(Clip::Text(BEFORE.into()))));
+        assert!(
+            listener.seen().is_empty(),
+            "UI Automation read it, and no copy changed the clipboard"
+        );
+        assert!(front_is(own), "the read brought nothing to the front");
+
+        editor.close();
+        listener.stop();
+    }
+
+    /// The window the thread of `window` has focused, if it names one.
+    fn focus_of(window: HWND) -> Option<HWND> {
+        use ::windows::Win32::UI::WindowsAndMessaging::{GUITHREADINFO, GetGUIThreadInfo};
+        // SAFETY: a window handle; the process id is not wanted.
+        let thread = unsafe { GetWindowThreadProcessId(window, None) };
+        let mut info = GUITHREADINFO {
+            cbSize: std::mem::size_of::<GUITHREADINFO>() as u32,
+            ..Default::default()
+        };
+        // SAFETY: `info` is writable for its size.
+        unsafe { GetGUIThreadInfo(thread, &mut info) }.ok()?;
+        (!info.hwndFocus.is_invalid()).then_some(info.hwndFocus)
     }
 
     /// Pane's own clipboard watch of the test's, counting the changes it
