@@ -2155,9 +2155,12 @@ impl Launcher {
     #[cfg(any(test, debug_assertions))]
     #[doc(hidden)]
     pub fn wait_for_timers(&self, limit: std::time::Duration) -> bool {
-        self.timers
-            .as_ref()
-            .is_some_and(|timers| timers.settled(limit))
+        let began = std::time::Instant::now();
+        self.registrations_told(limit)
+            && self
+                .timers
+                .as_ref()
+                .is_some_and(|timers| timers.settled(limit.saturating_sub(began.elapsed())))
     }
 
     /// Waits until the folder watchers the packages' code registered at
@@ -2168,9 +2171,24 @@ impl Launcher {
     #[cfg(any(test, debug_assertions))]
     #[doc(hidden)]
     pub fn wait_for_watchers(&self, limit: std::time::Duration) -> bool {
-        self.watchers
-            .as_ref()
-            .is_some_and(|watchers| watchers.settled(limit))
+        let began = std::time::Instant::now();
+        self.registrations_told(limit)
+            && self
+                .watchers
+                .as_ref()
+                .is_some_and(|watchers| watchers.settled(limit.saturating_sub(began.elapsed())))
+    }
+
+    /// Waits until the registry's hooks were told of every change so far,
+    /// which woke the timers and watchers threads for it; `false` if they
+    /// were not within `limit`. A registration is seen (on its
+    /// generation's undo list, say) a moment before then, and a wait for
+    /// the threads alone could end before they were woken for it.
+    #[cfg(any(test, debug_assertions))]
+    fn registrations_told(&self, limit: std::time::Duration) -> bool {
+        self.runtime.as_ref().map_or(true, |runtime| {
+            runtime.registrations().wait_until_told(limit)
+        })
     }
 
     /// Waits until Pane's clipboard history expiry thread swept after every
