@@ -30,9 +30,12 @@ use tempfile::TempDir;
 mod feedback;
 #[path = "support/rows.rs"]
 mod rows;
+#[path = "support/settle.rs"]
+mod settle;
 
 use feedback::shown;
 use rows::{manage, select_title, titles, to_root};
+use settle::wait_for_merges;
 
 const COMMAND: &str = "Greeting";
 const BUSY: &str = "Stop responding";
@@ -188,10 +191,15 @@ fn error(status: Status) -> String {
     }
 }
 
-/// Root search lists the Rust sample's answer to `reverse 42`.
+/// Root search lists the Rust sample's answer to `reverse 42`. The search
+/// ends once the sample has answered, but an answer that missed the
+/// list's budget (#201), as one sharing the runtime thread with a guest
+/// that computes can, merges into the list a moment later: the list is
+/// read once it has.
 fn sample_answers(launcher: &Launcher) -> bool {
     to_root(launcher);
     block_on(launcher.set_query("reverse 42"));
+    wait_for_merges(launcher);
     let answered = titles(launcher).iter().any(|title| title == "24");
     block_on(launcher.set_query(""));
     answered

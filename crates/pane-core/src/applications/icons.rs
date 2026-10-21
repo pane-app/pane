@@ -670,7 +670,13 @@ mod platform {
 
 /// Makes the calling thread one of low priority, for the CPU and, where
 /// the system has it, the disk: the worker refreshing icons never competes
-/// with what the user does.
+/// with what the user does. On macOS that is the utility quality-of-service
+/// class, not the background band (`PRIO_DARWIN_BG`): the system throttles
+/// a background thread's processor and disk for as long as anything else
+/// is busy, and on a loaded Mac it held this worker for 13 to 34 seconds
+/// at a time, while the row on screen waiting for the icon showed its
+/// placeholder. A utility thread still yields to the user's work, but it
+/// is not held back.
 fn lower_priority() {
     #[cfg(windows)]
     {
@@ -687,8 +693,12 @@ fn lower_priority() {
     }
     #[cfg(target_os = "macos")]
     {
-        // SAFETY: a plain system call on the calling thread (`who` 0).
-        let _ = unsafe { libc::setpriority(libc::PRIO_DARWIN_THREAD, 0, libc::PRIO_DARWIN_BG) };
+        const QOS_CLASS_UTILITY: u32 = 0x11;
+        unsafe extern "C" {
+            fn pthread_set_qos_class_self_np(class: u32, relative_priority: i32) -> i32;
+        }
+        // SAFETY: changes only the calling thread's own class.
+        let _ = unsafe { pthread_set_qos_class_self_np(QOS_CLASS_UTILITY, 0) };
     }
 }
 
