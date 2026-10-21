@@ -754,7 +754,8 @@ $source.add_Disposed({ param($sender, $event)\n\
 $source.RootVisual = $box\n\
 [void]$box.Focus()\n\
 if ($env:PANE_SELECT_ALL -eq '1') { $box.SelectAll() }\n\
-[System.IO.File]::WriteAllText($env:PANE_READY_MARK, 'ready')\n\
+$ready = [Action]{ [System.IO.File]::WriteAllText($env:PANE_READY_MARK, 'ready') }\n\
+[void]$source.Dispatcher.BeginInvoke([System.Windows.Threading.DispatcherPriority]::ApplicationIdle, $ready)\n\
 [System.Windows.Threading.Dispatcher]::Run()\n";
 
     /// The script of a copy target: a form with no control — no text
@@ -776,8 +777,12 @@ $form.Add_KeyDown({ param($sender, $event)\n\
     $event.Handled = $true\n\
     $event.SuppressKeyPress = $true\n\
   } })\n\
-$form.Add_Shown({ param($sender, $event)\n\
-  [System.IO.File]::WriteAllText($env:PANE_READY_MARK, 'ready') })\n\
+$script:ready = $false\n\
+[System.Windows.Forms.Application]::add_Idle({ param($sender, $event)\n\
+  if (-not $script:ready) {\n\
+    $script:ready = $true\n\
+    [void][System.Windows.Forms.Clipboard]::ContainsText()\n\
+    [System.IO.File]::WriteAllText($env:PANE_READY_MARK, 'ready') } })\n\
 [System.Windows.Forms.Application]::Run($form)\n";
 
     #[test]
@@ -952,9 +957,11 @@ $form.Add_Shown({ param($sender, $event)\n\
     /// of the test's own process would never be the target, which Pane
     /// skips), found by its window's title and closed by asking it to.
     /// Its script writes the file `PANE_READY_MARK` names once the form is
-    /// set up and about to handle its messages: its window exists before
-    /// that, and a read of it then found no selection yet, or a window
-    /// not responding while PowerShell was still loading (#421).
+    /// set up and its thread first has nothing left to do: its window
+    /// exists before that, and on a fresh runner a read of it then found
+    /// no selection yet, a window not responding while PowerShell was
+    /// still loading, or a copy target that copied 1 to 2 s after the
+    /// keys, past the wait of the simulated copy (#421).
     struct Form {
         window: HWND,
         child: std::process::Child,
