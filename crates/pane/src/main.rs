@@ -403,7 +403,9 @@ fn main() {
         // Closing the launcher's own window quits Pane, as closing the one
         // window always did: closing the Settings window, which shares
         // nothing of the launcher's lifecycle, closes only that window,
-        // and quitting ends Pane as before.
+        // and quitting ends Pane as before. On macOS the launcher refuses
+        // its window's close request and hides instead (#439, see
+        // `LauncherWindow::new`), so there only quitting closes it.
         let launcher_window = window.window_id();
         cx.on_window_closed(move |cx, closed| {
             if closed == launcher_window {
