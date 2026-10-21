@@ -387,6 +387,24 @@ impl Launcher {
                 // No list on this tree: the screen is the tree's alone.
                 return None;
             };
+            // The items' icons as the view named them, in the order of its
+            // items. The screen's tree has had each loaded icon replaced by
+            // what its load shows (`refresh_designed_view`), a stand-in
+            // while it loads, so a row's look taken from it would lose the
+            // web image or system icon it names for good, and the row
+            // would keep drawing the stand-in once the list is presented
+            // again (a search typed, #435). The looks show the loads
+            // themselves, as a command's list's do.
+            let own_icons: Vec<Option<crate::Icon>> = first_list(stack.top().tree())
+                .map(|(own, _)| {
+                    groups(own)
+                        .0
+                        .into_iter()
+                        .flat_map(|group| group.items)
+                        .map(item_icon)
+                        .collect()
+                })
+                .unwrap_or_default();
             let top = stack.top_mut();
             let view = top.id;
             let held = &mut top.list;
@@ -428,10 +446,16 @@ impl Launcher {
             let mut looks: Vec<(String, ItemLook)> = Vec::new();
             let mut sections = Vec::new();
             let grid = matches!(&node.kind, NodeKind::Grid(_));
+            let mut place = 0;
             for group in groups {
                 let before = rows.len();
                 for item in group.items {
                     let at = rows.len();
+                    let icon = match own_icons.get(place) {
+                        Some(icon) => icon.clone(),
+                        None => item_icon(item),
+                    };
+                    place += 1;
                     let (key, title, subtitle, keywords) = item_of(item, at);
                     if !searching
                         && !matches(&query, sensitivity, &title, subtitle.as_deref(), &keywords)
@@ -450,7 +474,7 @@ impl Launcher {
                     looks.push((
                         key,
                         ItemLook {
-                            icon: item_icon(item),
+                            icon,
                             title_tooltip: item_tooltip(item, true),
                             subtitle_tooltip: item_tooltip(item, false),
                             accessories: item_accessories(item),
