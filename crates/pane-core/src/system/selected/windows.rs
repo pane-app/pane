@@ -12,10 +12,13 @@
 //! history — Windows' own history may keep the target's copy, which Pane
 //! cannot mark.
 //!
-//! The worker reads the focused element of the target's own thread — the
-//! target is behind Pane's window when a command asks for its selection —
-//! through the Text pattern of the UI Automation element; a window met
-//! for the first time has its accessibility tree woken first (a
+//! The worker reads the focused element of the target's own thread
+//! through the Text pattern of the UI Automation element. The target is
+//! behind Pane's window when a command asks for its selection, and its
+//! thread then names no focused window, so the read is pointed at the
+//! control the front watcher last saw focused inside the target's window
+//! (#432); the target's window itself is read where the watcher saw none.
+//! A window met for the first time has its accessibility tree woken first (a
 //! Chromium-based application builds its tree only once something asks
 //! the window for its accessibility object), and a read that then finds
 //! nothing is tried again shortly after, once. "Nothing is selected" is
@@ -124,7 +127,12 @@ impl Selected {
     pub(in crate::system) fn read(&self, target: &Recorded) -> Result<Option<String>, SystemError> {
         let _one_at_a_time = lock(&self.reading);
         if !lock(&self.pause).paused(crate::util::now_ms()) {
-            match self.asking.ask(target.window) {
+            // The control focused inside the target before Pane came to
+            // the front, which its thread no longer names (#432).
+            let control = target
+                .focused()
+                .map_or(target.window, |focus| focus.0 as usize);
+            match self.asking.ask(control) {
                 Ok(Answer::Text { text }) => {
                     // An empty selection is no selection.
                     return Ok((!text.is_empty()).then_some(text));
@@ -339,10 +347,10 @@ fn selection(window: usize, waking: &mut Waking) -> Answer {
                 };
             }
         };
-    // The element to read is the one the target's own thread has focused
-    // — the target is behind Pane's window when the command asks for its
-    // selection — or the target's window itself when its thread names no
-    // focus.
+    // The element to read is the one the target's own thread has focused,
+    // or, when its thread names no focus (Pane's window in front), the
+    // window asked for itself: the control last focused inside the
+    // target, or the target's window.
     let focused = focused_of(window).unwrap_or(window);
     if waking.first_contact(focused.0 as usize) {
         wake(focused);
@@ -364,7 +372,8 @@ fn selection(window: usize, waking: &mut Waking) -> Answer {
 }
 
 /// The window the thread of `window` has focused, or `None` when the
-/// thread names no focus, and `window` itself is read.
+/// thread names no focus (its windows are not in front), and `window`
+/// itself is read.
 fn focused_of(window: HWND) -> Option<HWND> {
     // SAFETY: a window handle; the process id is not wanted.
     let thread = unsafe { GetWindowThreadProcessId(window, None) };
