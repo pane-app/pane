@@ -558,6 +558,14 @@ fn run_once(services: Weak<Services>, launcher: WeakLauncher, key: String, run: 
         // cadence that came due meanwhile is looked at now.
         show(launcher, &run.component, &run.data, answer);
     }
+    // The launcher is let go before the cycle reports, as the scheduler's
+    // runs let go of it: the report tells whoever waits for the services
+    // ([`Launcher::wait_for_services`]) that the cycle is over, and a Pane
+    // dropped after that must have nothing left that keeps it running.
+    // Held past the report, this handle let a dropped launcher's services
+    // thread look again at the next poke (a test's clock advancing) and
+    // run one more cycle on that launcher's stale state.
+    drop(alive);
     if let Some(services) = services.upgrade() {
         services.run_ended(&key, run.token);
     }
