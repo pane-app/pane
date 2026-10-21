@@ -9,7 +9,11 @@
 //! paste target is recorded, with its process, that process's program
 //! path and package family — what the front application and the paste
 //! read of it. Its title and its AppUserModelID are read when they are
-//! asked for, since the window may be gone by then if it closed. The
+//! asked for, since the window may be gone by then if it closed. A
+//! second hook, for `EVENT_OBJECT_FOCUS`, records the control focused
+//! inside the recorded window as the focus moves (#432): once Pane's
+//! window is in front, the target's thread names no focused window, and
+//! the selected-text read still has to know which control to read. The
 //! reading of a window's class, ownership, styles, program path and
 //! package family is shared with the Switch Windows host functions
 //! (#263), which list the windows the same way.
@@ -27,8 +31,9 @@ use ::windows::Win32::System::Threading::{
 };
 use ::windows::Win32::UI::Accessibility::{HWINEVENTHOOK, SetWinEventHook, UnhookWinEvent};
 use ::windows::Win32::UI::WindowsAndMessaging::{
-    EVENT_SYSTEM_FOREGROUND, GW_OWNER, GWL_EXSTYLE, GetClassNameW, GetWindow, GetWindowLongPtrW,
-    GetWindowThreadProcessId, OBJID_WINDOW, WINEVENT_OUTOFCONTEXT, WS_EX_TOOLWINDOW,
+    EVENT_OBJECT_FOCUS, EVENT_SYSTEM_FOREGROUND, GA_ROOT, GUITHREADINFO, GW_OWNER, GWL_EXSTYLE,
+    GetAncestor, GetClassNameW, GetGUIThreadInfo, GetWindow, GetWindowLongPtrW,
+    GetWindowThreadProcessId, IsWindow, OBJID_WINDOW, WINEVENT_OUTOFCONTEXT, WS_EX_TOOLWINDOW,
 };
 use ::windows::core::PWSTR;
 
@@ -55,6 +60,22 @@ pub(in crate::system) struct Recorded {
     pub(in crate::system) program: Option<String>,
     /// That process's package family name, if it has one.
     pub(in crate::system) family: Option<String>,
+    /// The control last focused inside the window, as an address, if
+    /// the watcher saw one: what the selected-text read reads once Pane's
+    /// window is in front and the window's thread names no focus (#432).
+    pub(in crate::system) focus: Option<usize>,
+}
+
+impl Recorded {
+    /// The control last focused inside the window, if it is still there:
+    /// a window, and inside this one, since a closed control's address
+    /// may have been given to another window since.
+    pub(in crate::system) fn focused(&self) -> Option<HWND> {
+        let focus = HWND(self.focus? as *mut _);
+        // SAFETY: plain values; a gone window answers false.
+        let alive = unsafe { IsWindow(Some(focus)) }.as_bool();
+        (alive && root_of(focus) == self.window).then_some(focus)
+    }
 }
 
 impl Watcher {
@@ -69,10 +90,12 @@ impl Watcher {
             // The watcher serves no requests on its thread; its stop
             // ends its loop.
             |_, _| {},
-            |hook| {
+            |hooks: [HWINEVENTHOOK; 2]| {
                 RECORDING.with(|recording| recording.borrow_mut().take());
-                // SAFETY: `hook` is the hook this thread installed.
-                let _ = unsafe { UnhookWinEvent(hook) };
+                for hook in hooks {
+                    // SAFETY: `hook` is a hook this thread installed.
+                    let _ = unsafe { UnhookWinEvent(hook) };
+                }
             },
         )?;
         Ok(Watcher { target, thread })
@@ -99,35 +122,44 @@ thread_local! {
         const { RefCell::new(None) };
 }
 
-/// On the watcher's thread: installs the foreground hook, whose events
-/// the thread's message loop delivers to [`foreground`] below.
-fn watch(recording: Arc<Mutex<Option<Recorded>>>) -> Result<(HWINEVENTHOOK, Option<HWND>), String> {
+/// On the watcher's thread: installs the foreground hook and the focus
+/// hook, whose events the thread's message loop delivers to [`event`]
+/// below.
+fn watch(
+    recording: Arc<Mutex<Option<Recorded>>>,
+) -> Result<([HWINEVENTHOOK; 2], Option<HWND>), String> {
     RECORDING.with(|recorded| *recorded.borrow_mut() = Some(recording));
-    // SAFETY: no module to load the callback from, every process and
-    // thread's events, out of process: the callback runs on this thread
-    // as it pumps its messages, and never blocks the window that came to
-    // the front.
-    let hook = unsafe {
-        SetWinEventHook(
-            EVENT_SYSTEM_FOREGROUND,
-            EVENT_SYSTEM_FOREGROUND,
-            None,
-            Some(foreground),
-            0,
-            0,
-            WINEVENT_OUTOFCONTEXT,
-        )
+    let foreground = hook(EVENT_SYSTEM_FOREGROUND, "foreground")?;
+    let focus = match hook(EVENT_OBJECT_FOCUS, "focus") {
+        Ok(focus) => focus,
+        Err(why) => {
+            // SAFETY: the hook installed just above.
+            let _ = unsafe { UnhookWinEvent(foreground) };
+            return Err(why);
+        }
     };
-    if hook.is_invalid() {
-        let why = ::windows::core::Error::from_thread().message();
-        return Err(format!("Windows refused the foreground hook: {why}"));
-    }
-    Ok((hook, None))
+    Ok(([foreground, focus], None))
 }
 
-/// The hook's callback, on the watcher's thread: called once for each
-/// window that comes to the front.
-unsafe extern "system" fn foreground(
+/// Installs the hook of `kind` alone, named `what` in its refusal.
+fn hook(kind: u32, what: &str) -> Result<HWINEVENTHOOK, String> {
+    // SAFETY: no module to load the callback from, every process and
+    // thread's events, out of process: the callback runs on this thread
+    // as it pumps its messages, and never blocks the window the event is
+    // about.
+    let hook =
+        unsafe { SetWinEventHook(kind, kind, None, Some(event), 0, 0, WINEVENT_OUTOFCONTEXT) };
+    if hook.is_invalid() {
+        let why = ::windows::core::Error::from_thread().message();
+        return Err(format!("Windows refused the {what} hook: {why}"));
+    }
+    Ok(hook)
+}
+
+/// The hooks' callback, on the watcher's thread: called once for each
+/// window that comes to the front, and for each control, in any process,
+/// that takes the focus.
+unsafe extern "system" fn event(
     _hook: HWINEVENTHOOK,
     event: u32,
     window: HWND,
@@ -148,8 +180,51 @@ unsafe extern "system" fn foreground(
                     *crate::util::lock(recording) = Some(recorded);
                 }
             });
+        } else if event == EVENT_OBJECT_FOCUS && !window.is_invalid() {
+            focused(window);
         }
     });
+}
+
+/// Records `control`, which took the focus, as the recorded window's
+/// focus if it is inside that window. Focus anywhere else, Pane's own
+/// window above all, leaves the recorded focus as it was.
+fn focused(control: HWND) {
+    let root = root_of(control);
+    RECORDING.with(|recording| {
+        if let Some(recording) = recording.borrow().as_ref()
+            && let Some(recorded) = crate::util::lock(recording).as_mut()
+            && recorded.window == root
+        {
+            recorded.focus = Some(control.0 as usize);
+        }
+    });
+}
+
+/// The top-level window `control` is inside, as an address.
+fn root_of(control: HWND) -> usize {
+    // SAFETY: plain values; a window that is gone answers none.
+    unsafe { GetAncestor(control, GA_ROOT) }.0 as usize
+}
+
+/// The control the thread of `window` has focused now, if it is inside
+/// `window`: the focus as the window comes to the front, before any focus
+/// event moves it.
+fn focus_in(window: HWND) -> Option<usize> {
+    // SAFETY: a window handle; the process id is not wanted.
+    let thread = unsafe { GetWindowThreadProcessId(window, None) };
+    if thread == 0 {
+        return None;
+    }
+    let mut info = GUITHREADINFO {
+        cbSize: std::mem::size_of::<GUITHREADINFO>() as u32,
+        ..Default::default()
+    };
+    // SAFETY: `info` is writable for its size; `thread` is `window`'s.
+    unsafe { GetGUIThreadInfo(thread, &mut info) }.ok()?;
+    let focus = info.hwndFocus;
+    let inside = !focus.is_invalid() && root_of(focus) == window.0 as usize;
+    inside.then_some(focus.0 as usize)
 }
 
 /// What the watcher reads of `window` if it is a paste target: its
@@ -178,6 +253,7 @@ fn recorded(window: HWND) -> Option<Recorded> {
         process,
         program: facts.program,
         family: family(process),
+        focus: focus_in(window),
     })
 }
 
