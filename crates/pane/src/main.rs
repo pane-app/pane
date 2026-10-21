@@ -358,6 +358,11 @@ fn main() {
                 // Manager, so nothing shows behind the panel that fills it.
                 #[cfg(target_os = "windows")]
                 pane::prefer_rounded_window_corners(window);
+                // macOS draws its close, minimize and zoom buttons over the
+                // transparent titlebar, which here is the search field: the
+                // launcher shows none, as on Windows and Linux.
+                #[cfg(target_os = "macos")]
+                pane::hide_window_buttons(window);
                 cx.new(|cx| {
                     let mut launcher = LauncherWindow::new(launcher, window, cx);
                     launcher.follow_changes(changes, window, cx);
@@ -398,7 +403,9 @@ fn main() {
         // Closing the launcher's own window quits Pane, as closing the one
         // window always did: closing the Settings window, which shares
         // nothing of the launcher's lifecycle, closes only that window,
-        // and quitting ends Pane as before.
+        // and quitting ends Pane as before. On macOS the launcher refuses
+        // its window's close request and hides instead (#439, see
+        // `LauncherWindow::new`), so there only quitting closes it.
         let launcher_window = window.window_id();
         cx.on_window_closed(move |cx, closed| {
             if closed == launcher_window {

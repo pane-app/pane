@@ -30,15 +30,22 @@ struct Fake {
     watches_each_folder: AtomicBool,
     /// The folders the latest watch was given.
     folders: Mutex<Vec<PathBuf>>,
+    /// How long a watch takes to stop, as a native watcher's thread can on
+    /// a busy computer: the coordinator holds the index meanwhile.
+    stop_delay: Mutex<Duration>,
 }
 
-struct FakeWatch(Arc<AtomicUsize>);
+struct FakeWatch {
+    watching: Arc<AtomicUsize>,
+    stop_delay: Duration,
+}
 
 impl Watching for FakeWatch {}
 
 impl Drop for FakeWatch {
     fn drop(&mut self) {
-        self.0.fetch_sub(1, Ordering::SeqCst);
+        std::thread::sleep(self.stop_delay);
+        self.watching.fetch_sub(1, Ordering::SeqCst);
     }
 }
 
@@ -94,7 +101,10 @@ impl ChangeSource for Fake {
         *lock(&self.folders) = folders;
         *lock(&self.sink) = Some(sink);
         self.watching.fetch_add(1, Ordering::SeqCst);
-        Ok(Box::new(FakeWatch(self.watching.clone())))
+        Ok(Box::new(FakeWatch {
+            watching: self.watching.clone(),
+            stop_delay: *lock(&self.stop_delay),
+        }))
     }
 }
 
@@ -551,6 +561,49 @@ fn disabling_stops_watching_and_enabling_again_catches_up_without_walking() {
         Some(CaughtUpBy::Journal)
     );
     assert_eq!(fixture.fake.catch_ups.load(Ordering::SeqCst), 1);
+}
+
+/// The fixture used by a package and indexed, its watches taking `delay`
+/// to stop.
+fn indexed_stopping_slowly(delay: Duration) -> Fixture {
+    let fixture = fixture();
+    *lock(&fixture.fake.stop_delay) = delay;
+    fixture.indexer.launcher_shown();
+    fixture.indexer.set_users(users(&[OWNER]));
+    fixture.settle();
+    fixture
+}
+
+#[test]
+fn enabling_again_at_once_waits_for_the_stopped_run_to_let_go_of_the_index() {
+    // The stopped run holds the index while its watch stops, longer than
+    // an open waits for another Pane to let go of it.
+    let fixture = indexed_stopping_slowly(Duration::from_millis(2500));
+    fixture.indexer.set_users(BTreeSet::new());
+    *lock(&fixture.fake.stop_delay) = Duration::ZERO;
+    fixture.indexer.set_users(users(&[OWNER]));
+    fixture.settle();
+    // This Pane's own run is waited for, not taken for another Pane's.
+    let status = fixture.indexer.status();
+    assert_eq!(status.state, IndexState::Current, "{status:?}");
+    assert_eq!(fixture.names("plan"), ["plan.txt"]);
+    assert_eq!(
+        fixture.fake.catch_ups.load(Ordering::SeqCst),
+        1,
+        "caught up from the cursors the stopped run saved"
+    );
+}
+
+#[test]
+fn deleting_the_index_at_once_after_disabling_waits_for_the_stopped_run() {
+    let fixture = indexed_stopping_slowly(Duration::from_millis(500));
+    fixture.indexer.set_users(BTreeSet::new());
+    // The last package using the index is uninstalled: the stopped run is
+    // done with the index before its folder goes, so nothing writes it
+    // again.
+    fixture.indexer.delete().unwrap();
+    assert_eq!(fixture.fake.watching.load(Ordering::SeqCst), 0);
+    assert!(!fixture.index_dir.exists());
 }
 
 #[test]

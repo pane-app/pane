@@ -466,6 +466,12 @@ struct Shared {
     /// Whether the launcher was shown since Pane started.
     shown: bool,
     run: Option<Run>,
+    /// The thread of a run asked to stop that may not have ended yet: it
+    /// still holds the index (and writes its cursors) until it does. The
+    /// next run waits for it before opening the index, which is this
+    /// Pane's own and not another Pane's, and [`Indexer::delete`] waits
+    /// for it before removing the index's folder.
+    stopping: Option<std::thread::JoinHandle<()>>,
     index: Option<Arc<FileIndex>>,
     scope: Option<Arc<Scope>>,
     status: IndexStatus,
@@ -584,8 +590,11 @@ impl Indexer {
         match (wanted, shared.run.is_some()) {
             (true, false) => self.start(&mut shared),
             (false, true) => {
-                if let Some(run) = shared.run.take() {
+                // Not waited for here (the caller may hold the launcher's
+                // state): the next run or a deletion waits for it.
+                if let Some(mut run) = shared.run.take() {
                     run.stop();
+                    shared.stopping = run.thread.take();
                 }
                 // Let go of once the coordinator has stopped: nothing of the
                 // index stays open while no package uses it.
@@ -624,10 +633,18 @@ impl Indexer {
         let thread_sender = sender.clone();
         let queued = Arc::new(Queued::default());
         let thread_queued = queued.clone();
+        let stopping = shared.stopping.take();
         let spawned = std::thread::Builder::new()
             .name("pane-file-index".into())
             .spawn(move || {
                 lower_current_thread();
+                // A run stopped a moment ago (the package disabled and
+                // enabled again) may still be letting go of the index:
+                // opening it before then would find it in use and take
+                // this Pane's own run for another Pane's.
+                if let Some(stopping) = stopping {
+                    let _ = stopping.join();
+                }
                 coordinate(
                     weak,
                     config,
@@ -657,20 +674,33 @@ impl Indexer {
     }
 
     /// Stops the coordinator and waits (a few seconds at most) for its
-    /// thread to end, so that the index is no longer written.
+    /// thread to end, so that the index is no longer written: the running
+    /// one, or else one stopped before that may not have ended yet. One
+    /// that does not end in time is left for the next run to wait for.
     fn stop_and_wait(&self) {
-        let run = self.shared().run.take();
-        if let Some(mut run) = run {
-            run.stop();
-            if let Some(thread) = run.thread.take() {
-                let deadline = Instant::now() + Duration::from_secs(10);
-                while !thread.is_finished() && Instant::now() < deadline {
-                    std::thread::sleep(Duration::from_millis(10));
+        let thread = {
+            let mut shared = self.shared();
+            match shared.run.take() {
+                // A run waits for the one stopped before it as it starts,
+                // so its own thread ending covers both.
+                Some(mut run) => {
+                    run.stop();
+                    run.thread.take()
                 }
-                if thread.is_finished() {
-                    let _ = thread.join();
-                }
+                None => shared.stopping.take(),
             }
+        };
+        let Some(thread) = thread else {
+            return;
+        };
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !thread.is_finished() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        if thread.is_finished() {
+            let _ = thread.join();
+        } else {
+            self.shared().stopping = Some(thread);
         }
     }
 

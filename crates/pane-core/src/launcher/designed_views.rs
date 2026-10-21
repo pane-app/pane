@@ -209,6 +209,13 @@ pub(super) struct SentDesignedEvent {
 }
 
 impl OpenDesignedView {
+    /// The view's last good tree, its icons as the view named them
+    /// (resolved, never replaced by what their loads show, which the
+    /// screen's copy is: see [`super::Launcher::refresh_designed_view`]).
+    pub(super) fn tree(&self) -> &DesignedTree {
+        &self.tree
+    }
+
     /// Sends `event` to the view, numbering it for ordering. `supersedes`
     /// says the event replaces the work its view left in flight — a
     /// search's newer text — so the older work's requests are aborted

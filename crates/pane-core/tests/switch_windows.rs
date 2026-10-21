@@ -30,7 +30,7 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 
 use futures::executor::block_on;
 use pane_core::applications::{Catalog, Key, Source};
@@ -95,13 +95,30 @@ fn listed(
 /// The host's icon extraction, stood in for: it answers a small PNG for
 /// a path that exists and for a Windows `shell:` name — the system's to
 /// find, as Windows' own extraction reads it — recording the paths it
-/// was asked for, which are what the windows' records named (#263).
+/// was asked for, which are what the windows' records named (#263). A
+/// held one answers nothing until the test releases it, so the list is
+/// drawn while its icons still load.
 #[derive(Clone, Default)]
 struct FakeIcons {
     asked: Arc<Mutex<Vec<String>>>,
+    held: Arc<(Mutex<bool>, Condvar)>,
 }
 
 impl FakeIcons {
+    /// One that answers once [`FakeIcons::release`] lets it.
+    fn held() -> FakeIcons {
+        let icons = FakeIcons::default();
+        *icons.held.0.lock().unwrap() = true;
+        icons
+    }
+
+    /// Lets a held one answer.
+    fn release(&self) {
+        let (held, changed) = &*self.held;
+        *held.lock().unwrap() = false;
+        changed.notify_all();
+    }
+
     /// The paths it was asked for, in order.
     fn asked(&self) -> Vec<String> {
         self.asked.lock().unwrap().clone()
@@ -111,6 +128,10 @@ impl FakeIcons {
 impl SystemIcons for FakeIcons {
     fn icon(&self, path: &Path) -> Result<SystemIcon, String> {
         self.asked.lock().unwrap().push(path.display().to_string());
+        let (held, changed) = &*self.held;
+        let _released = changed
+            .wait_while(held.lock().unwrap(), |held| *held)
+            .unwrap();
         let shell = path
             .to_string_lossy()
             .get(..6)
@@ -453,10 +474,14 @@ struct Pane {
 
 impl Pane {
     fn with(sample: &Sample) -> Pane {
+        Pane::with_icons(sample, FakeIcons::default())
+    }
+
+    /// One whose icon extraction is `icons`.
+    fn with_icons(sample: &Sample, icons: FakeIcons) -> Pane {
         let sources = tempfile::tempdir().unwrap();
         let data = tempfile::tempdir().unwrap();
         let fake = FakeWindows::default();
-        let icons = FakeIcons::default();
         let launcher =
             Launcher::with_packages(Runtime::start(), vec![], data.path().join("extensions"))
                 .with_switch_windows(Arc::new(fake.clone()))
@@ -694,6 +719,70 @@ fn typing_filters_the_windows_by_title_and_application(sample: &Sample) {
         sample.title
     );
     assert_eq!(pane.fake.activated(), ["2"], "{}", sample.title);
+}
+
+/// A window's icon is drawn on its row, and still once the user types
+/// into the list's search field (#435): the window draws the view while
+/// the icon loads, which put a stand-in in the place of the icon the row's
+/// look was taken from again when the list was filtered.
+fn a_window_s_icon_stays_drawn_once_the_list_is_filtered(sample: &Sample) {
+    let pane = Pane::with_icons(sample, FakeIcons::held());
+    pane.fake.set(vec![
+        listed(
+            "1",
+            "switch-me.txt - Notepad",
+            "Notepad",
+            Some(r"shell:AppsFolder\Microsoft.WindowsNotepad_8wekyb3d8bbwe!App"),
+            false,
+            false,
+            false,
+            false,
+        ),
+        window("2", "Terminal", "Windows Terminal"),
+    ]);
+    pane.open(sample);
+    // The window draws the view while its icon is still being extracted,
+    // and again once it is there, as it does on each change.
+    pane.launcher.refresh_designed_view();
+    pane.icons.release();
+    assert!(
+        pane.launcher
+            .wait_for_icons(std::time::Duration::from_secs(30)),
+        "{}: the icons kept loading",
+        sample.title
+    );
+    pane.launcher.refresh_designed_view();
+    let drawn = |launcher: &Launcher| -> Vec<Option<pane_core::IconSource>> {
+        launcher
+            .presentation()
+            .rows
+            .iter()
+            .map(|row| row.icon.as_ref().map(|icon| icon.source.clone()))
+            .collect()
+    };
+    let before = drawn(&pane.launcher);
+    assert!(
+        matches!(before[0], Some(pane_core::IconSource::Image { .. })),
+        "{}: Notepad's row draws its icon: {before:?}",
+        sample.title
+    );
+    // Typing filters the list: Notepad's row keeps drawing its icon.
+    block_on(pane.launcher.set_query("switch-me"));
+    assert_eq!(titles(&pane.launcher), ["switch-me.txt - Notepad"]);
+    let after = drawn(&pane.launcher);
+    assert_eq!(
+        after[..1],
+        before[..1],
+        "{}: the filtered row draws the icon it drew before",
+        sample.title
+    );
+}
+
+#[test]
+fn the_samples_keep_a_window_s_icon_when_the_list_is_filtered() {
+    for sample in SAMPLES {
+        a_window_s_icon_stays_drawn_once_the_list_is_filtered(&sample);
+    }
 }
 
 #[test]

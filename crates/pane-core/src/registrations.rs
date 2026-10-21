@@ -31,7 +31,7 @@
 //! instance going while the generation continues starts it again.
 
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, MutexGuard, Weak};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, Weak};
 
 use crate::generation::{End, Generation, Registration};
 use crate::runtime::Item;
@@ -57,11 +57,19 @@ pub(crate) struct Registrations {
     /// Told, with the state unlocked, after every change: a registration
     /// made or undone, an activation begun or its instance gone.
     hooks: Mutex<Vec<Weak<dyn Fn() + Send + Sync>>>,
+    /// Notified when the hooks have been told of every change so far.
+    told: Condvar,
 }
 
 /// What the registry keeps.
 #[derive(Debug, Default)]
 struct RegistrationsState {
+    /// The changes made whose hooks have not been told yet: a change is
+    /// seen (a registration on its generation's undo list, say) before
+    /// the worker threads are woken for it, so
+    /// [`Registrations::wait_until_told`] waits for this to come to
+    /// nothing.
+    untold: usize,
     /// The next registration's id, never reused.
     next: u64,
     /// Every registration still held, in the order they were made.
@@ -239,9 +247,10 @@ impl Registrations {
                 _undo: undo,
                 kind,
             });
+            state.untold += 1;
             id
         };
-        self.changed();
+        self.tell();
         id
     }
 
@@ -251,8 +260,16 @@ impl Registrations {
     /// when it is already undone. (Not `drop`, which the destructor's
     /// name reserves.)
     pub(crate) fn release(&self, id: u64) {
-        if self.remove(id).is_some() {
-            self.changed();
+        let removed = {
+            let mut state = self.lock();
+            let removed = Self::remove_from(&mut state, id);
+            if removed.is_some() {
+                state.untold += 1;
+            }
+            removed
+        };
+        if removed.is_some() {
+            self.tell();
         }
     }
 
@@ -272,8 +289,9 @@ impl Registrations {
                 return Err("this handle is not a dynamic root item".into());
             };
             *held = item;
+            state.untold += 1;
         }
-        self.changed();
+        self.tell();
         Ok(())
     }
 
@@ -293,10 +311,15 @@ impl Registrations {
             state
                 .activations
                 .retain(|activation| activation.instance != instance);
-            (registrations != state.entries.len()) || (activations != state.activations.len())
+            let changed =
+                (registrations != state.entries.len()) || (activations != state.activations.len());
+            if changed {
+                state.untold += 1;
+            }
+            changed
         };
         if changed {
-            self.changed();
+            self.tell();
         }
     }
 
@@ -421,8 +444,9 @@ impl Registrations {
                 generation: generation.clone(),
                 instance,
             });
+            state.untold += 1;
         }
-        self.changed();
+        self.tell();
     }
 
     /// Whether the activation entry point of `owner` has run in this
@@ -437,13 +461,43 @@ impl Registrations {
         })
     }
 
-    /// Removes the entry `id` if it is still held, telling the caller so
-    /// its hooks can be told too.
+    /// Removes the entry `id` if it is still held: the undo its
+    /// generation's end runs, which tells no hook (see
+    /// [`Registrations::add`]).
     fn remove(&self, id: u64) -> Option<()> {
-        let mut state = self.lock();
+        Self::remove_from(&mut self.lock(), id)
+    }
+
+    /// Removes the entry `id` from `state` if it is still held, saying so.
+    fn remove_from(state: &mut RegistrationsState, id: u64) -> Option<()> {
         let at = state.entries.iter().position(|entry| entry.id == id)?;
         state.entries.remove(at);
         Some(())
+    }
+
+    /// Tells the hooks of a change counted in `untold`, then counts it
+    /// told.
+    fn tell(&self) {
+        self.changed();
+        let mut state = self.lock();
+        state.untold = state.untold.saturating_sub(1);
+        if state.untold == 0 {
+            self.told.notify_all();
+        }
+    }
+
+    /// Waits until the hooks have been told of every change so far (the
+    /// worker threads woken for it); `false` if they were not within
+    /// `limit`. For tests, through the launcher's waits for its timers and
+    /// watchers, which so cover a registration seen before its hooks ran.
+    #[cfg(any(test, debug_assertions))]
+    pub(crate) fn wait_until_told(&self, limit: std::time::Duration) -> bool {
+        let state = self.lock();
+        let (state, _) = self
+            .told
+            .wait_timeout_while(state, limit, |state| state.untold > 0)
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        state.untold == 0
     }
 
     /// Has `changed` called after each change of the registry, with its

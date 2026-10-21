@@ -572,17 +572,29 @@ fn reloading_stops_a_pending_cycle_and_the_replacement_serves_again(fixture: &Fi
     block_on(started.launcher.reload(&identity));
     pane.settled(&started);
     assert_eq!(pane.slow_save().as_deref(), Some("started"));
-    // The reload's own outcome stays: the stopped cycle's late answer is
-    // discarded, not shown over it.
-    assert_eq!(
-        started.launcher.view().status,
-        Status::Result(format!("Reloaded {}", fixture.title))
+    // The stopped cycle's late answer is discarded, not shown over the
+    // reload's own outcome. The command's screen was reopened on the new
+    // code (ADR 0041), where the replacement's first cycle, which runs at
+    // once, shows its status as every cycle does: before the outcome or
+    // after it, as the threads come.
+    let status = started.launcher.view().status;
+    assert!(
+        [
+            Status::Result(format!("Reloaded {}", fixture.title)),
+            Status::Result("Watching: 0 events (cycle 3, 1 this run)".into()),
+        ]
+        .contains(&status),
+        "{status:?}"
     );
 
-    // The replacement's service runs again, at once, in a fresh task.
+    // The replacement's service runs again, at once, in a fresh task. Its
+    // first cycle is waited for until it answered, since the cadence
+    // counts from the answer: the clock moving on before then would not
+    // bring the next cycle.
     pane.until("the replacement's cycle to begin", Some(3), || {
         pane.cycles(&folder)
     });
+    pane.settled(&started);
     open(&started.launcher, fixture.command);
     pane.clock.advance(SECOND);
     pane.settled(&started);
@@ -605,9 +617,13 @@ fn a_reload_hands_the_services_task_over_to_the_new_code(fixture: &Fixture) {
     pane.clock.advance(SECOND);
     pane.settled(&started);
     block_on(started.launcher.reload(&identity));
+    // Its first cycle is waited for until it answered, since the cadence
+    // counts from the answer: the clock moving on before then would not
+    // bring the next cycle.
     pane.until("the replacement's cycle to begin", Some(3), || {
         pane.cycles(&folder)
     });
+    pane.settled(&started);
     pane.clock.advance(SECOND);
     pane.settled(&started);
     assert_eq!(

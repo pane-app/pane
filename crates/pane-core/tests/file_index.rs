@@ -428,8 +428,9 @@ fn disabling_files_stops_indexing_and_uninstalling_deletes_the_index() {
     while file_rows(&launcher).first().map(String::as_str) != Some("while disabled.txt") {
         assert!(
             std::time::Instant::now() < deadline,
-            "{:?}",
-            file_rows(&launcher)
+            "{:?} {:?}",
+            file_rows(&launcher),
+            launcher.file_index_status()
         );
         std::thread::sleep(Duration::from_millis(50));
         settle(&launcher);
