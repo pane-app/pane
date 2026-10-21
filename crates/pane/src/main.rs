@@ -358,6 +358,11 @@ fn main() {
                 // Manager, so nothing shows behind the panel that fills it.
                 #[cfg(target_os = "windows")]
                 pane::prefer_rounded_window_corners(window);
+                // macOS draws its close, minimize and zoom buttons over the
+                // transparent titlebar, which here is the search field: the
+                // launcher shows none, as on Windows and Linux.
+                #[cfg(target_os = "macos")]
+                pane::hide_window_buttons(window);
                 cx.new(|cx| {
                     let mut launcher = LauncherWindow::new(launcher, window, cx);
                     launcher.follow_changes(changes, window, cx);
