@@ -1536,10 +1536,12 @@ fn group_page(
         content.push(capabilities);
     }
     // The operations that belong to no installed extension: the
-    // runtime's, data kept for an uninstalled one; then every extension's
-    // automatic updates.
+    // runtime's, data kept for an uninstalled one; Pane's official
+    // extensions that are not installed, in a section of their own; then
+    // every extension's automatic updates.
     let mut global = None;
     let mut others: Vec<AnyElement> = Vec::new();
+    let mut official = Vec::new();
     for operation in operations {
         let installed = operation
             .owner
@@ -1550,6 +1552,10 @@ fn group_page(
         }
         if operation.kind == OperationKind::AutomaticUpdates {
             global = Some(operation);
+            continue;
+        }
+        if operation.kind == OperationKind::InstallOfficial {
+            official.push(operation);
             continue;
         }
         let reason = operation.unavailable.clone();
@@ -1578,6 +1584,9 @@ fn group_page(
         content.push(
             controls::section(None, controls::list_card(others, theme), theme).into_any_element(),
         );
+    }
+    if let Some(section) = official_section(this, official, theme, cx) {
+        content.push(section);
     }
     if let Some(operation) = global {
         let anchor = this.search_anchor(&operation.id);
@@ -1638,6 +1647,74 @@ fn group_page(
         content.push(install_section(this, theme, window, cx));
     }
     content
+}
+
+/// The group page's section of Pane's official extensions that are not
+/// installed (#283): what first setup left out, or an uninstall declined,
+/// each with what it does and its Install button, which sets it up from
+/// the commit this release pins. `None` when every one is installed.
+/// Each row's debug selector is `extension-official-<title>`, its button
+/// `extension-official-install-<title>`.
+fn official_section(
+    this: &mut SettingsWindow,
+    operations: Vec<ExtensionOperation>,
+    theme: &Theme,
+    cx: &mut Context<SettingsWindow>,
+) -> Option<AnyElement> {
+    if operations.is_empty() {
+        return None;
+    }
+    let listed = this.launcher.official_extensions();
+    let mut rows = Vec::new();
+    for (index, operation) in operations.into_iter().enumerate() {
+        let id = operation
+            .owner
+            .as_ref()
+            .and_then(|owner| owner.default_id());
+        let extension = listed
+            .iter()
+            .find(|extension| Some(extension.id.as_str()) == id);
+        let title = extension.map_or_else(|| operation.title.clone(), |e| e.title.clone());
+        let mut lines = Vec::new();
+        if let Some(description) = extension.and_then(|e| e.description.clone()) {
+            lines.push(controls::row_line(description, theme.text_muted, theme));
+        }
+        let anchor = this.search_anchor(&operation.id);
+        let enabled = operation.unavailable.is_none();
+        let label = operation.title.clone();
+        let button_selector = format!("extension-official-install-{title}");
+        let row_selector = format!("extension-official-{title}");
+        let button = controls::button(
+            ("extension-official-install", index),
+            "Install",
+            enabled,
+            theme,
+        )
+        .debug_selector(move || button_selector)
+        .role(Role::Button)
+        .aria_label(label)
+        .when(!enabled, |button| button.aria_disabled(true))
+        .on_click(cx.listener(move |this, _: &gpui::ClickEvent, _, cx| {
+            run(this, &operation, cx);
+        }));
+        rows.push(
+            controls::setting_row(title, lines, theme)
+                .child(button)
+                .id(("extension-official", index))
+                .debug_selector(move || row_selector)
+                .anchor_scroll(Some(anchor))
+                .into_any_element(),
+        );
+    }
+    Some(
+        controls::section(
+            Some("Official Extensions".into()),
+            controls::card(rows, theme),
+            theme,
+        )
+        .debug_selector(|| "extension-section-Official Extensions".into())
+        .into_any_element(),
+    )
 }
 
 /// The group page's install section: a button per source, and, while an

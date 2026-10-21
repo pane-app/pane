@@ -2286,6 +2286,113 @@ fn an_official_extension_is_marked_as_panes_own_wherever_settings_lists_it(
     );
 }
 
+/// An official extension first setup left out (#283) is listed in the
+/// Extensions group's own section, with what it does, and its Install
+/// button sets it up from its pin: it is installed with its default
+/// identity, no longer declined, and the section goes once nothing is left
+/// out.
+#[gpui::test]
+fn an_official_extension_left_out_at_first_setup_installs_from_the_extensions_group(
+    cx: &mut TestAppContext,
+) {
+    let data = tempfile::tempdir().unwrap();
+    // Two defaults, served over Git's smart HTTP protocol from 127.0.0.1
+    // (pane-core's test support; stand-ins for the defaults' own
+    // repositories, #285 — nothing reaches the network).
+    let server = repo_server::Server::start();
+    let repos = tempfile::tempdir().unwrap();
+    let pins = vec![
+        defaults::from_sample(
+            &server,
+            repos.path(),
+            "sample-icons",
+            "Icons sample",
+            "sample-icons",
+        ),
+        defaults::from_sample(
+            &server,
+            repos.path(),
+            "sample-greet",
+            "Greet sample",
+            "sample-greet",
+        ),
+    ];
+    cx.executor().allow_parking();
+    // First setup, the greet sample unticked.
+    let choosing =
+        Launcher::with_packages(Runtime::start(), vec![], data.path().join("extensions"))
+            .with_defaults(pins.clone());
+    cx.foreground_executor().block_on(choosing.first_setup());
+    assert!(choosing.toggle_choice_tick("sample-greet"));
+    let set_up = choosing
+        .view()
+        .rows
+        .iter()
+        .position(|row| row.title == "Set Up")
+        .expect("the Set Up row");
+    choosing.select(set_up);
+    cx.foreground_executor()
+        .block_on(choosing.activate_selected());
+    drop(choosing);
+    // Pane starts again: the choice holds.
+    let launcher =
+        Launcher::with_packages(Runtime::start(), vec![], data.path().join("extensions"))
+            .with_defaults(pins);
+    cx.foreground_executor().block_on(launcher.first_setup());
+    cx.update(pane::bind_keys);
+    let (window, cx) = cx.add_window_view(|window, cx| LauncherWindow::new(launcher, window, cx));
+    let (_settings, mut settings_cx) = open_extensions(cx);
+
+    // The section lists the one left out, not the one installed.
+    assert!(
+        settings_cx
+            .debug_bounds("extension-section-Official Extensions")
+            .is_some()
+    );
+    assert!(
+        settings_cx
+            .debug_bounds("extension-official-Greet sample")
+            .is_some()
+    );
+    assert!(
+        settings_cx
+            .debug_bounds("extension-official-Icons sample")
+            .is_none()
+    );
+    assert!(has_node(&mut settings_cx, "Button", "Install Greet sample"));
+
+    click_row(&mut settings_cx, "extension-official-install-Greet sample");
+    let launcher = cx.read_entity(&window, |window, _| window.launcher().clone());
+    let deadline = Instant::now() + Duration::from_secs(60);
+    while !launcher
+        .packages()
+        .iter()
+        .any(|package| package.identity == PackageIdentity::default_extension("sample-greet"))
+    {
+        assert!(
+            Instant::now() < deadline,
+            "the greet sample was not installed"
+        );
+        settings_cx.run_until_parked();
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    let registry: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(data.path().join("extensions").join("installed.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(registry.get("declinedDefaults"), None, "{registry:#}");
+    // Nothing is left out, so the section goes.
+    let deadline = Instant::now() + Duration::from_secs(60);
+    while settings_cx
+        .debug_bounds("extension-section-Official Extensions")
+        .is_some()
+    {
+        assert!(Instant::now() < deadline, "the section stayed");
+        settings_cx.run_until_parked();
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
 #[gpui::test]
 fn a_default_extension_s_page_has_the_update_automatically_switch(cx: &mut TestAppContext) {
     let data = tempfile::tempdir().unwrap();

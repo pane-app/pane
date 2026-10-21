@@ -83,7 +83,8 @@ impl Launcher {
 
     /// The extension list's rows: each package's state, reload and cache
     /// rows, then the hotkey of each command of the enabled packages, then
-    /// one row per identity with retained data, then the global
+    /// one row per identity with retained data, then one per official
+    /// extension not installed (#283), then the global
     /// automatic-update choice, last of all.
     fn extension_rows(&self, state: &State) -> (Vec<Row>, Vec<Entry>) {
         let developed = |identity: &PackageIdentity| self.is_developed(identity);
@@ -133,6 +134,13 @@ impl Launcher {
                 retained::rows(&state.retained, &installation.data);
             rows.extend(retained_rows);
             entries.extend(retained_entries);
+            // Pane's official extensions that are not installed, each
+            // offered to install (#283): what first setup left out stays
+            // a click away.
+            for (row, entry) in self.official_rows(state) {
+                rows.push(row);
+                entries.push(entry);
+            }
             // The update results of the latest pass that recorded, before
             // the global automatic-update choice, last of all: what the
             // last pass did is found beside what governs the next one.
@@ -270,6 +278,11 @@ pub enum OperationKind {
     /// Shows the update results of the latest pass that recorded: every
     /// extension it considered, grouped as Updated, Skipped and Failed.
     UpdateResults,
+    /// Installs one of Pane's official extensions that is not installed
+    /// (#283) — declined at first setup or by an uninstall, or never
+    /// acquired — from the commit this release pins. Its owner is the
+    /// default's identity, which is not installed.
+    InstallOfficial,
 }
 
 impl OperationKind {
@@ -299,6 +312,7 @@ impl OperationKind {
             OperationKind::RestartRuntime => "Restart the Runtime",
             OperationKind::DeleteRetainedData => "Delete Retained Data",
             OperationKind::UpdateResults => "Update Results",
+            OperationKind::InstallOfficial => "Install",
         }
     }
 }
@@ -500,6 +514,12 @@ fn operation(state: &State, row: Row, entry: &Entry) -> Option<ExtensionOperatio
             None,
         ),
         Entry::UpdateResults => (OperationKind::UpdateResults, None, None, None),
+        Entry::InstallOfficial(id) => (
+            OperationKind::InstallOfficial,
+            Some(PackageIdentity::default_extension(id)),
+            None,
+            None,
+        ),
         _ => return None,
     };
     Some(ExtensionOperation {

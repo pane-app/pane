@@ -462,12 +462,17 @@ fn main() {
             }
             Err(error) => pane_core::diagnostic!("pane-ext cannot reach this Pane: {error}"),
         }
-        // Acquiring the default extensions goes on in the background: the
-        // window, root search and the extension list stay usable, and the
-        // status line says what it is doing (the changes channel redraws
-        // the window as it goes, as for development builds).
+        // First setup (#283): on a data folder whose first setup has not
+        // chosen, the launcher shows the official extensions with the
+        // defaults ticked, and its Set Up row sets the ticked ones up;
+        // once the choice is made, each default that is missing and not
+        // declined is acquired by itself. Acquiring goes on in the
+        // background: the window, root search and the extension list stay
+        // usable, and the status line says what it is doing (the changes
+        // channel redraws the window as it goes, as for development
+        // builds).
         cx.spawn(async move |_| {
-            acquiring.acquire_defaults().await;
+            acquiring.first_setup().await;
         })
         .detach();
         // Checking for a Pane application update does too: it reads only

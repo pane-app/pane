@@ -2605,9 +2605,12 @@ impl LauncherWindow {
     /// version as a tag, what the run of the ticked ones came to for it
     /// once it reaches it, and — at the row's right end — its check mark.
     /// The row previews the extension, as Enter does; the check mark alone
-    /// ticks it, as Space does. `None` for the rows that are no
-    /// extension's (the Install row after them, which draws as any row
-    /// does).
+    /// ticks it, as Space does. First setup's choice of the official
+    /// extensions (#283) is drawn the same, but its rows tick their
+    /// extension where a collection's rows preview theirs (the launcher's
+    /// activation decides which). `None` for the rows that are no
+    /// extension's (the Install or Set Up row after them, which draws as
+    /// any row does).
     fn render_choice_row(
         &self,
         index: usize,

@@ -21,6 +21,16 @@
 //! while the choice is open: every extension is previewed and installed
 //! from that one revision, so however many are ticked, the revision is
 //! fetched once.
+//!
+//! First setup's choice of the official extensions (#283, ADR 0045) is
+//! the same screen over the default extensions' pins: each listed with
+//! the title and description its pin gives (nothing is fetched to list
+//! them), all of them ticked — they are the defaults — and the Set Up
+//! row after them, selected, so Enter sets the defaults up. Activating an
+//! extension's row ticks or unticks it, as Space does; Set Up records the
+//! choice (what was unticked is declined) and returns to root search,
+//! where the ticked ones are set up as first setup sets them up
+//! (`acquire`).
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -36,6 +46,21 @@ use crate::platform;
 
 /// The id of the choice's Install row, after the extension rows.
 const INSTALL_ROW: &str = "install";
+
+/// The id of first setup's Set Up row, after the extension rows (#283).
+const SET_UP_ROW: &str = "set-up";
+
+/// First setup's title (#283).
+const FIRST_SETUP_TITLE: &str = "Pane's Official Extensions";
+
+/// The lines under first setup's title (#283): where the extensions come
+/// from, and that what is left out stays available.
+const FIRST_SETUP_LINES: [&str; 2] = [
+    "Pane sets these up from their own repositories, at the releases this version of Pane \
+     was tested with",
+    "Untick what you do not want: you can install it later from the Extensions group in \
+     Settings",
+];
 
 /// One extension of a collection as the choice lists it: the id that names
 /// it, and what its own manifest says of it.
@@ -85,11 +110,22 @@ pub struct ChoiceView {
     pub details: Vec<String>,
 }
 
-/// A collection as the choice reads it (#308): where it is, how each of
-/// its extensions is read and installed, and what the screen shows of it.
+/// What a choice lists: a collection's extensions (#308), each read and
+/// installed from where the collection is, or first setup's official
+/// extensions (#283), set up by their pins once the choice is made.
+#[derive(Clone)]
+enum Of {
+    Collection(Source),
+    FirstSetup,
+}
+
+/// A collection as the choice reads it (#308), or first setup's official
+/// extensions (#283): what the choice lists, and what the screen shows of
+/// it.
 pub(in crate::launcher) struct Listed {
-    /// How each extension is read and installed.
-    source: Source,
+    /// What the choice lists: a collection, with how each extension is
+    /// read and installed, or first setup's official extensions.
+    of: Of,
     /// The screen's title: the repository's or folder's name.
     title: String,
     /// The lines under the title: where the collection came from and how
@@ -158,7 +194,7 @@ impl Listed {
         collection: &crate::collections::Collection,
     ) -> Listed {
         Listed {
-            source: Source::Folder(root.to_path_buf()),
+            of: Of::Collection(Source::Folder(root.to_path_buf())),
             title: crate::packages::folder_name(root),
             details: vec![
                 format!("Source: local folder {}", root.display()),
@@ -186,16 +222,41 @@ impl Listed {
         details.push(HOW.into());
         let folder = download.folder().to_path_buf();
         Listed {
-            source: Source::Fetched {
+            of: Of::Collection(Source::Fetched {
                 download,
                 origin: origin.clone(),
                 partial,
-            },
+            }),
             // The repository's own name, as a local collection's title is
             // its folder's: the details say where the collection is.
             title: crate::packages::folder_name(std::path::Path::new(repository)),
             details,
             extensions: extensions_of(&folder, collection),
+        }
+    }
+
+    /// First setup's choice of the official extensions `pins` names, the
+    /// default extensions this system sets up (#283): each listed by what
+    /// its pin says — its title, its description and the release it sets
+    /// up — before anything is fetched, with a first-letter tile.
+    pub(in crate::launcher) fn first_setup(pins: &[crate::defaults::DefaultExtension]) -> Listed {
+        Listed {
+            of: Of::FirstSetup,
+            title: FIRST_SETUP_TITLE.into(),
+            details: FIRST_SETUP_LINES
+                .iter()
+                .map(|line| (*line).into())
+                .collect(),
+            extensions: pins
+                .iter()
+                .map(|pin| ChoiceExtension {
+                    id: pin.id.clone(),
+                    title: pin.title.clone(),
+                    description: pin.description.clone(),
+                    version: Some(pin.tag.trim_start_matches('v').to_owned()),
+                    icon: Icon::letter_of(&pin.title),
+                })
+                .collect(),
         }
     }
 }
@@ -229,30 +290,34 @@ fn extensions_of(root: &Path, collection: &crate::collections::Collection) -> Ve
 /// Held while the choice screen — or the preview of one of its
 /// extensions, opened from it — is on show.
 pub(in crate::launcher) struct Choice {
-    source: Source,
+    of: Of,
     title: String,
     details: Vec<String>,
     extensions: Vec<ChoiceExtension>,
-    /// Which are ticked, aligned with `extensions`: none, at first.
+    /// Which are ticked, aligned with `extensions`: none, at first, for a
+    /// collection; every one, the defaults, for first setup.
     ticked: Vec<bool>,
     /// The run of the ticked extensions, once Install begins it.
     run: Option<Run>,
 }
 
 impl Choice {
-    /// The choice of `listed`'s extensions: none ticked, no run.
-    fn of(listed: Listed) -> Choice {
+    /// The choice of `listed`'s extensions, no run: a collection's with
+    /// none ticked, first setup's with every one ticked — they are the
+    /// default extensions (#283).
+    fn listing(listed: Listed) -> Choice {
         let Listed {
-            source,
+            of,
             title,
             details,
             extensions,
         } = listed;
+        let ticked = matches!(of, Of::FirstSetup);
         Choice {
-            source,
+            of,
             title,
             details,
-            ticked: vec![false; extensions.len()],
+            ticked: vec![ticked; extensions.len()],
             extensions,
             run: None,
         }
@@ -260,12 +325,30 @@ impl Choice {
 
     /// The request that reads and installs the extension `id`, as the
     /// choice's own preview and the run's installs name it; `None` where
-    /// the collection lists no such extension.
+    /// the collection lists no such extension, and for first setup, whose
+    /// extensions are set up by their pins (#283).
     fn request(&self, id: &str) -> Option<Request> {
+        let Of::Collection(source) = &self.of else {
+            return None;
+        };
         self.extensions
             .iter()
             .any(|extension| extension.id == id)
-            .then(|| self.source.request(id))
+            .then(|| source.request(id))
+    }
+
+    /// Whether this is first setup's choice of the official extensions
+    /// (#283).
+    pub(in crate::launcher) fn is_first_setup(&self) -> bool {
+        matches!(self.of, Of::FirstSetup)
+    }
+
+    /// Whether the extension `id` is ticked.
+    pub(in crate::launcher) fn ticks(&self, id: &str) -> bool {
+        self.extensions
+            .iter()
+            .zip(&self.ticked)
+            .any(|(extension, ticked)| extension.id == id && *ticked)
     }
 }
 
@@ -295,7 +378,14 @@ impl Launcher {
         self.leave_command(state);
         state.view.selected = None;
         state.view.status = Status::Idle;
-        state.choice = Some(Choice::of(listed));
+        let first_setup = matches!(listed.of, Of::FirstSetup);
+        let rows = listed.extensions.len();
+        state.choice = Some(Choice::listing(listed));
+        // First setup's Set Up row is selected, after the extensions, so
+        // Enter sets the defaults up (#283).
+        if first_setup {
+            state.view.selected = Some(rows);
+        }
         self.choice_view(state);
     }
 
@@ -309,6 +399,7 @@ impl Launcher {
         };
         let mut rows = Vec::with_capacity(choice.extensions.len() + 1);
         let mut entries = Vec::with_capacity(choice.extensions.len() + 1);
+        let first_setup = choice.is_first_setup();
         for extension in &choice.extensions {
             rows.push(Row {
                 id: extension.id.clone(),
@@ -316,9 +407,28 @@ impl Launcher {
                 subtitle: extension.description.clone(),
                 unavailable: None,
             });
-            entries.push(Entry::PreviewChoice(extension.id.clone()));
+            // First setup's rows tick (#283); a collection's preview.
+            entries.push(if first_setup {
+                Entry::TickChoice(extension.id.clone())
+            } else {
+                Entry::PreviewChoice(extension.id.clone())
+            });
         }
-        if choice.run.is_none() {
+        if first_setup {
+            let ticked = choice.ticked.iter().filter(|ticked| **ticked).count();
+            let subtitle = match ticked {
+                0 => "Set up none of them: Pane starts with no extensions".into(),
+                1 => "Set up the ticked extension".into(),
+                ticked => format!("Set up the {ticked} ticked extensions"),
+            };
+            rows.push(Row {
+                id: SET_UP_ROW.into(),
+                title: "Set Up".into(),
+                subtitle: Some(subtitle),
+                unavailable: None,
+            });
+            entries.push(Entry::SetUpDefaults);
+        } else if choice.run.is_none() {
             let ticked = choice.ticked.iter().filter(|ticked| **ticked).count();
             let subtitle = match ticked {
                 0 => "Tick the extensions to install".into(),
@@ -380,6 +490,13 @@ impl Launcher {
     /// of the ticked extensions is going.
     pub fn toggle_choice_tick(&self, id: &str) -> bool {
         let mut state = self.lock();
+        self.tick_choice(&mut state, id)
+    }
+
+    /// Ticks or unticks the extension `id` of the open choice, as
+    /// [`Launcher::toggle_choice_tick`] does: what Space, the check mark
+    /// and — on first setup's choice (#283) — the row itself do.
+    pub(in crate::launcher) fn tick_choice(&self, state: &mut State, id: &str) -> bool {
         let Some(choice) = state.choice.as_mut() else {
             return false;
         };
@@ -399,8 +516,38 @@ impl Launcher {
             state.view.status = Status::Idle;
         }
         state.view.selected = Some(at);
-        self.choice_view(&mut state);
+        self.choice_view(state);
         true
+    }
+
+    /// First setup's Set Up row (#283): records the choice — each default
+    /// left unticked is declined, as an uninstall declines one — and
+    /// returns to root search, where the ticked ones are set up in the
+    /// background. The launcher holds the choice as made at once, so
+    /// root search no longer offers it. [`Pending`] for the activation.
+    pub(in crate::launcher) fn set_up_chosen(&self, state: &mut State) -> Pending {
+        let Some(choice) = state
+            .choice
+            .as_ref()
+            .filter(|choice| choice.is_first_setup())
+        else {
+            return Pending::Nothing;
+        };
+        if self.installation.is_none() {
+            state.view.status = Status::Error("this launcher does not install packages".into());
+            return Pending::Nothing;
+        }
+        let declined: Vec<String> = choice
+            .extensions
+            .iter()
+            .zip(&choice.ticked)
+            .filter(|(_, ticked)| !**ticked)
+            .map(|(extension, _)| extension.id.clone())
+            .collect();
+        state.first_setup.choose(&declined);
+        state.view.status = Status::Idle;
+        self.show_root(state, None);
+        Pending::FirstSetup(declined)
     }
 
     /// The id of the extension of the open choice whose row is selected,
@@ -451,6 +598,10 @@ impl Launcher {
         let Some(choice) = state.choice.as_mut() else {
             return Pending::Nothing;
         };
+        let Of::Collection(source) = &choice.of else {
+            return Pending::Nothing;
+        };
+        let source = source.clone();
         let ids: Vec<String> = choice
             .extensions
             .iter()
@@ -463,7 +614,6 @@ impl Launcher {
                 Status::Error("No extensions are ticked: tick the ones to install".into());
             return Pending::Nothing;
         }
-        let source = choice.source.clone();
         let count = choice.extensions.len();
         choice.run = Some(Run {
             going: true,

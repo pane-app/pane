@@ -446,6 +446,15 @@ pub(in crate::launcher) fn selected_action(state: &State) -> SelectedAction {
         // its extension, and the Install row runs the ticked ones.
         (_, Some(Entry::PreviewChoice(_))) => acting("Show package"),
         (_, Some(Entry::InstallChoice)) => acting("Install"),
+        // First setup's choice (#283): a row ticks or unticks its
+        // extension, and the Set Up row sets up what is ticked.
+        (_, Some(Entry::TickChoice(id))) => {
+            let ticked = state.choice.as_ref().is_some_and(|choice| choice.ticks(id));
+            acting(if ticked { "Untick" } else { "Tick" })
+        }
+        (_, Some(Entry::SetUpDefaults)) => acting("Set Up"),
+        (_, Some(Entry::FirstSetup)) => acting("Choose extensions"),
+        (_, Some(Entry::InstallOfficial(_))) => acting("Install"),
         // A confirmation's rows are its answers; the direction a toggle
         // turns in comes from the state it acts on, not from a title.
         (_, Some(Entry::Toggle(identity))) => {

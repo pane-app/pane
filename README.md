@@ -27,7 +27,9 @@ cargo xtask package-macos  # build the macOS package the same way (on macOS; see
 ```
 
 Every build sets up the default extensions at first setup from the commits
-this release pins, fetching them with Pane's own Git client: a development
+this release pins, fetching them with Pane's own Git client once the user
+has chosen which to set up (the official extensions are listed with the
+defaults ticked): a development
 build takes its pins from `PANE_DEFAULTS` when that names a pins file of its
 own (the tests' and smokes' do, pointing at repositories served on this
 computer), and otherwise from the committed pins

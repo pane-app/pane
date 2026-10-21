@@ -113,6 +113,8 @@ pub fn made(
         DefaultExtension {
             id: id.into(),
             title: title.into(),
+            // What first setup's list says of it (#283).
+            description: Some(format!("What the {title} does")),
             repository,
             tag: tag.into(),
             commit,
