@@ -32,7 +32,7 @@ Result: `cargo xtask ci` passed (12 launcher, 9 core, 1 cache and 25
 sample-contract tests; window tests at that time 12), and the launcher built, in
 2 min 43 s wall time from an empty `target/` with a warm Cargo registry. No
 Windows machine or PowerShell was needed. Linux prerequisites are in the
-[README](../../README.md#build-run-and-test).
+[build instructions](../building.md#prerequisites).
 
 ## Native GUI smoke
 
