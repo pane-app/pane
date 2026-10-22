@@ -290,8 +290,8 @@ without building it, install it from its repository:
   [development mode](../docs/development-mode.md): Pane builds and reloads
   it after each save ([Developing a package](#developing-a-package-build-and-reload-on-save));
   held by `crates/pane-core/tests/develop_builds.rs`.
-- `js`: `@pane-app/extension`, the JS/TS SDK, made to be published on npm
-  under that name ([its README](js/README.md)): TypeScript declarations for
+- `js`: `@pane-app/extension`, the JS/TS SDK, published on npm under
+  that name ([its README](js/README.md)): TypeScript declarations for
   the contract (`pane.d.ts`), the adapter that turns thrown values into
   answers, the HTTP helper, the host-function wrappers and the WIT world
   JS/TS commands are built against. It carries no CLI.

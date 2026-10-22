@@ -111,9 +111,9 @@ fn scaffold(kind: Kind, language: Language) -> PathBuf {
             // the repository's own, beside the package as the development
             // samples' is, so the `file:../js` devDependency resolves both
             // in the package folder and in the build's staging of it (the
-            // staging provides the SDK alone). The unpublished
-            // `@pane-app/cli`, whose `pane-ext` the scripts run and this
-            // test never runs, is dropped rather than stubbed.
+            // staging provides the SDK alone). `@pane-app/cli`, whose
+            // `pane-ext` the scripts run and this test never runs, is
+            // dropped rather than stubbed.
             copy_folder(&repository().join("guests/js"), &parent.join("js"));
             let package = fs::read_to_string(folder.join("package.json")).unwrap();
             // The line is dropped whole, whatever the checkout's line

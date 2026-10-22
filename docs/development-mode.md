@@ -572,8 +572,8 @@ These are implementation choices of #12/#13, not user decisions:
 - An installed Pane without a checkout builds a JavaScript or TypeScript
   package on save with the componentizer of the package's own
   `@pane-app/cli` platform package (`node_modules/@pane-app/cli-<target>`,
-  which `npm install` provides; `#219` will publish those). A package
-  without one is explained; a Pane built from a checkout links the
+  which `npm install` provides from npm). A package without one is
+  explained; a Pane built from a checkout links the
   componentizer itself (#218), as `pane-ext` does.
 - On macOS and Linux, Ctrl+C in `pane-ext dev`'s terminal ends `pane-ext`
   but not a build it is running, which is in a process group of its own:
