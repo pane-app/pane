@@ -7,14 +7,16 @@
 //!
 //! The templates name the registry packages an author installs
 //! (`pane-extension` from crates.io, `@pane-app/extension` and
-//! `@pane-app/cli` from npm), which are not published yet (#281), so the
-//! test stands them in with this repository's own copies, as the
-//! development samples do: the Rust template's dependency points at
-//! `guests/pane-extension`, and the TypeScript template's SDK devDependency
-//! at a copy of `guests/js` beside the package, which `npm install` (the
-//! author's step) resolves. `@pane-app/cli` is dropped instead: the build
-//! never runs it, and the staging provides the SDK alone. The componentizer
-//! is pane-ext's own, linked in.
+//! `@pane-app/cli` from npm). The test stands them in with this
+//! repository's own copies, as the development samples do, so each
+//! template builds against this checkout's SDKs, not the last ones
+//! published: the Rust template's dependency points at
+//! `guests/pane-extension`, and the TypeScript template's SDK
+//! devDependency at a copy of `guests/js` beside the package, which
+//! `npm install` (the author's step) resolves.
+//! `@pane-app/cli` is dropped instead: the build never runs it, and the
+//! staging provides the SDK alone. The componentizer is pane-ext's own,
+//! linked in.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -54,7 +56,7 @@ fn repository() -> PathBuf {
 
 /// Scaffolds the `kind` template in `language` with `pane-ext new` (what
 /// an author runs), into Cargo's test folder where the builds below keep
-/// what they made between runs, and stands the templates' unpublished
+/// what they made between runs, and stands the templates' registry
 /// dependencies in with the repository's own copies.
 fn scaffold(kind: Kind, language: Language) -> PathBuf {
     let parent = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(match language {
@@ -109,9 +111,9 @@ fn scaffold(kind: Kind, language: Language) -> PathBuf {
             // the repository's own, beside the package as the development
             // samples' is, so the `file:../js` devDependency resolves both
             // in the package folder and in the build's staging of it (the
-            // staging provides the SDK alone). The unpublished
-            // `@pane-app/cli`, whose `pane-ext` the scripts run and this
-            // test never runs, is dropped rather than stubbed.
+            // staging provides the SDK alone). `@pane-app/cli`, whose
+            // `pane-ext` the scripts run and this test never runs, is
+            // dropped rather than stubbed.
             copy_folder(&repository().join("guests/js"), &parent.join("js"));
             let package = fs::read_to_string(folder.join("package.json")).unwrap();
             // The line is dropped whole, whatever the checkout's line

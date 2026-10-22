@@ -265,9 +265,10 @@ fn a_typescript_package_is_created_the_same_way() {
     let (sources, data) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
     let launcher = launcher(&data, Arc::new(TemplateBuilder::default()));
     let status = created(&launcher, sources.path(), "Word Count", "typescript");
-    // `npm install` needs the registry packages an author installs, which
-    // are not published yet (#281); it fails and stops nothing — the
-    // build is the stand-in here, so the flow reaches the preview anyway.
+    // `npm install`, run when npm is found, fetches the registry packages
+    // an author installs; whether it succeeds or fails here, it stops
+    // nothing — the build is the stand-in here, so the flow reaches the
+    // preview anyway.
     assert_eq!(status, Status::Idle);
     let folder = sources.path().join("word-count");
     assert!(folder.join("package.json").is_file());

@@ -65,7 +65,7 @@ and refuses the kind pointing at the `form` template instead.
   build and launcher, opening each command: the CI seam for "every
   template is built and installed" (#221), in the ordinary test tiers.
 
-Until the SDKs are published (#281), those tests point the templates'
-dependencies at this repository's own copies, as the development samples
-do; the templates themselves name the registry packages an author
-installs.
+Those tests point the templates' dependencies at this repository's own
+copies, as the development samples do, so each template builds against
+the SDKs it ships beside, not the last ones published. The templates
+themselves name the registry packages an author installs.

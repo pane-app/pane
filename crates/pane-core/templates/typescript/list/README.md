@@ -21,7 +21,8 @@ rebuilds and reloads the command while it keeps running.
   ([`@pane-app/cli`], whose `pane-ext` the scripts run), the build's
   esbuild and TypeScript, and the linter and formatter. In a Pane
   checkout, point the two `@pane-app` devDependencies at the repository's
-  own copies (`"file:../guests/js"`) until they are published.
+  own copies (`"file:../guests/js"`) to build against the SDK as it is
+  there, with changes not yet published.
 - `tsconfig.json` — the type checker's settings, as Pane's own
   TypeScript samples set them.
 - `biome.json` — the linter's and the formatter's settings;

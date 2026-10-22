@@ -18,9 +18,9 @@ package would.
 
 1. Build it once, from the repository root:
    `cd guests/hello-rust && cargo build --release --target wasm32-wasip2`.
-   (Outside this repository, copy the folder, point `pane-extension`'s `path`
-   in `Cargo.toml` at `guests/pane-extension` of a Pane checkout and copy
-   `rust-toolchain.toml` beside it.)
+   (Outside this repository, copy the folder, replace `pane-extension`'s
+   `path` in `Cargo.toml` with the crate on crates.io
+   (`pane-extension = "0.2"`) and copy `rust-toolchain.toml` beside it.)
 2. `cargo run -p pane -- --install guests/hello-rust`, and Enter on
    **Install**.
 3. In **Settings › Extensions**, choose **Develop Hello Rust** (the list's
@@ -572,8 +572,8 @@ These are implementation choices of #12/#13, not user decisions:
 - An installed Pane without a checkout builds a JavaScript or TypeScript
   package on save with the componentizer of the package's own
   `@pane-app/cli` platform package (`node_modules/@pane-app/cli-<target>`,
-  which `npm install` provides; `#219` will publish those). A package
-  without one is explained; a Pane built from a checkout links the
+  which `npm install` provides from npm). A package without one is
+  explained; a Pane built from a checkout links the
   componentizer itself (#218), as `pane-ext` does.
 - On macOS and Linux, Ctrl+C in `pane-ext dev`'s terminal ends `pane-ext`
   but not a build it is running, which is in a process group of its own:
