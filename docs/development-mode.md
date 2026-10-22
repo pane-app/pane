@@ -18,9 +18,9 @@ package would.
 
 1. Build it once, from the repository root:
    `cd guests/hello-rust && cargo build --release --target wasm32-wasip2`.
-   (Outside this repository, copy the folder, point `pane-extension`'s `path`
-   in `Cargo.toml` at `guests/pane-extension` of a Pane checkout and copy
-   `rust-toolchain.toml` beside it.)
+   (Outside this repository, copy the folder, replace `pane-extension`'s
+   `path` in `Cargo.toml` with the crate on crates.io
+   (`pane-extension = "0.2"`) and copy `rust-toolchain.toml` beside it.)
 2. `cargo run -p pane -- --install guests/hello-rust`, and Enter on
    **Install**.
 3. In **Settings › Extensions**, choose **Develop Hello Rust** (the list's

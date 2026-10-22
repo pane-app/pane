@@ -7,14 +7,16 @@
 //!
 //! The templates name the registry packages an author installs
 //! (`pane-extension` from crates.io, `@pane-app/extension` and
-//! `@pane-app/cli` from npm), which are not published yet (#281), so the
-//! test stands them in with this repository's own copies, as the
-//! development samples do: the Rust template's dependency points at
-//! `guests/pane-extension`, and the TypeScript template's SDK devDependency
-//! at a copy of `guests/js` beside the package, which `npm install` (the
-//! author's step) resolves. `@pane-app/cli` is dropped instead: the build
-//! never runs it, and the staging provides the SDK alone. The componentizer
-//! is pane-ext's own, linked in.
+//! `@pane-app/cli` from npm). The test stands them in with this
+//! repository's own copies, as the development samples do, so each
+//! template builds against the SDK of this checkout, and the npm packages,
+//! not published yet (#281), need no registry: the Rust template's
+//! dependency points at `guests/pane-extension`, and the TypeScript
+//! template's SDK devDependency at a copy of `guests/js` beside the
+//! package, which `npm install` (the author's step) resolves.
+//! `@pane-app/cli` is dropped instead: the build never runs it, and the
+//! staging provides the SDK alone. The componentizer is pane-ext's own,
+//! linked in.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -54,7 +56,7 @@ fn repository() -> PathBuf {
 
 /// Scaffolds the `kind` template in `language` with `pane-ext new` (what
 /// an author runs), into Cargo's test folder where the builds below keep
-/// what they made between runs, and stands the templates' unpublished
+/// what they made between runs, and stands the templates' registry
 /// dependencies in with the repository's own copies.
 fn scaffold(kind: Kind, language: Language) -> PathBuf {
     let parent = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(match language {

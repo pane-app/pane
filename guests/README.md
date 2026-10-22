@@ -19,18 +19,19 @@ installs them from the release commits this build pins
 the Windows three's pins naming `"platform": "windows"`, so only a
 Windows first setup acquires them.
 To work on one, clone its repository: its own CI builds the component, and
-`cargo xtask guests` here builds the samples only. Until the Rust SDK is
-published to crates.io (#128), build a default extension's repository
-against the SDK by adding a `[patch.crates-io]` entry for `pane-extension`
-pointing at this checkout's `guests/pane-extension`, and build it with
-`cargo build --release --target wasm32-wasip2`; commit the built component
-under the path its `pane.json` names on its release branch and tag
-`v<version>`, as its repository's own workflow does. To try a default
+`cargo xtask guests` here builds the samples only. A default extension's
+repository builds against the `pane-extension` crate on crates.io, with no
+Pane checkout: `cargo build --release --target wasm32-wasip2`. To try it
+against an SDK change not published yet, add a `[patch.crates-io]` entry
+for `pane-extension` pointing at this checkout's `guests/pane-extension`,
+without committing it. A release commits the built component under the
+path its `pane.json` names on its release branch and tags `v<version>`, as
+its repository's own workflow does. To try a default
 without building it, install it from its repository:
 `pane --install git:https://github.com/pane-app/calculator@v0.6.0`.
 
-- `pane-extension`: the Rust SDK, bindings for the contract, made to be
-  published on crates.io under that name ([its README](pane-extension/README.md));
+- `pane-extension`: the Rust SDK, bindings for the contract, published on
+  crates.io under that name ([its README](pane-extension/README.md));
   its version follows the extension API. `no_std`, so only WASI 0.3 is
   imported; it supplies the allocator, a panic handler that logs the panic
   and traps, print and log macros ([printing and logging](#printing-and-logging)),

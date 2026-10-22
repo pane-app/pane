@@ -18,8 +18,8 @@ rebuilds and reloads the command while it keeps running.
   `pane-ext new command .`.
 - `Cargo.toml` — the package and its one dependency, the SDK from
   crates.io. Inside a Pane checkout, point `pane-extension` at the
-  repository's own copy (`path = "../../guests/pane-extension"`) until the
-  SDK is published.
+  repository's own copy (`path = "../../guests/pane-extension"`) to build
+  against the SDK as it is there, with changes not yet published.
 - `rust-toolchain.toml` — stable Rust, `rustfmt` and `clippy`, and the
   `wasm32-wasip2` target the component builds for.
 - `rustfmt.toml` — the formatter's settings, matching Pane's own.

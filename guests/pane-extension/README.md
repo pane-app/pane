@@ -9,8 +9,8 @@ the rest), the extension UI builder and the print and log macros. It is
 the allocator and a panic handler.
 
 You need only rustup's stable toolchain and the `wasm32-wasip2` target
-(`rustup target add wasm32-wasip2`). Until the crate is published, depend on
-it by `path`, at `guests/pane-extension` in a checkout of Pane's repository.
+(`rustup target add wasm32-wasip2`), and this crate from crates.io; no
+checkout of Pane's repository.
 
 ```toml
 [package]
