@@ -9,11 +9,11 @@
 //! (`pane-extension` from crates.io, `@pane-app/extension` and
 //! `@pane-app/cli` from npm). The test stands them in with this
 //! repository's own copies, as the development samples do, so each
-//! template builds against the SDK of this checkout, and the npm packages,
-//! not published yet (#281), need no registry: the Rust template's
-//! dependency points at `guests/pane-extension`, and the TypeScript
-//! template's SDK devDependency at a copy of `guests/js` beside the
-//! package, which `npm install` (the author's step) resolves.
+//! template builds against this checkout's SDKs, not the last ones
+//! published: the Rust template's dependency points at
+//! `guests/pane-extension`, and the TypeScript template's SDK
+//! devDependency at a copy of `guests/js` beside the package, which
+//! `npm install` (the author's step) resolves.
 //! `@pane-app/cli` is dropped instead: the build never runs it, and the
 //! staging provides the SDK alone. The componentizer is pane-ext's own,
 //! linked in.

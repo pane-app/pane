@@ -67,6 +67,5 @@ and refuses the kind pointing at the `form` template instead.
 
 Those tests point the templates' dependencies at this repository's own
 copies, as the development samples do, so each template builds against
-the SDK it ships beside, and the npm packages, not published yet (#281),
-need no registry. The templates themselves name the registry packages an
-author installs.
+the SDKs it ships beside, not the last ones published. The templates
+themselves name the registry packages an author installs.
