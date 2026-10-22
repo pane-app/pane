@@ -1,0 +1,55 @@
+package pane:extension@0.1.0;
+
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+//
+// The push channel of a designed view (#243, the real-push slice of ADR
+// 0036): what an open view calls to ask Pane to draw it again the moment
+// its own work answered, instead of waiting for a refresh
+// (`refresh-after-ms`, #236) — and the text measurement a canvas's drawing
+// asks for while the view renders (#242, slice 8). Kept apart from
+// extension.wit, which holds the `command` interface and the worlds; the
+// header follows `package`: comments above it would document the package,
+// which extension.wit already does.
+//
+// An instance may call this between Pane's calls: the runtime keeps a
+// guest that still has work running (its store's event loop is driven)
+// while one of its designed views is open, so a load a view's render
+// started answers in the background and asks here, and the view is drawn
+// again without a timer. Pane coalesces the asks — one drawing is asked
+// for at a time per view — and numbers the drawing it sends with the
+// view's events, so a late answer never replaces a newer tree. A view
+// that is not on top of its stack, or whose window is not shown, is not
+// drawn: its ask waits for the next showing, and an ask for a view that
+// is no longer open is dropped.
+
+interface view {
+  /// How much room a text run takes: its width and height in logical pixels.
+  record text-extent {
+    width: f32,
+    height: f32,
+  }
+
+  /// Ask Pane to draw the designed view `view` again, now. `view` is the
+  /// id the view's render context named (`"view"`, as in `{"render": 1,
+  /// "view": 7}`), so a view with several in one component (a navigation
+  /// stack) asks for itself. Calling this is a short host call; it is
+  /// answered at once, and the drawing it asks for happens later, however
+  /// often it is called: at most one drawing of a view is in flight at a
+  /// time, and asks that arrive meanwhile are coalesced into it. A view
+  /// that has left the screen, or a `view` no open view answers to, asks
+  /// for nothing.
+  ask-to-render: func(view: u64);
+
+  /// Measure `text` as `style` names it, answering the width and height it
+  /// occupies: a canvas's drawing calls this while the view renders, so the
+  /// text it draws is laid out exactly, at the size and weight the tree's
+  /// text styles resolve to. `style` is JSON, the same properties a canvas
+  /// text operation names (`{"style": "title", "size": 13, "weight":
+  /// 500}`): a token style, a size in pixels, a weight from 100 to 900;
+  /// properties it does not know are ignored, as a tree's are. The height is
+  /// the style's line height, the width the longest line's. Pane answers
+  /// from the fonts the view is drawn with; calling this from a view that is
+  /// not open is fine, measuring nothing it changes. A synchronous, short
+  /// host call, answered at once.
+  measure-text: func(text: string, style: string) -> text-extent;
+}

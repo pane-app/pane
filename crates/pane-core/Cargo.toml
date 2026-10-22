@@ -1,0 +1,209 @@
+[package]
+name = "pane-core"
+version = "0.1.0"
+edition.workspace = true
+publish.workspace = true
+license.workspace = true
+rust-version.workspace = true
+# The test targets are listed at the end.
+autotests = false
+
+[dependencies]
+# How a package is built, once or on each save, and the process trees of
+# builds and system programs; shared with `pane-ext` (ADR 0047).
+pane-build = { path = "../pane-build" }
+pane-target = { path = "../pane-target" }
+serde.workspace = true
+serde_json.workspace = true
+# The local channel (#217) reads and writes its named pipe or socket by
+# lines (`io-util`, whose `bytes` is already in the tree).
+tokio = { workspace = true, features = ["io-util", "net", "rt", "sync", "time"] }
+unicase = "2.9"
+unicode-normalization = "0.1"
+wasmtime = { version = "=49.0.1", default-features = false, features = ["cache", "cranelift", "parallel-compilation", "runtime", "std", "async", "component-model", "component-model-async"] }
+wasmtime-wasi = { version = "=49.0.1", default-features = false, features = ["p3"] }
+# `wasi:http@0.3.0` for guests (an extension's `client.send`), sent by Pane's
+# own code (see `http`): the crate's default sender trusts a bundled root
+# list under a license (CDLA-Permissive-2.0) outside deny.toml, where Pane
+# trusts the system's certificates instead.
+wasmtime-wasi-http = { version = "=49.0.1", default-features = false, features = ["p3", "component-model-async"] }
+bytes = "1"
+http = "1"
+http-body = "1"
+http-body-util = "0.1"
+hyper = { version = "1", features = ["client", "http1"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
+rustls-native-certs = "0.8"
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12", "logging"] }
+# The native file watcher of development mode (inotify, FSEvents,
+# ReadDirectoryChangesW), which builds a local package on save.
+notify = "8.2"
+# Installing npm packages (#45): the gzipped tarball and its sha512
+# integrity, both already in the tree (image, Cranelift); the registry is
+# reached through `http` above.
+flate2.workspace = true
+tar.workspace = true
+sha2.workspace = true
+# Reading the zip of Pane's Windows package, which an application update
+# downloads (#54): its CRC32 check; already in the tree through `flate2`.
+crc32fast.workspace = true
+# Installing packages from Git repositories (#46): object ids are SHA-1,
+# computed with collision detection as Git itself does (RustCrypto, MIT OR
+# Apache-2.0); the pack's zlib streams are read with `flate2` above.
+sha1-checked = { version = "0.10", default-features = false }
+# Awaiting a scheduled run's answer on its own thread, off the window's
+# thread and the scheduler's (already in the tree through the `pane` crate).
+futures.workspace = true
+# The file index (#126, docs/files.md): each segment's term dictionary is a
+# finite state transducer (`fst`, BurntSushi, Unlicense OR MIT, no
+# dependencies of its own), read through a memory map of the segment file
+# (`memmap2`, MIT OR Apache-2.0, already in the tree). `.gitignore`,
+# `.ignore` and the global Git ignore file are matched as Git matches them
+# by ripgrep's `ignore` crate (Unlicense OR MIT), whose own dependencies
+# are already in the tree but for `globset`, of the same author and license.
+fst = "0.4"
+memmap2 = "0.9"
+ignore = "0.4"
+# The JSON Schema of `pane.json`, generated from the manifest types
+# themselves (see `schema`) so it cannot drift from what Pane reads (#224);
+# already in the dependency tree through GPUI CE, so it adds no package to
+# the lockfile.
+schemars = "1.2"
+# Decoding PNG images (MIT OR Apache-2.0, already in the tree through
+# GPUI's `image`): putting a kept clipboard image back as a bitmap
+# (`CF_DIB`) beside its PNG on Windows (#167), and cropping an
+# application's icon to its visible content on every system (#172).
+png = "0.18"
+# Transliterating root search's texts to ASCII before the query and the
+# results' titles, subtitles and keywords are compared, so accents and
+# scripts never stand between the user and a result (#193): `any_ascii`
+# (Hunter WB, ISC, on the license allow list, no dependencies), whose
+# table romanises every script (é to e, đ to d, ß to ss, ligatures split).
+any_ascii = "0.3"
+
+# Listing the Apps folder, reading what a shortcut opens (its target,
+# arguments and AppUserModelID property, through the shortcut interface and
+# a property store), the program an MSI-advertised shortcut installs (the
+# Windows Installer's functions), the known folders of the Desktops, and
+# opening a shortcut or packaged app as Explorer does, global hotkeys
+# (`RegisterHotKey`, and the `WH_KEYBOARD_LL` keyboard hook a refused
+# registration falls back to, with its raw-input watchdog, session and
+# power notifications, locked pages and priority), the system search path
+# in the registry, the elevation prompt (`ShellExecuteExW` with `runas`),
+# and the clipboard format listener of clipboard history (a message-only
+# window, the clipboard and its global memory). What the Run dialog runs
+# (#254) expands `%NAME%` in command lines, reads and writes the RunMRU
+# key of the history it shares with the Run dialog, and looks programs up
+# in App Paths; the selected text (#262) is read through UI Automation's
+# `IUIAutomation` from the focused element of the target's own thread
+# (`GetGUIThreadInfo`), its tree woken first with `WM_GETOBJECT`, and its
+# simulated copy reads the clipboard's sequence number; already in the
+# dependency tree through GPUI CE. The file index (#126) lists folders with
+# their file ids, reads the NTFS change journal without administrator rights
+# (`DeviceIoControl`, the journal's control codes) and runs its threads in
+# background mode with EcoQoS; its benchmark reads the process's private
+# memory (`ProcessStatus`). The applications' icons (#172) read a packaged
+# app's install folder through the package functions, a shortcut's icon
+# location and icon resources. The tray icon (#131) reads the taskbar's
+# theme and whether high contrast is on, and is made at the small-icon size
+# for its window's DPI. Local credentials and clipboard history are
+# encrypted on disk with DPAPI for the current user (#130). The session and
+# power commands (#255) end the session (`ExitWindowsEx`, which needs the
+# shutdown privilege), lock the screen (`LockWorkStation`) and ask the
+# power system what the computer can do, suspends and hibernates it
+# (`SetSuspendState`, `GetPwrCapabilities` of PowrProf). The volume and
+# microphone commands (#265) reach the audio endpoints through Core Audio
+# (`IMMDeviceEnumerator`, `IAudioEndpointVolume`), the open windows of
+# Switch Windows (#263) read the DWM cloak of a window and its taskbar
+# removal mark, and ask the shell's virtual desktop manager which desktop
+# it is on, and the Recycle Bin, appearance, hidden files and drives of
+# the remaining system commands (#266) reach the shell and the devices
+# (the bin, the Explorer settings, the ejection requests).
+[target.'cfg(windows)'.dependencies]
+windows = { workspace = true, features = ["Win32_Devices_Bluetooth", "Win32_Devices_DeviceAndDriverInstallation", "Win32_Devices_Display", "Win32_Foundation", "Win32_Graphics_Dwm", "Win32_Graphics_Gdi", "Win32_Media_Audio", "Win32_Media_Audio_Endpoints", "Win32_Security", "Win32_Security_Authorization", "Win32_Security_Cryptography", "Win32_Storage_FileSystem", "Win32_Storage_Packaging_Appx", "Win32_System_ApplicationInstallationAndServicing", "Win32_System_Com", "Win32_System_Com_StructuredStorage", "Win32_System_DataExchange", "Win32_System_Environment", "Win32_System_IO", "Win32_System_Ioctl", "Win32_System_LibraryLoader", "Win32_System_Memory", "Win32_System_Ole", "Win32_System_Power", "Win32_System_ProcessStatus", "Win32_System_Registry", "Win32_System_RemoteDesktop", "Win32_System_Shutdown", "Win32_System_Threading", "Win32_System_Variant", "Win32_System_WindowsProgramming", "Win32_UI_Accessibility", "Win32_UI_HiDpi", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_Shell", "Win32_UI_Shell_Common", "Win32_UI_Shell_PropertiesSystem", "Win32_UI_WindowsAndMessaging"] }
+
+# Global hotkeys on X11 (key grabs on the root window) and the X11
+# clipboard of clipboard history (XFIXES selection events, selection
+# transfers); already in the dependency tree through GPUI's X11 platform.
+# A guest's CPU clock and the file index's system calls; already in the
+# dependency tree.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+x11rb = { workspace = true, features = ["xkb", "xfixes"] }
+
+# Global hotkeys on macOS through Carbon's RegisterEventHotKey, which needs no
+# Accessibility permission. The menu-bar entry of the tray (#79): NSStatusItem
+# and its NSMenu (AppKit, as the pasteboard is), with the button it needs.
+[target.'cfg(target_os = "macos")'.dependencies]
+global-hotkey = "0.8"
+# The pasteboard of clipboard history on macOS (NSPasteboard's change count,
+# types, string and data, read inside an autorelease pool), and a command's
+# file copies and its trash (#145: NSURL, NSFileManager): pure Rust
+# bindings with no build script, already in the dependency tree through GPUI
+# CE's and global-hotkey's AppKit code. The system icon of a file or an
+# application (#142): NSWorkspace's icon, its images and their PNG. Copied
+# images and files in clipboard history (#167): a copy's pasteboard items
+# (every file URL), and a TIFF made into a PNG and back. The menu bar
+# item's template image (#131): its size (NSSize, NSGeometry's with
+# objc2-core-foundation's CGSize).
+objc2.workspace = true
+objc2-app-kit = { version = "0.3", default-features = false, features = ["NSControl", "NSMenu", "NSMenuItem", "NSPasteboard", "NSPasteboardItem", "NSResponder", "NSStatusBar", "NSStatusBarButton", "NSStatusItem", "NSView", "NSButton", "NSWorkspace", "NSImage", "NSImageRep", "NSBitmapImageRep", "objc2-core-foundation"] }
+objc2-foundation = { version = "0.3", default-features = false, features = ["NSArray", "NSData", "NSDictionary", "NSError", "NSFileManager", "NSGeometry", "NSString", "NSURL", "objc2-core-foundation", "std"] }
+# The file index's change source (#175): an FSEvents stream opened from a
+# saved event id, so that FSEvents replays what changed while Pane was not
+# running and then reports live changes (MIT, already in the tree through
+# `notify`'s FSEvents backend).
+fsevent-sys = "4.1"
+
+[dev-dependencies]
+tempfile.workspace = true
+# The tests build JavaScript and TypeScript packages with the componentizer
+# linked in (the `PANE_TEST_JS_BUILDS` gate is gone; Node.js and npm alone
+# build them now, #218).
+pane-build = { path = "../pane-build", features = ["componentizer"] }
+
+# The opt-in real-input hotkey adapter test injects keys with `SendInput`
+# and reaches the hook behind the adapter's back; the Windows half of the
+# workspace's `windows` crate serves it, already in the tree.
+[target.'cfg(windows)'.dev-dependencies]
+windows = { workspace = true, features = ["Win32_Foundation", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_WindowsAndMessaging"] }
+
+# The integration tests are one binary, whose `tests/main.rs` declares each
+# file: a binary per file meant a link, and a debug file, for each of them.
+[[test]]
+name = "integration"
+path = "tests/main.rs"
+
+# The adapters against the real clipboard and hotkeys keep a process of their
+# own, apart from the tests running beside them, as CI runs them on their own.
+[[test]]
+name = "clipboard_adapter"
+path = "tests/clipboard_adapter.rs"
+
+[[test]]
+name = "clipboard_adapter_linux"
+path = "tests/clipboard_adapter_linux.rs"
+
+[[test]]
+name = "clipboard_adapter_macos"
+path = "tests/clipboard_adapter_macos.rs"
+
+[[test]]
+name = "hotkey_adapters"
+path = "tests/hotkey_adapters.rs"
+
+# The containment of a system program's processes (a Job Object, a process
+# group) against the real system.
+[[test]]
+name = "program_adapters"
+path = "tests/program_adapters.rs"
+
+# The file index's benchmark (#174), run by `cargo xtask file-index-bench`
+# in release: it is a program, not a test, and runs on demand. CI runs it
+# over a reduced tree as a regression guard (`cargo xtask
+# file-index-guard`, #183), as the tests build it.
+[[example]]
+name = "file_index_bench"
+path = "examples/file_index_bench.rs"

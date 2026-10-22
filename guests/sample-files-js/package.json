@@ -1,0 +1,19 @@
+{
+  "name": "pane-sample-files-js",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Pane's files sample in JavaScript: finds and opens files through Pane's file index",
+  "license": "Apache-2.0 OR MIT",
+  "type": "module",
+  "main": "src/index.js",
+  "pane": {
+    "rootResults": true,
+    "fileIndex": true,
+    "typedFolder": true
+  },
+  "devDependencies": {
+    "@pane-app/extension": "file:../js",
+    "esbuild": "0.28.2",
+    "typescript": "7.0.2"
+  }
+}

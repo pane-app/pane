@@ -1,0 +1,514 @@
+{
+  "kind": "pane-visual-fixture-manifest",
+  "scenario": {
+    "name": "launcher-frame-narrow",
+    "description": "A narrow launcher: the keys select the last row, which the list scrolls into view above the footer (no reference counterpart)",
+    "family": "root",
+    "client": [
+      480.0,
+      360.0
+    ],
+    "reference": false,
+    "frame": true,
+    "steps": [
+      {
+        "action": "capture",
+        "name": "narrow-rest"
+      },
+      {
+        "action": "key",
+        "key": "down"
+      },
+      {
+        "action": "key",
+        "key": "down"
+      },
+      {
+        "action": "key",
+        "key": "down"
+      },
+      {
+        "action": "key",
+        "key": "down"
+      },
+      {
+        "action": "key",
+        "key": "down"
+      },
+      {
+        "action": "key",
+        "key": "down"
+      },
+      {
+        "action": "key",
+        "key": "down"
+      },
+      {
+        "action": "capture",
+        "name": "narrow-last-selected"
+      }
+    ]
+  },
+  "perturbation": null,
+  "material": "opaque",
+  "appearance": "dark",
+  "window": {
+    "bounds": [
+      720.0,
+      356.0,
+      480.0,
+      360.0
+    ],
+    "viewport": [
+      480.0,
+      360.0
+    ],
+    "scaleFactor": 1.0
+  },
+  "declared": {
+    "geometry": {
+      "searchHeight": 64.0,
+      "searchPaddingX": 20.0,
+      "searchGap": 14.0,
+      "searchSize": 19.0,
+      "rowMinHeight": 44.0,
+      "rowRadius": 10.0,
+      "rowPaddingX": 10.0,
+      "rowGap": 12.0,
+      "rowListGap": 2.0,
+      "rowTitleSize": 14.0,
+      "rowSubtitleSize": 13.0,
+      "listPaddingTop": 4.0,
+      "listPaddingBottom": 10.0,
+      "listPaddingX": 10.0,
+      "tileSize": 28.0,
+      "tileRadius": 7.0,
+      "footerHeight": 50.0,
+      "footerPaddingLeft": 16.0,
+      "footerPaddingRight": 8.0,
+      "actionHeight": 28.0,
+      "actionRadius": 7.0,
+      "actionPaddingX": 10.0,
+      "actionGap": 8.0,
+      "keycapHeight": 20.0,
+      "keycapRadius": 5.0,
+      "keycapPaddingX": 5.0,
+      "keycapGlyphSize": 12.0
+    },
+    "colors": {
+      "panelSolid": "#16171AFF",
+      "panelTopHighlight": "#FFFFFF1A",
+      "rowHover": "#FFFFFF09",
+      "rowSelected": "#FFFFFF16",
+      "rowSelectedBorder": "#FFFFFF0D",
+      "footerTint": "#00000024",
+      "hairline": "#FFFFFF13",
+      "hairlineSoft": "#FFFFFF0F",
+      "tileBackground": "#FFFFFF14",
+      "tileForeground": "#E9E9ECFF",
+      "textTitle": "#EDEDEFFF",
+      "textMuted": "#8E8F94FF",
+      "textQuery": "#F3F3F5FF",
+      "textPlaceholder": "#86878CFF"
+    }
+  },
+  "searchHeader": {
+    "x": 0.0,
+    "y": 0.0,
+    "width": 480.0,
+    "height": 64.0
+  },
+  "list": {
+    "x": 0.0,
+    "y": 64.0,
+    "width": 480.0,
+    "height": 246.0
+  },
+  "footer": {
+    "x": 0.0,
+    "y": 310.0,
+    "width": 480.0,
+    "height": 50.0
+  },
+  "captures": [
+    {
+      "name": "narrow-rest",
+      "after": [],
+      "query": "",
+      "pointer": null,
+      "rows": [
+        {
+          "title": "Figma",
+          "subtitle": null,
+          "unavailable": null,
+          "selected": true,
+          "hovered": false,
+          "rect": {
+            "x": 10.0,
+            "y": 68.0,
+            "width": 460.0,
+            "height": 44.0
+          },
+          "heightIsFloor": false,
+          "visible": true
+        },
+        {
+          "title": "Clipboard History",
+          "subtitle": "Clipboard",
+          "unavailable": null,
+          "selected": false,
+          "hovered": false,
+          "rect": {
+            "x": 10.0,
+            "y": 114.0,
+            "width": 460.0,
+            "height": 44.0
+          },
+          "heightIsFloor": false,
+          "visible": true
+        },
+        {
+          "title": "Left Half",
+          "subtitle": "Window Manager",
+          "unavailable": null,
+          "selected": false,
+          "hovered": false,
+          "rect": {
+            "x": 10.0,
+            "y": 160.0,
+            "width": 460.0,
+            "height": 44.0
+          },
+          "heightIsFloor": false,
+          "visible": true
+        },
+        {
+          "title": "Search Files",
+          "subtitle": "Files",
+          "unavailable": null,
+          "selected": false,
+          "hovered": false,
+          "rect": {
+            "x": 10.0,
+            "y": 206.0,
+            "width": 460.0,
+            "height": 44.0
+          },
+          "heightIsFloor": false,
+          "visible": true
+        },
+        {
+          "title": "Plugin Store",
+          "subtitle": "Pane",
+          "unavailable": null,
+          "selected": false,
+          "hovered": false,
+          "rect": {
+            "x": 10.0,
+            "y": 252.0,
+            "width": 460.0,
+            "height": 44.0
+          },
+          "heightIsFloor": false,
+          "visible": true
+        },
+        {
+          "title": "Toggle Dark Mode",
+          "subtitle": "System",
+          "unavailable": null,
+          "selected": false,
+          "hovered": false,
+          "rect": {
+            "x": 10.0,
+            "y": 298.0,
+            "width": 460.0,
+            "height": 44.0
+          },
+          "heightIsFloor": false,
+          "visible": false
+        },
+        {
+          "title": "Lock Screen",
+          "subtitle": "System",
+          "unavailable": null,
+          "selected": false,
+          "hovered": false,
+          "rect": {
+            "x": 10.0,
+            "y": 344.0,
+            "width": 460.0,
+            "height": 44.0
+          },
+          "heightIsFloor": false,
+          "visible": false
+        },
+        {
+          "title": "Settings",
+          "subtitle": "Pane",
+          "unavailable": null,
+          "selected": false,
+          "hovered": false,
+          "rect": {
+            "x": 10.0,
+            "y": 390.0,
+            "width": 460.0,
+            "height": 44.0
+          },
+          "heightIsFloor": false,
+          "visible": false
+        }
+      ],
+      "action": "Open Application",
+      "actionButton": {
+        "x": 319.6875,
+        "y": 321.5,
+        "width": 152.31248,
+        "height": 28.0
+      }
+    },
+    {
+      "name": "narrow-last-selected",
+      "after": [
+        {
+          "action": "key",
+          "key": "down"
+        },
+        {
+          "action": "key",
+          "key": "down"
+        },
+        {
+          "action": "key",
+          "key": "down"
+        },
+        {
+          "action": "key",
+          "key": "down"
+        },
+        {
+          "action": "key",
+          "key": "down"
+        },
+        {
+          "action": "key",
+          "key": "down"
+        },
+        {
+          "action": "key",
+          "key": "down"
+        }
+      ],
+      "query": "",
+      "pointer": null,
+      "rows": [
+        {
+          "title": "Figma",
+          "subtitle": null,
+          "unavailable": null,
+          "selected": false,
+          "hovered": false,
+          "rect": {
+            "x": 10.0,
+            "y": -56.0,
+            "width": 460.0,
+            "height": 44.0
+          },
+          "heightIsFloor": false,
+          "visible": false
+        },
+        {
+          "title": "Clipboard History",
+          "subtitle": "Clipboard",
+          "unavailable": null,
+          "selected": false,
+          "hovered": false,
+          "rect": {
+            "x": 10.0,
+            "y": -10.0,
+            "width": 460.0,
+            "height": 44.0
+          },
+          "heightIsFloor": false,
+          "visible": false
+        },
+        {
+          "title": "Left Half",
+          "subtitle": "Window Manager",
+          "unavailable": null,
+          "selected": false,
+          "hovered": false,
+          "rect": {
+            "x": 10.0,
+            "y": 36.0,
+            "width": 460.0,
+            "height": 44.0
+          },
+          "heightIsFloor": false,
+          "visible": false
+        },
+        {
+          "title": "Search Files",
+          "subtitle": "Files",
+          "unavailable": null,
+          "selected": false,
+          "hovered": false,
+          "rect": {
+            "x": 10.0,
+            "y": 82.0,
+            "width": 460.0,
+            "height": 44.0
+          },
+          "heightIsFloor": false,
+          "visible": true
+        },
+        {
+          "title": "Plugin Store",
+          "subtitle": "Pane",
+          "unavailable": null,
+          "selected": false,
+          "hovered": false,
+          "rect": {
+            "x": 10.0,
+            "y": 128.0,
+            "width": 460.0,
+            "height": 44.0
+          },
+          "heightIsFloor": false,
+          "visible": true
+        },
+        {
+          "title": "Toggle Dark Mode",
+          "subtitle": "System",
+          "unavailable": null,
+          "selected": false,
+          "hovered": false,
+          "rect": {
+            "x": 10.0,
+            "y": 174.0,
+            "width": 460.0,
+            "height": 44.0
+          },
+          "heightIsFloor": false,
+          "visible": true
+        },
+        {
+          "title": "Lock Screen",
+          "subtitle": "System",
+          "unavailable": null,
+          "selected": false,
+          "hovered": false,
+          "rect": {
+            "x": 10.0,
+            "y": 220.0,
+            "width": 460.0,
+            "height": 44.0
+          },
+          "heightIsFloor": false,
+          "visible": true
+        },
+        {
+          "title": "Settings",
+          "subtitle": "Pane",
+          "unavailable": null,
+          "selected": true,
+          "hovered": false,
+          "rect": {
+            "x": 10.0,
+            "y": 266.0,
+            "width": 460.0,
+            "height": 44.0
+          },
+          "heightIsFloor": false,
+          "visible": true
+        }
+      ],
+      "action": "Run Command",
+      "actionButton": {
+        "x": 335.3125,
+        "y": 321.5,
+        "width": 136.6875,
+        "height": 28.0
+      }
+    }
+  ],
+  "steps": [
+    {
+      "action": "capture",
+      "name": "narrow-rest"
+    },
+    {
+      "action": "key",
+      "key": "down"
+    },
+    {
+      "action": "key",
+      "key": "down"
+    },
+    {
+      "action": "key",
+      "key": "down"
+    },
+    {
+      "action": "key",
+      "key": "down"
+    },
+    {
+      "action": "key",
+      "key": "down"
+    },
+    {
+      "action": "key",
+      "key": "down"
+    },
+    {
+      "action": "key",
+      "key": "down"
+    },
+    {
+      "action": "capture",
+      "name": "narrow-last-selected"
+    }
+  ],
+  "keycaps": [
+    {
+      "binding": "invoke",
+      "group": "footer-primary",
+      "label": "Enter",
+      "glyph": true,
+      "labelWidth": 12.0,
+      "rect": {
+        "x": 440.0,
+        "y": 325.5,
+        "width": 22.0,
+        "height": 20.0
+      }
+    }
+  ],
+  "fonts": [
+    {
+      "file": "Geist-Regular.ttf",
+      "bytes": 126048,
+      "sha256": "5C8968EAFB98A4C4F47033DAF29E38E284A6F2A82EB017D171AB040FE7C4B615"
+    },
+    {
+      "file": "Geist-Medium.ttf",
+      "bytes": 127660,
+      "sha256": "0090E004725F6F64B841715B4167920580F883FCF9B67FC6D744089103FEC101"
+    },
+    {
+      "file": "Geist-SemiBold.ttf",
+      "bytes": 127872,
+      "sha256": "612EC98DF33935354F39E81E54101656961AB6E5549F64B63EB57868BA7BAB8D"
+    },
+    {
+      "file": "GeistMono-Regular.ttf",
+      "bytes": 148516,
+      "sha256": "42D8AD2E610238E64E8ABFCDE3037C63F7850A73928742B7AB7229D897BCB155"
+    },
+    {
+      "file": "GeistMono-Medium.ttf",
+      "bytes": 149328,
+      "sha256": "90B15711DC3779B2E64E8AFF5228154DD019A90BCE4947549C4A8A8A43F2AC25"
+    }
+  ]
+}

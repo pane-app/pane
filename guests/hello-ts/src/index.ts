@@ -1,0 +1,33 @@
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+//
+// A minimal TypeScript command to develop with Pane's development mode:
+// build it once, install this folder, choose "Develop" in the Actions menu
+// of Hello TypeScript's page in Settings, then edit GREETING and save. Pane type-checks and
+// builds the package with tools/componentize-js/pane_js.py and reloads it
+// while it keeps running; "Say hello" then shows the new text in a toast.
+// See guests/README.md.
+import type { Command } from "@pane-app/extension";
+import { showToast } from "@pane-app/extension/feedback";
+
+/** What "Say hello" shows in a toast. */
+const GREETING: string = "Hello from TypeScript";
+
+export const command: Command = {
+  async render() {
+    return {
+      title: "Hello",
+      items: [
+        {
+          id: "hello",
+          title: "Say hello",
+          onAction: async () => {
+            showToast({ title: GREETING });
+          },
+        },
+      ],
+    };
+  },
+  async openView() {
+    throw new Error("this command opens no designed view");
+  },
+};

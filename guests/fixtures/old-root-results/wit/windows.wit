@@ -1,0 +1,115 @@
+package pane:extension@0.1.0;
+
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+//
+// The open windows (the Windows power features' Switch Windows, #125,
+// ADR 0040): the windows Windows' own Alt+Tab would show, which any
+// extension may list and bring one of to the front, as it opens
+// installed applications (ADR 0015), whatever its mode. Which windows
+// count is what Alt+Tab shows: visible, unowned top-level windows that
+// are not "no activate", not tool windows unless forced onto the
+// taskbar, not removed from the taskbar by their application, not a
+// Store app's inner core window (its frame is kept), not the shell's
+// desktop windows; windows the application cloaks are dropped, and ones
+// the shell cloaks because they are on another virtual desktop are kept
+// only when the user's Alt+Tab setting shows all desktops, marked as
+// elsewhere. Each is listed with its title and the application it
+// belongs to — its name and icon, resolved best-effort through the
+// window's own AppUserModelID first (which separates web apps from
+// their browser and finds Store apps hosted by the frame process), then
+// its program's path, then its process's package identity — in z-order
+// with the front application's window first, so switching back is one
+// keystroke. Bringing one to the front restores it if it is minimized,
+// then follows the path pasting does: the plain foreground call, then
+// attaching to the foreground thread's input and trying again. Windows
+// only: elsewhere every call answers `not-available`, which is never a
+// reason to pause the extension. Rust commands use them through
+// pane-extension (`pane_extension::windows`), and JavaScript and
+// TypeScript ones whose package.json sets `"pane": { "windows": true }`
+// import them (guests/js/windows.d.ts).
+// The header follows `package`: comments above it would document the
+// package, which extension.wit already does.
+
+/// The open windows, as a command reaches them through Pane.
+interface windows {
+  /// One window Alt+Tab would show, as it is listed.
+  record window {
+    /// Identifies the window for this session alone: opaque (a command
+    /// must not parse it), valid while the session runs, and names the
+    /// window to `activate`. A window that closed is gone, and another
+    /// may have taken its place: activating the id then reaches that
+    /// one, or answers that no window it names is left.
+    id: string,
+    /// The window's title, as the system shows it ("notes.txt -
+    /// Notepad").
+    title: string,
+    /// The name of the application the window belongs to, as the system
+    /// shows it ("Notepad", "Google Chrome"), best-effort: the
+    /// application installed on the system the window resolves to, or
+    /// one named for the window itself where none matches.
+    application-name: string,
+    /// What the application's icon is the system's icon of: its
+    /// program's path, or a Windows `shell:AppsFolder` name, as a file
+    /// icon names one. `none` when nothing of the application is known.
+    icon: option<string>,
+    /// Whether the window is minimized.
+    minimized: bool,
+    /// Whether the window is maximized.
+    maximized: bool,
+    /// Whether the window is on another virtual desktop than the one
+    /// shown: it was kept only because the user's Alt+Tab shows all
+    /// desktops, and activating it is as Windows activates it from
+    /// Alt+Tab.
+    elsewhere: bool,
+    /// Whether the window's process is running as administrator, as far
+    /// as Pane can tell: bringing it to the front may still fail, and
+    /// window actions on it (a later slice) will say they cannot reach
+    /// it.
+    elevated: bool,
+  }
+
+  /// Why a call did not answer. `not-available` says the windows are
+  /// Windows-only and this Pane may reach none at all: nothing went
+  /// wrong, and the command can do something else. `failed` says why a
+  /// listing or an activation did not happen, for the user — a window
+  /// gone, or one that did not come to the front.
+  variant windows-error {
+    not-available(string),
+    failed(string),
+  }
+
+  /// The windows Alt+Tab would show, in z-order with the front
+  /// application's window first: the application the user was in before
+  /// Pane, then the rest by how recently they were in front. A window
+  /// the application cloaked, one of the shell's own, and one on
+  /// another virtual desktop while the user's Alt+Tab filters to the
+  /// desktop shown are not listed; one on another desktop otherwise is,
+  /// marked as `elsewhere`.
+  list-windows: func() -> result<list<window>, windows-error>;
+
+  /// Brings the window `id` names to the front, restoring it first if
+  /// it is minimized, as pasting brings its target forward: the plain
+  /// foreground call, then attaching to the foreground thread's input
+  /// and trying again. A window on another virtual desktop is activated
+  /// as Windows activates it from Alt+Tab. An id no window of this
+  /// session names, or one whose window closed since it was listed, is
+  /// a failure saying so; nothing else changed.
+  activate: func(id: string) -> result<_, windows-error>;
+}
+
+/// The windows import alone, for guest bindings.
+world windows-user {
+  import windows;
+}
+
+/// The world Pane hosts: a command that may also use extension data, call
+/// operations, find and open installed applications, run its native
+/// helpers and system programs, list the folder granted to its package,
+/// keep clipboard history, search the file index, run what the Run dialog
+/// runs, lock, log out, restart, shut down, sleep, hibernate or turn off
+/// the displays of the computer, and list the open windows, bringing one
+/// of them to the front (wit/windows.wit).
+world extension-with-windows {
+  include extension-with-system-commands;
+  import windows;
+}

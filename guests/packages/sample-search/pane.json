@@ -1,0 +1,24 @@
+{
+  "manifestVersion": 1,
+  "title": "Search sample",
+  "version": "0.1.0",
+  "apiVersion": "0.2",
+  "commands": [
+    {
+      "id": "packages",
+      "title": "Package search",
+      "subtitle": "Searches the fixture package registry as you type",
+      "component": "sample_search.wasm",
+      "mode": "designed"
+    }
+  ],
+  "preferences": [
+    {
+      "name": "service",
+      "type": "text",
+      "title": "Service address",
+      "description": "The address of the package registry the sample searches; the sample's own Service address view writes it.",
+      "placeholder": "http://127.0.0.1:8740"
+    }
+  ]
+}

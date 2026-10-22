@@ -1,0 +1,165 @@
+name: CI (branch)
+
+# The branch tier of CI: every push to a working branch that is not main
+# and not a pi-subagent worktree (those take ci-fast.yml), and every pull
+# request from a fork (whose pushes run no workflow here). Linux runs the
+# full check leg of the release matrix: the lints (`cargo xtask
+# ci-lints`: formatting, the prebuilt JS/TS samples, clippy) beside the
+# tests, split into three shards that run at once (`cargo xtask ci-tests
+# --partition hash:N/3`, under cargo-nextest, which retries a flaky
+# failure instead of failing the run for it), so a push's wall time is
+# the slowest shard's; shard 2 then runs the file index's regression
+# guard (`cargo xtask file-index-guard`). Windows and macOS run the same
+# lints, which type-check and lint the code only they compile (the
+# cfg-gating class of error) in minutes: one full test run per push is
+# the verification an iterating branch needs, and the full suite on every
+# operating system runs at ci-fast.yml's verify tier and in ci.yml's
+# release matrix. A push that changes only documentation runs nothing but
+# the summary. docs/agents/ci.md describes the tiers.
+on:
+  push:
+    branches-ignore:
+      - main
+      - "pi-subagent/**"
+  # A pull request from this repository's own branches is already
+  # verified by its branch's push run; the gate job skips the rest.
+  pull_request:
+
+# As in ci.yml: one run per branch, a superseded run cancelled.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  # The paths filter reads a pull request's files through the API.
+  pull-requests: read
+
+jobs:
+  # Whether this run verifies anything: not for a pull request from this
+  # repository (its push run does), and not for a push that changes only
+  # documentation. A push is compared with its branch's merge base with
+  # main, not with the push before it: that run may have been cancelled
+  # as superseded, so the newest run must answer for the whole branch.
+  changes:
+    name: What changed
+    runs-on: ubuntu-24.04
+    outputs:
+      verify: ${{ steps.decide.outputs.verify }}
+    steps:
+      - uses: actions/checkout@v4
+        if: github.event_name == 'push'
+        with:
+          fetch-depth: 50
+      - uses: dorny/paths-filter@v3
+        id: filter
+        if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name != github.repository
+        with:
+          base: main
+          # A file counts unless it is documentation: under docs/, or a
+          # Markdown file at the top of the repository. Everything else
+          # (code, guests, tools, workflows, a crate added later) counts
+          # without this list changing.
+          predicate-quantifier: every
+          filters: |
+            code:
+              - '**'
+              - '!docs/**'
+              - '!*.md'
+      - name: Decide
+        id: decide
+        run: echo "verify=${{ steps.filter.outputs.code == 'true' }}" >> "$GITHUB_OUTPUT"
+
+  lints:
+    name: Lints (${{ matrix.os }})
+    needs: changes
+    if: needs.changes.outputs.verify == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2025, macos-15]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The WIT guard in `ci-lints` walks the repository's history
+          # to find the released extension API (#319).
+          fetch-depth: 0
+      - uses: ./.github/actions/setup
+      # Clippy, not a plain `cargo check`, on Windows and macOS too: a
+      # macOS-only lint (a collapsible `if` in tray/macos.rs) once passed
+      # every branch run's `cargo check` and failed main's release matrix
+      # (run 37182486287).
+      - name: Check formatting, prebuilt samples and lints
+        run: cargo xtask ci-lints
+
+  tests:
+    name: Tests (${{ matrix.os }}, ${{ matrix.shard }})
+    needs: changes
+    if: needs.changes.outputs.verify == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04]
+        # nextest's hash partition: each test lands in one shard by its
+        # name, so a test added later needs no list kept up to date. Each
+        # shard builds the tests itself from the cache main saved: the
+        # builds run at once, where building once and passing an archive
+        # of the test binaries on would put its upload and download on the
+        # critical path.
+        shard: [1/3, 2/3, 3/3]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+        with:
+          tests: true
+      # Development mode's JavaScript and TypeScript builds (#218) run with
+      # the componentizer linked in, un-gated: Node.js and npm alone build
+      # them, and the setup action installs neither.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Build guests and run this shard of the tests
+        run: cargo xtask ci-tests --partition hash:${{ matrix.shard }}
+      # The Linux (X11) clipboard adapter's test replaces what is on the
+      # clipboard and needs a display to watch: opted in and run under
+      # Xvfb here, in one shard, reusing its build (the shards run it
+      # without a display, where it skips itself).
+      - name: Run the Linux clipboard adapter test (Xvfb)
+        if: runner.os == 'Linux' && matrix.shard == '1/3'
+        run: xvfb-run -a cargo nextest run --locked --workspace --retries 2 -E 'binary(clipboard_adapter_linux)'
+        env:
+          PANE_TEST_REAL_CLIPBOARD: "1"
+      # The file index's regression guard (#183): its benchmark over a
+      # reduced generated tree (about 20,000 entries), built in the
+      # development profile as the tests built it, failing when a measure
+      # (first index, index size, each kind of query's 95th percentile on
+      # one segment and on several, a changed file re-indexed) is over its
+      # generous ceiling. In shard 2, after its tests, reusing their build
+      # (shard 1 already runs the Xvfb step).
+      - name: Run the file index's regression guard
+        if: runner.os == 'Linux' && matrix.shard == '2/3'
+        run: cargo xtask file-index-guard
+
+  # The one check to require: green when every job above passed or was
+  # skipped, red when one failed or was cancelled, so jobs and shards may
+  # change without the branch protection changing with them. A job added
+  # to this workflow is added to `needs`.
+  passed:
+    # A same-repository pull request's run verifies nothing (its push run
+    # does), so its summary takes another name and never stands in for
+    # the push run's.
+    name: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) && 'CI passed (see the push run)' || 'CI passed' }}
+    if: always()
+    needs: [changes, lints, tests]
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Every job passed or was skipped
+        run: |
+          for result in ${{ join(needs.*.result, ' ') }}; do
+            case "$result" in
+              success|skipped) ;;
+              *) echo "A job ended with: $result"; exit 1 ;;
+            esac
+          done

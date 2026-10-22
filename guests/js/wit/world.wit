@@ -1,0 +1,51 @@
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+//
+// The world JS/TS commands are componentized against. It exports exactly
+// Pane's contract and imports launching commands, the window and feedback
+// functions (wit/feedback.wit), the system functions (wit/system.wit:
+// the clipboard, opening, revealing, recycling), a designed view asking to
+// be drawn again (wit/view.wit, #243), its extension data, its
+// package's preferences, operations and installed applications
+// (wit/extension.wit, wit/commands.wit, wit/data.wit, wit/preferences.wit,
+// wit/operations.wit and wit/applications.wit, copied into deps/ by the
+// build), its native helpers
+// (wit/helpers.wit), and declares the
+// WASI 0.3 imports JS source may use: a JS module can import only what this
+// world declares. WASI's own WIT (wit/deps: clocks, and `wasi:http` for web
+// requests, with the packages it names) is copied into deps/ too. The host
+// bindings are unchanged. `wasi:http`'s client is imported only by a command
+// whose bundle uses it (itself or through `@pane-app/extension/http`): the build
+// adds it to `js-command`, so a command that makes no web requests does not
+// import it, and Pane does not list it as using the network. Pane's system
+// programs (wit/programs.wit) are added the same way, only for a command
+// whose bundle uses them (itself or through `@pane-app/extension/programs`),
+// and so are the session and power commands (wit/system-commands.wit), only
+// for a command whose bundle uses them (itself or through
+// `@pane-app/extension/system-commands`).
+//
+// A command whose package.json sets `"pane": { ... }` options also exports
+// the interfaces they name: `rootResults` (wit/root-results.wit),
+// `indexedResults` (wit/applications.wit), `operations`
+// (wit/operations.wit), `service` (wit/service.wit), `events`
+// (wit/registrations.wit) and `activate` or `snapshot` (the lifecycle
+// interface of wit/registrations.wit: the activation entry point, and the
+// state handoff of ADR 0041); `files` makes it import the granted folder's listing
+// (wit/files.wit), `fileIndex` the file index Pane keeps (wit/file-index.wit),
+// `typedFolder` the entries of a folder the user typed (wit/typed-folder.wit)
+// and `clipboardHistory` the clipboard history Pane keeps
+// for it (wit/clipboard.wit), which no other command imports, `run`
+// what Windows' Run dialog runs, sharing its history and completing the
+// command line as it is typed (wit/run.wit), `windows` the open windows
+// it may list and bring one of to the front (wit/windows.wit), Windows
+// only. The build
+// writes a world
+// `js-command` including this one with those exports and imports
+// (tools/componentize-js/pane_js.py).
+package pane:js-guest@0.2.0;
+
+world js-extension {
+  include pane:extension/extension-with-data@0.2.0;
+  import pane:extension/applications@0.2.0;
+  import pane:extension/helpers@0.2.0;
+  import wasi:clocks/monotonic-clock@0.3.0;
+}

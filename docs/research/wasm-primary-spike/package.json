@@ -1,0 +1,7 @@
+{
+  "dependencies": {
+    "@bytecodealliance/componentize-js": "0.23.0",
+    "componentize-qjs": "0.4.5",
+    "esbuild": "0.28.2"
+  }
+}

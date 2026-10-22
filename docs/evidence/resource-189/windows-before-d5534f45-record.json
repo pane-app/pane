@@ -1,0 +1,39 @@
+{
+    "format":  1,
+    "script":  "measure-windows.ps1",
+    "date":  "2026-10-09T20:42:01.7449674+07:00",
+    "os":  "Microsoft Windows NT 10.0.26200.0",
+    "windowsBuild":  {
+                         "DisplayVersion":  "25H2",
+                         "CurrentBuild":  "26200",
+                         "UBR":  8737
+                     },
+    "architecture":  "AMD64",
+    "processors":  16,
+    "pane":  {
+                 "path":  "C:\\Users\\ADMIN\\AppData\\Local\\Temp\\pane-measure-before\\target\\debug\\pane.exe",
+                 "bytes":  107337728,
+                 "sha256":  "90D8DAE0DD2767C3B4FA3DD98EFE0A866E9D005F239687A8BCEB3E2614E2CEF6",
+                 "profile":  "debug"
+             },
+    "commit":  "d5534f450d4db1ee110d08d7c7ed45befb5cd8c1",
+    "workload":  {
+                     "hiddenSeconds":  60,
+                     "settleSeconds":  30,
+                     "sampleSeconds":  1,
+                     "setupSeconds":  600,
+                     "defaultExtensions":  [
+                                               "calculator",
+                                               "applications",
+                                               "quicklinks",
+                                               "files",
+                                               "clipboard-history"
+                                           ]
+                 },
+    "counted":  "context switches of each thread (SYSTEM_THREAD_INFORMATION.ContextSwitches); CPU in 100 ns; rss_kb is the working set",
+    "otherPaneProcesses":  0,
+    "loginRegistered":  false,
+    "loginRegistrationRestored":  false,
+    "hiddenBy":  "posted Escape",
+    "scratchKept":  false
+}

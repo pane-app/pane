@@ -1,0 +1,6 @@
+{
+  "exit_code": 1,
+  "seconds": 16.07799999997951,
+  "stdout": "",
+  "stderr": "Error: error while executing at wasm backtrace:\n    0: 0x682139 - libc.so!dlfree\n    1: 0x681ec9 - libc.so!free\n    2: 0x886ba4 - componentize_qjs_runtime.wasm!wit_dylib_export_async_callback\n    3: 0x961a90 - <unknown>![callback][async-lift]query\n    4: 0x969541 - <unknown>!<wasm function 277>\n\nCaused by:\n    0: memory fault at wasm address 0xdb53adc4 in linear memory of size 0x760000\n    1: wasm trap: out of bounds memory access\n\n"
+}

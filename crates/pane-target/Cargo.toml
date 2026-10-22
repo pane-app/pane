@@ -1,0 +1,10 @@
+# The operating systems and processors Pane and native helpers name: shared
+# by Pane's core, xtask and the helper sample's native helper, which is an
+# author example, hence the permissive license.
+[package]
+name = "pane-target"
+version = "0.1.0"
+edition.workspace = true
+publish.workspace = true
+rust-version.workspace = true
+license = "Apache-2.0 OR MIT"

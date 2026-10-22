@@ -1,0 +1,108 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/pane",
+    "crates/pane-build",
+    "crates/pane-core",
+    "crates/pane-ext",
+    "crates/pane-target",
+    "tools/componentize-js/componentize-qjs/crates/core",
+    "xtask",
+]
+# Guests target WebAssembly and form their own workspace, as does the
+# vendored componentize-qjs's runtime crate (built only for wasm32-wasip3
+# with a pinned nightly and wasi-sdk, by `cargo xtask wasm-parts`; nothing in
+# this workspace compiles it).
+exclude = ["guests", "tools/componentize-js/componentize-qjs/crates/runtime"]
+
+[workspace.package]
+edition = "2024"
+publish = false
+rust-version = "1.98"
+license = "GPL-3.0-or-later"
+
+# Crates more than one member declares, at one version and with the
+# features every member needs; a member adds its own features on top.
+[workspace.dependencies]
+crc32fast = "1"
+flate2 = "1"
+futures = { version = "0.3", default-features = false, features = ["executor"] }
+objc2 = "0.6"
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["unbounded_depth"] }
+sha2 = "0.10"
+tar = { version = "0.4.44", default-features = false }
+tempfile = "3"
+tokio = "1"
+windows = "0.62"
+x11rb = "0.13"
+
+# Full debug info made every test binary's Windows debug file (.pdb) close to
+# 1 GB, and the target directory over 100 GB. Line tables keep file and line
+# in panics and backtraces; a debugger session that needs local variables can
+# build with CARGO_PROFILE_DEV_DEBUG=full.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false
+
+# Extension components are compiled by Cranelift at run time. Unoptimized,
+# Cranelift takes over 10 s for a 4 MB JavaScript component in tests and
+# `cargo run`; optimizing the compiler crates brings that near release speed.
+[profile.dev.package.cranelift-assembler-x64]
+opt-level = 3
+
+[profile.dev.package.cranelift-bforest]
+opt-level = 3
+
+[profile.dev.package.cranelift-codegen]
+opt-level = 3
+
+[profile.dev.package.cranelift-entity]
+opt-level = 3
+
+[profile.dev.package.cranelift-frontend]
+opt-level = 3
+
+[profile.dev.package.regalloc2]
+opt-level = 3
+
+[profile.dev.package.wasmparser]
+opt-level = 3
+
+[profile.dev.package.wasmtime-environ]
+opt-level = 3
+
+[profile.dev.package.wasmtime-internal-cranelift]
+opt-level = 3
+
+# The launcher's background image (ADR 0028) is decoded, scaled and blurred
+# by `image` and its codecs. Unoptimized, choosing a large picture takes
+# seconds in `cargo run`; optimizing them brings it near release speed.
+[profile.dev.package.image]
+opt-level = 3
+
+[profile.dev.package.zune-jpeg]
+opt-level = 3
+
+[profile.dev.package.zune-core]
+opt-level = 3
+
+[profile.dev.package.png]
+opt-level = 3
+
+[profile.dev.package.fdeflate]
+opt-level = 3
+
+[profile.dev.package.image-webp]
+opt-level = 3
+
+[profile.dev.package.gif]
+opt-level = 3
+
+[profile.dev.package.weezl]
+opt-level = 3
+
+[profile.dev.package.moxcms]
+opt-level = 3

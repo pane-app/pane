@@ -1,0 +1,92 @@
+{
+    "script":  "capture-pane-windows.ps1",
+    "applicationRevision":  "582b73af41dd158f497315074c6d70ac561cc17e",
+    "installFolder":  "",
+    "binarySha256":  "A5A9317B0216DC30B5CFBF24719A408FCC334E932340F992869A9AC2E178989A",
+    "osVersion":  "Microsoft Windows NT 10.0.26200.0",
+    "windowsBuild":  {
+                         "DisplayVersion":  "25H2",
+                         "CurrentBuild":  "26200",
+                         "UBR":  8737
+                     },
+    "transparencySetting":  1,
+    "startedUtc":  "2026-10-05T09:07:33.2333262Z",
+    "binary":  "C:\\Users\\ADMIN\\Desktop\\nguyenvu\\pane\\target\\debug\\pane.exe",
+    "runDir":  "C:\\Users\\ADMIN\\Desktop\\nguyenvu\\pane\\.scratch\\ui-captures\\103-glass-light\\run-20261005-160732-4f92a4b5",
+    "paneDataDir":  "C:\\Users\\ADMIN\\Desktop\\nguyenvu\\pane\\.scratch\\ui-captures\\103-glass-light\\run-20261005-160732-4f92a4b5\\pane-data",
+    "localAppData":  "C:\\Users\\ADMIN\\Desktop\\nguyenvu\\pane\\.scratch\\ui-captures\\103-glass-light\\run-20261005-160732-4f92a4b5\\localappdata",
+    "cacheLocation":  "C:\\Users\\ADMIN\\Desktop\\nguyenvu\\pane\\.scratch\\ui-captures\\103-glass-light\\run-20261005-160732-4f92a4b5\\localappdata\\Pane\\cache",
+    "cacheDirExisted":  true,
+    "extensionsDir":  "C:\\Users\\ADMIN\\Desktop\\nguyenvu\\pane\\scripts\\..\\target\\guests",
+    "theme":  "dark",
+    "material":  "glass",
+    "keysRequested":  [
+
+                      ],
+    "keysAbortedAt":  null,
+    "captureMode":  "window",
+    "backdrop":  "light: base #ECECEC with black blocks/bands (distinct blurred luminance)",
+    "zOrderVerified":  true,
+    "pid":  61760,
+    "windowTitle":  "Pane",
+    "windowRect":  "580,257,1356,783",
+    "frameBounds":  "587,257,1349,776",
+    "requestedWindowSize":  null,
+    "positionedTopLeft":  false,
+    "dpi":  96,
+    "focusAchieved":  true,
+    "activationMethod":  "SetForegroundWindow",
+    "foregroundHwnd":  "hwnd 0x2bc1534 pid 61760",
+    "foregroundPid":  61760,
+    "foregroundIsPane":  true,
+    "foregroundBeforeFallback":  null,
+    "clickToFocusPoint":  null,
+    "clickToFocusGuards":  null,
+    "cursorSaved":  null,
+    "cursorRestored":  null,
+    "screenshots":  [
+                        {
+                            "file":  "00-initial-window.png",
+                            "label":  "initial",
+                            "utc":  "2026-10-05T09:07:37.7961699Z"
+                        }
+                    ],
+    "windowChecks":  [
+                         {
+                             "file":  "window-moved.png",
+                             "windowRect":  "612,281,1388,807",
+                             "foregroundIsPane":  true,
+                             "dpi":  96
+                         },
+                         {
+                             "file":  "window-narrow.png",
+                             "windowRect":  "612,281,992,701",
+                             "foregroundIsPane":  true,
+                             "dpi":  96
+                         },
+                         {
+                             "file":  "window-restored.png",
+                             "windowRect":  "580,257,1356,783",
+                             "foregroundIsPane":  true,
+                             "dpi":  96
+                         },
+                         {
+                             "file":  "window-inactive.png",
+                             "windowRect":  "580,257,1356,783",
+                             "foregroundIsPane":  false,
+                             "dpi":  96
+                         },
+                         {
+                             "file":  "window-active.png",
+                             "windowRect":  "580,257,1356,783",
+                             "foregroundIsPane":  true,
+                             "dpi":  96
+                         }
+                     ],
+    "backdropClosed":  true,
+    "processClosed":  true,
+    "processExited":  true,
+    "exitCode":  null,
+    "errorMessage":  null,
+    "finishedUtc":  "2026-10-05T09:07:41.4443829Z"
+}

@@ -1,0 +1,15 @@
+# Test fixture: a component built against the extension API 0.1 contract as
+# it was before `item` gained `platforms` (#19), which Pane must refuse.
+[package]
+name = "old-api"
+version = "0.1.0"
+edition.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wit-bindgen = { version = "=0.62.0", default-features = false, features = ["macros", "async"] }
+dlmalloc = { version = "0.2", features = ["global"] }

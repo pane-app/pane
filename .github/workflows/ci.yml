@@ -1,0 +1,450 @@
+name: CI
+
+on:
+  # The release matrix runs where a release is at stake: on pushes to
+  # main, and on demand via workflow_dispatch. Branches iterating
+  # toward a pull request take their per-push feedback from the branch
+  # tier in ci-branch.yml instead: this matrix's smoke, renderer,
+  # packaging and guests-from-source legs hold their runners for an
+  # hour or more, and paying that on every working-branch push made the
+  # milestone loop wait on release validation that only needs to
+  # happen once. A milestone's release-validation ticket (for #70, #84)
+  # is fed by the run on main when its pull request merges.
+  # pi-subagent/** worktrees keep their own two-tier workflow in
+  # ci-fast.yml. docs/agents/ci.md describes the tiers.
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      only:
+        description: >-
+          Run only these jobs, comma-separated with no spaces, to recheck a
+          fix without the whole matrix: renderers, licenses, lints, tests,
+          smoke, package, js-guests. Empty runs everything.
+        type: string
+        default: ""
+      smoke_os:
+        description: Operating system for the smoke jobs (other jobs are unchanged).
+        type: choice
+        default: all
+        options:
+          - all
+          - windows-2025
+          - macos-15
+          - ubuntu-24.04
+
+# One run per branch: a superseded run is cancelled instead of finishing
+# (each leg holds a shared runner for the better part of an hour, and
+# parallel runs on one branch only ever answer for the newest commit).
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  # Renderer tests live in the maintained fork, outside Pane's workspace.
+  # Keep this revision aligned with Pane's GPUI dependency pin. The harness
+  # uses a hidden DirectX target; it does not focus or capture the desktop.
+  windows-renderer:
+    name: Renderer output (windows-2025)
+    if: ${{ !inputs.only || contains(format(',{0},', inputs.only), ',renderers,') }}
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      # Derive the immutable revision from Pane so this job cannot silently
+      # exercise a different renderer than the default-startup smoke.
+      - name: Read Pane's renderer pin
+        id: renderer-pin
+        shell: python
+        run: |
+          import os, pathlib, re, tomllib
+          manifest = tomllib.loads(pathlib.Path("crates/pane/Cargo.toml").read_text())
+          dependency = manifest["dependencies"]["gpui"]
+          assert dependency["git"] == "https://github.com/hoangvu12/gpui-ce"
+          revision = dependency["rev"]
+          assert re.fullmatch(r"[0-9a-f]{40}", revision), "renderer requires an exact commit"
+          with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+              output.write(f"revision={revision}\n")
+      - uses: actions/checkout@v4
+        with:
+          repository: hoangvu12/gpui-ce
+          ref: ${{ steps.renderer-pin.outputs.revision }}
+          path: renderer
+          persist-credentials: false
+      - name: Install renderer test toolchain
+        run: rustup toolchain install 1.98.1 --profile minimal
+      # Saved only on main, as every Rust cache is (see the setup action).
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: renderer
+          key: windows-renderer-1.98.1
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Check source-over quad and path output
+        working-directory: renderer
+        run: cargo +1.98.1 test --locked -j1 -p gpui_ce_windows --features test-support --lib
+        env:
+          GPUI_ALPHA_OUTPUT_DIR: ${{ github.workspace }}/renderer-output
+      - name: Upload renderer output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-renderer-output
+          path: renderer-output
+          if-no-files-found: warn
+
+  macos-renderer:
+    name: Renderer CGColor regression (macos-15)
+    if: ${{ !inputs.only || contains(format(',{0},', inputs.only), ',renderers,') }}
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      # Derive the immutable revision from Pane so this job cannot silently
+      # exercise a different renderer than the default-startup smoke.
+      - name: Read Pane's renderer pin
+        id: renderer-pin
+        shell: python
+        run: |
+          import os, pathlib, re, tomllib
+          manifest = tomllib.loads(pathlib.Path("crates/pane/Cargo.toml").read_text())
+          dependency = manifest["dependencies"]["gpui"]
+          assert dependency["git"] == "https://github.com/hoangvu12/gpui-ce"
+          revision = dependency["rev"]
+          assert re.fullmatch(r"[0-9a-f]{40}", revision), "renderer requires an exact commit"
+          with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+              output.write(f"revision={revision}\n")
+      - uses: actions/checkout@v4
+        with:
+          repository: hoangvu12/gpui-ce
+          ref: ${{ steps.renderer-pin.outputs.revision }}
+          path: renderer
+          persist-credentials: false
+      - name: Install renderer test toolchain
+        run: rustup toolchain install 1.98.1 --profile minimal
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: renderer
+          key: macos-renderer-1.98.1
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Check native layer clearing and vibrancy material selection
+        working-directory: renderer
+        shell: bash
+        run: |
+          cargo +1.98.1 test --locked -j1 -p gpui_ce_macos --features font-kit --lib remove_layer_background_clears_cgcolor_recursively 2>&1 | tee renderer-test.log
+          grep -q '1 passed; 0 failed' renderer-test.log
+          cargo +1.98.1 test --locked -j1 -p gpui_ce_macos --features font-kit --lib blurred_view 2>&1 | tee renderer-material-test.log
+          grep -q '2 passed; 0 failed' renderer-material-test.log
+      - name: Upload macOS renderer result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-renderer-result
+          path: |
+            renderer/renderer-test.log
+            renderer/renderer-material-test.log
+          if-no-files-found: warn
+
+  licenses:
+    name: Licenses and sources
+    if: ${{ !inputs.only || contains(format(',{0},', inputs.only), ',licenses,') }}
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny@0.20.2
+      - name: Application dependencies
+        run: cargo deny --locked --workspace --exclude-dev check licenses sources
+      - name: Code compiled into extension components
+        working-directory: guests
+        run: cargo deny --locked --workspace --exclude-dev check licenses sources
+      - name: Code compiled into the Rust development sample
+        working-directory: guests/hello-rust
+        run: cargo deny --locked --workspace --exclude-dev check licenses sources
+
+  # What changed, so the JS/TS guests jobs can skip a push that touches
+  # nothing they rebuild (they are a second full Linux build and test run).
+  changes:
+    name: What changed
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      js-guests: ${{ steps.filter.outputs.js-guests }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            js-guests:
+              - 'guests/**'
+              - 'tools/**'
+              - 'wit/**'
+              - 'Cargo.lock'
+              - 'rust-toolchain.toml'
+              - '.github/workflows/ci.yml'
+              - '.github/actions/**'
+
+  # Formatting, the prebuilt JS/TS samples and clippy on every operating
+  # system. On main this job is also what saves each system's Rust cache,
+  # the one every other job of every workflow restores: it builds the
+  # guests and the tests too (without running them), so the cache holds
+  # what clippy, the test builds and the guest builds reuse.
+  lints:
+    name: Lints (${{ matrix.os }})
+    if: ${{ !inputs.only || contains(format(',{0},', inputs.only), ',lints,') }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2025, macos-15]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The WIT guard in `ci-lints` walks the repository's history
+          # to find the released extension API (#319).
+          fetch-depth: 0
+      # On main, `tests` installs the cargo-nextest the cache build uses.
+      - uses: ./.github/actions/setup
+        with:
+          save-cache: ${{ github.ref == 'refs/heads/main' }}
+          tests: ${{ github.ref == 'refs/heads/main' }}
+      - name: Check formatting, prebuilt samples and lints
+        run: cargo xtask ci-lints
+      - name: Build the guests and the tests for the cache
+        if: github.ref == 'refs/heads/main'
+        run: cargo xtask ci-tests --no-run
+
+  # The workspace's tests on every operating system, split into shards
+  # that run at once (nextest's hash partition, as in ci-branch.yml).
+  tests:
+    name: Tests (${{ matrix.os }}, ${{ matrix.shard }})
+    if: ${{ !inputs.only || contains(format(',{0},', inputs.only), ',tests,') }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2025, macos-15]
+        shard: [1/3, 2/3, 3/3]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+        with:
+          tests: true
+      # Development mode's JavaScript and TypeScript builds (#218) run with
+      # the componentizer linked in, un-gated: Node.js and npm alone build
+      # them, and the setup action installs neither.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Build guests and run this shard of the tests
+        run: cargo xtask ci-tests --partition hash:${{ matrix.shard }}
+      # The Linux (X11) clipboard adapter's test replaces what is on the
+      # clipboard and needs a display to watch: opted in and run under
+      # Xvfb here, in one shard, reusing its build (the shards run it
+      # without a display, where it skips itself).
+      - name: Run the Linux clipboard adapter test (Xvfb)
+        if: runner.os == 'Linux' && matrix.shard == '1/3'
+        run: xvfb-run -a cargo nextest run --locked --workspace --retries 2 -E 'binary(clipboard_adapter_linux)'
+        env:
+          PANE_TEST_REAL_CLIPBOARD: "1"
+
+  # The native GUI smokes, in their own jobs so they run beside the tests
+  # instead of after them: the tests need not finish before the smoke
+  # starts, and a failing test does not skip the evidence a smoke would
+  # have collected.
+  smoke:
+    name: Smoke (${{ matrix.os }})
+    if: ${{ !inputs.only || contains(format(',{0},', inputs.only), ',smoke,') }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: ${{ fromJSON(inputs.smoke_os && inputs.smoke_os != 'all' && format('["{0}"]', inputs.smoke_os) || '["windows-2025","macos-15","ubuntu-24.04"]') }}
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+      # The launcher the smokes drive, and the guest packages they install
+      # (the installer phases build their own packages besides).
+      - name: Build the launcher and the guests
+        run: |
+          cargo build --locked -p pane
+          cargo xtask guests
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install Pillow for screenshot checks
+        run: python -m pip install pillow
+      - name: Check screenshot assertions without a desktop
+        run: python -m unittest discover -s scripts -p test_check_screenshot.py
+      # The JavaScript and TypeScript development phases of each smoke
+      # skip themselves here as before: this job holds no JS toolchain.
+      - name: Native GUI smoke (Linux, Xvfb)
+        if: runner.os == 'Linux'
+        run: bash scripts/smoke-linux.sh smoke
+      # The #4 resource and latency workload: the same runner, the same
+      # guests and binary, its record checked against the proposed targets
+      # (scripts/resource-targets.json; every ceiling is pending a number,
+      # so the check passes until one is confirmed and then breached). Its
+      # hidden phases (#189) clone the default extensions'
+      # repositories at the commits this release pins and serve them on
+      # 127.0.0.1 (no
+      # application update source, so no update of Pane's own is offered),
+      # and add about two minutes (at most about twelve,
+      # waiting up to 600 s for the defaults); without the guests they
+      # are skipped and reported so (docs/agents/ci.md).
+      - name: Resource and latency workload (Linux, Xvfb)
+        if: runner.os == 'Linux'
+        run: bash scripts/measure-linux.sh measure
+      - name: Native GUI smoke (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/smoke-windows.ps1 -OutDir smoke
+      - name: Native default startup regression (macOS)
+        if: runner.os == 'macOS'
+        run: bash scripts/smoke-macos-default-startup.sh smoke/default-startup
+      - name: Native GUI smoke (macOS)
+        if: runner.os == 'macOS'
+        run: bash scripts/smoke-macos.sh smoke
+      - name: Upload GUI smoke evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gui-smoke-${{ runner.os }}
+          path: smoke
+          if-no-files-found: ignore
+      - name: Upload resource and latency measurements
+        if: always() && runner.os == 'Linux'
+        uses: actions/upload-artifact@v4
+        with:
+          name: resource-measurements
+          path: measure
+          if-no-files-found: ignore
+
+  # Each system's release package, in a job of its own beside the smoke
+  # rather than after it (it was 17 minutes of the Windows smoke job). The
+  # package is assembled from the guest packages `cargo xtask guests`
+  # builds.
+  package:
+    name: Package (${{ matrix.os }})
+    if: ${{ !inputs.only || contains(format(',{0},', inputs.only), ',package,') }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            system: linux
+          - os: windows-2025
+            system: windows
+          - os: macos-15
+            system: macos
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+      - name: Build the guests
+        run: cargo xtask guests
+      # Release, x86_64 on Linux and Windows, aarch64 on macOS.
+      - name: Build the package
+        run: cargo xtask package-${{ matrix.system }}
+      - name: Upload the package and its artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.system }}-package
+          path: target/dist/
+          if-no-files-found: error
+
+  # Rebuilds the JS/TS sample components from source with the pinned
+  # toolchain, then runs the same tests on them (below). The rebuilt files
+  # are not byte-identical to the committed ones (the QuickJS snapshot
+  # holds build-time state), so behaviour is compared, not bytes. A push
+  # that changes nothing under the paths it rebuilds skips both jobs (a
+  # manual run always runs them).
+  js-guests:
+    name: JS/TS guests from source (ubuntu-24.04)
+    needs: changes
+    if: >-
+      (!inputs.only || contains(format(',{0},', inputs.only), ',js-guests,'))
+      && (needs.changes.outputs.js-guests == 'true' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Committed components match their sources and toolchain pins
+        run: cargo xtask js-guests --check
+      - name: Rebuild the JS/TS sample components
+        run: cargo xtask js-guests
+      - name: Upload the rebuilt components
+        uses: actions/upload-artifact@v4
+        with:
+          name: js-guests
+          path: guests/prebuilt
+
+  # The whole test suite against the rebuilt components, in shards as the
+  # tests job runs it, with Node.js and npm alone: development mode's
+  # JavaScript and TypeScript builds on save
+  # (crates/pane-core/tests/develop_builds.rs) run un-gated through
+  # pane-build's build with the componentizer linked in (#218).
+  js-guests-tests:
+    name: JS/TS guests from source, tests (ubuntu-24.04, ${{ matrix.shard }})
+    needs: js-guests
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1/3, 2/3, 3/3]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - uses: ./.github/actions/setup
+        with:
+          tests: true
+      - name: Use the rebuilt components
+        uses: actions/download-artifact@v4
+        with:
+          name: js-guests
+          path: guests/prebuilt
+      - name: Run this shard of the tests against the rebuilt components
+        run: cargo xtask ci-tests --partition hash:${{ matrix.shard }}
+
+  # The one check to require, as in ci-branch.yml: green when every job
+  # above passed or was skipped. A job added here is added to `needs`.
+  passed:
+    name: CI passed
+    if: always()
+    needs:
+      - windows-renderer
+      - macos-renderer
+      - licenses
+      - changes
+      - lints
+      - tests
+      - smoke
+      - package
+      - js-guests
+      - js-guests-tests
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Every job passed or was skipped
+        run: |
+          for result in ${{ join(needs.*.result, ' ') }}; do
+            case "$result" in
+              success|skipped) ;;
+              *) echo "A job ended with: $result"; exit 1 ;;
+            esac
+          done

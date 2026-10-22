@@ -1,0 +1,36 @@
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+//
+// Echo, the query sample, in JavaScript: a command that takes a query. It
+// shows a toast with the text the user sends it from root search, through
+// its alias ("ec hello" when the user gave it the alias "ec") or by choosing
+// it as a fallback; Pane sends the text only when the user invokes it that
+// way, as the fallback text of its launch record. Echo is a no-view command
+// (`"mode": "no-view"`): it opens no screen, and root search stays as it was
+// while its toast shows. Launched in the background, it shows nothing.
+// Toasts and errors match the Rust query sample (guests/sample-query) and
+// the TypeScript one. "fail" is refused, to show how an error looks;
+// "crash" crashes on purpose, and three crashes within five minutes pause
+// the extension.
+import { showToast } from "@pane-app/extension/feedback";
+
+/** What Echo says when it was sent no text. */
+const NOTHING =
+  "Echo heard nothing: give it an alias or make it a fallback in Settings, then send it text " +
+  "from root search";
+
+/** @type {import("@pane-app/extension").Command} */
+export const command = {
+  async run(id, launch) {
+    if (id !== "echo") throw new Error(`unknown command: ${id}`);
+    const text = launch.fallbackText;
+    if (text === "fail") throw new Error("Echo refuses “fail”, to show how an error looks");
+    if (text === "crash") {
+      // Resolving with a value, where `run` resolves with nothing, is a
+      // crash, unlike throwing, which is an error the extension answers
+      // with.
+      return /** @type {void} */ (/** @type {unknown} */ (null));
+    }
+    const heard = text == null ? NOTHING : `Echo heard “${text}”`;
+    if (launch.launchType !== "background") showToast({ title: heard });
+  },
+};

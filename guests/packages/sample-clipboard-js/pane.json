@@ -1,0 +1,65 @@
+{
+  "manifestVersion": 1,
+  "title": "JavaScript clipboard sample",
+  "version": "0.1.0",
+  "apiVersion": "0.2",
+  "commands": [
+    {
+      "id": "clipboard-history",
+      "title": "Clipboard history (JavaScript)",
+      "subtitle": "A JavaScript command that lists the text you copy, once you turn it on",
+      "component": "sample_clipboard_js.wasm",
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ]
+    }
+  ],
+  "preferences": [
+    {
+      "name": "keepHistoryFor",
+      "type": "dropdown",
+      "title": "Keep History For",
+      "description": "Older items are deleted, also while Pane is stopped or the extension is disabled",
+      "options": [
+        {
+          "value": "3600",
+          "title": "1 Hour"
+        },
+        {
+          "value": "86400",
+          "title": "1 Day"
+        },
+        {
+          "value": "604800",
+          "title": "7 Days"
+        },
+        {
+          "value": "2592000",
+          "title": "30 Days"
+        },
+        {
+          "value": "7776000",
+          "title": "90 Days"
+        }
+      ],
+      "default": "604800"
+    },
+    {
+      "name": "pauseRecording",
+      "type": "checkbox",
+      "title": "Recording",
+      "label": "Pause Recording",
+      "description": "While paused, nothing you copy is kept",
+      "default": false
+    },
+    {
+      "name": "disabledApplications",
+      "type": "applications",
+      "title": "Disabled Applications",
+      "description": "What you copy in these applications is never kept. Copies an application marks as concealed, as password managers do, are never kept either",
+      "placeholder": "KeePass.exe"
+    }
+  ]
+}

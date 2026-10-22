@@ -1,0 +1,67 @@
+Give JavaScript a way to write to standard output and standard error.
+
+QuickJS has no `console` and componentize-qjs adds none, so what a command
+prints is lost. This defines a native `__paneWrite(stream, text)` that
+writes to standard output (1) or standard error (2) through the WASI 0.3
+libc, which Pane keeps as the package's extension log. Pane's SDK builds
+`console` on it (guests/js/console.js) and removes the global.
+
+Modifies componentize-qjs (Apache-2.0, see LICENSE-componentize-qjs); this
+patch is distributed under the same license.
+
+diff --git a/crates/runtime/src/lib.rs b/crates/runtime/src/lib.rs
+index e9b81e1..6aba8a9 100644
+--- a/crates/runtime/src/lib.rs
++++ b/crates/runtime/src/lib.rs
+@@ -4,6 +4,7 @@ mod buffer;
+ mod call;
+ mod futures;
+ mod instance_init;
++mod output;
+ mod interpreter;
+ mod module;
+ mod resources;
+@@ -162,6 +163,7 @@ impl JsState {
+                     .expect("Failed to store ResourceClasses userdata");
+                 module::init_state(&ctx);
+                 instance_init::install(&ctx).expect("Failed to install per-instance builtins");
++                output::install(&ctx).expect("Failed to install the output builtin");
+             });
+ 
+             JsState {
+diff --git a/crates/runtime/src/output.rs b/crates/runtime/src/output.rs
+new file mode 100644
+index 0000000..87be09c
+--- /dev/null
++++ b/crates/runtime/src/output.rs
+@@ -0,0 +1,30 @@
++//! Standard output and standard error for JavaScript, which QuickJS leaves
++//! out: a native `__paneWrite(stream, text)` that writes `text` to standard
++//! output (`stream` 1) or standard error (2) through the WASI 0.3 libc. The
++//! embedder's JavaScript builds `console` on it and removes the global.
++
++use std::io::Write;
++
++use rquickjs::{Ctx, Function};
++
++fn write(stream: i32, text: String) {
++    // Nothing is reported back: output that cannot be written is lost, as
++    // with any program's.
++    if stream == 2 {
++        let mut err = std::io::stderr().lock();
++        let _ = err.write_all(text.as_bytes());
++        let _ = err.flush();
++    } else {
++        let mut out = std::io::stdout().lock();
++        let _ = out.write_all(text.as_bytes());
++        let _ = out.flush();
++    }
++}
++
++/// Defines `__paneWrite` on the global object.
++pub(crate) fn install(ctx: &Ctx<'_>) -> rquickjs::Result<()> {
++    ctx.globals().set(
++        "__paneWrite",
++        Function::new(ctx.clone(), write)?.with_name("__paneWrite")?,
++    )
++}

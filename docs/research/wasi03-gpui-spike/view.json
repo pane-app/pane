@@ -1,0 +1,7 @@
+{
+  "title": "Language-neutral extension view",
+  "items": [
+    {"id": "first", "title": "First result", "subtitle": "Click to emit an activation event"},
+    {"id": "second", "title": "Second result", "subtitle": "JSON is adapted to native GPUI elements"}
+  ]
+}

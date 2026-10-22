@@ -1,0 +1,20 @@
+{
+  "name": "pane-sample-ts",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Pane's sample command in TypeScript",
+  "license": "Apache-2.0 OR MIT",
+  "type": "module",
+  "main": "src/index.tsx",
+  "pane": {
+    "rootResults": true
+  },
+  "dependencies": {
+    "zod": "4.6.5"
+  },
+  "devDependencies": {
+    "@pane-app/extension": "file:../js",
+    "esbuild": "0.28.2",
+    "typescript": "7.0.2"
+  }
+}

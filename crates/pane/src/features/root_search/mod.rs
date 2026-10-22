@@ -1,0 +1,445 @@
+//! Root search's query field and its results, also used as the search field
+//! of an opened command that searches as the user types.
+//!
+//! The query field is GPUI CE's single-line editable text element (typing,
+//! editing keys, clipboard, undo and input-method composition). It has
+//! keyboard focus whenever root search, or a command's search, is on screen;
+//! every change searches at once (the launcher decides what: root search's
+//! providers, or only the opened command). Up and Down move the selection
+//! through the results instead of the caret, Enter opens the selected result
+//! and Escape clears the query. Up, on an empty query, recalls the recent
+//! queries instead (`recall`, #206).
+//!
+//! The field's editing keys are the ones the form's text fields use, bound
+//! once by [`crate::ui::input::bind_text_editing`] without Tab, Enter and
+//! Escape: those bubble from the field to the launcher's Confirm and Back
+//! actions. [`bind_keys`] takes that binding's result, so root search cannot
+//! be registered without it.
+//!
+//! For assistive technology the field and the result list form one
+//! `EditableComboBox` node, which tracks the field's focus and carries the
+//! query as its value. It stays the focused node while the selection moves,
+//! so a screen reader echoes what is typed: no result reports itself as
+//! focused, and the window's announcer says the selected one instead
+//! ([`crate::features::announcer`], #132).
+
+use gpui::{
+    AnyElement, App, Context, Div, Entity, Focusable, KeyBinding, Role, Subscription, Window,
+    WindowControlArea, div, prelude::*, px,
+};
+use gpui_elements::editable_text::actions::DEFAULT_INPUT_CONTEXT;
+use gpui_elements::editable_text::{EditableTextState, StringStorage, TextChanged, text_input};
+use pane_core::{Keyboard, KeyboardAction, Screen};
+
+use crate::app::LauncherWindow;
+use crate::features::loading;
+use crate::ui::icon::{Glyph, glyph};
+use crate::ui::input::TextEditingKeys;
+use crate::ui::theme::Theme;
+use crate::{SelectNext, SelectPrevious};
+
+pub(crate) mod arguments;
+pub(crate) mod layouts;
+pub(crate) mod recall;
+
+pub(crate) use recall::Recall;
+
+pub(crate) const CONTEXT: &str = "RootSearch";
+/// The query field's own context, within the search field's: the query
+/// input's wrapper carries it, so the keys bound to the query field (its
+/// selection keys, and the argument fields' edge keys, #205) take the
+/// keystrokes only there — an argument field's input, another editable
+/// text under the search field, keeps the element's own keys.
+const QUERY_FIELD: &str = "QueryField";
+/// The query field's placeholder on root search: the reference's "Search
+/// apps, commands, plugins…" in Pane's own terms — root search finds
+/// installed applications and commands, and Pane has extensions, not
+/// plugins, whose results arrive as commands — so the adaptation drops the
+/// third noun rather than rename it to a search Pane does not offer.
+pub(crate) const ROOT_PLACEHOLDER: &str = "Search apps and commands…";
+/// The query field's placeholder in an opened command that searches.
+pub(crate) const COMMAND_PLACEHOLDER: &str = "Search";
+
+/// The context of the query field with focus, as a binding's context is
+/// written: the search field inside the window.
+pub(crate) fn field_context() -> String {
+    format!("{CONTEXT} > {QUERY_FIELD} > {DEFAULT_INPUT_CONTEXT}")
+}
+
+/// Registers the selection keys in the query field, under the bindings
+/// in force for previous and next result. They are registered after, and
+/// so take precedence over, the text element's own Up and Down, which in
+/// a single-line field move the caret to its start or end — the
+/// arrangement the fixed Up and Down had, kept for whatever keys the
+/// Keyboard page puts in their place. The field's other editing keys, and
+/// Enter and Escape bubbling to the launcher, come from the shared text
+/// editing keys.
+pub(crate) fn bind_keys(cx: &mut App, _: &TextEditingKeys, keyboard: &Keyboard) {
+    let context = field_context();
+    let previous = keyboard.binding(KeyboardAction::PreviousResult).id();
+    let next = keyboard.binding(KeyboardAction::NextResult).id();
+    cx.bind_keys([
+        // The element's own Up would otherwise take the key after the
+        // selection's action hands it on: when the previous-result key is
+        // the history's (#206), `select_previous` propagates so the key
+        // listener that walks the recent queries — the one that sees the
+        // press itself — takes it, but the element's binding is still
+        // matched and dispatched after the action, and its handler
+        // consumes the key before the listener ever sees it. Suppressed
+        // here — registered before the selection's own binding, so that
+        // binding still wins — the key reaches the walk's listener as
+        // Enter does, the element binds no Enter of its own.
+        KeyBinding::new(&previous, gpui::NoAction, Some(&context)),
+        KeyBinding::new(&next, SelectNext, Some(&context)),
+        KeyBinding::new(&previous, SelectPrevious, Some(&context)),
+    ]);
+}
+
+/// Root search's query field, kept for the window's lifetime.
+pub(crate) struct QueryField {
+    input: Entity<EditableTextState>,
+    /// Whether root search was on screen when focus last followed the
+    /// launcher's screen.
+    shown: bool,
+    _changes: Subscription,
+}
+
+impl QueryField {
+    /// A query field whose every change searches root, or the opened
+    /// command that searches.
+    pub(crate) fn new(window: &mut Window, cx: &mut Context<LauncherWindow>) -> QueryField {
+        let input = cx.new(|cx| EditableTextState::new(StringStorage::default(), cx));
+        input.focus_handle(cx).tab_stop(true);
+        let changes = cx.subscribe_in(
+            &input,
+            window,
+            |this, input, _: &TextChanged, window, cx| {
+                // A designed view's List whose view handles the search itself
+                // (#240): the field's changes are throttled, one event in
+                // flight, so fast typing asks only for the text the user
+                // stops at.
+                if this.designed_list_searches() {
+                    let typed = input.read(cx).as_str().to_owned();
+                    this.designed_search_typed(&typed, cx);
+                    cx.notify();
+                    return;
+                }
+                // Results computed from the query (the calculator's answer)
+                // arrive later, without holding up typing. The announcer waits
+                // for them before it says the selected row (#132).
+                //
+                // The sensitivity is pushed as the query changes, so the
+                // keystroke that changed it matches by the choice the
+                // Launcher page holds now. The learning switch is pushed
+                // with it: turned off, the same keystroke records nothing
+                // and ranks as if nothing was learned (#200).
+                this.launcher
+                    .set_search_sensitivity(crate::settings::search_sensitivity_of(cx));
+                this.launcher.set_learning(crate::settings::learning_of(cx));
+                let query = input.read(cx).as_str().to_owned();
+                // The query changed: the walk through the recent queries,
+                // if one stood, is over (#206) — any other key than the
+                // walking Up ends it. The walk that restores this query
+                // sets its own state after the replace that fired this.
+                this.recall = None;
+                // Whether the query just became a word followed by a space
+                // (#205): a word that is a command's alias, and a space
+                // typed after it, open what the alias names — the fields
+                // the query is one word that the space follows.
+                let became_alias_space = match this.launcher.screen() {
+                    Screen::Root { query: before } => {
+                        !before.is_empty()
+                            && !before.chars().any(char::is_whitespace)
+                            && query == format!("{before} ")
+                    }
+                    _ => false,
+                };
+                let computed = this.launcher.set_query(&query);
+                this.announcer.search_started();
+                // The query's caret is at its end, where the typing left
+                // it, as the argument fields' edge keys count it (#205).
+                this.query_caret = query.chars().count();
+                // The search may have selected a row whose fields show
+                // after the query (#205).
+                this.sync_arguments(window, cx);
+                if became_alias_space {
+                    this.alias_opened(window, cx);
+                }
+                cx.notify();
+                cx.spawn_in(window, async move |this, cx| {
+                    computed.await;
+                    this.update_in(cx, |this, window, cx| {
+                        this.announcer.search_ended();
+                        // The query's list is published once its search has
+                        // answered: the keys the window held for it are
+                        // applied (#203).
+                        this.replay_held_keys_if_published(window, cx);
+                        cx.notify();
+                    })
+                    .ok();
+                })
+                .detach();
+            },
+        );
+        QueryField {
+            input,
+            shown: true,
+            _changes: changes,
+        }
+    }
+
+    /// The field's editing state, which the window's other search headers
+    /// build theirs from (a designed List's, #240).
+    pub(crate) fn entity(&self) -> &Entity<EditableTextState> {
+        &self.input
+    }
+
+    pub(crate) fn focus(&self, window: &mut Window, cx: &mut App) {
+        window.focus(&self.input.focus_handle(cx), cx);
+    }
+
+    /// Replaces the query with `query`, as Tab's completion of a typed
+    /// folder and Shift+Tab's removal of a path component do (#204): the
+    /// field searches as if `query` were typed, and the announcer waits
+    /// for the results as it does for typing.
+    pub(crate) fn replace(&self, query: &str, cx: &mut App) {
+        self.input.update(cx, |input, cx| input.emplace(query, cx));
+    }
+}
+
+impl LauncherWindow {
+    /// Test support: the query field's editing state, which a platform
+    /// input method talks to while composing text (see
+    /// [`LauncherWindow::text_field`]).
+    #[doc(hidden)]
+    pub fn query_field(&self) -> Entity<EditableTextState> {
+        self.query.input.clone()
+    }
+
+    /// Makes the query field follow the launcher: it shows the launcher's
+    /// query (empty again after navigating back to root search, opening a
+    /// command that searches, or Escape) and takes focus when a screen with
+    /// a search field comes on screen; focus moves to the list when the
+    /// field leaves the screen.
+    pub(crate) fn sync_root_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let query = self.launcher.screen().search_field().map(str::to_owned);
+        let was_shown = self.query.shown;
+        self.query.shown = query.is_some();
+        match query {
+            Some(query) => {
+                let input = self.query.input.clone();
+                // A designed List's field holds text the view has not been
+                // told yet while the throttle waits (#240): the launcher's
+                // search is still the text sent before it, and an answer
+                // landing meanwhile — the view's first, say — must not put
+                // that back over what the user typed.
+                let typed_ahead = self.designed_list_searches() && self.designed_search_pending();
+                if !typed_ahead && input.read(cx).as_str() != query {
+                    input.update(cx, |input, cx| input.emplace(&query, cx));
+                }
+                if !was_shown {
+                    self.query.focus(window, cx);
+                }
+            }
+            // A form of Pane's own (the npm or Git package form), or a form
+            // or designed view opened from a command's search, has taken
+            // focus already: the designed controls cover both.
+            None if was_shown && self.designed.is_none() => window.focus(&self.focus_handle, cx),
+            None => {}
+        }
+    }
+
+    /// Root search, or an opened command's search: the query field, showing
+    /// `placeholder` while empty — the selected command's title, while its
+    /// argument fields show after the query (#205) — above `list`, the
+    /// results — the content that arrives with a view transition, wrapped
+    /// by the caller (see [`crate::app::LauncherWindow::render`]); the field
+    /// above it is the shell's search header and never moves. `loading` is
+    /// what the loading bar draws along the header's rule while waited-for
+    /// work has outlasted its threshold (#248).
+    ///
+    /// The field's chrome is the reference's search header: a 64px row with
+    /// the magnifier, 20px padding, a 14px gap and a hairline below — no
+    /// boxed input. The editable text element, its IME plumbing, focus
+    /// tracking and accessibility node are exactly the ones the launcher
+    /// always used; only the paint around them is new.
+    pub(crate) fn render_search(
+        &self,
+        query: String,
+        placeholder: &str,
+        loading: Option<loading::LoadingBar>,
+        list: impl gpui::IntoElement,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let input = &self.query.input;
+        let visuals = crate::settings::launcher_visuals(cx);
+        // Root search's inline argument fields, when the selected row's
+        // command declares any (#205): after the query, in this field.
+        let arguments = self.render_argument_fields(cx);
+        div()
+            .id("search")
+            .debug_selector(|| "search".into())
+            .key_context(CONTEXT)
+            // The editable text element has no accessibility node of its
+            // own; this node is the field's and tracks its focus handle.
+            .track_focus(&input.focus_handle(cx))
+            .role(Role::EditableComboBox)
+            .aria_label("Search")
+            .aria_value(query)
+            .aria_placeholder(placeholder)
+            .flex_1()
+            // Lets the results shrink below their content and scroll.
+            .min_h(px(0.))
+            .flex()
+            .flex_col()
+            .child(search_header(
+                input,
+                placeholder,
+                arguments,
+                loading,
+                &visuals.theme,
+                cx,
+            ))
+            .child(list)
+            .into_any_element()
+    }
+}
+
+/// The search header's chrome: the reference's 64px row — the magnifier,
+/// the 20px horizontal padding, the 14px gap and the hairline below —
+/// around the editable text element `input`, which is the caller's own
+/// (the launcher's query field, or another search field built the same
+/// way), and root search's inline argument fields after the query, when
+/// the selected row's command declares any (#205).
+///
+/// The magnifier's wrapper is the search header's drag region: with the
+/// native title bar hidden, the window can be moved by grabbing the icon —
+/// the editable field itself never drags. The hit target is a 44×44
+/// square, while −12px horizontal margins keep its layout box at the
+/// glyph's 20px: the header's alignment is unchanged, and the input keeps
+/// its 14px gap minus the 12px bleed — 2px of clear space before the
+/// editable field begins.
+///
+/// The query is Geist 19/400, as the reference's `.q`. Its `letter-spacing:
+/// -.005em` (−0.095px a character) is not applied: GPUI's editable text
+/// element shapes its text with no letter spacing whatever its style says,
+/// so a typed query runs about 0.1px a character wider than the
+/// reference's — under a pixel for the authored queries (#93).
+///
+/// Over a background image (ADR 0028, `Theme::frost`) the same field is a
+/// frosted pill inside the 64px row, with no hairline below it.
+///
+/// `loading` is the loading bar's frame (#248, ADR 0035): the line it
+/// says to draw lies along the header's rule — over the hairline, or
+/// along the frosted pill's bottom rim where there is no hairline —
+/// placed by [`loading::line`].
+///
+/// The launcher's search screens ([`LauncherWindow::render_search`])
+/// compose this header. The argument fields' keys are taken here, over
+/// the query and the fields both: the header is the ancestor of the one
+/// as of the other, wherever the keyboard is.
+pub(crate) fn search_header(
+    input: &Entity<EditableTextState>,
+    placeholder: &str,
+    arguments: Option<AnyElement>,
+    loading: Option<loading::LoadingBar>,
+    theme: &Theme,
+    cx: &mut Context<LauncherWindow>,
+) -> Div {
+    let geometry = &theme.geometry;
+    let typography = &theme.typography;
+    let field = div()
+        .flex()
+        .items_center()
+        .gap(geometry.search_gap)
+        .on_action(cx.listener(LauncherWindow::field_left))
+        .on_action(cx.listener(LauncherWindow::field_right))
+        .on_action(cx.listener(LauncherWindow::field_home))
+        .on_action(cx.listener(LauncherWindow::field_end))
+        .child(
+            div()
+                .window_control_area(WindowControlArea::Drag)
+                .flex_none()
+                .flex()
+                .items_center()
+                .justify_center()
+                .size(px(44.))
+                .mx(px(-12.))
+                .child(glyph(
+                    Glyph::Search,
+                    geometry.search_glyph_size,
+                    theme.text_muted,
+                )),
+        )
+        .child(
+            div().key_context(QUERY_FIELD).flex_1().min_w(px(0.)).child(
+                text_input("query")
+                    .state(input.downgrade())
+                    .placeholder(placeholder)
+                    .placeholder_color(theme.query_placeholder)
+                    .caret_color(theme.accent_text)
+                    .selection_color(theme.selection_wash)
+                    .marked_color(theme.accent_text)
+                    .text_size(typography.search_size)
+                    .text_color(theme.text_query)
+                    .font_family(typography.family.clone())
+                    .font_features(typography.features.clone())
+                    .pl(geometry.search_text_inset)
+                    .w_full()
+                    .min_w(px(0.))
+                    .whitespace_nowrap()
+                    .overflow_x_scroll(),
+            ),
+        )
+        .when_some(arguments, |row, arguments| row.child(arguments));
+    match theme.frost {
+        // The header's own rule carries the loading bar: the wrapper holds
+        // the bordered row and the 1px line over its border — a child of
+        // the row itself would paint beneath the border, which the row
+        // paints after its children (#248).
+        None => div()
+            .flex_none()
+            .relative()
+            .flex()
+            .flex_col()
+            .child(
+                field
+                    .flex_none()
+                    .h(geometry.search_height)
+                    .px(geometry.search_padding_x)
+                    .border_b_1()
+                    .border_color(theme.separator),
+            )
+            .when_some(loading, |header, bar| {
+                header.child(loading::line(&bar, px(0.), theme))
+            }),
+        // Over a background image (ADR 0028), the field is a frosted pill
+        // inside the header's row, with no hairline under it. The loading
+        // bar lies along the pill's bottom rim, inset by its corner radius
+        // — the straight part of the rim — so it follows the pill's
+        // rounded shape (#248).
+        Some(frost) => {
+            let (top, bottom, side) = frost.pill_margin;
+            div()
+                .flex_none()
+                .flex()
+                .h(geometry.search_height)
+                .pt(top)
+                .pb(bottom)
+                .px(side)
+                .child(
+                    field
+                        .flex_1()
+                        .relative()
+                        .px(frost.pill_padding_x)
+                        .rounded(frost.pill_radius)
+                        .backdrop_blur(frost.blur)
+                        .bg(frost.tint)
+                        .shadow(frost.edges())
+                        .when_some(loading, |pill, bar| {
+                            pill.child(loading::line(&bar, frost.pill_radius, theme))
+                        }),
+                )
+        }
+    }
+}

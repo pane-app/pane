@@ -1,0 +1,63 @@
+{
+    "script":  "capture-pane-windows.ps1",
+    "applicationRevision":  "9c6bfa3",
+    "installFolder":  "",
+    "binarySha256":  "9E2FABAEBBB9DABAD1A87E898C358AAAD8EF4154FB7D2E30091CEE71F731DBD1",
+    "osVersion":  "Microsoft Windows NT 10.0.26200.0",
+    "windowsBuild":  {
+                         "DisplayVersion":  "25H2",
+                         "CurrentBuild":  "26200",
+                         "UBR":  8737
+                     },
+    "transparencySetting":  1,
+    "startedUtc":  "2026-10-02T01:21:22.7925101Z",
+    "binary":  "C:\\Users\\ADMIN\\Desktop\\nguyenvu\\pane\\.scratch\\ui-native\\pane-integrated.exe",
+    "runDir":  "C:\\Users\\ADMIN\\Desktop\\nguyenvu\\pane\\.scratch\\ui-native\\control-dark-dark\\run-20261002-082122-d9bccc31",
+    "paneDataDir":  "C:\\Users\\ADMIN\\Desktop\\nguyenvu\\pane\\.scratch\\ui-native\\control-dark-dark\\run-20261002-082122-d9bccc31\\pane-data",
+    "localAppData":  "C:\\Users\\ADMIN\\Desktop\\nguyenvu\\pane\\.scratch\\ui-native\\control-dark-dark\\run-20261002-082122-d9bccc31\\localappdata",
+    "cacheLocation":  "C:\\Users\\ADMIN\\Desktop\\nguyenvu\\pane\\.scratch\\ui-native\\control-dark-dark\\run-20261002-082122-d9bccc31\\localappdata\\Pane\\cache",
+    "cacheDirExisted":  true,
+    "extensionsDir":  "C:\\Users\\ADMIN\\Desktop\\nguyenvu\\pane\\scripts\\..\\target\\guests",
+    "theme":  "dark",
+    "material":  "opaque",
+    "keysRequested":  [
+
+                      ],
+    "keysAbortedAt":  null,
+    "captureMode":  "window",
+    "backdrop":  "dark: base #161616 with white blocks/bands (distinct blurred luminance)",
+    "zOrderVerified":  true,
+    "pid":  66604,
+    "windowTitle":  "Pane",
+    "windowRect":  "32,32,808,500",
+    "frameBounds":  "39,32,801,493",
+    "requestedWindowSize":  null,
+    "positionedTopLeft":  true,
+    "dpi":  96,
+    "focusAchieved":  true,
+    "activationMethod":  "SetForegroundWindow",
+    "foregroundHwnd":  "hwnd 0x18e0500 pid 66604",
+    "foregroundPid":  66604,
+    "foregroundIsPane":  true,
+    "foregroundBeforeFallback":  null,
+    "clickToFocusPoint":  null,
+    "clickToFocusGuards":  null,
+    "cursorSaved":  null,
+    "cursorRestored":  null,
+    "screenshots":  [
+                        {
+                            "file":  "00-initial-window.png",
+                            "label":  "initial",
+                            "utc":  "2026-10-02T01:21:25.6670728Z"
+                        }
+                    ],
+    "windowChecks":  [
+
+                     ],
+    "backdropClosed":  true,
+    "processClosed":  true,
+    "processExited":  true,
+    "exitCode":  null,
+    "errorMessage":  null,
+    "finishedUtc":  "2026-10-02T01:21:25.7115164Z"
+}

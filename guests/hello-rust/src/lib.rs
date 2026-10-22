@@ -1,0 +1,36 @@
+//! A minimal Rust command to develop with Pane's development mode: install
+//! this folder, choose "Develop" in the Actions menu of Hello Rust's page in
+//! Settings, then edit `GREETING` and save. Pane builds the package with
+//! `cargo build --release --target wasm32-wasip2` and reloads it while it
+//! keeps running; "Say hello" then shows the new text in a toast. See
+//! guests/README.md.
+#![no_std]
+
+use pane_extension::alloc::{format, string::String, vec::Vec};
+use pane_extension::feedback::{Toast, show_toast};
+use pane_extension::{Command, Item, List};
+
+/// What "Say hello" shows.
+const GREETING: &str = "Hello from Rust";
+
+struct Hello;
+pane_extension::export!(Hello);
+
+/// Runs the action of the item `id`.
+async fn act(id: &str) -> Result<(), String> {
+    match id {
+        "hello" => {
+            show_toast(Toast::success(GREETING));
+            Ok(())
+        }
+        other => Err(format!("unknown item: {other}")),
+    }
+}
+
+impl Command for Hello {
+    type DesignedView = pane_extension::view::NoDesignedView;
+
+    async fn render() -> Result<List, String> {
+        Ok(List::new("Hello").item(Item::new("hello", "Say hello").on_action(|| act("hello"))))
+    }
+}

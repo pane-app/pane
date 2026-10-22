@@ -1,0 +1,33 @@
+[package]
+name = "xtask"
+version = "0.1.0"
+edition.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+# The manifest types the `schema` task generates `pane.json`'s JSON Schema
+# from (#224): the schema cannot drift from what Pane reads when it is
+# generated where the types are.
+pane-core = { path = "../crates/pane-core" }
+pane-target = { path = "../crates/pane-target" }
+# Rebuilding the prebuilt JS/TS samples through the one build path development
+# mode uses (#218), with the componentizer linked in.
+pane-build = { path = "../crates/pane-build", features = ["componentizer"] }
+# Packing the npm sample as `npm pack` does, without npm.
+tar.workspace = true
+flate2.workspace = true
+# The sha512 integrity of the default extensions' payloads in the artifact
+# index, and the package's sha256 (#53); already in the workspace's tree.
+sha2.workspace = true
+# Reading and rewriting a payload's pane.json as the artifacts are
+# assembled (#53); already in the workspace's tree.
+serde_json.workspace = true
+# The zip's per-file digests (#51), already in the workspace's tree as
+# flate2's own dependency.
+crc32fast.workspace = true
+# Parsing the WIT of the extension API for the guard that refuses a
+# breaking change under a version that has already shipped (#319): the
+# same parser the vendored componentizer builds with, already in the
+# tree at this version.
+wit-parser = "0.258"

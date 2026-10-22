@@ -1,0 +1,25 @@
+[package]
+name = "hello-rust"
+version = "0.1.0"
+edition = "2024"
+publish = false
+license = "Apache-2.0 OR MIT"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+# Pane's Rust SDK. Outside this repository, depend on the crate on
+# crates.io (`pane-extension = "0.2"`); here the sample builds against this
+# checkout's own copy, so it follows the SDK as it changes.
+pane-extension = { path = "../pane-extension" }
+
+# A package of its own, built in its own folder with the documented command
+# `cargo build --release --target wasm32-wasip2`, so that its component is
+# where pane.json says: target/wasm32-wasip2/release/hello_rust.wasm.
+[workspace]
+
+[profile.release]
+panic = "abort"
+opt-level = "s"
+lto = true

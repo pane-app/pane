@@ -1,0 +1,44 @@
+[package]
+name = "pane-extension"
+# The version follows the extension API it targets (ADR 0046): 0.2.x builds
+# components for `pane:extension@0.2.0`, the `apiVersion` "0.2" a package's
+# pane.json names, writing version 1 of the list tree. A new API version
+# is a new minor (a new major from 1.0); a release that keeps the API is a
+# new patch.
+version = "0.2.0"
+description = "Write Pane extensions in Rust: the bindings, host functions, extension UI builder and logging"
+repository = "https://github.com/pane-app/pane"
+homepage = "https://github.com/pane-app/pane"
+readme = "README.md"
+keywords = ["pane", "launcher", "extension", "wasm", "component-model"]
+categories = ["api-bindings", "wasm"]
+edition.workspace = true
+license.workspace = true
+# What is published: the source, the WIT it is generated from (a copy of the
+# repository's `wit/`, which `cargo xtask sdks` checks is identical) and the
+# licenses. `cargo xtask sdks` also checks that it packages and builds
+# alone; publishing it is a person's step, never CI's (#128).
+include = ["/src", "/wit", "/README.md", "/LICENSE-APACHE", "/LICENSE-MIT"]
+
+[package.metadata.docs.rs]
+# The crate builds only for the target extensions are built for.
+default-target = "wasm32-wasip2"
+targets = []
+
+[dependencies]
+wit-bindgen = { version = "=0.62.0", default-features = false, features = [
+    "macros",
+    "async",
+    # A loading state's work runs after the render that started it
+    # (#243): `spawn_local` keeps it going between Pane's calls, and
+    # inter-task wakeup is how a task that waits on nothing but its own
+    # futures sleeps. The same crate generates the exports, so the two
+    # share the task list.
+    "async-spawn",
+    "inter-task-wakeup",
+] }
+dlmalloc = { version = "0.2", features = ["global"] }
+# Preferences arrive as JSON, which `preferences::values` deserializes into
+# the command's own type.
+serde = { version = "1", default-features = false, features = ["alloc"] }
+serde_json = { version = "1", default-features = false, features = ["alloc"] }

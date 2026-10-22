@@ -1,0 +1,21 @@
+# Test fixture: a root provider built against an older shape of the
+# previous extension API, `wit/` here: a copy of `wit/previous` whose
+# root results' `results-for` takes the query alone, as the default
+# extensions released before 0.1 was frozen did (ADR 0046). Pane's shape
+# check must refuse it when it is installed, not fail when root search
+# asks it. It cannot use `pane-extension`, which binds the current
+# contract, so it supplies the allocator, panic handler and
+# `cabi_realloc` itself, as the other hand-written fixtures do.
+[package]
+name = "old-root-results"
+version = "0.1.0"
+edition.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wit-bindgen = { version = "=0.62.0", default-features = false, features = ["macros", "async"] }
+dlmalloc = { version = "0.2", features = ["global"] }

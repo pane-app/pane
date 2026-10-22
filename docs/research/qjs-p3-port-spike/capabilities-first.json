@@ -1,0 +1,5 @@
+{
+  "exit": 0,
+  "stdout": "\"{\\\"title\\\":\\\"TypeScript: WASI 0.3 + Fuse.js + Zod\\\",\\\"items\\\":[{\\\"id\\\":\\\"calculator\\\",\\\"title\\\":\\\"Calculator\\\"}],\\\"elapsedNs\\\":\\\"17450200\\\",\\\"invalidDataRejected\\\":true,\\\"invocations\\\":1,\\\"dateMs\\\":1790535143908,\\\"random\\\":0.7170834370193493,\\\"fileText\\\":\\\"p3 standard library fixture\\\\n\\\",\\\"fileError\\\":null,\\\"completion\\\":{\\\"tag\\\":\\\"ok\\\"}}\"\n",
+  "stderr": ""
+}

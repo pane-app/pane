@@ -1,0 +1,84 @@
+{
+    "script":  "capture-pane-windows.ps1",
+    "applicationRevision":  "b0793c2",
+    "binarySha256":  "35FBD7644B12432C5D21B40F9EFF83B42A66041B9B11FD0064B2A24454F99756",
+    "osVersion":  "Microsoft Windows NT 10.0.26200.0",
+    "windowsBuild":  {
+                         "DisplayVersion":  "25H2",
+                         "CurrentBuild":  "26200",
+                         "UBR":  8737
+                     },
+    "transparencySetting":  1,
+    "startedUtc":  "2026-10-02T01:05:43.9118732Z",
+    "binary":  "C:\\Users\\ADMIN\\Desktop\\nguyenvu\\pane\\.scratch\\ui-native\\pane-refactor.exe",
+    "runDir":  "C:\\Users\\ADMIN\\Desktop\\nguyenvu\\pane\\.scratch\\ui-native\\refactor\\run-20261002-080543-a4f06a46",
+    "paneDataDir":  "C:\\Users\\ADMIN\\Desktop\\nguyenvu\\pane\\.scratch\\ui-native\\refactor\\run-20261002-080543-a4f06a46\\pane-data",
+    "localAppData":  "C:\\Users\\ADMIN\\Desktop\\nguyenvu\\pane\\.scratch\\ui-native\\refactor\\run-20261002-080543-a4f06a46\\localappdata",
+    "cacheLocation":  "C:\\Users\\ADMIN\\Desktop\\nguyenvu\\pane\\.scratch\\ui-native\\refactor\\run-20261002-080543-a4f06a46\\localappdata\\Pane\\cache",
+    "cacheDirExisted":  true,
+    "extensionsDir":  "C:\\Users\\ADMIN\\Desktop\\nguyenvu\\pane\\scripts\\..\\target\\guests",
+    "theme":  "dark",
+    "material":  "opaque",
+    "keysRequested":  [
+                          "rust",
+                          "{ENTER}",
+                          "{ENTER}",
+                          "{ESC}"
+                      ],
+    "keysAbortedAt":  null,
+    "captureMode":  "window",
+    "backdrop":  null,
+    "zOrderVerified":  null,
+    "pid":  56756,
+    "windowTitle":  "Pane",
+    "windowRect":  "632,311,1288,770",
+    "frameBounds":  "639,311,1281,763",
+    "requestedWindowSize":  null,
+    "dpi":  96,
+    "focusAchieved":  true,
+    "activationMethod":  "SetForegroundWindow",
+    "foregroundHwnd":  "hwnd 0x650a44 pid 56756",
+    "foregroundPid":  56756,
+    "foregroundIsPane":  true,
+    "foregroundBeforeFallback":  null,
+    "clickToFocusPoint":  null,
+    "clickToFocusGuards":  null,
+    "cursorSaved":  null,
+    "cursorRestored":  null,
+    "screenshots":  [
+                        {
+                            "file":  "00-initial-window.png",
+                            "label":  "initial",
+                            "utc":  "2026-10-02T01:05:47.3722293Z"
+                        },
+                        {
+                            "file":  "01-after-rust-window.png",
+                            "label":  "after \u0027rust\u0027",
+                            "utc":  "2026-10-02T01:05:48.2395145Z"
+                        },
+                        {
+                            "file":  "02-after-ENTER-window.png",
+                            "label":  "after \u0027{ENTER}\u0027",
+                            "utc":  "2026-10-02T01:05:48.9908516Z"
+                        },
+                        {
+                            "file":  "03-after-ENTER-window.png",
+                            "label":  "after \u0027{ENTER}\u0027",
+                            "utc":  "2026-10-02T01:05:49.7349865Z"
+                        },
+                        {
+                            "file":  "04-after-ESC-window.png",
+                            "label":  "after \u0027{ESC}\u0027",
+                            "utc":  "2026-10-02T01:05:50.4823213Z"
+                        }
+                    ],
+    "windowChecks":  [
+
+                     ],
+    "backdropClosed":  null,
+    "processClosed":  true,
+    "processExited":  true,
+    "exitCode":  null,
+    "errorMessage":  null,
+    "finishedUtc":  "2026-10-02T01:05:50.6168487Z"
+}

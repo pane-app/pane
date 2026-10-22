@@ -1,0 +1,17 @@
+running 2 tests
+test directx_renderer::tests::translucent_quads_preserve_source_over_output ... ok
+
+thread 'directx_renderer::tests::translucent_path_sprite_preserves_source_over_output' (58392) panicked at
+crates\gpui_windows\src\directx_renderer.rs:3023:13:
+overlap: rendered premultiplied RGBA [64, 0, 127, 254], expected [64, 0, 128, 191]
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test directx_renderer::tests::translucent_path_sprite_preserves_source_over_output ... FAILED
+
+failures:
+
+failures:
+    directx_renderer::tests::translucent_path_sprite_preserves_source_over_output
+
+test result: FAILED. 1 passed; 1 failed; 0 ignored; 0 measured; 13 filtered out; finished in 0.26s
+
+error: test failed, to rerun pass `-p gpui_ce_windows --lib`

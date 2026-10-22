@@ -1,0 +1,267 @@
+//! Searching an online service inside its command through the native
+//! window, on GPUI's test platform, with real key events: typing in root
+//! search finds Package search (the search sample from `cargo xtask
+//! guests`) without asking its service; opening it gives its designed List
+//! the header's search field (#240), whose text is told to the view
+//! through the List's search-text event, throttled, and whose results the
+//! launcher's own rows list draws. The service is the fixture package
+//! registry, served on 127.0.0.1 by the test.
+
+#[path = "../../pane-core/tests/support/service.rs"]
+mod service;
+
+use std::time::Duration;
+
+use gpui::{Entity, TestAppContext, VisualTestContext, prelude::*};
+use pane::LauncherWindow;
+use pane_core::{Launcher, LauncherView, Runtime, Screen, Status};
+use service::Service;
+
+#[path = "support/settle.rs"]
+mod settle;
+
+use settle::{settle, settle_shown};
+
+#[path = "support/packages.rs"]
+mod packages;
+
+use packages::assembled_package;
+
+fn titles(view: &LauncherView) -> Vec<&str> {
+    view.rows.iter().map(|row| row.title.as_str()).collect()
+}
+
+/// The text in the window's query field.
+fn field_text(window: &Entity<LauncherWindow>, cx: &mut VisualTestContext) -> String {
+    let field = cx.read_entity(window, |window, _| window.query_field());
+    cx.read_entity(&field, |field, _| field.as_str().to_owned())
+}
+
+/// Points the open Package search at `address`, through the setting its
+/// searches read.
+fn use_service(window: &Entity<LauncherWindow>, cx: &mut VisualTestContext, address: &str) {
+    let identity = cx.read_entity(window, |window, _| {
+        window
+            .launcher()
+            .packages()
+            .into_iter()
+            .next()
+            .expect("the search sample is installed")
+            .identity
+    });
+    let saved = window.update(cx, |window, _| window.launcher().clone());
+    let saved = saved.set_preference(&identity, "service", Some(address));
+    cx.foreground_executor().block_on(saved).expect("saved");
+    settle(window, cx);
+}
+
+#[gpui::test]
+fn the_commands_own_search_field_lists_the_service_results(cx: &mut TestAppContext) {
+    let service = Service::start();
+    let (sources, data) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let folder = assembled_package("sample-search", &sources.path().join("search"));
+    cx.executor().allow_parking();
+    cx.update(pane::bind_keys);
+    let launcher =
+        Launcher::with_packages(Runtime::start(), vec![], data.path().join("extensions"));
+    // The window learns what the launcher changed in the background — a
+    // view's own ask to be drawn again, answered on the refresh thread —
+    // as the binary's window does: without it, the answer reaches the
+    // launcher while the window never draws it.
+    let (sender, changes) = pane_core::changes::channel();
+    let launcher = launcher.with_changes(sender);
+    let (window, cx) = cx.add_window_view(|window, cx| {
+        let mut launcher = LauncherWindow::new(launcher, window, cx);
+        launcher.follow_changes(changes, window, cx);
+        launcher.preview_package(&folder, window, cx);
+        launcher
+    });
+    settle(&window, cx);
+    cx.simulate_keystrokes("enter");
+    settle(&window, cx);
+
+    // The service this search reaches, as the backspace test's is: the
+    // install is settled before the address is written.
+    use_service(&window, cx, &service.url());
+
+    // Root search finds the command by its title, and asks no service.
+    cx.simulate_input("package search");
+    let view = settle(&window, cx);
+    assert_eq!(titles(&view).first(), Some(&"Package search"));
+    assert_eq!(service.requests(), Vec::<String>::new());
+
+    // Enter opens it: the designed List owns the header's search field,
+    // empty and focused, with the view's navigation title above it.
+    cx.simulate_keystrokes("enter");
+    let view = settle(&window, cx);
+    assert!(
+        matches!(view.screen, Screen::DesignedView { .. }),
+        "{:?}",
+        view.screen
+    );
+    assert_eq!(view.title, "Package search");
+    assert_eq!(field_text(&window, cx), "");
+    assert!(cx.debug_bounds("search").is_some(), "the field is rendered");
+    assert!(cx.debug_bounds("designed-title").is_some(), "the title row");
+    assert!(
+        cx.debug_bounds("designed-empty-Type to search the package registry")
+            .is_some()
+    );
+
+    // Typing searches the service; its results are the rows, and the
+    // field holds the text typed. A designed view answers its searches
+    // asynchronously — the answer asks for its own drawing — so the rows
+    // are waited for, not read at once. The view throttles what it is
+    // told: the typing's text waits out the throttle's time on the
+    // executor's clock, which this platform's parked runs never move.
+    cx.simulate_input("aurora");
+    cx.executor().advance_clock(Duration::from_millis(300));
+    // The rows are read from the launcher's state — the window's redraw
+    // of them is the frame bracket's question, not this test's (the
+    // settle's drawn==view check false-fails when the window's frame
+    // lags the launcher's view, which it does intermittently on this
+    // platform).
+    let view = {
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            cx.run_until_parked();
+            let view = cx.read_entity(&window, |window, _| window.launcher().view());
+            if view
+                .rows
+                .first()
+                .is_some_and(|row| row.title == "aurora-charts")
+            {
+                break view;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the search's answer never drew"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    };
+    assert_eq!(titles(&view), ["aurora-charts", "aurora-cli"]);
+    assert_eq!(field_text(&window, cx), "aurora");
+    // The row's drawn frame is waited for with its own deadline: the
+    // window's redraw of the answered view is the platform's notify
+    // processing, which lags the launcher's state.
+    {
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while cx.debug_bounds("row-aurora-cli").is_none() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the answered view's frame never drew"
+            );
+            cx.run_until_parked();
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+    assert_eq!(
+        service.requests().last().map(String::as_str),
+        Some("/search?q=aurora")
+    );
+
+    // Enter shows the selected package's details in a toast: a designed
+    // view's answer lands in the footer's toast, not the status line,
+    // so the toast is polled for through the shown fallback — settle,
+    // then the toast — as the harness twin's activation wait polls its
+    // shown status. The first row is selected (the Down's move is the
+    // separate question below).
+    cx.simulate_keystrokes("enter");
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    let shown = loop {
+        let status = settle_shown(&window, cx);
+        if !matches!(status, Status::Idle) {
+            break status;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the press's answer never drew: {status:?}"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    assert_eq!(
+        shown,
+        Status::Result("aurora-charts 2.1.0 (MIT): Charts that draw in the terminal".into())
+    );
+
+    // Escape clears the search field, then leaves the command. The
+    // launcher's state is what the test asserts — the window's redraw
+    // of a key-driven change is intermittent on this platform (the
+    // frame bracket's evidence), and a settle that demands the drawn
+    // frame match false-fails when it doesn't.
+    cx.simulate_keystrokes("escape");
+    let view = cx.read_entity(&window, |window, _| window.launcher().view());
+    assert!(
+        matches!(view.screen, Screen::DesignedView { .. }),
+        "{:?}",
+        view.screen
+    );
+    assert_eq!(field_text(&window, cx), "");
+    cx.simulate_keystrokes("escape");
+    let view = cx.read_entity(&window, |window, _| window.launcher().view());
+    assert!(
+        matches!(view.screen, Screen::Root { .. }),
+        "{:?}",
+        view.screen
+    );
+}
+
+#[gpui::test]
+fn backspace_in_the_empty_search_field_pops_the_view(cx: &mut TestAppContext) {
+    let service = Service::start();
+    let (sources, data) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let folder = assembled_package("sample-search", &sources.path().join("search"));
+    cx.executor().allow_parking();
+    cx.update(pane::bind_keys);
+    let launcher =
+        Launcher::with_packages(Runtime::start(), vec![], data.path().join("extensions"));
+    // The window learns what the launcher changed in the background — a
+    // view's own ask to be drawn again, answered on the refresh thread —
+    // as the binary's window does: without it, the answer reaches the
+    // launcher while the window never draws it.
+    let (sender, changes) = pane_core::changes::channel();
+    let launcher = launcher.with_changes(sender);
+    let (window, cx) = cx.add_window_view(|window, cx| {
+        let mut launcher = LauncherWindow::new(launcher, window, cx);
+        launcher.follow_changes(changes, window, cx);
+        launcher.preview_package(&folder, window, cx);
+        launcher
+    });
+    settle(&window, cx);
+    // The preview's Enter installs it, as the first test does, before
+    // its service is set.
+    cx.simulate_keystrokes("enter");
+    settle(&window, cx);
+    use_service(&window, cx, &service.url());
+    cx.simulate_input("package search");
+    settle(&window, cx);
+    cx.simulate_keystrokes("enter");
+    settle(&window, cx);
+
+    // The field holds text: Backspace deletes it, as a field's does.
+    cx.simulate_input("aurora");
+    settle(&window, cx);
+    cx.simulate_keystrokes("backspace");
+    let view = settle(&window, cx);
+    assert!(
+        matches!(view.screen, Screen::DesignedView { .. }),
+        "{:?}",
+        view.screen
+    );
+    assert_eq!(field_text(&window, cx), "auror");
+
+    // The field empty: Backspace leaves the command (#240, the general
+    // order the launcher polish's, #123).
+    for _ in "auror".chars() {
+        cx.simulate_keystrokes("backspace");
+    }
+    settle(&window, cx);
+    cx.simulate_keystrokes("backspace");
+    let view = settle(&window, cx);
+    assert!(
+        matches!(view.screen, Screen::Root { .. }),
+        "{:?}",
+        view.screen
+    );
+}

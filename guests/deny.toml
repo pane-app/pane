@@ -1,0 +1,22 @@
+# License and source policy for code compiled into extension components.
+# Everything here must stay permissive so Pane imposes no license on
+# extensions through embedded code.
+
+[graph]
+targets = ["wasm32-wasip2"]
+
+[licenses]
+allow = [
+  "MIT", "MIT-0", "Apache-2.0", "Apache-2.0 WITH LLVM-exception",
+  "BSD-2-Clause", "BSD-3-Clause", "ISC", "Zlib", "Unicode-3.0", "0BSD",
+  "CC0-1.0", "Unlicense",
+]
+confidence-threshold = 0.9
+unused-allowed-license = "allow"
+
+[licenses.private]
+ignore = true
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"

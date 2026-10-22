@@ -1,0 +1,84 @@
+{
+    "script":  "capture-pane.ps1",
+    "startedUtc":  "2026-10-02T16:10:20.0136522Z",
+    "binary":  "C:\\Users\\ADMIN\\Desktop\\nguyenvu\\pane\\target\\debug\\pane.exe",
+    "runDir":  "C:\\Users\\ADMIN\\AppData\\Local\\Temp\\pi-subagent-worktrees\\job-6129fa3dac82\\docs\\evidence\\settings-71\\captures\\run-20261002-231019-d017f6e2",
+    "paneDataDir":  "C:\\Users\\ADMIN\\AppData\\Local\\Temp\\pi-subagent-worktrees\\job-6129fa3dac82\\docs\\evidence\\settings-71\\captures\\run-20261002-231019-d017f6e2\\pane-data",
+    "localAppData":  "C:\\Users\\ADMIN\\AppData\\Local\\Temp\\pi-subagent-worktrees\\job-6129fa3dac82\\docs\\evidence\\settings-71\\captures\\run-20261002-231019-d017f6e2\\localappdata",
+    "cacheLocation":  "C:\\Users\\ADMIN\\AppData\\Local\\Temp\\pi-subagent-worktrees\\job-6129fa3dac82\\docs\\evidence\\settings-71\\captures\\run-20261002-231019-d017f6e2\\localappdata\\Pane\\cache",
+    "cacheDirExisted":  true,
+    "extensionsDir":  "C:\\Users\\ADMIN\\Desktop\\nguyenvu\\pane\\target\\guests",
+    "theme":  "dark",
+    "material":  "glass",
+    "keysRequested":  [
+                          "{ENTER}",
+                          "{DOWN}",
+                          "{DOWN}",
+                          "{DOWN}",
+                          "{DOWN}",
+                          "{ENTER}"
+                      ],
+    "keysAbortedAt":  null,
+    "captureMode":  "window",
+    "backdrop":  null,
+    "zOrderVerified":  null,
+    "pid":  56660,
+    "windowTitle":  "Pane",
+    "windowRect":  "572,306,1348,774",
+    "frameBounds":  "579,306,1341,767",
+    "requestedWindowSize":  null,
+    "dpi":  96,
+    "focusAchieved":  true,
+    "activationMethod":  "guarded-click",
+    "foregroundHwnd":  "hwnd 0x15a05d4 pid 56660",
+    "foregroundPid":  56660,
+    "foregroundIsPane":  true,
+    "foregroundBeforeFallback":  "hwnd 0x28098e pid 63796",
+    "clickToFocusPoint":  "960,338",
+    "clickToFocusGuards":  "guard1: hit 0x15a05d4 root 0x15a05d4 pid 56660 | guard2: hit 0x15a05d4 root 0x15a05d4 pid 56660",
+    "cursorSaved":  "2661,758",
+    "cursorRestored":  true,
+    "screenshots":  [
+                        {
+                            "file":  "00-initial-window.png",
+                            "label":  "initial",
+                            "utc":  "2026-10-02T16:10:26.3915642Z"
+                        },
+                        {
+                            "file":  "01-after-ENTER-window.png",
+                            "label":  "after \u0027{ENTER}\u0027",
+                            "utc":  "2026-10-02T16:10:27.1745416Z"
+                        },
+                        {
+                            "file":  "02-after-DOWN-window.png",
+                            "label":  "after \u0027{DOWN}\u0027",
+                            "utc":  "2026-10-02T16:10:27.9350464Z"
+                        },
+                        {
+                            "file":  "03-after-DOWN-window.png",
+                            "label":  "after \u0027{DOWN}\u0027",
+                            "utc":  "2026-10-02T16:10:28.7184430Z"
+                        },
+                        {
+                            "file":  "04-after-DOWN-window.png",
+                            "label":  "after \u0027{DOWN}\u0027",
+                            "utc":  "2026-10-02T16:10:29.4871043Z"
+                        },
+                        {
+                            "file":  "05-after-DOWN-window.png",
+                            "label":  "after \u0027{DOWN}\u0027",
+                            "utc":  "2026-10-02T16:10:30.2801084Z"
+                        },
+                        {
+                            "file":  "06-after-ENTER-window.png",
+                            "label":  "after \u0027{ENTER}\u0027",
+                            "utc":  "2026-10-02T16:10:31.0406970Z"
+                        }
+                    ],
+    "backdropClosed":  null,
+    "processClosed":  true,
+    "processExited":  true,
+    "exitCode":  null,
+    "errorMessage":  null,
+    "finishedUtc":  "2026-10-02T16:10:31.1228800Z"
+}

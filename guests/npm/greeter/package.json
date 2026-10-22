@@ -1,0 +1,9 @@
+{
+  "name": "@pane-samples/greeter",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Pane's npm-distributed sample extension: a command and a greet operation, built as WebAssembly components",
+  "license": "Apache-2.0 OR MIT",
+  "keywords": ["pane-extension"],
+  "files": ["pane.json", "sample_npm_js.wasm"]
+}

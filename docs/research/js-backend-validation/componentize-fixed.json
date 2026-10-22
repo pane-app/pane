@@ -1,0 +1,36 @@
+{
+  "variant": "fixed",
+  "runtime_sha256": "a602636e6cfd3511c0b3600a1641c46566a6ce7e55a982e4d7e96b80503fe5b6",
+  "artifacts": {
+    "p3-capabilities": {
+      "component_bytes": 9996161,
+      "componentize_ms": 246,
+      "sha256": "901b0ca258fb88b1772c54d5e66326d4e7ae3cedb65d1e9bbd92aadb74b5d9cd"
+    },
+    "p3-search": {
+      "component_bytes": 9915681,
+      "componentize_ms": 240,
+      "sha256": "c6fa9f9936052c8dbe27023883ba1f73f0a616b730a718e12657451746e04ec7"
+    },
+    "p3-sample-js": {
+      "component_bytes": 4006084,
+      "componentize_ms": 177,
+      "sha256": "0920ab1509d9248c3ef06a68e3a2ac0d24658e7122534cd2d348c178bdf0c584"
+    },
+    "p3-sample-ts": {
+      "component_bytes": 4005869,
+      "componentize_ms": 174,
+      "sha256": "e35a48ec4808fd8e0758094950c6366671b60808fc634e82d4c6bd33b0587a70"
+    },
+    "stock-search": {
+      "component_bytes": 7543450,
+      "componentize_ms": 209,
+      "sha256": "82a665f4fd16a65bc3978fac0598771dcca32044f6a02fa717c59d9a0f16721b"
+    },
+    "stock-sample-ts": {
+      "component_bytes": 1634247,
+      "componentize_ms": 160,
+      "sha256": "38edb14c8f1c2123c6a3a8ab351f7952f79f4b8b7e0c7c02edf457842955fb35"
+    }
+  }
+}

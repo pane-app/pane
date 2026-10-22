@@ -1,0 +1,427 @@
+//! WASI Component Model async ABI: FFI imports, protocol enums, and event decoding.
+//!
+//! Canonical ABI specification:
+//! <https://github.com/WebAssembly/component-model/blob/main/design/mvp/CanonicalABI.md>
+#![allow(unsafe_code)]
+#![cfg_attr(not(feature = "component-model-async"), allow(dead_code))]
+
+use num_enum::TryFromPrimitive;
+
+/// Returned by stream/future read/write when the operation blocks.
+pub(crate) const BLOCKED: u32 = 0xFFFF_FFFF;
+
+#[inline(always)]
+pub(crate) fn is_blocked_raw(code: u32) -> bool {
+    code == BLOCKED
+}
+
+/// Event codes delivered as `event0` in the async callback.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, TryFromPrimitive)]
+#[repr(u32)]
+enum EventCode {
+    None = 0,
+    Subtask = 1,
+    StreamRead = 2,
+    StreamWrite = 3,
+    FutureRead = 4,
+    FutureWrite = 5,
+    TaskCancelled = 6,
+}
+
+/// Subtask state transitions, this is delivered in `event2` when event type is `Subtask`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, TryFromPrimitive)]
+#[repr(u32)]
+pub(crate) enum SubtaskState {
+    Starting = 0,
+    Started = 1,
+    Returned = 2,
+    CancelledBeforeStarted = 3,
+    CancelledBeforeReturned = 4,
+}
+
+/// Callback return codes, returned from the `canon lift` callback.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u32)]
+#[allow(dead_code)]
+pub(crate) enum CallbackCode {
+    Exit = 0,
+    Yield = 1,
+    Wait = 2,
+}
+
+impl CallbackCode {
+    /// Encode as the raw `u32` returned from the callback.
+    ///
+    /// The low four bits contain the callback code. `Wait` stores the
+    /// waitable-set index in the remaining upper bits.
+    pub(crate) fn encode(self, waitable_set: u32) -> u32 {
+        match self {
+            Self::Exit => 0,
+            Self::Yield => 1,
+            Self::Wait => 2 | (waitable_set << 4),
+        }
+    }
+}
+
+/// Stream/future I/O result codes, this is the lower 4 bits of packed return value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, TryFromPrimitive)]
+#[repr(u32)]
+pub(crate) enum CopyResult {
+    Completed = 0,
+    Dropped = 1,
+    Cancelled = 2,
+}
+
+/// Unpack a stream/future return value into (progress, result) tuple.
+///
+/// The low four bits contain [`CopyResult`] and the upper bits contain the
+/// number of elements copied. Returns `None` for the distinguished
+/// [`BLOCKED`] value.
+pub(crate) fn unpack_copy_result(packed: u32) -> Option<(u32, CopyResult)> {
+    if is_blocked_raw(packed) {
+        return None;
+    }
+
+    let progress = packed >> 4;
+    let result = CopyResult::try_from(packed & 0xF).expect("unknown copy result");
+
+    Some((progress, result))
+}
+
+/// Tracks the lifecycle of a copy operation on a stream/future end.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, TryFromPrimitive)]
+#[repr(u32)]
+#[allow(dead_code)]
+pub(crate) enum CopyState {
+    /// Ready to start an operation.
+    Idle = 1,
+    /// Executing an operation that has not returned to JavaScript yet.
+    SyncCopying = 2,
+    /// Waiting for the host to deliver a completion callback.
+    AsyncCopying = 3,
+    /// Waiting for a blocked cancellation request to complete.
+    CancellingCopy = 4,
+    /// Closed, dropped, or consumed.
+    Done = 5,
+}
+
+impl CopyState {
+    /// Whether a copy operation is currently in progress.
+    pub(crate) fn copying(self) -> bool {
+        !matches!(self, Self::Idle | Self::Done)
+    }
+
+    /// Whether an active copy operation can be cancelled.
+    pub(crate) fn cancellable(self) -> bool {
+        matches!(self, CopyState::AsyncCopying)
+    }
+}
+
+/// Whether a copy end allows re-use after a completed operation.
+///
+/// Streams are reusable (can do more reads/writes after completion),
+/// futures are one-shot (always transition to Done).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CopyKind {
+    Future,
+    Stream,
+}
+
+impl CopyKind {
+    fn completion(self) -> CopyState {
+        match self {
+            // Futures are one-shot, they can't be used again after completion.
+            CopyKind::Future => CopyState::Done,
+            // Streams are reusable, they can be used again after completion.
+            CopyKind::Stream => CopyState::Idle,
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            CopyKind::Future => "future",
+            CopyKind::Stream => "stream",
+        }
+    }
+}
+
+/// Common state for a readable or writable stream/future end.
+///
+/// A present `handle` is owned by this end. Streams return to [`CopyState::Idle`]
+/// after successful copies, while futures transition to [`CopyState::Done`]
+/// because they are one-shot.
+pub(crate) struct CopyEnd {
+    kind: CopyKind,
+    /// Index into the WIT stream/future metadata table.
+    pub(crate) type_index: u32,
+    /// Canonical ABI handle, removed when ownership is transferred or dropped.
+    pub(crate) handle: Option<u32>,
+    /// Current copy/cancellation state.
+    pub(crate) state: CopyState,
+}
+
+impl CopyEnd {
+    /// Create a new stream end in the Idle state.
+    pub(crate) fn new_stream(type_index: u32, handle: u32) -> Self {
+        Self {
+            kind: CopyKind::Stream,
+            type_index,
+            handle: Some(handle),
+            state: CopyState::Idle,
+        }
+    }
+
+    /// Create a new future end in the Idle state.
+    pub(crate) fn new_future(type_index: u32, handle: u32) -> Self {
+        Self {
+            kind: CopyKind::Future,
+            type_index,
+            handle: Some(handle),
+            state: CopyState::Idle,
+        }
+    }
+
+    /// Validate that the end is idle and ready for a new read/write.
+    /// Returns `(handle, type_index)` on success.
+    pub(crate) fn begin_op(&self) -> rquickjs::Result<(u32, u32)> {
+        if self.state != CopyState::Idle {
+            return Err(rquickjs::Error::new_from_js(
+                self.kind.label(),
+                "operation requires an idle endpoint",
+            ));
+        }
+
+        let h = self
+            .handle
+            .ok_or_else(|| rquickjs::Error::new_from_js("object", "already dropped"))?;
+
+        Ok((h, self.type_index))
+    }
+
+    pub(crate) fn begin_transfer(&mut self, type_index: u32) -> rquickjs::Result<u32> {
+        if self.type_index != type_index {
+            return Err(rquickjs::Error::new_from_js(
+                self.kind.label(),
+                "matching WIT type",
+            ));
+        }
+        let (handle, _) = self.begin_op()?;
+        self.handle = None;
+        self.state = CopyState::Done;
+        Ok(handle)
+    }
+
+    pub(crate) fn begin_drop(&mut self) -> rquickjs::Result<Option<u32>> {
+        if self.state.copying() {
+            return Err(rquickjs::Error::new_from_js(
+                self.kind.label(),
+                "cancel and await the active operation before dropping",
+            ));
+        }
+        self.state = CopyState::Done;
+        Ok(self.handle.take())
+    }
+
+    /// Validate that the end has an active async copy that can be cancelled.
+    /// Returns `(handle, type_index)` on success.
+    pub(crate) fn begin_cancel(&self) -> rquickjs::Result<(u32, u32)> {
+        if !self.state.cancellable() {
+            return Err(rquickjs::Error::new_from_js(
+                self.kind.label(),
+                "cancel without active operation",
+            ));
+        }
+
+        let h = self
+            .handle
+            .ok_or_else(|| rquickjs::Error::new_from_js("object", "already dropped"))?;
+
+        Ok((h, self.type_index))
+    }
+
+    /// Transition to AsyncCopying when the operation blocks.
+    pub(crate) fn mark_blocked(&mut self) {
+        debug_assert_eq!(self.state, CopyState::Idle);
+        self.state = CopyState::AsyncCopying;
+    }
+
+    /// Transition after a sync or async completion.
+    pub(crate) fn mark_completed(&mut self, result: CopyResult) {
+        self.state = match result {
+            CopyResult::Dropped => CopyState::Done,
+            CopyResult::Cancelled => CopyState::Idle,
+            CopyResult::Completed => self.kind.completion(),
+        };
+    }
+
+    /// Transition to CancellingCopy when a cancel itself blocks.
+    pub(crate) fn mark_cancel_blocked(&mut self) {
+        debug_assert_eq!(self.state, CopyState::AsyncCopying);
+        self.state = CopyState::CancellingCopy;
+    }
+}
+
+/// A decoded async callback event.
+pub(crate) enum Event {
+    None,
+    Subtask { handle: u32, state: SubtaskState },
+    StreamRead { handle: u32, result: u32 },
+    StreamWrite { handle: u32, result: u32 },
+    FutureRead { handle: u32, result: u32 },
+    FutureWrite { handle: u32, result: u32 },
+    TaskCancelled,
+}
+
+impl Event {
+    /// Decode a raw `(event0, event1, event2)` callback triple into a typed event.
+    ///
+    /// `event0` selects the event kind. For I/O events `event1` is the handle
+    /// and `event2` is the packed copy result; subtask events use `event2` for
+    /// [`SubtaskState`].
+    pub(crate) fn decode(event0: u32, event1: u32, event2: u32) -> Self {
+        match EventCode::try_from(event0).expect("unknown event code") {
+            EventCode::None => Self::None,
+            EventCode::Subtask => Self::Subtask {
+                handle: event1,
+                state: SubtaskState::try_from(event2).expect("unknown subtask state"),
+            },
+            EventCode::StreamRead => Self::StreamRead {
+                handle: event1,
+                result: event2,
+            },
+            EventCode::StreamWrite => Self::StreamWrite {
+                handle: event1,
+                result: event2,
+            },
+            EventCode::FutureRead => Self::FutureRead {
+                handle: event1,
+                result: event2,
+            },
+            EventCode::FutureWrite => Self::FutureWrite {
+                handle: event1,
+                result: event2,
+            },
+            EventCode::TaskCancelled => Self::TaskCancelled,
+        }
+    }
+}
+
+// Canonical built-in imports
+#[cfg(feature = "component-model-async")]
+mod async_builtins {
+    // SDK 34 libc owns canonical context slots for stack/TLS bookkeeping.
+    // Its task hooks preserve this thread-local slot across async suspension.
+    std::thread_local! {
+        static QJS_TASK_CONTEXT: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+    }
+
+    pub(crate) unsafe fn context_get() -> u32 {
+        QJS_TASK_CONTEXT.with(|slot| slot.get())
+    }
+
+    pub(crate) unsafe fn context_set(value: u32) {
+        QJS_TASK_CONTEXT.with(|slot| slot.set(value));
+    }
+
+    #[link(wasm_import_module = "$root")]
+    unsafe extern "C" {
+        #[link_name = "[waitable-set-new]"]
+        pub(crate) fn waitable_set_new() -> u32;
+
+        #[link_name = "[waitable-join]"]
+        pub(crate) fn waitable_join(waitable: u32, set: u32);
+
+        #[link_name = "[waitable-set-drop]"]
+        pub(crate) fn waitable_set_drop(set: u32);
+
+        #[link_name = "[waitable-set-poll]"]
+        #[allow(dead_code)]
+        pub(crate) fn waitable_set_poll(set: u32, payload_addr: *mut u32) -> u32;
+
+        #[link_name = "[waitable-set-wait]"]
+        #[allow(dead_code)]
+        pub(crate) fn waitable_set_wait(set: u32, payload_addr: *mut u32) -> u32;
+
+        #[link_name = "[subtask-drop]"]
+        pub(crate) fn subtask_drop(task: u32);
+
+        #[link_name = "[subtask-cancel]"]
+        pub(crate) fn subtask_cancel(task: u32) -> u32;
+
+        #[link_name = "[thread-yield]"]
+        #[allow(dead_code)]
+        pub(crate) fn thread_yield() -> u32;
+    }
+
+    #[link(wasm_import_module = "[export]$root")]
+    unsafe extern "C" {
+        #[link_name = "[task-cancel]"]
+        pub(crate) fn task_cancel();
+
+        #[link_name = "[backpressure-set]"]
+        #[allow(dead_code)]
+        pub(crate) fn backpressure_set(enabled: u32);
+    }
+}
+
+#[cfg(not(feature = "component-model-async"))]
+mod async_builtins {
+    #[cold]
+    fn async_disabled() -> ! {
+        panic!("component-model async is disabled in this runtime")
+    }
+
+    pub(crate) unsafe fn waitable_set_new() -> u32 {
+        async_disabled()
+    }
+
+    pub(crate) unsafe fn waitable_join(_waitable: u32, _set: u32) {
+        async_disabled()
+    }
+
+    pub(crate) unsafe fn waitable_set_drop(_set: u32) {
+        async_disabled()
+    }
+
+    pub(crate) unsafe fn waitable_set_poll(_set: u32, _payload_addr: *mut u32) -> u32 {
+        async_disabled()
+    }
+
+    pub(crate) unsafe fn waitable_set_wait(_set: u32, _payload_addr: *mut u32) -> u32 {
+        async_disabled()
+    }
+
+    pub(crate) unsafe fn subtask_drop(_task: u32) {
+        async_disabled()
+    }
+
+    pub(crate) unsafe fn subtask_cancel(_task: u32) -> u32 {
+        async_disabled()
+    }
+
+    pub(crate) unsafe fn context_get() -> u32 {
+        async_disabled()
+    }
+
+    pub(crate) unsafe fn context_set(_value: u32) {
+        async_disabled()
+    }
+
+    pub(crate) unsafe fn task_cancel() {
+        async_disabled()
+    }
+
+    pub(crate) unsafe fn thread_yield() -> u32 {
+        async_disabled()
+    }
+
+    pub(crate) unsafe fn backpressure_set(_enabled: u32) {
+        async_disabled()
+    }
+}
+
+pub(crate) use async_builtins::*;
+
+unsafe extern "C" {
+    pub(crate) fn __wasilibc_reset_preopens();
+}

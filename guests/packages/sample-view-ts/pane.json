@@ -1,0 +1,29 @@
+{
+  "manifestVersion": 1,
+  "title": "TypeScript designed view sample",
+  "version": "0.1.0",
+  "apiVersion": "0.2",
+  "commands": [
+    {
+      "id": "sample",
+      "title": "TypeScript designed view sample",
+      "subtitle": "A counter whose screen the extension designs as a tree",
+      "component": "sample_view_ts.wasm",
+      "mode": "designed"
+    },
+    {
+      "id": "components",
+      "title": "TypeScript components sample",
+      "subtitle": "Every component of the UI component set, drawn by Pane",
+      "component": "sample_view_ts.wasm",
+      "mode": "designed"
+    },
+    {
+      "id": "loading",
+      "title": "TypeScript loading sample",
+      "subtitle": "Data arriving drawn the moment it lands, with no timer",
+      "component": "sample_view_ts.wasm",
+      "mode": "designed"
+    }
+  ]
+}

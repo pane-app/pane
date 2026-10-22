@@ -1,0 +1,209 @@
+// Test fixture: Pane's current contract with one change, `form-error`
+// without its `field` field, so that every export matches by name and only
+// a type differs, as a later change to a record of API 0.1 would.
+//
+// Host/guest contract for one extension command. This is not the full Pane
+// SDK.
+package pane:extension@0.1.0;
+
+
+interface command {
+  use commands.{launch-record};
+
+  /// An operating system Pane runs on. In the tree, an item's `platforms`
+  /// names these as strings.
+  enum platform {
+    windows,
+    macos,
+    linux,
+  }
+
+  /// A form the user fills in and submits to the command. In the tree, an
+  /// item's `form` carries it as JSON (docs/list-tree.md); submitting it
+  /// calls `submit-form` with the item's id.
+  record form {
+    title: string,
+    fields: list<field>,
+    /// The submit button's label.
+    submit-label: string,
+  }
+
+  record field {
+    /// Identifies the field's value in `submit-form`.
+    id: string,
+    /// Names the field on screen and to assistive technology.
+    label: string,
+    kind: field-kind,
+  }
+
+  variant field-kind {
+    /// A single-line text field. It starts empty.
+    text(text-field),
+    /// A choice of exactly one of these options. The first starts chosen.
+    choice(list<choice>),
+  }
+
+  record text-field {
+    /// Shown while the field is empty.
+    placeholder: option<string>,
+  }
+
+  record choice {
+    /// The field's value while this option is chosen.
+    id: string,
+    label: string,
+  }
+
+  /// One field's value when the form is submitted: a text field's text, or
+  /// the chosen option's id.
+  record field-value {
+    id: string,
+    value: string,
+  }
+
+  /// Why a submitted form was not accepted.
+  record form-error {
+    message: string,
+  }
+
+
+  /// a tree of layout nodes and UI components that Pane renders (ADR 0036;
+  /// `docs/designed-tree.md` describes every node). The extension keeps the
+  /// view's state in the resource. Pane drops it when the view leaves the
+  /// screen, and never uses it again. Only the envelope is typed: the tree
+  /// is JSON, so a UI component, a property or an event can be added with
+  /// no WIT change, and a component built against an older component set
+  /// keeps working.
+  resource view {
+    /// Draws the view as it is now: its tree as JSON, naming the version of
+    /// the UI component set it uses, such as `{"version": "1.0", "root":
+    /// {"type": "column", "children": [...]}}`, and how long Pane waits
+    /// before asking again (`refresh-after-ms`, #236: Pane draws the view
+    /// again then, clamped to the floor and ceiling of refreshes, while
+    /// the view is on top and the launcher is shown). `context` is JSON
+    /// too: the sequence number of this render, the id of the view it
+    /// draws and why Pane asks — `"open"` (the view's first drawing),
+    /// `"event"` (the render an event's answer asks for), `"refresh"`
+    /// (the drawing the view asked to wait for) or `"push"` (the drawing
+    /// the view's work asked for itself) — so the extension can name each
+    /// render's callbacks, ask for a drawing again through
+    /// `pane:extension/view`, and run an interval's work only in the
+    /// refresh's render, and the version of the UI component set Pane
+    /// supports, such as `{"render": 1, "view": 7, "why": "open", "ui":
+    /// "1.0"}`; it can grow without WIT changes.
+    /// Pane ignores a node it does not know, drawing the `fallback` the
+    /// tree gave, else the node's children, and a property it does not
+    /// know; a tree it cannot read, over one of its limits, or of another
+    /// major version of the component set, is the extension's error: the
+    /// view keeps its last good tree. An error is shown to the user.
+    render: async func(context: string) -> result<rendered, string>;
+
+    /// Handles the user's input to the view: `callback`, the id the tree
+    /// named for what was pressed, with the sequence number of the render
+    /// whose tree the user saw (`render`), the key of the node the event
+    /// was raised on (`key`, or `""` when the tree gave it none) and the
+    /// event's details as JSON in `payload` (`"{}"` for a press). An event
+    /// from a render older than the extension's last two is stale: it is
+    /// dropped, never an error. Pane calls `render` afterwards. An error
+    /// is shown to the user; the view stays open with its last good tree.
+    handle-event: async func(event: ui-event) -> result<outcome, string>;
+  }
+
+  /// What `view.render` answers: the view's tree, and how long Pane waits
+  /// before asking for it again.
+  record rendered {
+    tree: string,
+    refresh-after-ms: option<u32>,
+  }
+
+  /// The user's input to a designed view, as the tree's callback ids name
+  /// it.
+  record ui-event {
+    /// The sequence number of the render whose tree the user saw.
+    render: u64,
+    /// The key of the node the event was raised on, or `""` when the tree
+    /// gave it none.
+    key: string,
+    /// The callback id the tree named for what was pressed.
+    callback: u32,
+    /// The event's details as JSON, `"{}"` when it has none.
+    payload: string,
+  }
+
+  /// What handling a designed view's event does next. Pane ignores every
+  /// field for now: the navigation stack lands with #239, which gives
+  /// `push` and `replace` their meaning, and `pop`'s, and until then an
+  /// answer is the empty outcome.
+  record outcome {
+    /// A view to push onto the stack.
+    push: option<view>,
+    /// A view to replace the top of the stack with.
+    replace: option<view>,
+    /// Pops the top of the stack, answering the pushing view with `pop`.
+    pop: option<string>,
+  }
+
+  /// Draws the command's screen: a JSON tree that names its version, such
+  /// as `{"version": 1, "view": {"type": "list", "title": "Notes", "items":
+  /// [...]}}` (docs/list-tree.md describes every field). An item's action
+  /// names a callback id, which Pane passes to `handle-event` when the user
+  /// chooses it. Pane ignores a field it does not know, and draws what it
+  /// understands of a tree naming a newer version than it knows; a tree it
+  /// cannot read is the command's failure, shown as an error the extension
+  /// answered with is, never a crash. An error is shown to the user.
+  ///
+  /// `launch` is how the command's screen was opened: Pane passes the same
+  /// record each time it asks for the screen again while it is open. A
+  /// scheduled item's run (`"schedule"` with an `item`) draws the list
+  /// with a `background` record from its `schedule`.
+  render: async func(launch: launch-record) -> result<string, string>;
+
+  /// Runs the no-view command `command` (its id in `pane.json`, so one
+  /// component can serve several commands): one whose `pane.json` entry
+  /// says `"mode": "no-view"`. Pane calls it, never `render`, each time the
+  /// command is launched (Enter on its row, its alias, a fallback, its
+  /// global hotkey, its quick slot, another command, or its schedule), and
+  /// opens no screen. The answer is a JSON object, as `handle-event`'s is
+  /// (`{}`); Pane shows nothing of it: the command tells the user what
+  /// happened with a toast or a HUD (wit/feedback.wit). An error is shown
+  /// to the user as a failure toast with a "Copy Error" action; it is an
+  /// operation error, which never counts towards pausing the extension (a
+  /// crash does). Once the run ends, a toast it left in the animated style
+  /// is hidden. A component that serves no no-view command answers with an
+  /// error; Pane never calls it then.
+  run: async func(command: string, launch: launch-record) -> result<string, string>;
+
+  /// Handles the user's choice of the callback `callback`, an id the
+  /// command's tree named (such as an item's action's), or a search
+  /// result's id (wit/search.wit). `details` is a JSON object with the
+  /// event's details, `{}` when it has none. The answer is a JSON object
+  /// (docs/list-tree.md), `{}` for now; Pane shows nothing of it: the
+  /// command tells the user what happened with a toast or a HUD
+  /// (wit/feedback.wit). Pane then calls `render` again and keeps the
+  /// selection on the same item. An error is shown to the user as a failure
+  /// toast.
+  handle-event: async func(callback: string, details: string) -> result<string, string>;
+
+  /// Handle the submitted form of the item with `item-id`. `values` holds
+  /// every field of the form, in order. The returned text is shown to the
+  /// user as the result; an error is shown next to its field.
+  submit-form: async func(item-id: string, values: list<field-value>) -> result<string, form-error>;
+
+  /// Opens the designed view of the command `command` (its id in
+  /// `pane.json`, so one component can serve several commands), launched as
+  /// `launch` says: a command whose `pane.json` entry says
+  /// `"mode": "designed"`, which Pane calls at its launch and never
+  /// `render`. Each call opens a new view with its own state; Pane's first
+  /// `render` of it follows this answer. A component that serves no
+  /// designed command answers with an error; Pane never calls it then.
+  open-view: async func(command: string, launch: launch-record) -> result<view, string>;
+}
+
+world extension {
+  import commands;
+  import window;
+  import feedback;
+  import system;
+  import view;
+  export command;
+}

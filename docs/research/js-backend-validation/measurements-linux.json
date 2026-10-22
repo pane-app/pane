@@ -1,0 +1,137 @@
+{
+  "scope": "Fresh release processes on one machine; 3-5 samples. Host = docs/research/p3-only-host (Wasmtime 49.0.1, P3 only). Peak RSS is the whole process, including Wasmtime/Cranelift. Not launcher idle memory, steady per-extension cost, or installer size.",
+  "machine": {
+    "os": "Linux-7.0.0-31-generic-x86_64-with-glibc2.43",
+    "cpu_count": 24,
+    "python": "3.14.4"
+  },
+  "sizes": {
+    "p3-capabilities": {
+      "bytes": 9996161,
+      "mib": 9.53,
+      "gzip9_bytes": 2905409,
+      "sha256": "901b0ca258fb88b1772c54d5e66326d4e7ae3cedb65d1e9bbd92aadb74b5d9cd"
+    },
+    "p3-search": {
+      "bytes": 9915681,
+      "mib": 9.46,
+      "gzip9_bytes": 2916704,
+      "sha256": "c6fa9f9936052c8dbe27023883ba1f73f0a616b730a718e12657451746e04ec7"
+    },
+    "p3-sample-js": {
+      "bytes": 4006084,
+      "mib": 3.82,
+      "gzip9_bytes": 1382168,
+      "sha256": "0920ab1509d9248c3ef06a68e3a2ac0d24658e7122534cd2d348c178bdf0c584"
+    },
+    "p3-sample-ts": {
+      "bytes": 4005869,
+      "mib": 3.82,
+      "gzip9_bytes": 1382405,
+      "sha256": "e35a48ec4808fd8e0758094950c6366671b60808fc634e82d4c6bd33b0587a70"
+    },
+    "stock-search": {
+      "bytes": 7543450,
+      "mib": 7.19,
+      "gzip9_bytes": 2108795,
+      "sha256": "82a665f4fd16a65bc3978fac0598771dcca32044f6a02fa717c59d9a0f16721b"
+    },
+    "stock-sample-ts": {
+      "bytes": 1634247,
+      "mib": 1.56,
+      "gzip9_bytes": 576894,
+      "sha256": "38edb14c8f1c2123c6a3a8ab351f7952f79f4b8b7e0c7c02edf457842955fb35"
+    },
+    "rust-sample (target/guests)": {
+      "bytes": 40491,
+      "mib": 0.04,
+      "gzip9_bytes": 14521,
+      "sha256": "e074f439ba610b4b24a4ce890045a7ee5f92f653e6a69a0b7993fee9beda7a0f"
+    }
+  },
+  "host_in_process": {
+    "p3-capabilities": {
+      "cranelift_compile_ms": 1056.5,
+      "compile_peak_rss_mib": 99.6,
+      "cwasm_bytes": 12004848,
+      "deserialize_ms_median": 0.849,
+      "first_instantiate_ms_median": 0.203,
+      "later_instantiate_ms_median": 0.1,
+      "later_instantiate_ms_max": 0.129,
+      "instantiate20_process_peak_rss_mib_median": 10.887
+    },
+    "p3-search": {
+      "cranelift_compile_ms": 1005.2,
+      "compile_peak_rss_mib": 98.9,
+      "cwasm_bytes": 11856952,
+      "deserialize_ms_median": 0.834,
+      "first_instantiate_ms_median": 0.179,
+      "later_instantiate_ms_median": 0.094,
+      "later_instantiate_ms_max": 0.206,
+      "instantiate20_process_peak_rss_mib_median": 10.969
+    },
+    "p3-sample-js": {
+      "cranelift_compile_ms": 1011.3,
+      "compile_peak_rss_mib": 81.0,
+      "cwasm_bytes": 5697328,
+      "deserialize_ms_median": 0.86,
+      "first_instantiate_ms_median": 0.177,
+      "later_instantiate_ms_median": 0.095,
+      "later_instantiate_ms_max": 0.155,
+      "instantiate20_process_peak_rss_mib_median": 10.969
+    },
+    "p3-sample-ts": {
+      "cranelift_compile_ms": 1014.7,
+      "compile_peak_rss_mib": 81.3,
+      "cwasm_bytes": 5697328,
+      "deserialize_ms_median": 0.864,
+      "first_instantiate_ms_median": 0.184,
+      "later_instantiate_ms_median": 0.094,
+      "later_instantiate_ms_max": 0.164,
+      "instantiate20_process_peak_rss_mib_median": 11.004
+    },
+    "rust-sample (target/guests)": {
+      "cranelift_compile_ms": 24.0,
+      "compile_peak_rss_mib": 14.9,
+      "cwasm_bytes": 116288,
+      "deserialize_ms_median": 0.126,
+      "first_instantiate_ms_median": 0.05,
+      "later_instantiate_ms_median": 0.012,
+      "later_instantiate_ms_max": 0.022,
+      "instantiate20_process_peak_rss_mib_median": 8.535
+    }
+  },
+  "cli_same_workload": {
+    "stock-search": {
+      "compile_process_ms": 162.0,
+      "compile_peak_rss_mib": 176.3,
+      "cwasm_bytes": 10588560,
+      "run_process_ms_median": 17.658,
+      "run_peak_rss_mib_median": 26.152
+    },
+    "p3-search": {
+      "compile_process_ms": 145.3,
+      "compile_peak_rss_mib": 165.0,
+      "cwasm_bytes": 11857120,
+      "run_process_ms_median": 18.154,
+      "run_peak_rss_mib_median": 26.332
+    }
+  },
+  "pane_core_run_guest": {
+    "p3-sample-js": {
+      "first_get_view_ms_median": 1030.824,
+      "later_action_ms_median": 0.229,
+      "process_peak_rss_mib_median": 80.754
+    },
+    "p3-sample-ts": {
+      "first_get_view_ms_median": 1033.363,
+      "later_action_ms_median": 0.328,
+      "process_peak_rss_mib_median": 80.809
+    },
+    "rust-sample (target/guests)": {
+      "first_get_view_ms_median": 23.624,
+      "later_action_ms_median": 0.019,
+      "process_peak_rss_mib_median": 15.52
+    }
+  }
+}

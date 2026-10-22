@@ -1,0 +1,39 @@
+{
+  "region_left_top_right_bottom": [
+    630,
+    120,
+    730,
+    300
+  ],
+  "meaning": "Background response establishes transparency only. Blur is established separately by visual review of softened known external edges.",
+  "results": {
+    "glass-dark": {
+      "mean_absolute_rgb_difference": 13.818944,
+      "files": [
+        "glass-dark-lightbackdrop/00-initial-window.png",
+        "glass-dark-darkbackdrop/00-initial-window.png"
+      ]
+    },
+    "control-dark": {
+      "mean_absolute_rgb_difference": 0.0,
+      "files": [
+        "control-dark-light/00-initial-window.png",
+        "control-dark-dark/00-initial-window.png"
+      ]
+    },
+    "glass-light": {
+      "mean_absolute_rgb_difference": 16.858611,
+      "files": [
+        "glass-light-lightbackdrop/00-initial-window.png",
+        "glass-light-darkbackdrop/00-initial-window.png"
+      ]
+    },
+    "control-light": {
+      "mean_absolute_rgb_difference": 0.0,
+      "files": [
+        "control-light-light/00-initial-window.png",
+        "control-light-dark/00-initial-window.png"
+      ]
+    }
+  }
+}

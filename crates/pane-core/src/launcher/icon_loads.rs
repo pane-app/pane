@@ -1,0 +1,638 @@
+//! Loading the icons that need the host's help (#142): web images, which
+//! Pane downloads, and system icons, which it extracts. A list never waits
+//! for them: [`IconLoads::want`] starts what an open command's items need
+//! when their looks are remembered, and [`IconLoads::shown`] says what each
+//! icon shows now, its fallback (or a neutral placeholder) until the image
+//! is ready and for good if it fails. Each load that ends tells the window
+//! the launcher changed, so the row draws its image.
+//!
+//! - **Web images**, by `http(s)` URL, are downloaded through Pane's HTTP
+//!   client within the ceilings of the extension's own web requests (ADR
+//!   0018: the response's head, its pieces, the whole request and a
+//!   4 MiB body), and kept as the package's extension cache
+//!   ([`ExtensionData::web_images`]): "Clear cache" removes them, and a
+//!   restart finds them without downloading them again. A download that
+//!   fails, is over the limits or is not an image leaves the fallback. One
+//!   URL is downloaded once per package, however many rows name it. A
+//!   download is on its package's generation's undo list: disabling,
+//!   updating or uninstalling the package stops it. A command built into
+//!   Pane has no cache, so its web images show their fallbacks.
+//! - **System icons**, by path, are extracted by the host
+//!   ([`crate::system_icons`]) once per path and version of the file, and
+//!   kept as PNGs in Pane's own folder beside the installed packages.
+//! - **Installed applications' own icons**, by the icon reference the
+//!   applications import returns (#172), are the host's cache of the
+//!   applications' icons ([`crate::applications::icons`]), which extracts
+//!   them on a worker of its own.
+//!
+//! Loads run on a few threads of their own, never the window's or the
+//! extension runtime's.
+
+use std::collections::{HashMap, VecDeque};
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, MutexGuard};
+use std::time::UNIX_EPOCH;
+
+use crate::applications::icons::IconCache;
+use crate::extension_data::ExtensionData;
+use crate::generation::Generation;
+use crate::http::{self, GetError, Network};
+use crate::icons::{
+    Color, Icon, IconSource, Tint, Tone, WEB_IMAGE_KINDS, image_kind, is_web_url, web_image_stem,
+};
+use crate::packages::PackageIdentity;
+use crate::system_icons::{NativeIcons, SystemIcon, SystemIcons};
+use crate::util::lock;
+
+/// How many loads run at once.
+const WORKERS: usize = 4;
+
+/// The folder beside the installed packages holding the system icons Pane
+/// extracted.
+const SYSTEM_ICONS_DIR: &str = "system-icons";
+
+/// What the window is told when a load ended.
+pub(super) type Changed = Arc<dyn Fn() + Send + Sync>;
+
+/// The launcher's icon loads: what each web image and system icon is now,
+/// and the threads loading them. Cloning shares them.
+#[derive(Clone)]
+pub(super) struct IconLoads {
+    shared: Arc<Shared>,
+}
+
+struct Shared {
+    /// Where the installed packages' data is: their web images' folders,
+    /// and their generations. `None` for a launcher that installs no
+    /// packages.
+    data: Option<ExtensionData>,
+    /// Where extracted system icons are kept; `None` likewise.
+    system_folder: Option<PathBuf>,
+    /// The runtime's web requests: the ceilings downloads keep to, and
+    /// each package's network use.
+    network: Option<Arc<Network>>,
+    /// Tells the window the launcher changed.
+    changed: Changed,
+    /// Extracts system icons: the system's, or a test's.
+    system_icons: Mutex<Arc<dyn SystemIcons>>,
+    /// The host's cache of the installed applications' icons (#172), when
+    /// the launcher keeps one.
+    applications: Mutex<Option<IconCache>>,
+    state: Mutex<Loads>,
+}
+
+#[derive(Default)]
+struct Loads {
+    /// Web images by package (its identity key) and URL.
+    web: HashMap<(String, String), Load>,
+    /// System icons by path.
+    system: HashMap<PathBuf, Load>,
+    queue: VecDeque<Job>,
+    /// Threads loading now.
+    workers: usize,
+}
+
+/// Where one image is.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum Load {
+    Loading,
+    /// Ready to draw: the image's file.
+    Ready(PathBuf),
+    /// It could not be loaded: its fallback shows.
+    Failed,
+}
+
+/// One load to run.
+enum Job {
+    Web {
+        owner: String,
+        url: String,
+        folder: PathBuf,
+        generation: Generation,
+    },
+    System {
+        path: PathBuf,
+    },
+}
+
+impl IconLoads {
+    /// The loads of a launcher whose packages' data is `data` (beside
+    /// which, in `folder`, system icons are kept), downloading through
+    /// `network`, telling the window of each load that ended with
+    /// `changed`.
+    pub(super) fn new(
+        data: Option<(ExtensionData, PathBuf)>,
+        network: Option<Arc<Network>>,
+        changed: Changed,
+    ) -> IconLoads {
+        let (data, system_folder) = match data {
+            Some((data, folder)) => (Some(data), Some(folder.join(SYSTEM_ICONS_DIR))),
+            None => (None, None),
+        };
+        IconLoads {
+            shared: Arc::new(Shared {
+                data,
+                system_folder,
+                network,
+                changed,
+                system_icons: Mutex::new(Arc::new(NativeIcons)),
+                applications: Mutex::new(None),
+                state: Mutex::new(Loads::default()),
+            }),
+        }
+    }
+
+    /// Extracts system icons with `system_icons` from now on, forgetting
+    /// those extracted before.
+    pub(super) fn set_system_icons(&self, system_icons: Arc<dyn SystemIcons>) {
+        *lock(&self.shared.system_icons) = system_icons;
+        self.shared.lock().system.clear();
+    }
+
+    /// Draws installed applications' own icons from `cache` from now on
+    /// (#172).
+    pub(super) fn set_application_icons(&self, cache: Option<IconCache>) {
+        *lock(&self.shared.applications) = cache;
+    }
+
+    /// Starts loading what `icon` and its fallbacks need that is not
+    /// loaded or loading yet, for the package with identity `owner`
+    /// (`None` for a command built into Pane).
+    pub(super) fn want(&self, owner: Option<&PackageIdentity>, icon: &Icon) {
+        let mut next = Some(icon);
+        while let Some(icon) = next {
+            match &icon.source {
+                IconSource::Url(url) if is_web_url(url) => self.want_web(owner, url),
+                IconSource::File(path) => self.want_system(path),
+                IconSource::Application(reference) => {
+                    if let Some(cache) = lock(&self.shared.applications).as_ref() {
+                        cache.want(reference);
+                    }
+                }
+                _ => {}
+            }
+            next = icon.fallback.as_deref();
+        }
+    }
+
+    fn want_web(&self, identity: Option<&PackageIdentity>, url: &str) {
+        let shared = &self.shared;
+        let (Some(identity), Some(data)) = (identity, &shared.data) else {
+            // Built into Pane: no cache to keep it in.
+            return;
+        };
+        let owner = identity.key();
+        let key = (owner.clone(), url.to_owned());
+        let mut state = shared.lock();
+        if let Some(Load::Loading | Load::Failed) = state.web.get(&key) {
+            return;
+        }
+        if let Some(Load::Ready(file)) = state.web.get(&key)
+            && file.is_file()
+        {
+            return;
+        }
+        // Downloaded before, this session or another: kept on disk.
+        let folder = data.web_images(&owner);
+        let stem = web_image_stem(url);
+        let kept = WEB_IMAGE_KINDS
+            .iter()
+            .map(|kind| folder.join(format!("{stem}.{kind}")))
+            .find(|file| file.is_file());
+        if let Some(file) = kept {
+            state.web.insert(key, Load::Ready(file));
+            return;
+        }
+        state.web.insert(key, Load::Loading);
+        let generation = data.owned_by(identity).generation().clone();
+        state.queue.push_back(Job::Web {
+            owner,
+            url: url.to_owned(),
+            folder,
+            generation,
+        });
+        self.start_worker(&mut state);
+    }
+
+    fn want_system(&self, path: &Path) {
+        if self.shared.system_folder.is_none() {
+            return;
+        }
+        let mut state = self.shared.lock();
+        match state.system.get(path) {
+            Some(Load::Loading | Load::Failed) => return,
+            Some(Load::Ready(file)) if file.is_file() => return,
+            _ => {}
+        }
+        state.system.insert(path.to_path_buf(), Load::Loading);
+        state.queue.push_back(Job::System {
+            path: path.to_path_buf(),
+        });
+        self.start_worker(&mut state);
+    }
+
+    /// Starts another thread loading, unless enough are.
+    fn start_worker(&self, state: &mut Loads) {
+        if state.workers >= WORKERS {
+            return;
+        }
+        state.workers += 1;
+        let shared = self.shared.clone();
+        let started = std::thread::Builder::new()
+            .name("pane-icon-loads".into())
+            .spawn(move || shared.work());
+        if let Err(error) = started {
+            state.workers -= 1;
+            crate::diagnostic!("pane: could not start a thread loading icons: {error}");
+        }
+    }
+
+    /// `icon` as a row shows it now, for the package with identity key
+    /// `owner`: a web image, a system icon or an application's own icon
+    /// that is ready as its image file (an application's light and dark
+    /// variants); one loading or failed as its fallback (shown alike), or a
+    /// neutral placeholder without one, keeping its tooltip. Anything else
+    /// as it is.
+    pub(super) fn shown(&self, owner: Option<&str>, icon: &Icon) -> Icon {
+        let fallback = icon
+            .fallback
+            .as_deref()
+            .map(|fallback| self.shown(owner, fallback));
+        // A web image or a system icon is one file for both themes.
+        let both = |file: PathBuf| (file.clone(), file);
+        let file = match &icon.source {
+            IconSource::Url(url) if is_web_url(url) => Some(owner.and_then(|owner| {
+                let key = (owner.to_owned(), url.clone());
+                match self.shared.lock().web.get(&key) {
+                    Some(Load::Ready(file)) => Some(both(file.clone())),
+                    _ => None,
+                }
+            })),
+            IconSource::File(path) => Some(match self.shared.lock().system.get(path) {
+                Some(Load::Ready(file)) => Some(both(file.clone())),
+                _ => None,
+            }),
+            // An application's own icon, once its cache keeps it (#172),
+            // with its light and dark variants.
+            IconSource::Application(reference) => Some(
+                lock(&self.shared.applications)
+                    .as_ref()
+                    .and_then(|cache| cache.shown(reference))
+                    .map(|shown| (shown.light, shown.dark)),
+            ),
+            _ => None,
+        };
+        let source = match file {
+            // Not one Pane loads: as it is.
+            None => icon.source.clone(),
+            Some(Some((light, dark))) => IconSource::Image { light, dark },
+            Some(None) => {
+                let mut stand_in = fallback.unwrap_or_else(placeholder);
+                if stand_in.tooltip.is_none() {
+                    stand_in.tooltip = icon.tooltip.clone();
+                }
+                return stand_in;
+            }
+        };
+        Icon {
+            source,
+            tint: icon.tint,
+            mask: icon.mask,
+            fallback: fallback.map(Box::new),
+            tooltip: icon.tooltip.clone(),
+        }
+    }
+
+    /// Forgets the web images of the package with identity key `owner`,
+    /// whose cache was cleared: the next list naming them downloads them
+    /// again.
+    pub(super) fn forget(&self, owner: &str) {
+        self.shared.lock().web.retain(|(of, _), _| of != owner);
+    }
+
+    /// Waits up to `limit` until no load is queued or running; whether none
+    /// is. For tests.
+    #[cfg(any(test, debug_assertions))]
+    pub(super) fn wait_idle(&self, limit: std::time::Duration) -> bool {
+        let deadline = std::time::Instant::now() + limit;
+        loop {
+            {
+                let state = self.shared.lock();
+                if state.workers == 0 && state.queue.is_empty() {
+                    return true;
+                }
+            }
+            if std::time::Instant::now() >= deadline {
+                return false;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    }
+}
+
+impl super::Launcher {
+    /// This launcher extracting system icons with `system_icons` instead
+    /// of the system's adapter ([`NativeIcons`]): a test's stand-in.
+    pub fn with_system_icons(self, system_icons: Arc<dyn SystemIcons>) -> Self {
+        self.lock().icon_loads.set_system_icons(system_icons);
+        self
+    }
+
+    /// Waits up to `limit` until no web image or system icon is loading;
+    /// whether none is. For tests; debug builds only.
+    #[cfg(any(test, debug_assertions))]
+    #[doc(hidden)]
+    pub fn wait_for_icons(&self, limit: std::time::Duration) -> bool {
+        let loads = self.lock().icon_loads.clone();
+        loads.wait_idle(limit)
+    }
+}
+
+/// Writes the diagnostic of a web image `url` that shows its fallback
+/// because of `why`. The image is named by the address it was asked of
+/// only: the rest of an extension's URL can carry what the user typed (a
+/// search's query), which Pane's log never holds (#133). `why` names the
+/// URL in its own way at times (escaped, or the one a redirect led to), so
+/// beyond the URL itself, every URL-like text in it is left out.
+fn report_fallback(url: &str, why: &str) {
+    let address =
+        http::address_of(url).unwrap_or_else(|| "an address that is not a web one".into());
+    let why = without_urls(&why.replace(url, &address));
+    crate::diagnostic!("pane: a web image from {address} shows its fallback: {why}");
+}
+
+/// `text` with every URL-like text in it (a scheme, `://` and what follows
+/// up to a space, a quote or a bracket) replaced by `<url>`.
+fn without_urls(text: &str) -> String {
+    let scheme = |c: char| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.');
+    let ends = |c: char| c.is_whitespace() || "`\"'<>()".contains(c);
+    let mut kept = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(at) = rest.find("://") {
+        let start = rest[..at].trim_end_matches(scheme).len();
+        let end = rest[at..]
+            .find(ends)
+            .map_or(rest.len(), |length| at + length);
+        kept.push_str(&rest[..start]);
+        kept.push_str("<url>");
+        rest = &rest[end..];
+    }
+    kept.push_str(rest);
+    kept
+}
+
+/// What an icon shows while its image loads, or when it failed, if it has
+/// no fallback: a neutral image glyph in the secondary tone.
+fn placeholder() -> Icon {
+    Icon {
+        tint: Some(Tint::Same(Color::Tone(Tone::Secondary))),
+        ..Icon::new(IconSource::Builtin {
+            name: "image".into(),
+            filled: false,
+        })
+    }
+}
+
+impl Shared {
+    fn lock(&self) -> MutexGuard<'_, Loads> {
+        lock(&self.state)
+    }
+
+    /// A loading thread: runs queued loads until none is left.
+    fn work(&self) {
+        loop {
+            let job = {
+                let mut state = self.lock();
+                match state.queue.pop_front() {
+                    Some(job) => job,
+                    None => {
+                        state.workers -= 1;
+                        return;
+                    }
+                }
+            };
+            match job {
+                Job::Web {
+                    owner,
+                    url,
+                    folder,
+                    generation,
+                } => {
+                    let loaded = self.download(&owner, &url, &folder, &generation);
+                    if let Err(why) = &loaded {
+                        report_fallback(&url, why);
+                    }
+                    let load = loaded.map_or(Load::Failed, Load::Ready);
+                    self.lock().web.insert((owner, url), load);
+                }
+                Job::System { path } => {
+                    let load = self.extract(&path).map_or(Load::Failed, Load::Ready);
+                    self.lock().system.insert(path, load);
+                }
+            }
+            (self.changed)();
+        }
+    }
+
+    /// Downloads the web image at `url` for the package with identity key
+    /// `owner` into `folder`, unless its `generation` ended first; the
+    /// image's file.
+    fn download(
+        &self,
+        owner: &str,
+        url: &str,
+        folder: &Path,
+        generation: &Generation,
+    ) -> Result<PathBuf, String> {
+        let network = self
+            .network
+            .as_ref()
+            .ok_or("Pane's extension runtime is not running")?;
+        if let Some(address) = http::address_of(url) {
+            network.note_contacted(owner, address);
+        }
+        // On the generation's undo list while it downloads: its end stops
+        // it.
+        let (abort, aborted) = tokio::sync::oneshot::channel::<()>();
+        let _undo = generation.on_end("web image", move || {
+            let _ = abort.send(());
+            Ok(())
+        });
+        let answer =
+            http::get_for_extension(url, network.limits(), Some(aborted)).map_err(|error| {
+                match error {
+                    GetError::TooLarge => "it is larger than an extension may download".to_owned(),
+                    GetError::Failed(why) => why,
+                }
+            })?;
+        if !(200..300).contains(&answer.status) {
+            return Err(format!("the server answered {}", answer.status));
+        }
+        let kind = image_kind(&answer.body).ok_or("it is not an image Pane draws")?;
+        if generation.ended().is_some() {
+            return Err("its extension stopped".into());
+        }
+        let file = folder.join(format!("{}.{kind}", web_image_stem(url)));
+        crate::atomic::write_atomically(&file, &answer.body, crate::atomic::Readers::Default)
+            .map_err(|error| format!("cannot keep it: {error}"))?;
+        Ok(file)
+    }
+
+    /// Extracts the system icon of `path`, keeping it as a PNG in Pane's
+    /// folder; the image's file.
+    fn extract(&self, path: &Path) -> Result<PathBuf, String> {
+        let folder = self
+            .system_folder
+            .as_ref()
+            .ok_or("this launcher keeps no system icons")?;
+        // Keyed by the path and the file's version: a changed application
+        // is extracted again.
+        let modified = std::fs::metadata(path)
+            .ok()
+            .map(|metadata| {
+                let at = metadata
+                    .modified()
+                    .ok()
+                    .and_then(|at| at.duration_since(UNIX_EPOCH).ok())
+                    .map_or(0, |at| at.as_millis());
+                format!("{at}:{}", metadata.len())
+            })
+            .unwrap_or_default();
+        let key = format!("{}\n{modified}", path.display());
+        let file = folder.join(format!("{}.png", web_image_stem(&key)));
+        if file.is_file() {
+            return Ok(file);
+        }
+        let system_icons = lock(&self.system_icons).clone();
+        match system_icons.icon(path) {
+            Ok(SystemIcon::File(image)) => Ok(image),
+            Ok(SystemIcon::Png(png)) => {
+                crate::atomic::write_atomically(&file, &png, crate::atomic::Readers::Default)
+                    .map_err(|error| format!("cannot keep it: {error}"))?;
+                Ok(file)
+            }
+            Err(why) => Err(why),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn loads() -> IconLoads {
+        IconLoads::new(None, None, Arc::new(|| {}))
+    }
+
+    /// A web image an extension built from the user's query fails: the
+    /// log names the address it was asked of, never the query.
+    #[test]
+    fn a_failed_web_image_is_logged_by_its_address_without_the_users_query() {
+        let folder = tempfile::tempdir().unwrap();
+        let captured =
+            crate::diagnostics::capture_into(folder.path(), crate::diagnostics::Redactor::none());
+        let query = "my-secret-search";
+        let url = format!("https://images.example.com/search?q={query}");
+        report_fallback(&url, &format!("`{url}` answered nothing"));
+        report_fallback(
+            &format!("weird:{query}"),
+            &format!("`weird:{query}` is not a web address"),
+        );
+        // The error names the URL otherwise: escaped, or another a redirect
+        // led to.
+        report_fallback(
+            &url,
+            "error sending request for url (https://images.example.com/search?q=my%2Dsecret)",
+        );
+        report_fallback(
+            &url,
+            &format!("redirected to HTTP://cdn.example.com/{query}.png and failed"),
+        );
+        let text = captured.text();
+        assert!(
+            text.contains("pane: a web image from images.example.com"),
+            "{text}"
+        );
+        assert!(!text.contains("secret"), "{text}");
+        assert!(
+            text.contains("shows its fallback: redirected to <url> and failed"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn url_like_text_is_left_out() {
+        assert_eq!(
+            without_urls("a (https://a.example/x?q=1) and `git+ssh://b/c`, then d://e f"),
+            "a (<url>) and `<url>`, then <url> f"
+        );
+        assert_eq!(without_urls("no address here: a:b"), "no address here: a:b");
+        assert_eq!(
+            without_urls("ends with https://x.example/y"),
+            "ends with <url>"
+        );
+    }
+
+    #[test]
+    fn an_image_not_loaded_shows_its_fallback_or_a_placeholder_with_its_tooltip() {
+        let loads = loads();
+        let web = |fallback: Option<Icon>| Icon {
+            fallback: fallback.map(Box::new),
+            tooltip: Some("Logo".into()),
+            ..Icon::new(IconSource::Url("https://example.com/logo.png".into()))
+        };
+        let star = Icon::new(IconSource::Builtin {
+            name: "star".into(),
+            filled: false,
+        });
+        let shown = loads.shown(Some("owner"), &web(Some(star.clone())));
+        assert_eq!(shown.source, star.source);
+        assert_eq!(shown.tooltip.as_deref(), Some("Logo"));
+        let shown = loads.shown(Some("owner"), &web(None));
+        assert_eq!(
+            shown.source,
+            IconSource::Builtin {
+                name: "image".into(),
+                filled: false
+            }
+        );
+        assert_eq!(shown.tooltip.as_deref(), Some("Logo"));
+        // Anything else shows as it is.
+        assert_eq!(loads.shown(None, &star), star);
+    }
+
+    #[test]
+    fn a_ready_image_shows_its_file_with_the_icons_tint_and_mask() {
+        let loads = loads();
+        let file = PathBuf::from("/cache/abc.png");
+        let url = "https://example.com/a.png".to_owned();
+        loads
+            .shared
+            .lock()
+            .web
+            .insert(("owner".into(), url.clone()), Load::Ready(file.clone()));
+        let icon = Icon {
+            mask: Some(crate::icons::Mask::Circle),
+            ..Icon::new(IconSource::Url(url))
+        };
+        let shown = loads.shown(Some("owner"), &icon);
+        assert_eq!(
+            shown.source,
+            IconSource::Image {
+                light: file.clone(),
+                dark: file
+            }
+        );
+        assert_eq!(shown.mask, Some(crate::icons::Mask::Circle));
+        // Another package's is its own.
+        assert!(matches!(
+            loads.shown(Some("other"), &icon).source,
+            IconSource::Builtin { .. }
+        ));
+        loads.forget("owner");
+        assert!(matches!(
+            loads.shown(Some("owner"), &icon).source,
+            IconSource::Builtin { .. }
+        ));
+    }
+}

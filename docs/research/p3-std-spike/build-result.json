@@ -1,0 +1,19 @@
+{
+  "exit_code": 0,
+  "seconds": 31.0,
+  "command": [
+    "rustup",
+    "run",
+    "nightly-2026-09-27",
+    "cargo",
+    "build",
+    "--release",
+    "--target",
+    "wasm32-wasip3",
+    "-Zbuild-std=std,panic_abort",
+    "--manifest-path",
+    "C:\\Users\\ADMIN\\Desktop\\nguyenvu\\kyoko\\docs\\research\\p3-std-spike\\Cargo.toml"
+  ],
+  "toolchain": "nightly-2026-09-27",
+  "target_dir": "C:\\Users\\ADMIN\\AppData\\Local\\Temp\\kyoko-p3-native-toolchain\\std-nightly-target"
+}

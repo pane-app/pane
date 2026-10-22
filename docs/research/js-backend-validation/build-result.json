@@ -1,0 +1,62 @@
+{
+  "runtime": {
+    "seconds": 3.4,
+    "command": [
+      "rustup",
+      "run",
+      "nightly-2026-09-27",
+      "cargo",
+      "build",
+      "--release",
+      "--target",
+      "wasm32-wasip3",
+      "-Zbuild-std=std,panic_abort",
+      "--manifest-path",
+      "$PANE_SCRATCH/qjs-port/Cargo.toml",
+      "-p",
+      "componentize-qjs-runtime"
+    ],
+    "bytes": 1248792,
+    "sha256": "a602636e6cfd3511c0b3600a1641c46566a6ce7e55a982e4d7e96b80503fe5b6"
+  },
+  "componentizer": {
+    "seconds": 188.8,
+    "command": [
+      "cargo",
+      "build",
+      "--release",
+      "--locked",
+      "--manifest-path",
+      "$PANE_SCRATCH/qjs-port/Cargo.toml",
+      "-p",
+      "componentize-qjs",
+      "--example",
+      "p3_build"
+    ]
+  },
+  "host": {
+    "seconds": 57.9,
+    "command": [
+      "cargo",
+      "build",
+      "--release",
+      "--manifest-path",
+      "$REPO/docs/research/p3-only-host/Cargo.toml"
+    ]
+  },
+  "pane": {
+    "seconds": 0.4,
+    "command": [
+      "cargo",
+      "build",
+      "--release",
+      "--locked",
+      "-p",
+      "pane-core",
+      "--example",
+      "run_guest"
+    ]
+  },
+  "nightly": "rustc 1.101.0-nightly (75a75c3e0 2026-09-26)",
+  "stable": "cargo 1.98.1 (797e8a9bc 2026-08-05)"
+}

@@ -1,0 +1,16 @@
+# Test fixture: a component whose exports all match the extension API 0.1
+# contract by name while one record differs in type, which Pane must refuse
+# at install without running it.
+[package]
+name = "mismatched-api"
+version = "0.1.0"
+edition.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wit-bindgen = { version = "=0.62.0", default-features = false, features = ["macros", "async"] }
+dlmalloc = { version = "0.2", features = ["global"] }

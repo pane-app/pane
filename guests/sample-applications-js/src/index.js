@@ -1,0 +1,91 @@
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+//
+// Pane's applications sample in JavaScript: it finds the installed
+// applications through `pane:extension/applications`, which Pane's host
+// provides since a WASI guest cannot see or start them, supplies "Launch
+// <name>" for each to root search as indexed results (`indexedResults`,
+// built with it through package.json's `"pane"`), and its command lists
+// them and opens one. Titles, results and errors match the TypeScript
+// sample (guests/sample-applications-ts). The JSDoc types let TypeScript
+// check this file against Pane's contract; they are optional.
+// @ts-check
+import { showToast } from "@pane-app/extension/feedback";
+import { installed, open } from "pane:extension/applications@0.2.0";
+
+const SAMPLE = "JavaScript applications sample";
+
+/**
+ * Calls a host function, turning its error into a plain message.
+ * @template T
+ * @param {() => T} call
+ * @returns {T}
+ */
+function host(call) {
+  try {
+    return call();
+  } catch (error) {
+    const payload = /** @type {{ payload?: unknown }} */ (error).payload;
+    throw typeof payload === "string" ? new Error(payload) : error;
+  }
+}
+
+/**
+ * The installed applications, by name.
+ * @returns {import("pane:extension/applications@0.2.0").Application[]}
+ */
+function applications() {
+  return host(installed).sort((a, b) =>
+    a.name.toLowerCase().localeCompare(b.name.toLowerCase()),
+  );
+}
+
+/**
+ * Opens the application with id `itemId`, the action of its item, and
+ * shows a toast saying so.
+ * @param {string} itemId
+ * @returns {Promise<void>}
+ */
+async function act(itemId) {
+  host(() => open(itemId));
+  const name = applications().find((app) => app.id === itemId)?.name ?? itemId;
+  showToast({ title: `Opened ${name}` });
+}
+
+/** @type {import("@pane-app/extension").Command} */
+export const command = {
+  async render() {
+    return {
+      title: SAMPLE,
+      items: applications().map((app) => ({
+        id: app.id,
+        title: app.name,
+        subtitle: app.location,
+        icon: { application: app.icon },
+        onAction: () => act(app.id),
+      })),
+    };
+  },
+
+  async openView() {
+    throw new Error("this sample opens no designed view");
+  },
+};
+
+/** @type {import("@pane-app/extension").IndexedResults} */
+export const indexedResults = {
+  async results() {
+    return applications().map((app) => ({
+      id: app.id,
+      title: `Launch ${app.name}`,
+      subtitle: SAMPLE,
+      // Found by its other names (its program's, untranslated) and its
+      // keywords too, as Pane's own Applications results are. An
+      // alternate title is a name the result is found by, never shown:
+      // the name itself, unadorned — a prefix on it would score a
+      // program's exact name ("wt") as a mere word inside it.
+      alternateTitles: app.alternateTitles,
+      keywords: app.keywords,
+      action: { tag: "open-application", val: app.id },
+    }));
+  },
+};

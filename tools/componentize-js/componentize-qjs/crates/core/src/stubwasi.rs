@@ -1,0 +1,102 @@
+//! WASI import stubbing for snapshotted components.
+//!
+//! The approach:
+//! 1. Decode the snapshotted component to extract its WIT world
+//! 2. Create a "stub world" where the WASI imports become exports
+//! 3. Use `dummy_module` to generate a core module with trap implementations
+//! 4. Encode it as a stub component
+//! 5. Use `wasm-compose` to compose the stub into the original component
+
+use anyhow::{Context, Result, bail};
+use indexmap::IndexMap;
+use wasm_compose::{composer::ComponentComposer, config::Config as ComposeConfig};
+use wit_component::{ComponentEncoder, StringEncoding, dummy_module, embed_component_metadata};
+use wit_parser::decoding::{DecodedWasm, decode};
+use wit_parser::{Docs, ManglingAndAbi, Resolve, Stability, World, WorldItem, WorldKey};
+
+/// Stub all WASI imports in a component, producing a self-contained component.
+pub fn stub_wasi_imports(component: &[u8]) -> Result<Vec<u8>> {
+    stub_imports(component, |name| name.starts_with("wasi:"))
+}
+
+/// Stub componentization-only imports that must not leak into final components.
+pub fn stub_internal_imports(component: &[u8]) -> Result<Vec<u8>> {
+    stub_imports(component, |name| name == "local:init/module-loader")
+}
+
+fn stub_imports(component: &[u8], should_stub: impl Fn(&str) -> bool) -> Result<Vec<u8>> {
+    let decoded = decode(component).context("failed to decode component WIT")?;
+    let (resolve, world_id) = match decoded {
+        DecodedWasm::Component(resolve, world_id) => (resolve, world_id),
+        _ => bail!("expected a component, got a WIT package"),
+    };
+
+    let world = &resolve.worlds[world_id];
+
+    let imports: IndexMap<WorldKey, WorldItem> = world
+        .imports
+        .clone()
+        .into_iter()
+        .filter(|(key, _)| should_stub(&resolve.name_world_key(key)))
+        .collect();
+
+    if imports.is_empty() {
+        return Ok(component.to_vec());
+    }
+
+    let stub_component =
+        make_stub_component(&resolve, world, &imports).context("failed to build stub component")?;
+
+    let dir = tempfile::tempdir().context("failed to create composition directory")?;
+    let component_path = dir.path().join("original.wasm");
+    let stub_path = dir.path().join("stubs.wasm");
+
+    std::fs::write(&component_path, component).context("failed to stage original component")?;
+    std::fs::write(&stub_path, stub_component).context("failed to stage stub component")?;
+
+    let config = ComposeConfig {
+        dir: dir.path().to_path_buf(),
+        definitions: vec!["stubs.wasm".into()],
+        ..Default::default()
+    };
+
+    ComponentComposer::new(&component_path, &config)
+        .compose()
+        .context("failed to compose stub component")
+}
+
+/// Build a component that exports trap implementations for the given imports.
+fn make_stub_component(
+    resolve: &Resolve,
+    original_world: &World,
+    imports: &IndexMap<WorldKey, WorldItem>,
+) -> Result<Vec<u8>> {
+    let mut stub_resolve = resolve.clone();
+    let stub_world_id = stub_resolve.worlds.alloc(World {
+        name: "wasi-stubs".to_string(),
+        imports: IndexMap::new(),
+        exports: imports.clone(),
+        package: original_world.package,
+        docs: Docs::default(),
+        stability: Stability::default(),
+        includes: Vec::new(),
+        span: Default::default(),
+    });
+
+    let mut core_module = dummy_module(&stub_resolve, stub_world_id, ManglingAndAbi::Standard32);
+
+    embed_component_metadata(
+        &mut core_module,
+        &stub_resolve,
+        stub_world_id,
+        StringEncoding::UTF8,
+    )
+    .context("failed to embed component metadata in stub module")?;
+
+    ComponentEncoder::default()
+        .module(&core_module)
+        .unwrap()
+        .validate(true)
+        .encode()
+        .context("failed to encode stub component")
+}

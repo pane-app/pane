@@ -1,0 +1,17 @@
+{
+  "name": "pane-sample-clipboard-ts",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Pane's clipboard history sample in TypeScript: lists the text Pane keeps once the user turns it on",
+  "license": "Apache-2.0 OR MIT",
+  "type": "module",
+  "main": "src/index.ts",
+  "pane": {
+    "clipboardHistory": true
+  },
+  "devDependencies": {
+    "@pane-app/extension": "file:../js",
+    "esbuild": "0.28.2",
+    "typescript": "7.0.2"
+  }
+}

@@ -1,0 +1,20 @@
+//! Feature presentation.
+
+pub(crate) mod actions_panel;
+pub(crate) mod announcer;
+pub(crate) mod clipboard_history;
+pub(crate) mod compact_pins;
+pub(crate) mod confirmation;
+pub(crate) mod extension_log;
+pub(crate) mod footer_menu;
+pub(crate) mod held_keys;
+pub(crate) mod hud;
+pub(crate) mod icons;
+pub(crate) mod loading;
+pub(crate) mod number_hints;
+pub(crate) mod quick_slots;
+pub(crate) mod root_search;
+pub(crate) mod search_files;
+pub(crate) mod settings;
+pub(crate) mod toast;
+pub(crate) mod update_results;

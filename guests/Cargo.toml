@@ -1,0 +1,71 @@
+# Extension guests compile to WebAssembly components (`wasm32-wasip2` target,
+# `no_std`, so only WASI 0.3 interfaces are imported). Build them with
+# `cargo xtask guests` from the repository root.
+[workspace]
+resolver = "3"
+members = [
+    "pane-extension",
+    "sample-rust",
+    "sample-settings",
+    "sample-view",
+    "sample-nav",
+    "sample-timer",
+    "sample-operations",
+    "sample-dependencies",
+    "sample-greet",
+    "sample-capabilities",
+    "sample-registrations",
+    "sample-handoff",
+    "sample-query",
+    "sample-keywords",
+    "sample-matches",
+    "sample-no-view",
+    "sample-search",
+    "sample-schedule",
+    "sample-service",
+    "sample-actions",
+    "sample-preferences",
+    "sample-arguments",
+    "sample-helper",
+    "sample-icons",
+    "sample-programs",
+    "sample-run",
+    "sample-system-commands",
+    "sample-switch-windows",
+    "sample-files",
+    "fixtures/faulty",
+    "fixtures/folder-files",
+    "fixtures/quick",
+    "fixtures/operations",
+    "fixtures/capabilities",
+    "fixtures/registrations",
+    "fixtures/handoff",
+    "fixtures/old-api",
+    "fixtures/mismatched-api",
+    "fixtures/previous-api",
+    "fixtures/old-root-results",
+    "fixtures/designed",
+    "fixtures/failing-start",
+    "fixtures/refusing-view",
+    "fixtures/trees",
+    "git/greeter",
+]
+# `mixed-p2` deliberately uses std (WASI 0.2), and `helpers/echo` is a native
+# program, not a component; each has its own workspace. `hello-rust` is a
+# package built in its own folder, as an author's is.
+exclude = ["fixtures/mixed-p2", "helpers/echo", "hello-rust"]
+
+# Every guest is private but the SDK, `pane-extension`, which does not
+# inherit `publish`.
+[workspace.package]
+edition = "2024"
+publish = false
+license = "Apache-2.0 OR MIT"
+
+[workspace.dependencies]
+pane-extension = { path = "pane-extension" }
+
+[profile.release]
+panic = "abort"
+opt-level = "s"
+lto = true

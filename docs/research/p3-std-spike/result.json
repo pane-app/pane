@@ -1,0 +1,42 @@
+{
+  "pass": true,
+  "component_bytes": 197696,
+  "sha256": "0df35316e66dd0cf648c0f73b152776829429dde8aa75af7ba7c929c509da6cf",
+  "imports": [
+    "import wasi:cli/environment@0.3.0;",
+    "import wasi:cli/exit@0.3.0;",
+    "import wasi:cli/types@0.3.0;",
+    "import wasi:cli/stdin@0.3.0;",
+    "import wasi:cli/stdout@0.3.0;",
+    "import wasi:cli/stderr@0.3.0;",
+    "import wasi:cli/terminal-input@0.3.0;",
+    "import wasi:cli/terminal-output@0.3.0;",
+    "import wasi:cli/terminal-stdin@0.3.0;",
+    "import wasi:cli/terminal-stdout@0.3.0;",
+    "import wasi:cli/terminal-stderr@0.3.0;",
+    "import wasi:clocks/types@0.3.0;",
+    "import wasi:clocks/monotonic-clock@0.3.0;",
+    "import wasi:clocks/system-clock@0.3.0;",
+    "import wasi:filesystem/types@0.3.0;",
+    "import wasi:filesystem/preopens@0.3.0;",
+    "import wasi:random/insecure-seed@0.3.0;"
+  ],
+  "p3_only_imports": true,
+  "execution_host": "Wasmtime CLI 49.0.1 (supports P2 and P3)",
+  "cases": [
+    {
+      "mode": "success",
+      "exit_code": 0,
+      "stdout": "{\"ok\":true,\"epochMs\":1790534285249,\"entries\":1}\n",
+      "stderr": "p3 diagnostics work\n",
+      "elapsed_ms": 57.60029994416982
+    },
+    {
+      "mode": "denied",
+      "exit_code": 0,
+      "stdout": "denied-ok\n",
+      "stderr": "",
+      "elapsed_ms": 29.534799978137016
+    }
+  ]
+}

@@ -1,0 +1,45 @@
+# Extension failures, updates and offline setup
+
+Researched 2026-09-27 for Q20-Q22. Q18 managed real Node is accepted; Q20's recovery direction is supported with a request to check precedents. Q21 automatic updates with controls were subsequently accepted; Q22 subsequently selects automatic Node acquisition rather than bundling. Source review only; no crash, installer or update experiment was performed. Pi details are in the separate [source audit](pi-failures-updates-offline.md).
+
+## Q20: Failures are not all equivalent
+
+Raycast shows an error overlay for uncaught exceptions and rejected promises, with stack traces in development and a simpler message in production. It advises authors to handle expected failures such as network errors with a toast. Its documented error backend is an additional Raycast feature, not something our launcher has adopted. These docs do not establish a complete native-process crash/restart policy. [Debugging](https://developers.raycast.com/basics/debug-an-extension)
+
+Raycast documents a Node child process with a worker per running extension. Workers provide separate JS execution environments inside a shared process; this is not evidence that a fatal process failure affects only one extension. The page contains macOS-specific and older future-tense wording, so do not treat it as a full current implementation audit. [Runtime model](https://developers.raycast.com/information/security)
+
+VS Code's desktop implementation automatically restarts a crashed local extension host while its recent-crash count is below three in five minutes. At the threshold it offers manual restart and Extension Bisect in production. This manages the extension host, not necessarily a single offending extension; other extensions in that host are affected. Sources pinned at `682c0f7de831c5f8616e854c28ba1bd15705441a`: [crash handling](https://github.com/microsoft/vscode/blob/682c0f7de831c5f8616e854c28ba1bd15705441a/src/vs/workbench/services/extensions/electron-browser/nativeExtensionService.ts#L142), [crash counter](https://github.com/microsoft/vscode/blob/682c0f7de831c5f8616e854c28ba1bd15705441a/src/vs/workbench/services/extensions/common/abstractExtensionService.ts#L1416).
+
+Pi catches extension loading and several handler/command errors, but conventional extensions share its process. The source also has an uncaught-exception path that cleans up the terminal and exits. It is not a precedent for keeping an unrelated GUI host alive through every extension crash. See [Pi audit](pi-failures-updates-offline.md).
+
+Our recommendation remains: show recoverable operation errors locally; expose Retry and logs after extension failure; keep the GPUI host responsive; stop repeated failing background activations rather than looping forever. Preserve saved data. Distinguish restarting a runtime from repeating the user's action: do not blindly replay a potentially completed side effect after losing a response. The latter is a proposed implementation rule, not researched Pi/Raycast behavior.
+
+Process topology must satisfy the intended recovery behavior. Native Rust helpers have an explicit process boundary. For JS, a shared Node process can interrupt multiple extensions when it dies; workers alone do not establish full crash separation. This is an unresolved performance/reliability tradeoff, not a reason to reopen the trusted-code model. Retry thresholds and any limited automatic runtime restart remain design work; VS Code's exact numbers are precedent, not adopted defaults.
+
+## Q21: How updates reach users
+
+| Project | Published behavior |
+|---|---|
+| Raycast | Automatically updates Store extensions in the background, with a manual Check for Extension Updates command and result/version-history views. Imported local development extensions are not Store-updated. |
+| VS Code | Automatically checks and installs extension updates by default. Users can disable automatic updates globally or per extension, and manually update one or all. Update checking itself has a separate control. |
+| Pi | Checks for package updates and notifies in interactive startup; package changes are applied through explicit commands. The current CLI distinguishes `pi update --extensions`, `pi update <source>`, and plain `pi update` for Pi itself. Exact npm pins and configured Git refs influence what changes. |
+
+Sources: [Raycast extension manual](https://manual.raycast.com/extensions), [VS Code extension management](https://code.visualstudio.com/docs/configure/extensions/extension-marketplace), [Pi source audit](pi-failures-updates-offline.md). Pi resolution may still install missing/mismatched packages or refresh temporary unpinned Git sources; explicit update commands are not a blanket promise that startup never changes packages. The Raycast manual describes a manual check but does not establish a global opt-out setting; do not infer one from the check command.
+
+Revised recommendation, subsequently accepted in Q21 ("ok do rec"): for the general-purpose desktop audience, default to automatic compatible updates of unpinned published packages, with global/per-extension opt-out and manual Update all. This follows Raycast's convenience and VS Code's controls. The earlier manual-first recommendation favored minimal implementation work; the comparison supports offering less maintenance for normal users.
+
+Preserve explicit version pins and never auto-overwrite a local development folder. Define Git tracking independently: a release/tag/commit and a moving branch have different meanings. Stage replacements and switch at an appropriate lifecycle boundary, not mid-command; background services and persistent views need a specific activation policy. Retain previous code when practical, while recognizing data migrations may prevent safe rollback. Compatibility checks use declared host/API/platform requirements and cannot prove the update is bug-free. The automatic-update controls, pins/local-folder exclusions and avoiding mid-command replacement are accepted direction. Detailed staging, Git tracking and rollback mechanics remain proposals; no update machinery has been implemented.
+
+## Q22: No manual runtime install versus offline readiness
+
+Raycast manages and downloads Node automatically. That satisfies no-manual-Node setup but does not establish that its runtime is present in a fresh installer or that every extension works before a first network fetch. Store artifacts also download on installation. [Raycast runtime and distribution](https://developers.raycast.com/information/security)
+
+Follow-up verification after the user questioned installer contents: Raycast's engineering article explicitly describes choosing an external managed runtime to avoid adding it to each app release, and automatically downloading/installing it before first extension use. This is stronger evidence for the documented design than the security page alone. However, the article is historical and the security page has older macOS-specific wording; neither is a direct inspection of the latest macOS v2 or Windows installer. Earlier conversation wording implying verified exclusion from every current installer was too categorical. [Raycast engineering explanation](https://www.raycast.com/blog/how-raycast-api-extensions-work)
+
+Pi's standalone binary build embeds Bun; its npm distribution instead requires Node. A downloaded standalone runtime is distinct from a completely offline extension setup: package operations still invoke external npm/Git, and missing dependencies may require network access. [Pi audit](pi-failures-updates-offline.md)
+
+VS Code desktop supplies a local Node extension host. Its base installation includes editor functionality and selected language features; developer tools or extension-specific components can still require separate setup. Do not confuse the editor's internal extension runtime with installing Node to run the user's own project. [Extension host](https://code.visualstudio.com/api/advanced-topics/extension-host), [additional components](https://code.visualstudio.com/docs/setup/additional-components)
+
+Earlier recommendation, superseded by Q22: include managed Node and the default extension artifacts in the normal installer, so supported local features work immediately after installation without downloading an execution runtime. Optional packages can download on installation. This increases installer size; it does not require keeping Node or every default extension permanently active. Installed size and active memory must be measured separately. OS prerequisites still need a supported-platform matrix; network integrations and uninstalled packages are not promised offline operation.
+
+Alternative: Raycast-style managed download gives a smaller initial package and a first-use network dependency. Both can satisfy Q16's no-manual-tools requirement. The user subsequently chose this automatic-acquisition alternative with "ok ig do like ray?". Cache the downloaded runtime for reuse; exact setup timing and default-extension artifact packaging remain open.

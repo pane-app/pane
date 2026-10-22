@@ -1,0 +1,166 @@
+﻿{
+    "command":  "\u0026 .\\scripts\\visual-workbench.ps1 -OutputDir $out -RealAppSmoke 2\u003e\u00261 | Where-Object { $_ -match \u0027^==|passed|flipped|smoke|exit|Workbench|failed\u0027 }\n",
+    "revision":  "b7f1b881cc19b15e0c3c0febaf21565a79bf8271",
+    "workingTreeDirty":  true,
+    "outputDir":  "C:\\Users\\ADMIN\\Desktop\\nguyenvu\\pane\\.scratch\\visual-workbench\\run-final",
+    "theme":  "dark",
+    "material":  "opaque",
+    "steps":  {
+                  "reference-hash":  {
+                                         "ok":  true,
+                                         "seconds":  0
+                                     },
+                  "build-fixture":  {
+                                        "ok":  true,
+                                        "seconds":  25
+                                    },
+                  "registry":  {
+                                   "ok":  true,
+                                   "seconds":  2
+                               },
+                  "reference-capture":  {
+                                            "ok":  true,
+                                            "seconds":  22
+                                        },
+                  "native-capture":  {
+                                         "ok":  true,
+                                         "seconds":  18
+                                     },
+                  "compare":  {
+                                  "ok":  true,
+                                  "seconds":  6
+                              },
+                  "sensitivity-row-padding-plus-4":  {
+                                                         "ok":  true,
+                                                         "seconds":  6
+                                                     },
+                  "sensitivity-selected-fill":  {
+                                                    "ok":  true,
+                                                    "seconds":  6
+                                                },
+                  "sensitivity-hover-fill":  {
+                                                 "ok":  true,
+                                                 "seconds":  4
+                                             },
+                  "real-app-smoke":  {
+                                         "ok":  true,
+                                         "seconds":  28
+                                     }
+              },
+    "reference":  {
+                      "path":  "C:\\Users\\ADMIN\\Desktop\\nguyenvu\\pane\\docs\\evidence\\ui-prototype\\reference\\launcher.html",
+                      "sha256":  "F7E81E030E2216FE61509B9AFD98A68147D1998C73F0A168BAB02D0BF00F0BB4",
+                      "requestedCopySha256":  "F7E81E030E2216FE61509B9AFD98A68147D1998C73F0A168BAB02D0BF00F0BB4"
+                  },
+    "fixture":  {
+                    "path":  "C:\\Users\\ADMIN\\Desktop\\nguyenvu\\pane\\target\\debug\\pane-visual-fixture.exe",
+                    "sha256":  "96D9743EEF21E44B8997DCCC437D1D1E51ED4A3C29A4DA1BF43D61E55CA3064E"
+                },
+    "sensitivity":  {
+                        "row-padding-plus-4":  {
+                                                   "expected":  "wash left",
+                                                   "flipped":  8,
+                                                   "harness":  4,
+                                                   "parity":  4,
+                                                   "examples":  [
+                                                                    {
+                                                                        "id":  "harness-native/root-rest/rest/row:Figma/wash left",
+                                                                        "baseline":  11.0,
+                                                                        "now":  15.0,
+                                                                        "expected":  11.0,
+                                                                        "delta":  4.0,
+                                                                        "limit":  1.0,
+                                                                        "unit":  "px"
+                                                                    },
+                                                                    {
+                                                                        "id":  "parity/root-rest/rest/row:Figma/wash left",
+                                                                        "baseline":  11.0,
+                                                                        "now":  15.0,
+                                                                        "expected":  10.0,
+                                                                        "delta":  5.0,
+                                                                        "limit":  1.0,
+                                                                        "unit":  "px"
+                                                                    },
+                                                                    {
+                                                                        "id":  "harness-native/root-selected/rest/row:Figma/wash left",
+                                                                        "baseline":  11.0,
+                                                                        "now":  15.0,
+                                                                        "expected":  11.0,
+                                                                        "delta":  4.0,
+                                                                        "limit":  1.0,
+                                                                        "unit":  "px"
+                                                                    },
+                                                                    {
+                                                                        "id":  "parity/root-selected/rest/row:Figma/wash left",
+                                                                        "baseline":  11.0,
+                                                                        "now":  15.0,
+                                                                        "expected":  10.0,
+                                                                        "delta":  5.0,
+                                                                        "limit":  1.0,
+                                                                        "unit":  "px"
+                                                                    }
+                                                                ]
+                                               },
+                        "selected-fill":  {
+                                              "expected":  "wash alpha (selected)",
+                                              "flipped":  8,
+                                              "harness":  4,
+                                              "parity":  4,
+                                              "examples":  [
+                                                               {
+                                                                   "id":  "harness-native/root-rest/rest/row:Figma/wash alpha (selected)",
+                                                                   "baseline":  21.65,
+                                                                   "now":  63.59,
+                                                                   "expected":  22,
+                                                                   "delta":  41.59,
+                                                                   "limit":  2.0,
+                                                                   "unit":  "levels"
+                                                               },
+                                                               {
+                                                                   "id":  "parity/root-rest/rest/row:Figma/wash alpha",
+                                                                   "baseline":  21.65,
+                                                                   "now":  63.59,
+                                                                   "expected":  21.98,
+                                                                   "delta":  41.62,
+                                                                   "limit":  2.0,
+                                                                   "unit":  "levels"
+                                                               },
+                                                               {
+                                                                   "id":  "harness-native/root-selected/rest/row:Figma/wash alpha (selected)",
+                                                                   "baseline":  21.65,
+                                                                   "now":  63.59,
+                                                                   "expected":  22,
+                                                                   "delta":  41.59,
+                                                                   "limit":  2.0,
+                                                                   "unit":  "levels"
+                                                               },
+                                                               {
+                                                                   "id":  "parity/root-selected/rest/row:Figma/wash alpha",
+                                                                   "baseline":  21.65,
+                                                                   "now":  63.59,
+                                                                   "expected":  21.98,
+                                                                   "delta":  41.62,
+                                                                   "limit":  2.0,
+                                                                   "unit":  "levels"
+                                                               }
+                                                           ]
+                                          },
+                        "hover-fill":  {
+                                           "expected":  "wash alpha (hovered)",
+                                           "flipped":  1,
+                                           "harness":  1,
+                                           "parity":  0,
+                                           "examples":  [
+                                                            {
+                                                                "id":  "harness-native/root-hover/hover/row:Clipboard History/wash alpha (hovered)",
+                                                                "baseline":  8.98,
+                                                                "now":  51.03,
+                                                                "expected":  9,
+                                                                "delta":  42.03,
+                                                                "limit":  2.0,
+                                                                "unit":  "levels"
+                                                            }
+                                                        ]
+                                       }
+                    }
+}

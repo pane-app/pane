@@ -1,0 +1,7121 @@
+//! The extension runtime: a Wasmtime engine that registers only WASI 0.3.
+//!
+//! The runtime owns every engine, store and guest instance on one dedicated
+//! thread. Callers hold a cheap [`Runtime`] handle and await replies, so a slow
+//! or failing guest never blocks the caller's thread.
+//!
+//! The thread serves many calls at once (#136): while a call waits on
+//! something outside its guest (the user, a system program, a native
+//! helper, a paste, a web request, a clock, another extension's operation),
+//! the thread runs other packages' and other commands' calls. Each
+//! instance's own calls stay one after another: a call waits for its
+//! instance's turn, in the order the calls were asked for, so a guest never
+//! sees two of its calls interleaved. A wait is never charged as the
+//! guest's computing. Every await point is the same: a host import's future
+//! that the guest awaits, so a new kind of wait (a confirmation, a program
+//! run) needs no change here. A call into an installed package belongs to
+//! the package's generation (see `generation`): when it ends, a pending call
+//! of it stops where the guest waits, and one queued behind is never
+//! started. Component checks run on a checker thread of their own, so a
+//! reload's check never waits behind the call it is about to stop.
+//!
+//! A crash of the runtime thread itself (a panic, not a guest trap) stops
+//! every call it held without sending any again; Pane restarts the thread,
+//! unless it crashed shortly before (see `supervisor`).
+//!
+//! A guest that stops cooperating is bounded too (see `deadlines`): every
+//! guest yields to the runtime thread at each epoch tick, a call computing
+//! for too long without finishing is stopped as unresponsive (its package's
+//! own failure), and a runtime thread that stops responding altogether is
+//! given up on and replaced, as a crashed one is.
+
+use std::cell::{Cell, RefCell};
+use std::collections::{HashMap, HashSet};
+use std::fmt;
+use std::future::Future;
+use std::path::{Path, PathBuf};
+use std::pin::Pin;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
+use std::task::{self, Poll};
+
+use futures::stream::{FuturesUnordered, StreamExt};
+use tokio::sync::{mpsc, oneshot};
+
+use crate::packages::paused_reason;
+use wasmtime::component::{Component, Linker, Resource, ResourceAny, ResourceTable};
+use wasmtime::{Cache, CacheConfig, Config, Engine, Store};
+use wasmtime_wasi::{WasiCtx, WasiCtxView, WasiView};
+use wasmtime_wasi_http::{WasiHttpCtx, WasiHttpCtxView, WasiHttpView};
+
+use crate::http;
+
+mod application_list;
+pub(crate) mod deadlines;
+mod designed;
+mod faults;
+mod host_functions;
+mod memory;
+mod previous;
+mod run_functions;
+mod supervisor;
+mod system_command_functions;
+mod system_functions;
+mod tree;
+mod windows_functions;
+
+pub use crate::tokens::{Space, TextLevel, TextStyle};
+use deadlines::Doing;
+#[doc(hidden)]
+pub use deadlines::Limits;
+#[cfg(any(test, debug_assertions))]
+#[doc(hidden)]
+pub use deadlines::Timers;
+pub use deadlines::{COMPUTE_LIMIT, UNRESPONSIVE_LIMIT, WARN_AFTER};
+pub(crate) use deadlines::{HostCall, Hosted, Watch};
+
+pub use designed::{
+    Align, Badge, Border, Button, COMPONENT_SET, Canvas, CanvasA11y, CanvasHandlers, CanvasOp,
+    CanvasRole, CanvasStroke, CanvasText, Checkbox, DateField, DesignedHandler, DesignedTree,
+    DropdownItem, EmptyState, FieldProps, FilePicker, Finite, Fit, FormNode, FormValue,
+    GRID_COLUMNS, GridItem, IconExtent, IconNode, Image, Justify, KeySequence, Keycap, Layout,
+    Length, Link, ListAction, ListDropdown, ListItem, ListNode, ListSection, Loading,
+    MAX_CANVAS_OPS, MAX_CANVAS_TEXT_CHARS, MAX_DEPTH, MAX_GRID_COLUMNS, MAX_INLINE_IMAGE,
+    MAX_MARKDOWN_CHARS, MAX_NODES, MAX_PAGE_SIZE, MAX_PX, MAX_TREE_BYTES, Markdown, MetadataItem,
+    MetadataList, Node, NodeKind, Offset, Orientation, Padding, Paint, Place, Progress,
+    RadiusLength, RichRow, RowAccessory, SectionHeader, Segment, Segmented, Select, Sizing, Slider,
+    Span, StrokeCap, StrokeJoin, Style, Surface, Tag, TagPicker, Text, TextContent, TextInput,
+    Toggle, Tone as ButtonTone, key_problems,
+};
+#[cfg(any(test, debug_assertions))]
+#[doc(hidden)]
+pub use faults::Fault;
+#[cfg(any(test, debug_assertions))]
+use faults::Fault as InjectedFault;
+use faults::Faults;
+pub use memory::GUEST_MEMORY;
+#[cfg(any(test, debug_assertions))]
+#[doc(hidden)]
+pub use memory::peaks::memory_peak;
+pub(crate) use supervisor::CRASH_WINDOW;
+use supervisor::{NotSent, Shared};
+pub use supervisor::{RuntimeFailure, RuntimeStatus};
+pub(crate) use tree::read_shortcut;
+pub use tree::{Accessory, AccessoryContent, ItemLook, MAX_ACCESSORIES};
+pub use tree::{
+    Action, ActionKind, ActionStyle, ActionSubmenu, Answer, Item, SubmenuEntries, TREE_VERSION,
+    View,
+};
+
+pub(crate) mod bindings {
+    wasmtime::component::bindgen!({
+        path: "../../wit",
+        world: "extension-with-typed-folder",
+        with: {
+            // The host type behind each owned registration resource: the
+            // registration's id in the registry (see `registrations`).
+            "pane:extension/registrations.root-item": crate::registrations::RootItemHandle,
+            "pane:extension/registrations.timer": crate::registrations::TimerHandle,
+            "pane:extension/registrations.watcher": crate::registrations::WatcherHandle,
+            "pane:extension/registrations.provision": crate::registrations::ProvisionHandle,
+        },
+        imports: {
+            "pane:extension/operations": store,
+            "pane:extension/helpers": store,
+            // A program's waits run off the runtime thread, which awaits
+            // them without holding the guest (`programs`).
+            "pane:extension/programs": store,
+            // Saving waits for the file to be written, off the runtime
+            // thread, which awaits it.
+            "pane:extension/settings.set": async,
+            "pane:extension/content.set": async,
+            "pane:extension/cache.set": async,
+            "pane:extension/credentials.set": async,
+            // The system functions wait for the system (a handler
+            // starting, the clipboard held by another program), off the
+            // runtime thread, which awaits them.
+            "pane:extension/system": async,
+            // Listing the folder the user typed reads the file system,
+            // which may block, off the runtime thread, which awaits it.
+            "pane:extension/typed-folder": async,
+            // What the Run dialog runs waits for the shell and Windows'
+            // elevation prompt, off the runtime thread, which awaits it.
+            "pane:extension/run": async,
+            // The session and power commands likewise wait for the system
+            // (the displays' power message, the session ending), off the
+            // runtime thread, which awaits them.
+            "pane:extension/system-commands": async,
+            // The open windows wait for their processes and the
+            // foreground, off the runtime thread, which awaits them.
+            "pane:extension/windows": async,
+            // What a command registers at run time it owns as a resource:
+            // interactions with the store's resource table can trap.
+            "pane:extension/registrations": trappable,
+        },
+        exports: { default: async | store },
+    });
+}
+
+/// The `root-results` export of a command that computes root results.
+mod root_bindings {
+    wasmtime::component::bindgen!({
+        path: "../../wit",
+        world: "root-results-provider",
+        exports: { default: async | store },
+    });
+}
+
+/// The `indexed-results` export of a command that supplies root results
+/// ahead of the query.
+mod indexed_bindings {
+    wasmtime::component::bindgen!({
+        path: "../../wit",
+        world: "indexed-results-provider",
+        exports: { default: async | store },
+    });
+}
+
+/// The `service` export of a command that runs a continuing service.
+mod service_bindings {
+    wasmtime::component::bindgen!({
+        path: "../../wit",
+        world: "service-provider",
+        exports: { default: async | store },
+    });
+}
+
+/// The `published-operations` export of a component serving operations.
+mod operations_bindings {
+    wasmtime::component::bindgen!({
+        path: "../../wit",
+        world: "operations-provider",
+        exports: { default: async | store },
+    });
+}
+
+/// The `events` export of a component that registers timers or watchers,
+/// which their firings are delivered to.
+mod events_bindings {
+    wasmtime::component::bindgen!({
+        path: "../../wit",
+        world: "events-provider",
+        exports: { default: async | store },
+    });
+}
+
+/// The `lifecycle` export of a component that opts in to the activation
+/// entry point or the state handoff (ADR 0041).
+mod lifecycle_bindings {
+    wasmtime::component::bindgen!({
+        path: "../../wit",
+        world: "lifecycle-provider",
+        exports: { default: async | store },
+    });
+}
+
+use bindings::exports::pane::extension::command;
+use bindings::pane::extension::commands as launching;
+use bindings::pane::extension::preferences as preference_values;
+use bindings::pane::extension::registrations as registering;
+use bindings::pane::extension::view as view_host;
+use bindings::pane::extension::{
+    applications, cache, clipboard_history, content, credentials, settings,
+};
+use bindings::pane::extension::{
+    feedback as feedback_host, run as run_host, system as system_host,
+    system_commands as system_commands_host, typed_folder as typed_folder_host,
+    window as window_host, windows as windows_host,
+};
+use events_bindings::exports::pane::extension::events;
+use indexed_bindings::exports::pane::extension::indexed_results;
+use root_bindings::exports::pane::extension::root_results;
+
+use crate::applications::Applications;
+use crate::clipboard::{self, Capture, CaptureState};
+use crate::extension_data::{DataKind, PackageData};
+use crate::extension_log::{CurrentCommand, ExtensionLogs, LogLevel, LogStream};
+use crate::feedback::HostFunctions;
+use crate::files::{FileAccess, Folders};
+use crate::generation::{End, Fence, Generation, Registration};
+use crate::helpers;
+use crate::helpers::runner::{self, HelperError, HelperErrorKind, Helpers, Running, Spec};
+use crate::launch::{LaunchRecord, LaunchRequest, LaunchSource, LaunchType, Launches};
+use crate::operations::{
+    self, Addressed, Directory, OperationAnswer, OperationCall, OperationError, Target,
+};
+use crate::registrations::Registrations;
+
+/// Interface-version prefix every imported WASI interface must carry.
+const WASI_VERSION: &str = "@0.3.";
+
+/// The interface an extension command exports.
+const COMMAND_INTERFACE: &str = "pane:extension/command@0.2.0";
+
+/// The interface a command that computes root results also exports.
+const ROOT_RESULTS_INTERFACE: &str = "pane:extension/root-results@0.2.0";
+
+/// The interface a command that supplies root results ahead of the query
+/// also exports.
+const INDEXED_RESULTS_INTERFACE: &str = "pane:extension/indexed-results@0.2.0";
+
+/// The interface a component serving published operations also exports.
+const OPERATIONS_INTERFACE: &str = "pane:extension/published-operations@0.2.0";
+
+/// The interface a command that runs a continuing service also exports.
+const SERVICE_INTERFACE: &str = "pane:extension/service@0.2.0";
+
+/// The interface a component that registers timers or watchers also
+/// exports, which their firings are delivered to.
+const EVENTS_INTERFACE: &str = "pane:extension/events@0.2.0";
+
+/// The interface a component that opts in to the state handoff exports,
+/// as the activation entry point its package's `pane.json` names under
+/// `activate` does (ADR 0041): `pane:extension/lifecycle`.
+const LIFECYCLE_INTERFACE: &str = "pane:extension/lifecycle@0.2.0";
+
+/// How long the runtime waits for the `snapshot` answer of an instance
+/// whose code is being replaced (ADR 0041's state handoff): a snapshot
+/// that is not answered by then is dropped, so a handoff never delays a
+/// replacement by more than this.
+const SNAPSHOT_DEADLINE: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// The state an instance handed to the code that replaced it (ADR 0041's
+/// state handoff), staged in memory for the new code's first instance of
+/// the same component file to restore. Never written to disk.
+struct StagedSnapshot {
+    /// The generation that restores the state: the one that directly
+    /// replaced the code the snapshot came from, so nothing is handed over
+    /// after, say, a disable followed by an enable.
+    generation: Generation,
+    /// The bytes the old code's `snapshot` answered.
+    state: Vec<u8>,
+}
+
+/// Snapshots staged for the new code to restore, by the package's identity
+/// key and the new code's component path: shared by every runtime thread,
+/// so one that replaces a crashed thread still restores them.
+type SharedSnapshots = Arc<Mutex<HashMap<(String, PathBuf), StagedSnapshot>>>;
+
+/// What a result a command answers with shows as a row: the fields its
+/// computed root results and indexed results share (each interface's WIT
+/// declares its own record, as a WIT record cannot extend another).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ResultListing {
+    /// Identifies the result among the command's results.
+    pub id: String,
+    pub title: String,
+    pub subtitle: Option<String>,
+}
+
+/// A result a command computed from root search's query.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct RootResult {
+    pub listing: ResultListing,
+    pub action: RootAction,
+    /// The answer's card, when the result is one: its own section, its
+    /// swatch and further ways to copy it (see [`AnswerDetail`]).
+    pub answer: Option<AnswerDetail>,
+}
+
+/// What a root result that is an answer's card says beyond its title and
+/// action: the section it sits under, the colour of its swatch and
+/// further ways to copy it, as the command answered (the calculator's
+/// colour and date answers, #196).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct AnswerDetail {
+    /// The section the answer is listed under, in place of the command's
+    /// title ("Color", "Date & Time").
+    pub section: String,
+    /// The colour of the card's swatch, as `#RRGGBB` or `#RRGGBBAA`;
+    /// `None` when the answer is not a colour.
+    pub swatch: Option<String>,
+    /// Further ways to copy the answer, each an entry of the Actions
+    /// panel, in order.
+    pub copies: Vec<AnswerCopy>,
+}
+
+/// One further way to copy a computed answer, as the Actions panel offers
+/// it: what the copy is called and the text it copies.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct AnswerCopy {
+    pub title: String,
+    pub text: String,
+}
+
+/// When a query is asked about: the moment the user stopped at it, in
+/// milliseconds since the Unix epoch, and how far the local time there
+/// is from UTC, by the clock root search's own dates are shown by (a
+/// test's, in a test).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct WallTime {
+    pub milliseconds: u64,
+    /// In milliseconds.
+    pub offset: i64,
+}
+
+/// What invoking a computed root result does; Pane performs it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum RootAction {
+    /// Copy this text to the clipboard.
+    Copy(String),
+    /// Open this web address with the system's link handler.
+    OpenUrl(String),
+    /// Open this file with the system's handler for its type.
+    OpenFile(String),
+}
+
+/// A root result a command supplies ahead of the query.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct IndexedResult {
+    pub listing: ResultListing,
+    /// Other titles that find it, as its title does.
+    pub alternate_titles: Vec<String>,
+    /// Words that find it, as its subtitle does.
+    pub keywords: Vec<String>,
+    pub action: IndexedAction,
+}
+
+/// What invoking an indexed root result does; Pane performs it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum IndexedAction {
+    /// Open the installed application with this id.
+    OpenApplication(String),
+    /// Open `target` (a URL of any scheme, a file, a folder or an
+    /// application) with the system's handler, or with `application`, as
+    /// the `system.open` host function does.
+    Open {
+        target: String,
+        application: Option<String>,
+    },
+}
+
+/// What a component exports besides `command`, as its package manifest
+/// says, for [`Runtime::check_with`] to confirm.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct Exports {
+    /// `root-results`: it computes root results from the query.
+    pub root_results: bool,
+    /// `indexed-results`: it supplies root results ahead of the query.
+    pub indexed_results: bool,
+    /// `published-operations`: it serves published operations.
+    pub operations: bool,
+    /// `service`: it runs a continuing service while the package's code
+    /// may run.
+    pub service: bool,
+    /// `lifecycle`: it is the activation entry point its package's
+    /// `pane.json` names under `activate`, or a component that opts in to
+    /// the state handoff (ADR 0041).
+    pub activate: bool,
+}
+
+// The system's applications as the runtime's guests and the launcher see
+// them; replaceable, for tests.
+pub(crate) use application_list::SharedApplications;
+
+/// Where the runtime's guests keep clipboard history, once the launcher
+/// said (see [`Runtime::set_clipboard`]); held weakly, since the launcher
+/// owns it and Pane stops watching the clipboard once it is dropped.
+type SharedClipboard = Arc<Mutex<Option<std::sync::Weak<Capture>>>>;
+
+/// The installed packages as the launcher has them, once it has said, for
+/// resolving operation calls and finding a guest's helpers.
+type SharedDirectory = Arc<Mutex<Option<Directory>>>;
+
+/// What starts the commands guests launch (`pane:extension/commands`),
+/// once the launcher has said: the launcher's own.
+type SharedLaunches = Arc<Mutex<Option<Launches>>>;
+
+/// What the window and feedback host functions guests call do
+/// (`wit/feedback.wit`, and `commands.set-subtitle`), once the launcher has
+/// said: the launcher's own.
+type SharedHostFunctions = Arc<Mutex<Option<Arc<dyn HostFunctions>>>>;
+
+/// What Pane does when a designed view asks to be drawn again
+/// (`pane:extension/view`, #243): told the view's id, the id its render
+/// context named. Set by the launcher, which owns the drawing it asks
+/// for; held weakly by the runtime, so it keeps neither the launcher nor
+/// the runtime running. The runtime alone has none, and an ask names
+/// nothing.
+type SharedViewAsks = Arc<Mutex<Option<Arc<dyn Fn(u64) + Send + Sync>>>>;
+/// What measures text for a designed view's canvases
+/// (`pane:extension/view.measure-text`, #242): told a text and the JSON a
+/// canvas text operation names, the width and height it occupies. The
+/// window's fonts, which the pane crate owns; see
+/// [`Runtime::set_text_measures`].
+pub type TextMeasures = Arc<dyn Fn(&str, &str) -> (f32, f32) + Send + Sync>;
+
+/// What measures text for a designed view's canvases
+/// (`pane:extension/view.measure-text`, #242): the window's fonts, which
+/// the pane crate owns, handed to the runtime. Installed by the launcher
+/// before any call; `None` until then, answering no extent.
+type SharedTextMeasures = Arc<Mutex<Option<Arc<dyn Fn(&str, &str) -> (f32, f32) + Send + Sync>>>>;
+
+/// What a call into a guest is for, as the host functions it calls see it
+/// (`crate::feedback::Caller`): the command it runs for, if Pane knows it,
+/// and whether a window was shown for it. Set as the call starts; any other
+/// call (an operation, a root search's ask, a service's cycle) has none.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct CallFor {
+    /// The manifest id of the command the call runs for.
+    pub(crate) command: Option<String>,
+    /// Whether a window was shown for the call: the user launched the
+    /// command or works in its screen; not a background launch or a
+    /// schedule.
+    pub(crate) windowed: bool,
+}
+
+impl CallFor {
+    /// A call for `command` (if known) launched as `launch` says: with a
+    /// window unless in the background.
+    fn launched(command: Option<String>, launch: &LaunchRecord) -> CallFor {
+        CallFor {
+            command,
+            windowed: !launch.is_background(),
+        }
+    }
+
+    /// A call the user makes in the command's screen: with a window.
+    fn in_window(command: Option<String>) -> CallFor {
+        CallFor {
+            command,
+            windowed: true,
+        }
+    }
+}
+
+/// What one render of a designed view answers: its tree, the render's
+/// sequence number, and how long the view asked Pane to wait before
+/// rendering it again (`refresh-after-ms`, #236: the launcher schedules
+/// the refresh through it).
+#[derive(Clone, Debug, PartialEq)]
+pub struct DesignedRendered {
+    pub tree: DesignedTree,
+    /// The sequence number the render was asked with: the context's
+    /// `render`, which the view's events carry back.
+    pub render: u64,
+    /// `refresh-after-ms`: how long Pane waits before drawing the view
+    /// again.
+    pub refresh_after_ms: Option<u32>,
+}
+
+/// The user's input to a designed view, as its tree's callback ids name
+/// it (the WIT `ui-event`): the sequence number of the render whose tree
+/// the user saw, the key of the node the event was raised on, the callback
+/// id the tree named, and the event's details as JSON.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DesignedEvent {
+    pub render: u64,
+    pub key: String,
+    pub callback: u32,
+    pub payload: String,
+}
+
+/// The most views one command's navigation stack may hold: a push that
+/// would go beyond it is the extension's error, the view keeping its last
+/// good tree (the specification's proposed default, #239).
+pub const MAX_NAVIGATION_DEPTH: usize = 32;
+
+/// What a designed view's event answered it does next, as the launcher
+/// owns the navigation stack: nothing (the view re-rendered, as a designed
+/// view does), a view the answer pushed above it or replaced it with (now
+/// the top of the stack, its first tree drawn), or a pop of the view
+/// itself — dropped in the runtime, its result answered to the view below.
+#[derive(Clone, Debug, PartialEq)]
+pub enum DesignedNext {
+    /// The view answered nothing next: its tree, as re-rendered.
+    Tree(DesignedRendered),
+    /// The view pushed a view: the top of the stack, its first tree
+    /// drawn; the pushing view stays below it.
+    Pushed(ViewId, DesignedRendered),
+    /// The view replaced itself: the new view is the top, at the replaced
+    /// view's depth, which is dropped in the runtime.
+    Replaced(ViewId, DesignedRendered),
+    /// The view popped itself, answering `result` to the view below: the
+    /// view is dropped, the view below's last tree shows, and it is then
+    /// told the view above popped. A pop of the root view leaves the
+    /// command with it.
+    Popped { result: String },
+}
+
+/// Identifies a designed view open in a [`Runtime`]. Ids are never reused,
+/// even by a runtime thread that replaced a crashed one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct ViewId {
+    /// The number of the runtime thread holding the view.
+    thread: u64,
+    id: u64,
+}
+
+impl ViewId {
+    /// A view id with number `id`: a Pane form's identity is its own
+    /// number, not a view's, so the window's keyed state follows either.
+    #[doc(hidden)]
+    pub fn of_number(id: u64) -> ViewId {
+        ViewId { thread: 0, id }
+    }
+
+    /// The number of the runtime thread that holds the view: a crash of
+    /// that thread (see [`supervisor::CrashReport`]) closes it.
+    pub(crate) fn thread(&self) -> u64 {
+        self.thread
+    }
+
+    /// The view's id, as its render context names it and
+    /// `pane:extension/view`'s `ask-to-render` asks for (#243): a number
+    /// shared by every thread the runtime started, so it names this view
+    /// alone.
+    pub(crate) fn number(&self) -> u64 {
+        self.id
+    }
+}
+
+/// What one cycle of a continuing service answers: the status to show on
+/// the command's screen and how long Pane waits before the next cycle
+/// (`pane:extension/service`, which the launcher's services thread runs
+/// while the package's code may run).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Cycle {
+    /// The status to show, as an action's answer is shown.
+    pub status: String,
+    /// How long to wait before the next cycle, in seconds.
+    pub next_seconds: u64,
+}
+
+/// Why a call into an extension did not produce a result.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum CallError {
+    /// The runtime could not start, or has stopped.
+    RuntimeUnavailable(String),
+    /// The component could not be read or compiled.
+    Load(String),
+    /// The component needs interfaces Pane does not provide, such as WASI 0.2.
+    Incompatible(Vec<String>),
+    /// The component does not implement Pane's extension interface.
+    Interface(String),
+    /// The component exports Pane's extension interface, but with functions
+    /// or types of another shape of the API version it was built for: it
+    /// was built against an older contract, and must be rebuilt for the
+    /// version [`api`](OlderApiShape::api) names.
+    OlderApiShape {
+        /// The API version whose shape check refused the component: the
+        /// current one, or the previous one while its window lasts (ADR
+        /// 0046) — the one a rebuild targets.
+        api: (u64, u64),
+        /// The first mismatch, in Pane's words.
+        reason: String,
+    },
+    /// The guest ran and reported an error.
+    Guest(String),
+    /// The guest answered something Pane cannot read: a tree that is not
+    /// JSON, or lacks a field Pane needs (see `tree`). The command's
+    /// failure, as an error it answered with is, never a crash.
+    Unreadable(String),
+    /// The guest trapped or otherwise failed while running.
+    Trap(String),
+    /// The guest computed for too long without finishing (see
+    /// [`COMPUTE_LIMIT`]), so Pane stopped the call and dropped its
+    /// instance.
+    Unresponsive(String),
+    /// The command's package is disabled, so none of its code runs. A call
+    /// pending when it was disabled is stopped with this.
+    Disabled,
+    /// The command's code was replaced by a reload or an update while the
+    /// call was pending, so the call was stopped and its answer discarded.
+    Replaced,
+    /// The command's package was uninstalled while the call was pending, so
+    /// the call was stopped and its answer discarded.
+    Uninstalled,
+    /// Pane paused the command's package after it failed (it could not
+    /// start, or crashed too often), so none of its code runs
+    /// until the user retries it. A call pending when it was paused is
+    /// stopped with this.
+    Paused,
+    /// The view was closed, or its guest instance has stopped, so it cannot
+    /// handle events any more.
+    ViewClosed,
+    /// The caller no longer wanted the answer (root search's query changed,
+    /// or root search was left), so the call was not started, or was stopped
+    /// where the guest waited, with its instance.
+    Cancelled,
+}
+
+impl fmt::Display for CallError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            CallError::Disabled => write!(f, "The extension is disabled"),
+            CallError::Replaced => write!(
+                f,
+                "The extension was reloaded or updated while this was running; try again"
+            ),
+            CallError::Uninstalled => write!(f, "The extension was uninstalled"),
+            CallError::Paused => f.write_str(&paused_reason("The extension")),
+            CallError::RuntimeUnavailable(reason) => {
+                write!(f, "Extension runtime unavailable: {reason}")
+            }
+            CallError::Load(reason) => write!(f, "Could not load the extension: {reason}"),
+            CallError::Incompatible(imports) => write!(
+                f,
+                "Incompatible extension: Pane supports only WASI 0.3, but it imports {}",
+                imports.join(", ")
+            ),
+            CallError::Interface(reason) => write!(
+                f,
+                "Incompatible extension: it does not implement Pane's extension interface: {reason}"
+            ),
+            CallError::OlderApiShape { api, reason } => write!(
+                f,
+                "Incompatible extension: it was built for an older extension API shape: \
+                 rebuild it against Pane's extension API {}.{} ({reason})",
+                api.0, api.1
+            ),
+            CallError::Guest(message) => write!(f, "The extension reported an error: {message}"),
+            CallError::Unreadable(reason) => {
+                write!(
+                    f,
+                    "Pane could not read what the extension answered: {reason}"
+                )
+            }
+            CallError::Trap(reason) => write!(f, "The extension crashed: {reason}"),
+            CallError::Unresponsive(reason) => {
+                write!(f, "The extension stopped responding: {reason}")
+            }
+            CallError::ViewClosed => f.write_str("The extension's view is no longer open"),
+            CallError::Cancelled => f.write_str("The search was cancelled"),
+        }
+    }
+}
+
+impl std::error::Error for CallError {}
+
+/// A handle to the runtime thread. Cloning shares the same runtime, also
+/// once it was restarted after its thread crashed.
+#[derive(Clone)]
+pub struct Runtime {
+    /// The thread serving calls now, and the helper processes guests
+    /// started, which end once every handle is dropped.
+    shared: Arc<Shared>,
+    /// Component checks, served one at a time by the checker thread, apart
+    /// from the runtime thread: a reload's check must not wait behind the
+    /// guest call the reload is about to stop.
+    checks: std::sync::mpsc::Sender<Check>,
+}
+
+/// A handle to the runtime thread that does not keep it running: the
+/// thread stops once every [`Runtime`] is dropped, even while something it
+/// holds (such as its health report) holds one of these.
+#[derive(Clone)]
+pub(crate) struct WeakRuntime {
+    shared: std::sync::Weak<Shared>,
+    checks: std::sync::mpsc::Sender<Check>,
+}
+
+impl WeakRuntime {
+    /// The runtime, unless every handle to it was dropped.
+    pub(crate) fn upgrade(&self) -> Option<Runtime> {
+        Some(Runtime {
+            shared: self.shared.upgrade()?,
+            checks: self.checks.clone(),
+        })
+    }
+}
+
+/// A component check for the checker thread.
+struct Check {
+    component: PathBuf,
+    exports: Exports,
+    reply: oneshot::Sender<Result<Checked, CallError>>,
+}
+
+/// What checking a component found out about it besides that Pane can run
+/// it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Checked {
+    /// It imports `wasi:http`: its code can make web requests.
+    pub network: bool,
+    /// It imports `pane:extension/programs`: its code can run system
+    /// programs.
+    pub programs: bool,
+}
+
+impl std::ops::BitOrAssign for Checked {
+    /// What a package's components can do together.
+    fn bitor_assign(&mut self, other: Checked) {
+        self.network |= other.network;
+        self.programs |= other.programs;
+    }
+}
+
+enum Request {
+    Render {
+        component: PathBuf,
+        /// The manifest id of the command whose screen it draws, if known.
+        command: Option<String>,
+        launch: LaunchRecord,
+        data: Option<PackageData>,
+        reply: oneshot::Sender<Result<View, CallError>>,
+    },
+    HandleEvent {
+        component: PathBuf,
+        /// The manifest id of the command whose event it is, if known.
+        command: Option<String>,
+        callback: String,
+        details: String,
+        data: Option<PackageData>,
+        reply: oneshot::Sender<Result<Answer, CallError>>,
+    },
+    RunItem {
+        component: PathBuf,
+        /// The manifest id of the command whose item it runs, if known.
+        command: Option<String>,
+        item_id: String,
+        launch: LaunchRecord,
+        data: Option<PackageData>,
+        reply: oneshot::Sender<Result<Answer, CallError>>,
+    },
+    Run {
+        component: PathBuf,
+        command: String,
+        launch: LaunchRecord,
+        data: Option<PackageData>,
+        reply: oneshot::Sender<Result<Answer, CallError>>,
+    },
+    RunCycle {
+        component: PathBuf,
+        command: String,
+        data: Option<PackageData>,
+        reply: oneshot::Sender<Result<Cycle, CallError>>,
+    },
+    /// Activates the package of `data`: calls its component's
+    /// `activate` export (the activation entry point, ADR 0041).
+    Activate {
+        component: PathBuf,
+        data: Option<PackageData>,
+        reply: oneshot::Sender<Result<(), CallError>>,
+    },
+    /// Asks the running instance of `component` that exports `snapshot`
+    /// for the state it hands to its replacement (ADR 0041), before the
+    /// old generation ends.
+    Snapshot {
+        component: PathBuf,
+        data: Option<PackageData>,
+        reply: oneshot::Sender<Result<Option<Vec<u8>>, CallError>>,
+    },
+    /// Delivers one event of what the package of `data` registered (a
+    /// timer's firing, a watcher's coalesced changes) to its component's
+    /// `events` export.
+    Event {
+        component: PathBuf,
+        event: crate::registrations::GuestEvent,
+        data: Option<PackageData>,
+        reply: oneshot::Sender<Result<(), CallError>>,
+    },
+    IndexedResults {
+        component: PathBuf,
+        data: Option<PackageData>,
+        reply: oneshot::Sender<Result<Vec<IndexedResult>, CallError>>,
+    },
+    RootResults {
+        component: PathBuf,
+        query: String,
+        at: WallTime,
+        data: Option<PackageData>,
+        reply: oneshot::Sender<Result<Vec<RootResult>, CallError>>,
+    },
+    Forget {
+        components: Vec<PathBuf>,
+    },
+    /// Notes the size a canvas of an open designed view was laid out at
+    /// (#242): the render context names it, and its change is an event.
+    NoteCanvasSize {
+        view: ViewId,
+        key: String,
+        width: f32,
+        height: f32,
+    },
+    OpenDesignedView {
+        component: PathBuf,
+        command: String,
+        launch: LaunchRecord,
+        data: Option<PackageData>,
+        reply: oneshot::Sender<Result<(ViewId, DesignedRendered), CallError>>,
+    },
+    DesignedViewEvent {
+        view: ViewId,
+        event: DesignedEvent,
+        /// Whether this event supersedes the work its view left in
+        /// flight: a search's does — the field's newer text replacing the
+        /// older one's requests — and no other event does, the view's own
+        /// background work running to its end as it left it.
+        supersedes: bool,
+        reply: oneshot::Sender<Result<DesignedNext, CallError>>,
+    },
+    RefreshDesignedView {
+        view: ViewId,
+        /// Whether the view's own work asked for this drawing (its push,
+        /// #243) rather than the clock making the view's ask due: the
+        /// render's context says so, and the SDKs run an interval's work
+        /// only on the ask's drawing.
+        pushed: bool,
+        reply: oneshot::Sender<Result<DesignedRendered, CallError>>,
+    },
+    /// Keeps the component's instance running between Pane's calls (#243):
+    /// the work a designed view's answer started is driven to its end, so
+    /// the view can push a drawing of what landed. Asked of the thread by
+    /// itself, as a render of an open view answers.
+    Pump {
+        component: PathBuf,
+    },
+    CloseDesignedView {
+        view: ViewId,
+    },
+    /// Names the selected item of a designed view's List or Grid (#240):
+    /// its key, or `None` when no item is selected. The view's render
+    /// context carries the key, so the view builds the detail pane's
+    /// content for the item it names.
+    SetViewSelection {
+        view: ViewId,
+        key: Option<String>,
+    },
+    DesignedViewCount {
+        reply: oneshot::Sender<Result<usize, CallError>>,
+    },
+    Running {
+        reply: oneshot::Sender<Result<Vec<PathBuf>, CallError>>,
+    },
+    /// Drops the idle instances whose generation ended, as an instance's
+    /// entry on its generation's undo list asks.
+    DropStopped,
+    /// Pane is quitting: the thread stops, dropping every call in progress
+    /// with its instance, which ends what it waits on.
+    Quit,
+}
+
+impl Request {
+    /// The component this request's call runs in, when it is a call the
+    /// user asked the package for — opening (or drawing again) a command,
+    /// handling an event of its list, running an item, running a no-view
+    /// command the user launched, a form submission, opening a custom view
+    /// or opening a designed view. Not the background
+    /// and ambient ones (a scheduled run, a background launch, a service
+    /// cycle, a root search's ask), which a replacement of the package's
+    /// code ends and its new code restarts or re-asks, nor a view's event
+    /// or refresh, whose screen is what the launcher checks.
+    fn user_component(&self) -> Option<&Path> {
+        match self {
+            Request::Run {
+                component, launch, ..
+            } if !launch.is_background() => Some(component),
+            Request::Render { component, .. }
+            | Request::HandleEvent { component, .. }
+            | Request::RunItem { component, .. }
+            | Request::OpenDesignedView { component, .. } => Some(component),
+            _ => None,
+        }
+    }
+}
+
+/// A request on its way to a runtime thread, with what counts it in flight
+/// there until it has been served or dropped (see [`Watch::call`]): the
+/// thread's epoch ticker and watchdog wait while none is. Every request
+/// sent through the runtime ([`Shared::send`]) is counted, whatever it is:
+/// guest calls of every kind, a view's destructor, and the host
+/// work that waits on guests (`Runtime::running`, `designed_view_count`). The
+/// thread's own nudge to drop stopped instances runs no guest code and is
+/// not.
+struct Sent {
+    request: Request,
+    in_flight: Option<deadlines::InFlight>,
+}
+
+/// How a call into an installed package's code failed, for deciding
+/// whether to pause the package (see the launcher's `pausing`). Only the
+/// package's own failures are reported: an error the guest answers with is
+/// not one, nor is a call stopped because its generation, or that of a
+/// caller in its chain, ended.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum Health {
+    /// The guest trapped while running: a crash.
+    Crashed(CallError),
+    /// The guest computed for too long without finishing, and was stopped
+    /// ([`CallError::Unresponsive`]). Wasmtime was running its code, so the
+    /// failure is its own.
+    Unresponsive(CallError),
+    /// The component could not be loaded or instantiated.
+    FailedToStart(CallError),
+}
+
+/// Told of each failure of a call into an installed package's code: its
+/// component, the extension data (and so the generation) it ran with, and
+/// how it failed. Called on the runtime thread before the call's answer is
+/// sent.
+pub(crate) type HealthReport = Arc<dyn Fn(&Path, &PackageData, Health) + Send + Sync>;
+
+impl Runtime {
+    /// A handle that does not keep the runtime thread running.
+    pub(crate) fn downgrade(&self) -> WeakRuntime {
+        WeakRuntime {
+            shared: Arc::downgrade(&self.shared),
+            checks: self.checks.clone(),
+        }
+    }
+
+    /// Starts the runtime thread. Extensions are compiled on every start
+    /// (unless `PANE_TEST_CODE_CACHE` names a cache shared by the tests).
+    pub fn start() -> Result<Runtime, CallError> {
+        Runtime::start_with(None)
+    }
+
+    /// Starts the runtime thread, keeping compiled extension code in
+    /// `cache_dir` so later runtimes load it instead of recompiling. The
+    /// directory holds only disposable data.
+    pub fn start_with_cache(cache_dir: PathBuf) -> Result<Runtime, CallError> {
+        Runtime::start_with(Some(cache_dir))
+    }
+
+    /// For the tests of the compiled-code cache itself: from now on, the
+    /// runtimes this process starts keep compiled code where they were
+    /// started to ([`Runtime::start_with_cache`]), or nowhere, even when
+    /// `PANE_TEST_CODE_CACHE` names a cache shared by the tests.
+    #[doc(hidden)]
+    pub fn ignore_shared_code_cache() {
+        IGNORE_SHARED_CODE_CACHE.store(true, Ordering::Relaxed);
+    }
+
+    fn start_with(cache_dir: Option<PathBuf>) -> Result<Runtime, CallError> {
+        let engine = engine(cache_dir.clone())?;
+        let applications = SharedApplications::new(crate::applications::native());
+        let code = Arc::new(Code::new(engine));
+        let (checks, pending_checks) = std::sync::mpsc::channel::<Check>();
+        let checker = code.clone();
+        std::thread::Builder::new()
+            .name("pane-extension-check".into())
+            .spawn(move || {
+                for check in pending_checks {
+                    // A check that panics answers so, and the next one is
+                    // still checked.
+                    let checked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        checker.check(&check.component, check.exports)
+                    }))
+                    .unwrap_or_else(|_| {
+                        Err(CallError::RuntimeUnavailable(
+                            "checking the component crashed Pane's checker".into(),
+                        ))
+                    });
+                    let _ = check.reply.send(checked);
+                }
+            })
+            .map_err(unavailable)?;
+        let shared = Shared::start(code, applications, Helpers::default(), cache_dir)?;
+        Ok(Runtime { shared, checks })
+    }
+
+    /// What the runtime is doing after a crash of its thread, if it had one.
+    pub fn status(&self) -> RuntimeStatus {
+        self.shared.status()
+    }
+
+    /// Starts the runtime again after its thread crashed and Pane did not
+    /// restart it by itself ([`RuntimeStatus::Stopped`]); nothing that was
+    /// running before is run again. A runtime that runs is left as it is.
+    pub(crate) fn restart(&self) -> Result<(), CallError> {
+        self.shared.restart()
+    }
+
+    /// Injects `fault` into the runtime thread serving calls now, to check
+    /// that Pane recovers. For tests and the native smokes only; debug
+    /// builds only.
+    #[cfg(any(test, debug_assertions))]
+    #[doc(hidden)]
+    pub fn inject(&self, fault: InjectedFault) {
+        self.shared.inject(fault);
+    }
+
+    /// Sets the limits the runtime applies to guest calls and to its own
+    /// thread from now on ([`Limits`]), so tests and smokes reach them
+    /// quickly. For tests and the native smokes only; debug builds only.
+    #[cfg(any(test, debug_assertions))]
+    #[doc(hidden)]
+    pub fn set_limits(&self, limits: Limits) {
+        self.shared.set_limits(limits);
+    }
+
+    /// What the epoch ticker and the watchdog of the runtime thread serving
+    /// calls now are doing ([`Timers`]), so tests see them wait while no
+    /// call runs and wake for one; `None` while the runtime is stopped. For
+    /// tests only; debug builds only.
+    #[cfg(any(test, debug_assertions))]
+    #[doc(hidden)]
+    pub fn timers(&self) -> Option<Timers> {
+        self.shared.timers()
+    }
+
+    /// The limits the runtime applies ([`Limits`]).
+    pub(crate) fn limits(&self) -> Limits {
+        self.shared.limits()
+    }
+
+    /// Sets the ceilings of guests' web requests started from now on, so
+    /// tests can reach them quickly. For tests only; debug builds only.
+    #[cfg(any(test, debug_assertions))]
+    #[doc(hidden)]
+    pub fn set_http_limits(&self, limits: http::HttpLimits) {
+        self.shared.network.set_limits(limits);
+    }
+
+    /// The runtime's web requests: their limits and what each package
+    /// reached, which Pane's downloads of extensions' web images share
+    /// (#142).
+    pub(crate) fn network(&self) -> Arc<http::Network> {
+        self.shared.network.clone()
+    }
+
+    /// `host:port` of every address the package with identity key `owner`
+    /// tried to reach this session, sorted.
+    pub(crate) fn contacted(&self, owner: &str) -> Vec<String> {
+        self.shared.network.contacted(owner)
+    }
+
+    /// Injects a fault each time a file appears at `file`, then removes it:
+    /// `crash` injects [`Fault::Crash`], `crash-before-answer:<item>`
+    /// [`Fault::CrashBeforeAnswer`] for the action `<item>`, `hang`
+    /// [`Fault::Hang`] and `release` [`Fault::Release`];
+    /// `limits:<compute>,<warn>,<unresponsive>` (whole seconds) sets the
+    /// runtime's [`Limits`]. For the native
+    /// smokes, which set `PANE_TEST_RUNTIME_FAULTS`; the file is looked for
+    /// every 100 ms, by a thread that stops once every handle to the
+    /// runtime is dropped. Debug builds only.
+    #[cfg(any(test, debug_assertions))]
+    #[doc(hidden)]
+    pub fn watch_fault_file(&self, file: PathBuf) {
+        let runtime = self.downgrade();
+        let _ = std::thread::Builder::new()
+            .name("pane-runtime-faults".into())
+            .spawn(move || {
+                loop {
+                    std::thread::sleep(std::time::Duration::from_millis(100));
+                    let Some(runtime) = runtime.upgrade() else {
+                        return;
+                    };
+                    let Ok(text) = std::fs::read_to_string(&file) else {
+                        continue;
+                    };
+                    let _ = std::fs::remove_file(&file);
+                    let text = text.trim();
+                    match text.strip_prefix("crash-before-answer:") {
+                        Some(item) => runtime.inject(InjectedFault::CrashBeforeAnswer {
+                            item: item.to_owned(),
+                        }),
+                        None if text == "crash" => runtime.inject(InjectedFault::Crash),
+                        None if text == "hang" => runtime.inject(InjectedFault::Hang),
+                        None if text == "release" => runtime.inject(InjectedFault::Release),
+                        None => match parse_limits(text) {
+                            Some(limits) => runtime.set_limits(limits),
+                            None => {
+                                crate::diagnostic!(
+                                    "PANE_TEST_RUNTIME_FAULTS: unknown fault {text:?}"
+                                )
+                            }
+                        },
+                    }
+                }
+            });
+    }
+
+    /// Tells `report` of each crash of the runtime thread, after Pane
+    /// restarted it or chose not to.
+    pub(crate) fn set_crash_report(&self, report: supervisor::CrashReport) {
+        self.shared.set_crash_report(report);
+    }
+
+    /// Tells `report` when the runtime thread is not responding yet, and
+    /// when it carries on (see [`supervisor::SlowReport`]).
+    pub(crate) fn set_slow_report(&self, report: supervisor::SlowReport) {
+        self.shared.set_slow_report(report);
+    }
+
+    /// Asks the command in `component` to draw its screen (`render`), and
+    /// reads the list its tree describes. The command has no extension
+    /// data, and is launched by the user from root search.
+    pub async fn render(&self, component: &Path) -> Result<View, CallError> {
+        self.render_with(component, None).await
+    }
+
+    /// Like [`Runtime::render`], with the launch record `launch`.
+    pub async fn render_launched(
+        &self,
+        component: &Path,
+        launch: &LaunchRecord,
+    ) -> Result<View, CallError> {
+        self.render_launched_with(component, None, launch, None)
+            .await
+    }
+
+    /// Runs the no-view command with manifest id `command` in `component`
+    /// (`run`), launched as `launch` says, and reads its answer. The
+    /// command has no extension data.
+    pub async fn run_command(
+        &self,
+        component: &Path,
+        command: &str,
+        launch: &LaunchRecord,
+    ) -> Result<Answer, CallError> {
+        self.run_command_with(component, command, launch, None)
+            .await
+    }
+
+    /// Like [`Runtime::run_command`]; the command reads and saves `data`.
+    /// Starts its instance if it has none.
+    pub(crate) async fn run_command_with(
+        &self,
+        component: &Path,
+        command: &str,
+        launch: &LaunchRecord,
+        data: Option<PackageData>,
+    ) -> Result<Answer, CallError> {
+        let (reply, response) = oneshot::channel();
+        self.call(
+            Request::Run {
+                component: component.to_path_buf(),
+                command: command.to_owned(),
+                launch: launch.clone(),
+                data,
+                reply,
+            },
+            response,
+        )
+        .await
+    }
+
+    /// Has the command in `component` handle the user's choice of
+    /// `callback`, a callback id its tree named, with `details`, a JSON
+    /// object (`handle-event`). The caller asks for
+    /// the tree again afterwards. The command has no extension data.
+    pub async fn handle_event(
+        &self,
+        component: &Path,
+        callback: &str,
+        details: &str,
+    ) -> Result<Answer, CallError> {
+        self.handle_event_with(component, None, callback, details, None)
+            .await
+    }
+
+    /// Runs the action of the item `item_id` of the command in `component`,
+    /// as choosing it would: asks for the command's tree, then has it handle
+    /// the item's action's callback, in one request, so no other call comes
+    /// between. An item the list does not have, or one without an action,
+    /// is an error. The command has no extension data.
+    pub async fn run_item(&self, component: &Path, item_id: &str) -> Result<Answer, CallError> {
+        self.run_item_with(component, item_id, None).await
+    }
+
+    /// Like [`Runtime::render`]; the command reads and saves `data`.
+    /// An instance keeps the data it was started with.
+    pub(crate) async fn render_with(
+        &self,
+        component: &Path,
+        data: Option<PackageData>,
+    ) -> Result<View, CallError> {
+        self.render_launched_with(component, None, &LaunchRecord::default(), data)
+            .await
+    }
+
+    /// Like [`Runtime::render_launched`], for the command with manifest id
+    /// `command` (if known: its host functions act for it); the command
+    /// reads and saves `data`.
+    pub(crate) async fn render_launched_with(
+        &self,
+        component: &Path,
+        command: Option<&str>,
+        launch: &LaunchRecord,
+        data: Option<PackageData>,
+    ) -> Result<View, CallError> {
+        let (reply, response) = oneshot::channel();
+        self.call(
+            Request::Render {
+                component: component.to_path_buf(),
+                command: command.map(str::to_owned),
+                launch: launch.clone(),
+                data,
+                reply,
+            },
+            response,
+        )
+        .await
+    }
+
+    /// Like [`Runtime::handle_event`], for the command with manifest id
+    /// `command` (if known: its host functions act for it); the command
+    /// reads and saves `data`.
+    pub(crate) async fn handle_event_with(
+        &self,
+        component: &Path,
+        command: Option<&str>,
+        callback: &str,
+        details: &str,
+        data: Option<PackageData>,
+    ) -> Result<Answer, CallError> {
+        let (reply, response) = oneshot::channel();
+        self.call(
+            Request::HandleEvent {
+                component: component.to_path_buf(),
+                command: command.map(str::to_owned),
+                callback: callback.to_owned(),
+                details: details.to_owned(),
+                data,
+                reply,
+            },
+            response,
+        )
+        .await
+    }
+
+    /// Like [`Runtime::run_item`]; the command reads and saves `data`.
+    pub(crate) async fn run_item_with(
+        &self,
+        component: &Path,
+        item_id: &str,
+        data: Option<PackageData>,
+    ) -> Result<Answer, CallError> {
+        self.run_item_launched_with(component, None, item_id, &LaunchRecord::default(), data)
+            .await
+    }
+
+    /// Like [`Runtime::run_item_with`], for the command with manifest id
+    /// `command` (if known: its host functions act for it), drawing the
+    /// list with the launch record `launch`: a scheduled item's run draws it
+    /// with its schedule's.
+    pub(crate) async fn run_item_launched_with(
+        &self,
+        component: &Path,
+        command: Option<&str>,
+        item_id: &str,
+        launch: &LaunchRecord,
+        data: Option<PackageData>,
+    ) -> Result<Answer, CallError> {
+        let (reply, response) = oneshot::channel();
+        self.call(
+            Request::RunItem {
+                component: component.to_path_buf(),
+                command: command.map(str::to_owned),
+                item_id: item_id.to_owned(),
+                launch: launch.clone(),
+                data,
+                reply,
+            },
+            response,
+        )
+        .await
+    }
+
+    /// Checks, without running any guest code, that `component` is a
+    /// component Pane can run: it compiles, imports only WASI 0.3 and exports
+    /// the extension interface, with the function types of the current
+    /// contract ([`CallError::OlderApiShape`] otherwise). The check keeps
+    /// nothing loaded, and runs on Pane's checker thread, one check at a
+    /// time: it does not wait for guest calls in progress, such as one a
+    /// reload is about to stop.
+    pub async fn check(&self, component: &Path) -> Result<(), CallError> {
+        self.check_with(component, Exports::default())
+            .await
+            .map(|_| ())
+    }
+
+    /// Like [`Runtime::check`]; the component must also export each
+    /// interface `exports` names, with the current function types.
+    pub(crate) async fn check_with(
+        &self,
+        component: &Path,
+        exports: Exports,
+    ) -> Result<Checked, CallError> {
+        let (reply, response) = oneshot::channel();
+        self.checks
+            .send(Check {
+                component: component.to_path_buf(),
+                exports,
+                reply,
+            })
+            .map_err(|_| checker_stopped())?;
+        response.await.unwrap_or_else(|_| Err(checker_stopped()))
+    }
+
+    /// Asks the command in `component`, which supplies root results ahead
+    /// of the query, for all of them; the command uses
+    /// its `data`. Starts its instance if it has none.
+    pub(crate) async fn indexed_results_with(
+        &self,
+        component: &Path,
+        data: Option<PackageData>,
+    ) -> Result<Vec<IndexedResult>, CallError> {
+        let (reply, response) = oneshot::channel();
+        self.call(
+            Request::IndexedResults {
+                component: component.to_path_buf(),
+                data,
+                reply,
+            },
+            response,
+        )
+        .await
+    }
+
+    /// Has the runtime's guests, and the launcher opening their results,
+    /// find and open applications through `applications` from now on,
+    /// instead of this system's own ([`crate::applications::native`]).
+    pub fn set_applications(&self, applications: Arc<dyn Applications>) {
+        self.shared.applications.replace(applications);
+    }
+
+    /// Has `changed` told, with the components that asked for the
+    /// installed applications and may still run, each time the list
+    /// changes by itself (see [`Applications::on_change`]).
+    pub(crate) fn on_applications_changed(
+        &self,
+        changed: impl Fn(Vec<PathBuf>) + Send + Sync + 'static,
+    ) {
+        self.shared.applications.on_change(Arc::new(changed));
+    }
+
+    /// The components that asked for the installed applications and may
+    /// still run: what they supply ahead of the query may have changed
+    /// when the applications did, and is asked for again then (see
+    /// [`Runtime::on_applications_changed`]), so a show of root search
+    /// that changed nothing asks them for nothing (#202).
+    pub(crate) fn applications_askers(&self) -> Vec<PathBuf> {
+        self.shared.applications.askers()
+    }
+
+    /// Has the runtime list granted folders through `folders` from now on,
+    /// instead of this system's own ([`crate::files::native`]).
+    pub fn set_folders(&self, folders: Arc<dyn Folders>) {
+        self.shared.files.set_folders(folders);
+    }
+
+    /// The granted folders and their listings, which the launcher shares.
+    pub(crate) fn file_access(&self) -> FileAccess {
+        self.shared.files.clone()
+    }
+
+    /// Finds and opens the system's applications.
+    pub(crate) fn applications(&self) -> Arc<dyn Applications> {
+        self.shared.applications.current()
+    }
+
+    /// What finds the system's applications, as it is replaced
+    /// ([`Runtime::set_applications`]), without keeping the runtime: the
+    /// worker refreshing their icons holds it (#172).
+    pub(crate) fn applications_handle(&self) -> SharedApplications {
+        self.shared.applications.clone()
+    }
+
+    /// The folder of disposable data this runtime was started with
+    /// ([`Runtime::start_with_cache`]), which also holds the installed
+    /// applications' icons (#172); `None` when it keeps none.
+    pub(crate) fn cache_folder(&self) -> Option<PathBuf> {
+        self.shared.cache_dir.clone()
+    }
+
+    /// Has the runtime's guests keep clipboard history through `capture`
+    /// from now on; until then they are told that this Pane does not watch
+    /// the clipboard.
+    pub(crate) fn set_clipboard(&self, capture: &Arc<Capture>) {
+        *lock(&self.shared.clipboard) = Some(Arc::downgrade(capture));
+    }
+
+    /// Asks the command in `component`, which computes root results, for
+    /// its results for `query` at `at` (see [`WallTime`]); the command
+    /// reads and saves `data`. Starts its instance if it has none.
+    pub(crate) async fn root_results_with(
+        &self,
+        component: &Path,
+        query: &str,
+        at: WallTime,
+        data: Option<PackageData>,
+    ) -> Result<Vec<RootResult>, CallError> {
+        let (reply, response) = oneshot::channel();
+        self.call(
+            Request::RootResults {
+                component: component.to_path_buf(),
+                query: query.to_owned(),
+                at,
+                data,
+                reply,
+            },
+            response,
+        )
+        .await
+    }
+
+    /// Runs one cycle of the continuing service of the command with
+    /// manifest id `command` in `component`, which reads and saves `data`.
+    /// The launcher's services thread asks for each cycle while the
+    /// package's code may run, taking the generation current when it does:
+    /// a disable, reload, update, uninstall or pause that happens while the
+    /// cycle runs stops it (see `Runtime::handle_event_with`, whose stopping
+    /// is the same), and its late answer is discarded. An error the service
+    /// answers with is an expected error; a trap, or a cycle that computes
+    /// without finishing, is a crash of the package like any call's.
+    /// What the packages' guests registered at run time, and which
+    /// activation entry points ran: the registry the launcher reads (see
+    /// `registrations`).
+    pub(crate) fn registrations(&self) -> Arc<Registrations> {
+        self.shared.registrations.clone()
+    }
+
+    /// Activates the package of `data`: calls its component's `activate`
+    /// export (the activation entry point its `pane.json` names, ADR
+    /// 0041). A trap is a crash of the package, counted towards pausing
+    /// it; an error loading or instantiating the component is as any
+    /// call's is. The caller that runs it while starting reloaded code
+    /// takes the failure as a startup failure.
+    pub(crate) async fn activate_with(
+        &self,
+        component: &Path,
+        data: Option<PackageData>,
+    ) -> Result<(), CallError> {
+        let (reply, response) = oneshot::channel();
+        self.call(
+            Request::Activate {
+                component: component.to_path_buf(),
+                data,
+                reply,
+            },
+            response,
+        )
+        .await
+    }
+
+    /// Asks the running instance of `component` that exports `snapshot`
+    /// for the state it hands to the code the caller is about to install
+    /// (the state handoff, ADR 0041): the instance must be idle (no call
+    /// pending in it), the answer must come within [`SNAPSHOT_DEADLINE`],
+    /// and the bytes are limited to the operation JSON limit. `None` when
+    /// the instance is not running, exports no `snapshot`, is busy, is
+    /// late, answers too much or traps: the replacement goes ahead either
+    /// way, never delayed by more than the deadline. What this returns is
+    /// kept in memory only, for [`Runtime::stage_restores`] to hand to the
+    /// new code; a replacement or build that failed its checks never asks.
+    pub(crate) async fn snapshot_of(
+        &self,
+        component: &Path,
+        data: Option<PackageData>,
+    ) -> Result<Option<Vec<u8>>, CallError> {
+        let (reply, response) = oneshot::channel();
+        self.call(
+            Request::Snapshot {
+                component: component.to_path_buf(),
+                data,
+                reply,
+            },
+            response,
+        )
+        .await
+    }
+
+    /// Stages `states` for the new code of the package with identity key
+    /// `owner` in its generation `generation` to restore (the state
+    /// handoff, ADR 0041): each component path names a component of the
+    /// new code — the instance that first starts at it restores the bytes
+    /// it holds, before any other call into it — and whatever the
+    /// package's earlier code left staged goes. Kept in memory only, never
+    /// written to disk. Called once the replacement passed its checks and
+    /// the old code's generation ended, with the new code not yet started:
+    /// the generation given is the one the new code runs in, so only it
+    /// restores the state.
+    pub(crate) fn stage_restores(
+        &self,
+        owner: &str,
+        generation: &Generation,
+        states: Vec<(PathBuf, Vec<u8>)>,
+    ) {
+        let mut staged = lock(&self.shared.snapshots);
+        staged.retain(|(whose, _), _| whose != owner);
+        for (component, state) in states {
+            staged.insert(
+                (owner.to_owned(), component),
+                StagedSnapshot {
+                    generation: generation.clone(),
+                    state,
+                },
+            );
+        }
+    }
+
+    /// Drops the snapshots staged for the new code of the package with
+    /// identity key `owner` (see [`Runtime::stage_restores`]), for a
+    /// package that will never start again, such as one being uninstalled.
+    pub(crate) fn drop_restores(&self, owner: &str) {
+        lock(&self.shared.snapshots).retain(|(whose, _), _| whose != owner);
+    }
+
+    /// Delivers one event of what the package of `data` registered — a
+    /// timer's firing, a watcher's coalesced changes — to its component's
+    /// `events` export, as the timers and watchers threads do.
+    pub(crate) async fn event_with(
+        &self,
+        component: &Path,
+        event: crate::registrations::GuestEvent,
+        data: Option<PackageData>,
+    ) -> Result<(), CallError> {
+        let (reply, response) = oneshot::channel();
+        self.call(
+            Request::Event {
+                component: component.to_path_buf(),
+                event,
+                data,
+                reply,
+            },
+            response,
+        )
+        .await
+    }
+
+    pub(crate) async fn run_cycle_with(
+        &self,
+        component: &Path,
+        command: &str,
+        data: Option<PackageData>,
+    ) -> Result<Cycle, CallError> {
+        let (reply, response) = oneshot::channel();
+        self.call(
+            Request::RunCycle {
+                component: component.to_path_buf(),
+                command: command.to_owned(),
+                data,
+                reply,
+            },
+            response,
+        )
+        .await
+    }
+
+    /// Opens the designed view of the command `command` in the command in
+    /// `component`, launched as `launch` says (`open-view`), and draws it
+    /// once. The view stays open, holding its state in the guest, until
+    /// [`Runtime::close_designed_view`] or until its instance stops.
+    /// The command has no extension data.
+    pub async fn open_designed_view(
+        &self,
+        component: &Path,
+        command: &str,
+        launch: &LaunchRecord,
+    ) -> Result<(ViewId, DesignedRendered), CallError> {
+        self.open_designed_view_with(component, command, launch, None)
+            .await
+    }
+
+    /// Like [`Runtime::open_designed_view`]; the command reads and saves
+    /// `data`.
+    pub(crate) async fn open_designed_view_with(
+        &self,
+        component: &Path,
+        command: &str,
+        launch: &LaunchRecord,
+        data: Option<PackageData>,
+    ) -> Result<(ViewId, DesignedRendered), CallError> {
+        let (reply, response) = oneshot::channel();
+        self.call(
+            Request::OpenDesignedView {
+                component: component.to_path_buf(),
+                command: command.to_owned(),
+                launch: launch.clone(),
+                data,
+                reply,
+            },
+            response,
+        )
+        .await
+    }
+
+    /// Has the open designed view `view` handle `event`, then draws what
+    /// the event answered it does next ([`DesignedNext`]): the view again,
+    /// the view the answer pushed or replaced (now the top of the stack,
+    /// drawn for the first time), or nothing when the view popped itself.
+    /// A view that has closed answers [`CallError::ViewClosed`].
+    ///
+    /// The event is sent when this is called, not when the returned future
+    /// is first polled: events are handled one at a time, in the order of
+    /// these calls.
+    pub fn designed_view_event(
+        &self,
+        view: ViewId,
+        event: DesignedEvent,
+        supersedes: bool,
+    ) -> impl Future<Output = Result<DesignedNext, CallError>> + Send + 'static {
+        let (reply, response) = oneshot::channel();
+        self.call(
+            Request::DesignedViewEvent {
+                view,
+                event,
+                supersedes,
+                reply,
+            },
+            response,
+        )
+    }
+
+    /// Draws the open designed view `view` again, with no event: the
+    /// refresh its last render asked for by `refresh-after-ms`. The view
+    /// stays open; a view that has closed answers
+    /// [`CallError::ViewClosed`].
+    ///
+    /// The refresh is sent when this is called, not when the returned
+    /// future is first polled, and is numbered as an event's render is, so
+    /// a late refresh answer never replaces a newer tree (the launcher
+    /// drops it, as it drops a stale event's).
+    pub fn refresh_designed_view(
+        &self,
+        view: ViewId,
+    ) -> impl Future<Output = Result<DesignedRendered, CallError>> + Send + 'static {
+        self.ask_designed_view(view, false)
+    }
+
+    /// Draws the open designed view `view` again as its own push asked
+    /// (#243, `pane:extension/view`): the drawing a view asks for when its
+    /// work answered. Sent as a refresh is — numbered with the view's
+    /// events, so a late answer never replaces a newer tree — with the
+    /// render's context saying the view's work asked for it, so an
+    /// interval's work does not run in it as the ask's drawing does.
+    pub fn push_designed_view(
+        &self,
+        view: ViewId,
+    ) -> impl Future<Output = Result<DesignedRendered, CallError>> + Send + 'static {
+        self.ask_designed_view(view, true)
+    }
+
+    /// Sends the drawing of `view` a refresh or a push asked for.
+    fn ask_designed_view(
+        &self,
+        view: ViewId,
+        pushed: bool,
+    ) -> impl Future<Output = Result<DesignedRendered, CallError>> + Send + 'static {
+        let (reply, response) = oneshot::channel();
+        self.call(
+            Request::RefreshDesignedView {
+                view,
+                pushed,
+                reply,
+            },
+            response,
+        )
+    }
+
+    /// Names the selected item of the designed view `view`'s List or Grid
+    /// (#240): its key, or `None` when no item is selected. The key is
+    /// carried in the view's render context — the view builds the detail
+    /// pane's content for the item it names — and moves with the
+    /// selection, which the launcher owns.
+    pub fn set_view_selection(&self, view: ViewId, key: Option<String>) {
+        // A stopped runtime holds no views.
+        let _ = self.send(Request::SetViewSelection { view, key });
+    }
+
+    /// Closes the designed view `view`: the guest's view is dropped, after
+    /// any event already sent to it, and later events are refused.
+    pub fn close_designed_view(&self, view: ViewId) {
+        // A stopped runtime holds no views.
+        let _ = self.send(Request::CloseDesignedView { view });
+    }
+
+    /// How many designed views are open in guest instances, counting the
+    /// requests sent before this call. A diagnostic for tests and logs, as
+    /// [`Runtime::designed_view_count`] is.
+    pub async fn designed_view_count(&self) -> usize {
+        let (reply, response) = oneshot::channel();
+        self.call(Request::DesignedViewCount { reply }, response)
+            .await
+            .unwrap_or(0)
+    }
+
+    /// Notes the size the canvas `key` of the designed view `view` was laid
+    /// out at (#242): every render context of the view names it, and its
+    /// change is an event the view's tree asked for by `onResize`. Sent
+    /// ahead of the render a resize asks for, so that render's context
+    /// already carries the new size. Noted for a view that is no longer
+    /// open does nothing.
+    pub fn note_canvas_size(&self, view: ViewId, key: &str, width: f32, height: f32) {
+        let _ = self.send(Request::NoteCanvasSize {
+            view,
+            key: key.to_owned(),
+            width,
+            height,
+        });
+    }
+
+    /// The components that have a live guest instance, counting the
+    /// requests sent before this call, in no particular order. A diagnostic
+    /// for tests and logs, like [`Runtime::designed_view_count`]: listing or
+    /// searching commands starts none; invoking a command starts its own.
+    pub async fn running(&self) -> Vec<PathBuf> {
+        self.try_running().await.unwrap_or_default()
+    }
+
+    /// How many times an instance of `component` was started: a diagnostic
+    /// for tests and logs, like [`Runtime::running`]. A cancelled call
+    /// drops its instance, so a call after it starts one again; root search
+    /// asks a provider once a burst of keystrokes has gone quiet (#202).
+    pub fn instance_starts(&self, component: &Path) -> u64 {
+        lock(&self.shared.starts)
+            .get(component)
+            .copied()
+            .unwrap_or(0)
+    }
+
+    /// The components with calls the user asked for that have not answered
+    /// yet, counting the calls asked for before this one: sent, queued
+    /// behind another call or running in the guest. The replacement of a
+    /// package's code (an update) waits for these, so that no command the
+    /// user is waiting on is interrupted mid-run. Background and ambient
+    /// calls (a scheduled run, a service cycle, a root search's ask) are
+    /// not counted: a replacement ends them and the new code restarts or
+    /// re-asks them. Nor is a designed view's event, whose open screen is
+    /// what the launcher waits for instead. In no particular order.
+    pub(crate) fn busy(&self) -> Vec<PathBuf> {
+        lock(&self.shared.busy)
+            .iter()
+            .filter(|(_, busy)| busy.calls > 0)
+            .map(|(component, _)| component.clone())
+            .collect()
+    }
+
+    /// Like [`Runtime::running`], saying why there is no answer: the
+    /// runtime is stopped, or its thread failed (a crash, or Pane gave up
+    /// on it) before answering. Answered once every request sent before it
+    /// was handled, so it tells when those are done.
+    pub(crate) async fn try_running(&self) -> Result<Vec<PathBuf>, CallError> {
+        let (reply, response) = oneshot::channel();
+        self.call(Request::Running { reply }, response).await
+    }
+
+    /// The process ids of the native helpers guests started that are still
+    /// running (not yet ended and reaped), in no particular order. A
+    /// diagnostic for tests and logs, like [`Runtime::running`].
+    pub fn helper_processes(&self) -> Vec<u32> {
+        self.shared.helpers.running()
+    }
+
+    /// The process ids of the system programs guests run now (not the
+    /// processes those started), not yet ended and reaped, in no particular
+    /// order. A diagnostic for tests and logs, like
+    /// [`Runtime::helper_processes`].
+    pub fn program_processes(&self) -> Vec<u32> {
+        self.shared.helpers.running_programs()
+    }
+
+    /// The programs the installed package with the identity key `owner`
+    /// ran this session, by path, in order; " (elevated)" follows one run
+    /// elevated.
+    pub(crate) fn programs_run(&self, owner: &str) -> Vec<String> {
+        self.shared.helpers.programs_run(owner)
+    }
+
+    /// Finds the programs guests name by a bare name on what `search_path`
+    /// answers, asked at each call, instead of the system's search path:
+    /// for tests, whose programs are in a folder of their own.
+    #[doc(hidden)]
+    pub fn set_program_search_path(&self, search_path: crate::programs::runner::SearchPath) {
+        self.shared.helpers.set_search_path(search_path);
+    }
+
+    /// Ends every native helper process guests started, waiting until each
+    /// is reaped, for Pane quitting: its threads stop with it, and nothing
+    /// would end them otherwise. The calls that ran them answer that they
+    /// were stopped.
+    pub fn stop_helpers(&self) {
+        self.shared.helpers.stop_all();
+    }
+
+    /// Pane is quitting: ends every native helper and system program, with
+    /// the processes each started ([`Runtime::stop_helpers`]), and stops the
+    /// runtime thread, dropping every call in progress with its instance,
+    /// so whatever a call waits on (a helper, a program, a web request, a
+    /// clock) ends now rather than with the process. Calls asked for
+    /// afterwards answer that the runtime stopped.
+    pub fn quit(&self) {
+        self.shared.helpers.stop_all();
+        let _ = self.send(Request::Quit);
+    }
+
+    /// Ends the native helper processes running a file inside `folder`,
+    /// waiting (briefly) until each is reaped: before a replaced managed
+    /// copy is removed, so no running program keeps it in use.
+    pub(crate) fn stop_helpers_in(&self, folder: &Path) {
+        self.shared.helpers.stop_in(folder);
+    }
+
+    /// Drops the compiled code and live instances of `components`, for
+    /// example after their files were replaced or removed; a later call
+    /// loads the file again. Calls made afterwards see the effect; a call
+    /// already in progress finishes first, unless its generation ends (as
+    /// the launcher does before forgetting a disabled or replaced package),
+    /// which stops it. Nothing coordinates this with a command the user has
+    /// open: its instance's state is lost. Their calls the user asked for
+    /// are being stopped, so they no longer count as busy
+    /// ([`Runtime::busy`]): the count's generation moves on, so a call of
+    /// the ended generation dropped later cannot touch a newer one's.
+    pub fn forget(&self, components: impl IntoIterator<Item = PathBuf>) {
+        let components: Vec<PathBuf> = components.into_iter().collect();
+        {
+            let mut busy = lock(&self.shared.busy);
+            for component in &components {
+                // Ends the generation the counts so far are of, zeroing
+                // them: a newer generation starts its count afresh.
+                let busy = busy.entry(component.clone()).or_default();
+                busy.calls = 0;
+                busy.generation += 1;
+            }
+        }
+        // A stopped runtime holds nothing to forget.
+        let _ = self.send(Request::Forget { components });
+    }
+
+    /// Resolves the operation calls guests make against `directory` from
+    /// now on. Without one, every call is answered that nothing is
+    /// installed. It applies at once, not in the order of the requests:
+    /// a call already queued resolves against it too. It is shared by
+    /// every runtime thread, so a restarted one keeps it. The launcher sets
+    /// it once, as it is created, before it asks for any call.
+    pub(crate) fn set_directory(&self, directory: Directory) {
+        *lock(&self.shared.directory) = Some(directory);
+    }
+
+    /// Has `launches` start the commands guests launch
+    /// (`pane:extension/commands.launch`) from now on, also for calls
+    /// already queued and on a restarted runtime thread. Until then a
+    /// launch is refused.
+    pub(crate) fn set_launches(&self, launches: Launches) {
+        *lock(&self.shared.launches) = Some(launches);
+    }
+
+    /// Has `host_functions` carry out the window and feedback host
+    /// functions guests call from now on, also for calls already queued and
+    /// on a restarted runtime thread. Until then a window function answers
+    /// that no window was shown, a toast or a HUD is shown nowhere, and a
+    /// subtitle is refused.
+    pub(crate) fn set_host_functions(&self, host_functions: Arc<dyn HostFunctions>) {
+        *lock(&self.shared.host_functions) = Some(host_functions);
+    }
+
+    /// Has `asks` hear every designed view that asks to be drawn again
+    /// (`pane:extension/view`, #243) from now on, also for asks made by
+    /// calls already queued and on a restarted runtime thread. Until then
+    /// an ask names nothing: the view is not drawn for it. The runtime
+    /// holds `asks` weakly — it keeps neither the launcher nor itself
+    /// running.
+    pub(crate) fn set_view_asks(&self, asks: Arc<dyn Fn(u64) + Send + Sync>) {
+        *lock(&self.shared.view_asks) = Some(asks);
+    }
+
+    /// Has `measures` measure text for the drawing of a designed view's
+    /// canvases (`pane:extension/view.measure-text`, #242) from now on,
+    /// also for calls already queued and on a restarted runtime thread:
+    /// the fonts the view is drawn with, which the window owns. Until then
+    /// a measurement answers no extent (0 x 0), which a guest drawing from
+    /// it sees as no text laid out.
+    pub(crate) fn set_text_measures(&self, measures: TextMeasures) {
+        *lock(&self.shared.text_measures) = Some(measures);
+    }
+
+    /// Tells `health` of each later failure of a call into an installed
+    /// package's code (see [`Health`]). Like [`Runtime::set_directory`], it
+    /// applies at once, to calls already queued too, and holds for a
+    /// restarted runtime thread.
+    pub(crate) fn set_health(&self, health: HealthReport) {
+        *lock(&self.shared.health) = Some(health);
+    }
+
+    /// Every package's extension log, which guests' output and the
+    /// runtime's messages about their packages go to.
+    pub(crate) fn logs(&self) -> ExtensionLogs {
+        self.shared.logs.clone()
+    }
+
+    /// How many runtime threads Pane gave up on, because they stopped
+    /// responding, are still stuck, holding what they held. A diagnostic
+    /// for tests and logs, like [`Runtime::running`].
+    pub fn abandoned_threads(&self) -> usize {
+        self.shared.abandoned()
+    }
+
+    fn send(&self, request: Request) -> Result<(), CallError> {
+        self.shared
+            .send(request)
+            .map(|_| ())
+            .map_err(NotSent::error)
+    }
+
+    /// Sends `request`, when this is called, and returns its answer from
+    /// `response`. An answer lost because the runtime thread crashed or
+    /// stopped responding is known once Pane has restarted it or chosen
+    /// not to, and says which; the request is never sent again.
+    ///
+    /// A call the user asked a package for (see
+    /// [`Request::user_component`]) is counted as busy in its component
+    /// until its answer is waited for or nobody waits for it any more, so
+    /// that replacing the package's code can wait for every such call to
+    /// finish ([`Runtime::busy`]).
+    fn call<T: Send + 'static>(
+        &self,
+        request: Request,
+        response: oneshot::Receiver<Result<T, CallError>>,
+    ) -> impl Future<Output = Result<T, CallError>> + Send + 'static + use<T> {
+        let component = request.user_component().map(Path::to_path_buf);
+        let handled = self.shared.handled();
+        let sent = self.shared.send(request);
+        let shared = Arc::downgrade(&self.shared);
+        let answer = async move {
+            let thread = match sent {
+                Err(NotSent::Stopped) => return Err(supervisor::stopped()),
+                Err(NotSent::Lost(thread)) => thread,
+                Ok(thread) => {
+                    // A thread Pane gave up on never answers: its failure
+                    // being handled stands for the answer.
+                    let mut response = response;
+                    let mut given_up =
+                        std::pin::pin!(supervisor::handled_after(handled.clone(), thread));
+                    let answer = std::future::poll_fn(|cx| {
+                        if let std::task::Poll::Ready(answer) =
+                            std::pin::Pin::new(&mut response).poll(cx)
+                        {
+                            return std::task::Poll::Ready(answer.ok());
+                        }
+                        given_up.as_mut().poll(cx).map(|()| None)
+                    })
+                    .await;
+                    if let Some(answer) = answer {
+                        return answer;
+                    }
+                    thread
+                }
+            };
+            Err(supervisor::lost(shared, handled, thread).await)
+        };
+        match component {
+            None => CountedCall {
+                answer,
+                counting: None,
+            },
+            Some(component) => {
+                // The generation the count is of, captured here and checked
+                // again when it ends: `forget` moves the generation on, so
+                // this call cannot take a call of a newer generation's
+                // count with it.
+                let generation = {
+                    let mut busy = lock(&self.shared.busy);
+                    let busy = busy.entry(component.clone()).or_default();
+                    busy.calls += 1;
+                    busy.generation
+                };
+                CountedCall {
+                    answer,
+                    counting: Some((self.shared.clone(), component, generation)),
+                }
+            }
+        }
+    }
+}
+
+/// The answer of one call, counted as busy in its component for as long
+/// as it is waited for when the user asked the package for it (see
+/// [`Runtime::call`]).
+struct CountedCall<F> {
+    answer: F,
+    /// What to tell when this stops counting, with the component to tell
+    /// it for and the generation the count was of; `None` for a call that
+    /// is not counted.
+    counting: Option<(Arc<Shared>, PathBuf, u64)>,
+}
+
+impl<F: Future> Future for CountedCall<F> {
+    type Output = F::Output;
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> task::Poll<F::Output> {
+        // SAFETY: `answer` is never moved out of this, and is pinned here
+        // for as long as `self` is, as structural pinning requires.
+        let answer = unsafe {
+            self.as_mut()
+                .map_unchecked_mut(|counted| &mut counted.answer)
+        };
+        answer.poll(cx)
+    }
+}
+
+impl<F> Drop for CountedCall<F> {
+    fn drop(&mut self) {
+        if let Some((shared, component, generation)) = self.counting.take() {
+            let mut busy = lock(&shared.busy);
+            if let Some(count) = busy.get_mut(&component)
+                && count.generation == generation
+                && count.calls > 0
+            {
+                count.calls -= 1;
+            }
+        }
+    }
+}
+
+/// The limits `limits:<compute>,<warn>,<unresponsive>` sets, in whole
+/// seconds (see [`Runtime::watch_fault_file`]).
+#[cfg(any(test, debug_assertions))]
+fn parse_limits(text: &str) -> Option<Limits> {
+    let seconds: Vec<u64> = text
+        .strip_prefix("limits:")?
+        .split(',')
+        .map(|n| n.trim().parse().ok())
+        .collect::<Option<_>>()?;
+    let [compute, warn, unresponsive] = seconds[..] else {
+        return None;
+    };
+    let secs = std::time::Duration::from_secs;
+    Some(Limits {
+        compute: secs(compute),
+        warn: secs(warn),
+        unresponsive: secs(unresponsive),
+    })
+}
+
+/// Locks a mutex, taking it over if a thread panicked while holding it
+/// (the runtime thread may crash while a lock is held, see `supervisor`).
+pub(crate) use crate::util::lock;
+
+/// The runtime could not do something because of `error`.
+pub(crate) fn unavailable(error: impl fmt::Display) -> CallError {
+    CallError::RuntimeUnavailable(error.to_string())
+}
+
+/// The environment variable naming a folder that every runtime keeps its
+/// compiled extension code in, in place of its own cache folder (or none):
+/// the test runs set it (`.cargo/config.toml`), so a run's tests compile
+/// each component once rather than once per test, which for the 4 MB
+/// JavaScript components is most of a test's time. Only the compiled code
+/// moves; the runtime's cache folder ([`Runtime::cache_folder`]) and all it
+/// holds stay where they were. Wasmtime's cache may be shared by processes
+/// running at once: it writes each entry whole under a temporary name and
+/// renames it into place, and treats an entry it cannot read as missing.
+/// Unset or empty, each runtime keeps its own, as a released Pane does.
+const SHARED_CODE_CACHE: &str = "PANE_TEST_CODE_CACHE";
+
+/// Set by [`Runtime::ignore_shared_code_cache`].
+static IGNORE_SHARED_CODE_CACHE: AtomicBool = AtomicBool::new(false);
+
+/// The folder [`SHARED_CODE_CACHE`] names, unless this process ignores it.
+fn shared_code_cache() -> Option<PathBuf> {
+    if IGNORE_SHARED_CODE_CACHE.load(Ordering::Relaxed) {
+        return None;
+    }
+    std::env::var_os(SHARED_CODE_CACHE)
+        .filter(|dir| !dir.is_empty())
+        .map(PathBuf::from)
+}
+
+/// The engine every runtime thread runs guests with: WASI 0.3 and
+/// component-model async, keeping compiled code in `cache_dir`, if given
+/// (or in the shared cache [`SHARED_CODE_CACHE`] names).
+fn engine(cache_dir: Option<PathBuf>) -> Result<Engine, CallError> {
+    let mut config = Config::new();
+    config
+        .wasm_component_model(true)
+        .wasm_component_model_async(true)
+        // Every guest yields to the runtime thread at each tick (see
+        // `deadlines`), so none holds it by computing.
+        .epoch_interruption(true);
+    if let Some(dir) = shared_code_cache().or(cache_dir) {
+        let mut cache = CacheConfig::new();
+        cache.with_directory(dir);
+        let cache = Cache::new(cache).map_err(unavailable)?;
+        config.cache(Some(cache));
+    }
+    Engine::new(&config).map_err(unavailable)
+}
+
+/// How a call whose guest trapped with `trap` answers: as running out of
+/// memory if the guest was refused memory before (see `memory`), since its
+/// trap then says only where it gave up.
+fn crashed(trap: &wasmtime::Error, out_of_memory: bool) -> CallError {
+    CallError::Trap(if out_of_memory {
+        memory::out_of_memory()
+    } else {
+        format!("{trap:#}")
+    })
+}
+
+/// How a check answers once the checker thread has stopped.
+fn checker_stopped() -> CallError {
+    CallError::RuntimeUnavailable("Pane's component checker has stopped".into())
+}
+
+/// How a call of a generation that ended for `end` answers.
+fn ended(end: End) -> CallError {
+    match end {
+        End::Disabled => CallError::Disabled,
+        End::Replaced => CallError::Replaced,
+        End::Uninstalled => CallError::Uninstalled,
+        End::Paused => CallError::Paused,
+        End::Abandoned => given_up(),
+    }
+}
+
+/// Why stopped code (see [`GuestState::stopped`]) may not start host work.
+pub(crate) fn stopped_code(end: End) -> String {
+    match end {
+        End::Abandoned => "Pane's extension runtime stopped responding and was replaced while \
+                           this code ran; it no longer changes anything"
+            .into(),
+        _ => "this code of the extension was stopped (disabled, reloaded or updated)".into(),
+    }
+}
+
+/// Why code is stopped, if it is: the one check every host interface goes
+/// through ([`GuestState::stopped`], and the web requests' sender, which
+/// holds no `GuestState`). Code of an installed package is stopped once its
+/// generation ended (which says why first); any code, once `fence`, its
+/// runtime thread's, closed, whether or not its data was fenced with it
+/// ([`PackageData::stopped`] checks that fence too).
+pub(crate) fn code_stopped(data: Option<&PackageData>, fence: &Fence) -> Option<End> {
+    data.and_then(PackageData::stopped)
+        .or_else(|| fence.closed().then_some(End::Abandoned))
+}
+
+/// How a call answers that ran on a runtime thread Pane gave up on.
+fn given_up() -> CallError {
+    CallError::RuntimeUnavailable("it stopped responding and was replaced".into())
+}
+
+pub(crate) struct GuestState {
+    wasi: WasiCtx,
+    table: ResourceTable,
+    /// The extension data of the package the command belongs to; `None` for a
+    /// command built into Pane.
+    data: Option<PackageData>,
+    /// The guest's component, which identifies it as a caller.
+    pub(crate) component: PathBuf,
+    /// Where the guest's operation calls go, to be served while it waits.
+    pub(crate) calls: mpsc::UnboundedSender<OperationCall>,
+    /// Whether Pane is running a call of this guest, whose frame serves the
+    /// guest's operation calls. A call made at any other time, such as while
+    /// the component starts, is refused.
+    pub(crate) serving: bool,
+    /// Finds and opens the system's applications for the guest.
+    applications: SharedApplications,
+    /// `wasi:http`'s settings for the guest's web requests.
+    http: WasiHttpCtx,
+    /// Sends the guest's web requests.
+    sender: http::Sender,
+    /// Whether the guest asked for more memory than it may have
+    /// ([`GUEST_MEMORY`]) and was refused: a trap that follows is told as
+    /// running out of memory (see `memory`).
+    out_of_memory: bool,
+    /// The granted folders and their listings.
+    files: FileAccess,
+    /// Keeps clipboard history for the guest's package.
+    clipboard: SharedClipboard,
+    /// The installed packages, for finding the guest's helpers.
+    directory: SharedDirectory,
+    /// Starts the commands the guest launches.
+    launches: SharedLaunches,
+    /// Carries out the window and feedback host functions the guest calls.
+    host_functions: SharedHostFunctions,
+    /// What a designed view asking to be drawn again does
+    /// (`pane:extension/view`, #243): the drawing it asks for is not the
+    /// instance's to run, so the ask is handed on here, however the
+    /// instance is running.
+    view_asks: SharedViewAsks,
+    /// What measures text for a canvas's drawing
+    /// (`pane:extension/view.measure-text`, #242): the window's fonts,
+    /// handed to the runtime by the launcher.
+    text_measures: SharedTextMeasures,
+    /// What the call the guest runs now is for, as its host functions see
+    /// it. Set through [`GuestState::set_call`].
+    call: CallFor,
+    /// The command the guest's output is logged under: the call's, else
+    /// the one last noted.
+    log_command: CurrentCommand,
+    /// The runtime's helper processes and system programs; those of this
+    /// instance are ended with it.
+    helpers: Helpers,
+    /// Identifies this instance as the owner of the helpers and programs it
+    /// starts.
+    owner: u64,
+    /// The programs the call running now spawned (`programs`).
+    pub(crate) programs: crate::programs::Processes,
+    /// The runtime thread running the instance: its host calls are marked
+    /// there, and once Pane gave up on it (a runtime hang), its fence is
+    /// closed and the instance is stopped ([`GuestState::stopped`]).
+    watch: Arc<Watch>,
+    /// The command, by its id in `pane.json`, Pane last opened, ran or
+    /// asked in this instance: whose preferences `pane:extension/
+    /// preferences` reads when the guest names none.
+    command: Option<String>,
+    /// What the package registered at run time, which its host functions
+    /// add to and its resource handles name (see `registrations`).
+    registrations: Arc<Registrations>,
+    /// Which instance of its component this is: the runtime thread's
+    /// number and the instance's serial, never reused together. What the
+    /// instance registers is tagged with it, so the instance going ends
+    /// its registrations ([`GuestState::drop`]).
+    identity: (u64, u64),
+    /// Whether the component exports `pane:extension/events`, which
+    /// timer firings and watcher changes are delivered to; a component
+    /// that registers a timer or a watcher must.
+    events: bool,
+}
+
+impl Drop for GuestState {
+    /// The instance is going (its generation ended, it crashed, it was
+    /// forgotten or the runtime stopped): so do the helpers it started,
+    /// and so do the registrations it holds and the activation entry
+    /// point it ran, whose instance going is what ends them (ADR 0041).
+    fn drop(&mut self) {
+        self.helpers.stop_owned_by(self.owner);
+        self.registrations
+            .instance_gone(&self.component, self.identity);
+    }
+}
+
+impl GuestState {
+    /// Notes what the call the guest runs now is for: its host functions
+    /// see it, and its output is logged under its command (else the one
+    /// last noted).
+    fn set_call(&mut self, call: CallFor) {
+        self.log_command
+            .set(call.command.clone().or_else(|| self.command.clone()));
+        self.call = call;
+    }
+
+    /// Starts the helper `name` of the guest's own package with `args` and
+    /// `input`. Its process belongs to this instance and to the generation
+    /// of its code.
+    pub(crate) fn start_helper(
+        &mut self,
+        name: String,
+        args: Vec<String>,
+        input: String,
+    ) -> impl Future<Output = Result<Running, HelperError>> + Send + 'static + use<> {
+        let checked = (|| {
+            // Stopped code starts no more work.
+            if let Some(end) = self.stopped() {
+                return Err(runner::stopped_code(end));
+            }
+            if self.data.is_none() {
+                return Err(HelperError::new(
+                    HelperErrorKind::Refused,
+                    "only installed packages ship helpers; this command is built into Pane",
+                ));
+            }
+            runner::check_limits(&args, &input)?;
+            Ok(lock(&self.directory).clone())
+        })();
+        let (component, helpers) = (self.component.clone(), self.helpers.clone());
+        let (generation, owner) = (self.generation().cloned(), self.owner);
+        let fence = self.watch.fence().clone();
+        async move {
+            let directory = checked?;
+            // Finding and checking its file and starting its process may
+            // block, so they run off the runtime thread, which only awaits.
+            helpers
+                .start_off_thread(move || {
+                    let installed = directory.map(|directory| directory()).unwrap_or_default();
+                    let program = helpers::find(&installed, &component, &name)?;
+                    Ok(Spec {
+                        name,
+                        program,
+                        args,
+                        input,
+                        generation,
+                        fence: Some(fence),
+                        owner,
+                    })
+                })
+                .await
+        }
+    }
+
+    /// Whose a system program the guest runs is: this instance's, its
+    /// generation's and its runtime thread's, noted for its package.
+    pub(crate) fn program_owner(&self) -> crate::programs::runner::Owner {
+        crate::programs::runner::Owner {
+            helpers: self.helpers.clone(),
+            owner: self.owner,
+            generation: self.generation().cloned(),
+            fence: Some(self.watch.fence().clone()),
+            package: self.owner(),
+        }
+    }
+
+    /// The generation the instance belongs to; `None` for a command built
+    /// into Pane, which runs as long as Pane.
+    pub(crate) fn generation(&self) -> Option<&Generation> {
+        self.data.as_ref().map(PackageData::generation)
+    }
+
+    /// Why the instance's code is stopped, if it is: its generation ended,
+    /// or Pane gave up on the runtime thread running it
+    /// ([`End::Abandoned`]). Stopped code may no longer run, save data,
+    /// call operations or start any other host work: every host interface
+    /// checks this one fence.
+    pub(crate) fn stopped(&self) -> Option<End> {
+        // The data is fenced with this thread's fence
+        // ([`PackageData::fenced`]).
+        code_stopped(self.data.as_ref(), self.watch.fence())
+    }
+
+    /// Marks a host call on the runtime thread until the guard is dropped
+    /// (see `deadlines`): its time is not the guest's, and the thread is
+    /// not given up on meanwhile, so what it does must not block for long.
+    pub(crate) fn host(&self) -> HostCall<'_> {
+        self.watch.host()
+    }
+
+    /// The runtime thread running the instance, for marking host work.
+    pub(crate) fn watch(&self) -> Arc<Watch> {
+        self.watch.clone()
+    }
+
+    /// Marks each poll of `future`, a host call's work, as
+    /// [`GuestState::host`] does.
+    pub(crate) fn hosted<F: Future>(&self, future: F) -> Hosted<F> {
+        deadlines::hosted(self.watch.clone(), future)
+    }
+
+    fn data(&self) -> Result<&PackageData, String> {
+        self.data.as_ref().ok_or_else(|| {
+            "only installed packages keep settings or data; this command is built into Pane".into()
+        })
+    }
+}
+
+/// Implements one kind of data's interface over the package's extension
+/// data. Reading is a short host call; saving waits for the file to be
+/// written, off the runtime thread.
+macro_rules! data_host {
+    ($interface:ident, $kind:expr) => {
+        impl $interface::Host for GuestState {
+            fn get(&mut self, key: String) -> Result<Option<String>, String> {
+                let _host = self.host();
+                self.data()?.get($kind, &key)
+            }
+
+            async fn set(&mut self, key: String, value: String) -> Result<(), String> {
+                let data = self.data()?.clone();
+                self.hosted(async move { data.set($kind, &key, &value).await })
+                    .await
+            }
+        }
+    };
+}
+
+// Re-exported for the previous world's adapter, which implements the
+// previous bindgen's data interfaces over the same data with the same
+// macro (`runtime::previous`).
+pub(crate) use data_host;
+data_host!(settings, DataKind::Settings);
+data_host!(content, DataKind::Content);
+data_host!(cache, DataKind::Cache);
+data_host!(credentials, DataKind::LocalCredentials);
+
+impl preference_values::Host for GuestState {
+    /// The effective preference values of `command` of the guest's own
+    /// package, as JSON (see `crate::preferences::values_json`): read from
+    /// the package's manifest and Pane's record of the values, a short
+    /// host call.
+    fn values(&mut self, command: Option<String>) -> Result<String, String> {
+        preference_values_of(self, command)
+    }
+}
+
+/// The preferences read behind both worlds' `preferences` interfaces: the
+/// shared half of the interface, which the previous world's adapter
+/// delegates to as the current one's impl does (see `runtime::previous`).
+fn preference_values_of(state: &GuestState, command: Option<String>) -> Result<String, String> {
+    let _host = state.host();
+    if let Some(end) = state.stopped() {
+        return Err(stopped_code(end));
+    }
+    let owner = state
+        .owner()
+        .ok_or("only installed packages declare preferences; this command is built into Pane")?;
+    let directory = lock(&state.directory)
+        .clone()
+        .ok_or("this Pane keeps no preferences")?;
+    let installed = directory();
+    let package = installed
+        .packages
+        .iter()
+        .find(|package| package.identity.key() == owner)
+        .ok_or("the extension is no longer installed")?;
+    let manifest = package
+        .manifest
+        .as_ref()
+        .map_err(|error| format!("{} cannot load: {error}", package.title()))?;
+    let command = match command
+        .or_else(|| state.call.command.clone())
+        .or_else(|| state.command.clone())
+    {
+        Some(command) => command,
+        None => {
+            let mut serving = manifest
+                .commands
+                .iter()
+                .filter(|declared| package.location.join(&declared.component) == state.component);
+            match (serving.next(), serving.next()) {
+                (Some(only), None) => only.id.clone(),
+                _ => {
+                    return Err(
+                        "this component serves several commands; name the command whose \
+                         preferences to read"
+                            .into(),
+                    );
+                }
+            }
+        }
+    };
+    if !manifest
+        .commands
+        .iter()
+        .any(|declared| declared.id == command)
+    {
+        return Err(format!("{} has no command `{command}`", manifest.title));
+    }
+    let stored = installed
+        .data
+        .as_ref()
+        .map(|data| data.preference_values(&package.identity))
+        .unwrap_or_default();
+    let declared = crate::preferences::declared(manifest, &command);
+    let json = crate::preferences::values_json(&declared, &stored);
+    Ok(json)
+}
+
+impl launching::Host for GuestState {
+    /// Hands the launch to the launcher, which starts it or says why it
+    /// will not, and never waits for the target to run (see
+    /// [`Launches`]).
+    fn launch(
+        &mut self,
+        target: launching::CommandRef,
+        launch_type: launching::LaunchType,
+        arguments: Vec<launching::ArgumentValue>,
+        context: Option<String>,
+    ) -> Result<(), String> {
+        // Stopped code launches nothing: checked once the host call is
+        // marked, as applications' are.
+        let _host = self.host();
+        if let Some(end) = self.stopped() {
+            return Err(stopped_code(end));
+        }
+        let launches = lock(&self.launches)
+            .clone()
+            .ok_or("this Pane does not launch commands for extensions")?;
+        launches(LaunchRequest {
+            caller: self.component.clone(),
+            source: target.source,
+            command: target.command,
+            launch_type: match launch_type {
+                launching::LaunchType::UserInitiated => LaunchType::UserInitiated,
+                launching::LaunchType::Background => LaunchType::Background,
+            },
+            arguments: arguments
+                .into_iter()
+                .map(|argument| (argument.name, argument.value))
+                .collect(),
+            context,
+        })
+    }
+
+    /// Hands the subtitle to the launcher, which keeps it for the command
+    /// the call runs for (see `host_functions`).
+    fn set_subtitle(&mut self, subtitle: Option<String>) -> Result<(), String> {
+        self.set_command_subtitle(subtitle)
+    }
+}
+
+impl registering::Host for GuestState {
+    /// Registers a dynamic root item under `command`, from `item`: the
+    /// item shape of docs/list-tree.md as JSON, plus the `mode` that makes
+    /// it a dynamic command. Only code Pane is running a call of, of an
+    /// installed package, may register, as operations may only be called;
+    /// the manifest's command and the item are checked here, so the entry
+    /// the registry keeps is one Pane can list.
+    fn add_root_item(
+        &mut self,
+        command: String,
+        item: String,
+    ) -> wasmtime::Result<Result<Resource<crate::registrations::RootItemHandle>, String>> {
+        self.add_root_item(command, item)
+    }
+
+    /// Registers a timer that fires once, `seconds` from now.
+    fn timer_after(
+        &mut self,
+        seconds: u64,
+        tag: String,
+    ) -> wasmtime::Result<Result<Resource<crate::registrations::TimerHandle>, String>> {
+        Ok(self.timer(false, seconds, tag))
+    }
+
+    /// Registers a timer that fires every `seconds` until it is dropped
+    /// or the generation ends.
+    fn timer_every(
+        &mut self,
+        seconds: u64,
+        tag: String,
+    ) -> wasmtime::Result<Result<Resource<crate::registrations::TimerHandle>, String>> {
+        Ok(self.timer(true, seconds, tag))
+    }
+
+    /// Registers a watcher of `path`, recursive or not, reporting with
+    /// `tag`.
+    fn watch_folder(
+        &mut self,
+        path: String,
+        recursive: bool,
+        tag: String,
+    ) -> wasmtime::Result<Result<Resource<crate::registrations::WatcherHandle>, String>> {
+        self.watch_folder(path, recursive, tag)
+    }
+
+    /// Registers a provision of `capability`: the package provides it
+    /// while this is held.
+    fn provide_capability(
+        &mut self,
+        capability: String,
+    ) -> wasmtime::Result<Result<Resource<crate::registrations::ProvisionHandle>, String>> {
+        self.provide_capability(capability)
+    }
+}
+
+impl registering::HostRootItem for GuestState {
+    /// Replaces the item this handle owns with `item`.
+    fn update(
+        &mut self,
+        own: Resource<crate::registrations::RootItemHandle>,
+        item: String,
+    ) -> wasmtime::Result<Result<(), String>> {
+        self.update_root_item(own, item)
+    }
+
+    /// The handle is gone: so is the registration, and its entry on the
+    /// generation's undo list.
+    fn drop(
+        &mut self,
+        own: Resource<crate::registrations::RootItemHandle>,
+    ) -> wasmtime::Result<()> {
+        if let Ok(handle) = self.table.delete(own) {
+            self.registrations.release(handle.0);
+        }
+        Ok(())
+    }
+}
+
+impl registering::HostTimer for GuestState {
+    /// The handle is gone: so is the timer.
+    fn drop(&mut self, own: Resource<crate::registrations::TimerHandle>) -> wasmtime::Result<()> {
+        if let Ok(handle) = self.table.delete(own) {
+            self.registrations.release(handle.0);
+        }
+        Ok(())
+    }
+}
+
+impl registering::HostWatcher for GuestState {
+    /// The handle is gone: so is the watcher.
+    fn drop(&mut self, own: Resource<crate::registrations::WatcherHandle>) -> wasmtime::Result<()> {
+        if let Ok(handle) = self.table.delete(own) {
+            self.registrations.release(handle.0);
+        }
+        Ok(())
+    }
+}
+
+impl registering::HostProvision for GuestState {
+    /// The handle is gone: the provider is withdrawn at once.
+    fn drop(
+        &mut self,
+        own: Resource<crate::registrations::ProvisionHandle>,
+    ) -> wasmtime::Result<()> {
+        if let Ok(handle) = self.table.delete(own) {
+            self.registrations.release(handle.0);
+        }
+        Ok(())
+    }
+}
+
+impl GuestState {
+    /// Registers what `make` makes, named `what` on the generation's undo
+    /// list, refusing beyond `limit` registrations of the kinds `same`
+    /// names: the shared half of the registrations interface's functions.
+    /// The guest's call is a host call; the registry records the entry
+    /// and tells its hooks, so the launcher relists root search, the
+    /// worker threads take their work and the routing sees the provision.
+    fn add_registration(
+        &mut self,
+        what: &'static str,
+        limit: usize,
+        same: impl Fn(&crate::registrations::Kind) -> bool,
+        make: impl FnOnce(
+            &GuestState,
+            &operations::Installed,
+        ) -> Result<crate::registrations::Kind, String>,
+    ) -> Result<u64, String> {
+        let _host = self.host();
+        if !self.serving {
+            return Err(
+                "registrations can only be made while Pane runs a call of the extension".into(),
+            );
+        }
+        if let Some(end) = self.stopped() {
+            return Err(crate::registrations::replaced(end));
+        }
+        let owner = self.owner().ok_or(
+            "only installed packages register at run time; this command is built into Pane",
+        )?;
+        let generation = self
+            .generation()
+            .cloned()
+            .expect("an instance with an owner has a generation");
+        self.registrations
+            .refuse_beyond(&owner, what, limit, &same)?;
+        let installed = self.installed();
+        let kind = make(self, &installed)?;
+        Ok(self.registrations.add(
+            &owner,
+            &self.component,
+            self.identity,
+            &generation,
+            what,
+            kind,
+        ))
+    }
+
+    /// Registers a timer, one firing (`every` false) or one every
+    /// interval, refusing the bounds and the missing `events` export.
+    fn timer(
+        &mut self,
+        every: bool,
+        seconds: u64,
+        tag: String,
+    ) -> Result<Resource<crate::registrations::TimerHandle>, String> {
+        let bounds = crate::packages::MIN_SCHEDULE_SECONDS..=crate::packages::MAX_SCHEDULE_SECONDS;
+        if !bounds.contains(&seconds) {
+            return Err(format!(
+                "this timer's {seconds} seconds are beyond Pane's timer bounds, 1 second to \
+                 30 days; timers run within them"
+            ));
+        }
+        self.add_registration(
+            "timer",
+            crate::registrations::MAX_TIMERS,
+            |kind| matches!(kind, crate::registrations::Kind::Timer { .. }),
+            |state, _| {
+                state.wants_events()?;
+                Ok(crate::registrations::Kind::Timer {
+                    after: !every,
+                    seconds,
+                    tag,
+                })
+            },
+        )
+        .and_then(|id| {
+            self.table
+                .push(crate::registrations::TimerHandle(id))
+                .map_err(|error| error.to_string())
+        })
+    }
+
+    /// Registers a dynamic root item under `command`, from `item`: the
+    /// shared half of the registrations interface, which the previous
+    /// world's adapter delegates to as the current one's impl does (see
+    /// `runtime::previous`).
+    fn add_root_item(
+        &mut self,
+        command: String,
+        item: String,
+    ) -> wasmtime::Result<Result<Resource<crate::registrations::RootItemHandle>, String>> {
+        Ok(self
+            .add_registration(
+                "dynamic root item",
+                crate::registrations::MAX_ROOT_ITEMS,
+                |kind| matches!(kind, crate::registrations::Kind::RootItem { .. }),
+                |state, installed| {
+                    let manifest = state.command_manifest(installed, &command)?;
+                    let declared = manifest
+                        .commands
+                        .iter()
+                        .find(|declared| declared.id == command)
+                        .ok_or_else(|| format!("{} has no command `{command}`", manifest.title))?;
+                    if state.component != state.location_of(installed).join(&declared.component) {
+                        return Err(format!(
+                            "command `{command}` is not served by this component; a dynamic \
+                             root item is under a command this component serves"
+                        ));
+                    }
+                    if declared.mode == crate::packages::CommandMode::Provider {
+                        return Err(format!(
+                            "command `{command}` only answers root search; a dynamic root item \
+                             is under a command with a row of its own"
+                        ));
+                    }
+                    Ok(crate::registrations::Kind::RootItem {
+                        command,
+                        item: state.read_item(&item)?,
+                    })
+                },
+            )
+            .and_then(|id| {
+                self.table
+                    .push(crate::registrations::RootItemHandle(id))
+                    .map_err(|error| error.to_string())
+            }))
+    }
+
+    /// Registers a watcher of `path`, recursive or not, reporting with
+    /// `tag`: the shared half of the registrations interface, as
+    /// [`add_root_item`] is.
+    fn watch_folder(
+        &mut self,
+        path: String,
+        recursive: bool,
+        tag: String,
+    ) -> wasmtime::Result<Result<Resource<crate::registrations::WatcherHandle>, String>> {
+        Ok(self
+            .add_registration(
+                "folder watcher",
+                crate::registrations::MAX_WATCHERS,
+                |kind| matches!(kind, crate::registrations::Kind::Watcher { .. }),
+                |state, _| {
+                    state.wants_events()?;
+                    let path = PathBuf::from(&path);
+                    if !path.exists() {
+                        return Err(format!(
+                            "Pane cannot watch {}: there is nothing there",
+                            path.display()
+                        ));
+                    }
+                    Ok(crate::registrations::Kind::Watcher {
+                        path,
+                        recursive,
+                        tag,
+                    })
+                },
+            )
+            .and_then(|id| {
+                self.table
+                    .push(crate::registrations::WatcherHandle(id))
+                    .map_err(|error| error.to_string())
+            }))
+    }
+
+    /// Registers a provision of `capability`: the package provides it
+    /// while this is held. The shared half of the registrations
+    /// interface, as [`add_root_item`] is.
+    fn provide_capability(
+        &mut self,
+        capability: String,
+    ) -> wasmtime::Result<Result<Resource<crate::registrations::ProvisionHandle>, String>> {
+        let provided = capability.clone();
+        Ok(self
+            .add_registration(
+                "run-time provision",
+                crate::registrations::MAX_PROVISIONS,
+                |kind| matches!(kind, crate::registrations::Kind::Provision { .. }),
+                |state, installed| {
+                    let manifest = state.manifest_of(installed)?;
+                    match manifest
+                        .provides
+                        .iter()
+                        .find(|provides| provides.capability == provided)
+                    {
+                        None => Err(format!(
+                            "{} declares no `provides` entry for `{provided}` in its pane.json; \
+                             declare it there, marked `atRunTime`, to provide it at run time",
+                            manifest.title
+                        )),
+                        Some(provides) if !provides.at_run_time => Err(format!(
+                            "{} provides `{provided}` whenever it can run; mark the entry \
+                             `atRunTime` in its pane.json to provide it at run time",
+                            manifest.title
+                        )),
+                        Some(_) => Ok(crate::registrations::Kind::Provision {
+                            capability: provided,
+                        }),
+                    }
+                },
+            )
+            .and_then(|id| {
+                self.table
+                    .push(crate::registrations::ProvisionHandle(id))
+                    .map_err(|error| error.to_string())
+            }))
+    }
+
+    /// Replaces the item the registration `own` owns with `item`: the
+    /// shared half of the root-item resource's methods, as
+    /// [`add_root_item`] is.
+    fn update_root_item(
+        &mut self,
+        own: Resource<crate::registrations::RootItemHandle>,
+        item: String,
+    ) -> wasmtime::Result<Result<(), String>> {
+        let _host = self.host();
+        // Read first, so a handle that is no longer held says that rather
+        // than what is wrong with the item.
+        let read = self.read_item(&item);
+        match self.table.get(&own) {
+            Ok(handle) => Ok(match read {
+                Ok(item) => self.registrations.update_root_item(handle.0, item),
+                Err(error) => Err(error),
+            }),
+            // A handle the table no longer holds: its registration ended.
+            Err(_) => Ok(Err("its registration was undone".into())),
+        }
+    }
+
+    /// The manifest of the guest's own package, as `installed` holds it.
+    fn manifest_of(
+        &self,
+        installed: &operations::Installed,
+    ) -> Result<crate::packages::Manifest, String> {
+        let owner = self.owner().expect("checked by add_registration");
+        let package = installed
+            .packages
+            .iter()
+            .find(|package| package.identity.key() == owner)
+            .ok_or("the extension is no longer installed")?;
+        package
+            .manifest
+            .clone()
+            .map_err(|error| format!("{} cannot load: {error}", package.title()))
+    }
+
+    /// The folder of the guest's own package in `installed`, for checking
+    /// which of its commands this component serves.
+    fn location_of(&self, installed: &operations::Installed) -> PathBuf {
+        let owner = self.owner().expect("checked by add_registration");
+        installed
+            .packages
+            .iter()
+            .find(|package| package.identity.key() == owner)
+            .map(|package| package.location.clone())
+            .unwrap_or_default()
+    }
+
+    /// The manifest of the guest's own package, as a dynamic root item's
+    /// `command` needs it: the command must be one of its own.
+    fn command_manifest(
+        &self,
+        installed: &operations::Installed,
+        _command: &str,
+    ) -> Result<crate::packages::Manifest, String> {
+        self.manifest_of(installed)
+    }
+
+    /// The dynamic root item `item` describes, with its size bounded as
+    /// an indexed result's answer is.
+    fn read_item(&self, item: &str) -> Result<crate::registrations::DynamicItem, String> {
+        if item.len() > operations::MAX_OPERATION_JSON {
+            return Err(format!(
+                "the item is {} bytes; at most {} are passed",
+                item.len(),
+                operations::MAX_OPERATION_JSON
+            ));
+        }
+        tree::dynamic_item(item)
+    }
+
+    /// Whether the guest's component can be told of timer firings and
+    /// watcher changes, or why it cannot: a component that registers
+    /// either exports the events interface.
+    fn wants_events(&self) -> Result<(), String> {
+        if self.events {
+            return Ok(());
+        }
+        Err(format!(
+            "this component does not export {EVENTS_INTERFACE}, which timer firings and \
+             folder watcher changes are delivered to; export it beside `command` \
+             (pane_extension::registrations::export_events!(Events) in Rust, \"pane\": {{ \
+             \"events\": true }} in a JS/TS package.json)"
+        ))
+    }
+}
+
+/// `launch`, of the command with manifest id `command` (empty when Pane
+/// does not know it), as the guest's bindings carry it.
+fn launch_record(launch: &LaunchRecord, command: Option<&str>) -> launching::LaunchRecord {
+    launching::LaunchRecord {
+        launch_type: match launch.launch_type {
+            LaunchType::UserInitiated => launching::LaunchType::UserInitiated,
+            LaunchType::Background => launching::LaunchType::Background,
+        },
+        source: match launch.source {
+            LaunchSource::RootSearch => launching::LaunchSource::RootSearch,
+            LaunchSource::Alias => launching::LaunchSource::Alias,
+            LaunchSource::Fallback => launching::LaunchSource::Fallback,
+            LaunchSource::Hotkey => launching::LaunchSource::Hotkey,
+            LaunchSource::QuickSlot => launching::LaunchSource::QuickSlot,
+            LaunchSource::Command => launching::LaunchSource::Command,
+            LaunchSource::Schedule => launching::LaunchSource::Schedule,
+        },
+        arguments: launch
+            .arguments
+            .iter()
+            .map(|(name, value)| launching::ArgumentValue {
+                name: name.clone(),
+                value: value.clone(),
+            })
+            .collect(),
+        fallback_text: launch.fallback_text.clone(),
+        context: launch.context.clone(),
+        command: command.unwrap_or_default().to_owned(),
+    }
+}
+
+/// Why Pane asks a designed view for its tree, as its render's context
+/// names: the view's first drawing, the render an event's answer asks
+/// for, the refresh the view's own answer asked for by `refresh-after-ms`
+/// (#236), or the drawing the view's work asked for itself (#243). The
+/// SDKs run an interval's work only in the refresh's render; a push's
+/// drawing shows what landed, without ticking.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Why {
+    Open,
+    Event,
+    Refresh,
+    Push,
+}
+
+impl Why {
+    /// The word the context names it by.
+    fn as_str(self) -> &'static str {
+        match self {
+            Why::Open => "open",
+            Why::Event => "event",
+            Why::Refresh => "refresh",
+            Why::Push => "push",
+        }
+    }
+}
+
+/// The context of a designed view's `render` number `render`: JSON naming
+/// it, the id of the view it draws, why Pane asks, and the version of the
+/// UI component set Pane renders, so the extension can name each render's
+/// callbacks, ask for a drawing again through `pane:extension/view`
+/// (#243), run an interval's work only where it is due, and refuse trees
+/// of a component set it cannot target. It can grow without WIT changes.
+fn render_context(
+    view: ViewId,
+    render: u64,
+    why: Why,
+    selected: Option<&str>,
+    canvases: &HashMap<String, (f32, f32)>,
+) -> String {
+    // The selected item's key of the view's List or Grid (#240): the view
+    // builds the detail pane's content for the item it names; absent when
+    // no item is selected.
+    let selected = selected
+        .map(|selected| format!(",\"selected\":\"{}\"", escaped(selected)))
+        .unwrap_or_default();
+    // The sizes the view's canvases were laid out at, by their keys
+    // (#242) — a canvas that fills the space the layout gives it draws
+    // what its size asks.
+    let canvases = if canvases.is_empty() {
+        String::new()
+    } else {
+        let sizes = canvases
+            .iter()
+            .map(|(key, (width, height))| {
+                format!(
+                    "\"{}\":{{\"width\":{width},\"height\":{height}}}",
+                    escaped(key)
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(",");
+        format!(",\"canvases\":{{{sizes}}}")
+    };
+    format!(
+        "{{\"render\":{render},\"view\":{},\"why\":\"{}\"{selected},\"ui\":\"{}.{}\"{canvases}}}",
+        view.id,
+        why.as_str(),
+        designed::COMPONENT_SET.0,
+        designed::COMPONENT_SET.1
+    )
+}
+
+/// `text` as a JSON string's content, escaped.
+fn escaped(text: &str) -> String {
+    let mut escaped = String::with_capacity(text.len());
+    for character in text.chars() {
+        match character {
+            '"' => escaped.push_str("\\\""),
+            '\\' => escaped.push_str("\\\\"),
+            '\n' => escaped.push_str("\\n"),
+            '\r' => escaped.push_str("\\r"),
+            '\t' => escaped.push_str("\\t"),
+            other if (other as u32) < 0x20 => {
+                escaped.push_str(&format!("\\u{:04x}", other as u32));
+            }
+            other => escaped.push(other),
+        }
+    }
+    escaped
+}
+
+impl GuestState {
+    fn applications(&self) -> Arc<dyn Applications> {
+        self.applications.current()
+    }
+
+    /// The granted folders and their listings, for the guest.
+    pub(crate) fn file_access(&self) -> FileAccess {
+        self.files.clone()
+    }
+
+    /// The identity key of the guest's package; `None` for a command
+    /// built into Pane.
+    pub(crate) fn owner(&self) -> Option<String> {
+        self.data.as_ref().map(|data| data.owner().to_owned())
+    }
+
+    /// The installed packages as the launcher has them, for host functions
+    /// that answer from them (a capability's providers); a runtime no
+    /// launcher drives answers as with none installed.
+    pub(crate) fn installed(&self) -> operations::Installed {
+        match lock(&self.directory).clone() {
+            Some(directory) => directory(),
+            None => operations::Installed::default(),
+        }
+    }
+}
+
+impl applications::Host for GuestState {
+    fn installed(&mut self) -> Result<Vec<applications::Application>, String> {
+        // Stopped code starts no more work: checked once the host call is
+        // marked, from when Pane no longer decides to give up on the thread.
+        let _host = self.host();
+        if let Some(end) = self.stopped() {
+            return Err(stopped_code(end));
+        }
+        // The host keeps its list while a package that asked can run.
+        self.applications.asked_by(
+            &self.component,
+            self.data.as_ref().map(PackageData::generation),
+        );
+        Ok(self
+            .applications()
+            .installed()?
+            .into_iter()
+            .map(|application| applications::Application {
+                icon: crate::applications::icon_reference(&application.id),
+                id: application.id,
+                name: application.name,
+                location: application.location,
+                alternate_titles: application.alternate_titles,
+                keywords: application.keywords,
+                distinction: application.distinction,
+            })
+            .collect())
+    }
+
+    fn open(&mut self, id: String) -> Result<(), String> {
+        // Stopped code opens nothing: checked once the host call is
+        // marked, from when Pane no longer decides to give up on the thread.
+        let _host = self.host();
+        if let Some(end) = self.stopped() {
+            return Err(stopped_code(end));
+        }
+        self.applications().open(&id)
+    }
+}
+
+impl GuestState {
+    /// Runs `call` with what the guest's package does with its clipboard
+    /// history, as one host call. Stopped code ([`GuestState::stopped`],
+    /// the one check every host interface goes through) reads and changes
+    /// nothing more, and the call is marked ([`GuestState::host`]), so its
+    /// time (the history's lock and file, the system's clipboard) is
+    /// Pane's, never the guest's.
+    fn clipboard<R>(
+        &self,
+        call: impl FnOnce(clipboard::Commands<'_>) -> Result<R, String>,
+    ) -> Result<R, String> {
+        let _host = self.host();
+        // Checked once the call is marked, as applications' are.
+        if let Some(end) = self.stopped() {
+            return Err(stopped_code(end));
+        }
+        let data = self.data.as_ref().ok_or(
+            "only installed packages keep clipboard history; this command is built into Pane",
+        )?;
+        let capture = lock(&self.clipboard)
+            .as_ref()
+            .and_then(std::sync::Weak::upgrade);
+        call(clipboard::Commands { data, capture })
+    }
+}
+
+impl From<CaptureState> for clipboard_history::Capture {
+    fn from(state: CaptureState) -> Self {
+        match state {
+            CaptureState::Off => clipboard_history::Capture::Off,
+            CaptureState::On => clipboard_history::Capture::On,
+            CaptureState::Paused => clipboard_history::Capture::Paused,
+        }
+    }
+}
+
+impl From<clipboard_history::Capture> for CaptureState {
+    fn from(capture: clipboard_history::Capture) -> Self {
+        match capture {
+            clipboard_history::Capture::Off => CaptureState::Off,
+            clipboard_history::Capture::On => CaptureState::On,
+            clipboard_history::Capture::Paused => CaptureState::Paused,
+        }
+    }
+}
+
+/// A count for a guest, which cannot exceed `u32` in practice.
+fn count(count: usize) -> u32 {
+    u32::try_from(count).unwrap_or(u32::MAX)
+}
+
+impl clipboard_history::Host for GuestState {
+    fn status(&mut self) -> Result<clipboard_history::HistoryStatus, String> {
+        let status = self.clipboard(|history| history.status())?;
+        Ok(clipboard_history::HistoryStatus {
+            capture: status.capture.into(),
+            problem: status.problem,
+            excluded: status.excluded.into_iter().map(String::from).collect(),
+            items: count(status.items),
+            retention_seconds: status.retention_seconds,
+        })
+    }
+
+    fn set_capture(&mut self, wanted: clipboard_history::Capture) -> Result<(), String> {
+        self.clipboard(|history| history.set_capture(wanted.into()))
+    }
+
+    fn set_excluded(&mut self, programs: Vec<String>) -> Result<(), String> {
+        self.clipboard(|history| history.set_excluded(&programs))
+    }
+
+    fn set_retention(&mut self, seconds: u64) -> Result<(), String> {
+        self.clipboard(|history| history.set_retention(seconds))
+    }
+
+    fn entries(&mut self) -> Result<Vec<clipboard_history::Entry>, String> {
+        let (items, now) = self.clipboard(|history| history.items())?;
+        Ok(items
+            .into_iter()
+            .map(|item| clipboard_history::Entry {
+                id: item.id.to_string(),
+                text: item.text,
+                copied_at: item.copied_at,
+                age_seconds: now.saturating_sub(item.copied_at) / 1000,
+                // The program's file name, as the contract says, also where
+                // Pane keeps its path (Windows).
+                source: item
+                    .source
+                    .as_deref()
+                    .map(|source| clipboard::program_file_name(source).to_owned()),
+            })
+            .collect())
+    }
+
+    fn copy(&mut self, id: String) -> Result<(), String> {
+        self.clipboard(|history| history.copy(&id))
+    }
+
+    fn clear(&mut self) -> Result<u32, String> {
+        Ok(count(self.clipboard(|history| history.clear())?))
+    }
+
+    fn delete_items(&mut self, ids: Vec<String>) -> Result<u32, String> {
+        Ok(count(self.clipboard(|history| history.delete(&ids))?))
+    }
+
+    fn turn_off_and_clear(&mut self) -> Result<u32, String> {
+        Ok(count(
+            self.clipboard(|history| history.turn_off_and_clear())?,
+        ))
+    }
+}
+
+impl WasiView for GuestState {
+    fn ctx(&mut self) -> WasiCtxView<'_> {
+        WasiCtxView {
+            ctx: &mut self.wasi,
+            table: &mut self.table,
+        }
+    }
+}
+
+impl WasiHttpView for GuestState {
+    fn http(&mut self) -> WasiHttpCtxView<'_> {
+        WasiHttpCtxView {
+            ctx: &mut self.http,
+            table: &mut self.table,
+            hooks: &mut self.sender,
+        }
+    }
+}
+
+/// A running guest instance of one component.
+struct Instance {
+    store: Store<GuestState>,
+    /// The world the component was built for, and its bindings: the
+    /// current API's, or the previous one's through the adapter (see
+    /// `previous`). The accessor and call names are the current world's,
+    /// so no call site branches on the version.
+    bindings: previous::World,
+    /// Its root results export, if it has one, of either world.
+    root_results: Option<previous::WorldRootResults>,
+    /// Its indexed results export, if it has one, of either world.
+    indexed_results: Option<previous::WorldIndexedResults>,
+    /// Its published operations export, if it has one, of either world.
+    operations: Option<previous::WorldOperations>,
+    /// Its continuing-service export, if it runs one, of either world.
+    service: Option<previous::WorldService>,
+    /// Its events export, if it registers timers or watchers, of either
+    /// world.
+    events: Option<previous::WorldEvents>,
+    /// Its activation entry point export, if its package's `pane.json`
+    /// names it under `activate`, of either world.
+    lifecycle: Option<previous::WorldLifecycle>,
+    /// The operation calls its guest makes, which the call it runs serves
+    /// ([`Host::run_guest`]); taken out while it runs one.
+    calls: Option<mpsc::UnboundedReceiver<OperationCall>>,
+    /// Tells this instance apart from a later one of the same component, so
+    /// a view of one is never used with the other's store.
+    serial: u64,
+    /// Its entry on its generation's undo list: the generation's end has the
+    /// runtime thread drop it, even while no call asks for it.
+    _undo: Option<Registration>,
+}
+
+/// A designed view open in a guest instance.
+#[derive(Clone)]
+struct LiveDesignedView {
+    /// The id Pane handed out for the view.
+    id: ViewId,
+    /// The component whose instance holds the view.
+    component: PathBuf,
+    /// The guest's `view` resource.
+    resource: ResourceAny,
+    /// The instance holding it ([`Instance::serial`]).
+    serial: u64,
+    /// The sequence number of the last render asked of it: each `render`
+    /// call's context names it, so the view can name each render's
+    /// callbacks, and each event carries the number of the tree the user
+    /// saw.
+    rendered: u64,
+    /// The view's depth in its command's navigation stack: the root view
+    /// the command opened is 1, each view a push added one deeper. A push
+    /// that would go beyond [`MAX_NAVIGATION_DEPTH`] is refused.
+    depth: usize,
+    /// The key problems already reported for this view in development: a
+    /// tree that re-renders with the same problem reports it once, not
+    /// once per refresh.
+    reported: RefCell<HashSet<String>>,
+    /// The selected item's key of the view's List or Grid (#240), named in
+    /// its render context: the view builds the detail pane's content for
+    /// the item it names. Set by the launcher, which owns the selection.
+    selected: RefCell<Option<String>>,
+    /// The size each of the view's canvases was last laid out at, by its
+    /// key (#242): what every render context names for them. Noted as the
+    /// window lays the tree out; a change asks the view to draw again.
+    canvases: RefCell<HashMap<String, (f32, f32)>>,
+}
+
+/// The engine and the host interfaces guests link against, shared by the
+/// runtime thread and the checker thread.
+struct Code {
+    engine: Engine,
+    linker: Linker<GuestState>,
+}
+
+/// One request and the operation calls served inside it: the guest calls
+/// running for it, outermost first. Each package in it is busy until its
+/// call returns.
+#[derive(Clone, Default)]
+struct Chain {
+    /// Tells it apart from the other chains the thread serves meanwhile.
+    id: u64,
+    /// The components running a guest call in the chain, outermost first.
+    components: Vec<PathBuf>,
+    /// The generations of the calls in the chain that have one, outermost
+    /// first: when any ends, the calls from it inward stop.
+    owners: Vec<Generation>,
+}
+
+/// One instance's turn to run calls: one call into an instance at a time,
+/// the others queued in the order they were asked for (see [`Host::turn`]).
+#[derive(Default)]
+struct Lane {
+    /// Held by the call whose turn it is.
+    turn: Arc<tokio::sync::Mutex<()>>,
+    /// The chain holding the turn, if one does.
+    holder: Option<u64>,
+    /// Counts [`Host::forget`]s of the component: an instance taken out for
+    /// a call before one is dropped when the call ends, not put back.
+    forgotten: u64,
+    /// While the instance is out for a call: its generation, and
+    /// `forgotten` as it was when it was taken out.
+    out: Option<(Option<Generation>, u64)>,
+    /// Whether a call is waiting for the turn: a park that holds it ends
+    /// (see [`Host::park_guest`]), so the call never waits behind the
+    /// guest's own work. One waiter at most can hold the turn, so a
+    /// boolean says it.
+    wanted: Arc<AtomicBool>,
+    /// Wakes a park holding the turn: the waiter it notes itself by
+    /// `wanted` first, then wakes it here (the park re-reads `wanted`, so
+    /// a wake it misses is caught by its next poll).
+    woken: Arc<tokio::sync::Notify>,
+    /// Whether a park of the component's instance is running or waiting
+    /// for its turn (see [`Host::park_guest`]): at most one at a time, so
+    /// the render whose answer it follows never starts a second.
+    parking: bool,
+}
+
+/// A call's turn on its instance's [`Lane`]; the next call queued takes it
+/// once this is dropped.
+struct Turn<'a> {
+    host: &'a Host,
+    component: PathBuf,
+    _held: tokio::sync::OwnedMutexGuard<()>,
+}
+
+impl Drop for Turn<'_> {
+    fn drop(&mut self) {
+        // Never panics, even while the thread unwinds from a crash.
+        if let Ok(mut lanes) = self.host.lanes.try_borrow_mut()
+            && let Some(lane) = lanes.get_mut(&self.component)
+        {
+            lane.holder = None;
+        }
+    }
+}
+
+/// Notes, until dropped, that a call wants a lane's turn (see
+/// [`Host::turn`]): a park holding the lane ends, and the note goes when
+/// the call takes the turn — or stops waiting for it.
+struct Wanting(Arc<AtomicBool>);
+
+impl Drop for Wanting {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::SeqCst);
+    }
+}
+
+/// Notes, until dropped, which lane a chain waits for (see
+/// [`Host::would_deadlock`]).
+struct Waiting<'a> {
+    host: &'a Host,
+    chain: u64,
+}
+
+impl Drop for Waiting<'_> {
+    fn drop(&mut self) {
+        if let Ok(mut waiting) = self.host.waiting.try_borrow_mut() {
+            waiting.remove(&self.chain);
+        }
+    }
+}
+
+/// The requests a runtime thread serves at once, each a task polled on the
+/// thread itself, so that a panic in any unwinds the thread (see
+/// `supervisor`).
+type Tasks<'a> = FuturesUnordered<Task<'a>>;
+
+/// One request being served (see [`Tasks`]).
+type Task<'a> = Pin<Box<dyn Future<Output = ()> + 'a>>;
+
+/// Runtime-thread state: compiled components, their live instances and the
+/// designed views open in them, shared by the requests the thread serves at
+/// once (see [`Host::serve`]). Only the thread uses it, one task at a time,
+/// and nothing borrowed from it is held across an await.
+struct Host {
+    code: Arc<Code>,
+    components: RefCell<HashMap<PathBuf, Component>>,
+    /// The live instances not running a call; one running a call is taken
+    /// out for it (see [`Lane::out`]).
+    instances: RefCell<HashMap<PathBuf, Instance>>,
+    /// Each component's turn, which orders the calls into its instance.
+    lanes: RefCell<HashMap<PathBuf, Lane>>,
+    /// The lane each chain waits for, while it waits.
+    waiting: RefCell<HashMap<u64, PathBuf>>,
+    /// The designed views open in guest instances, keyed by the ids Pane
+    /// handed out for them.
+    designed_views: RefCell<HashMap<ViewId, LiveDesignedView>>,
+    /// The next view id, shared with the threads that replace this one.
+    next_view: Arc<AtomicU64>,
+    /// The next chain's id.
+    next_chain: Cell<u64>,
+    /// The next instance's serial.
+    next_serial: Cell<u64>,
+    /// How many times each component was instantiated, shared with the
+    /// runtime's handles: a diagnostic for tests (#202).
+    starts: Arc<Mutex<HashMap<PathBuf, u64>>>,
+    /// Woken whenever an instance taken out for a call comes back or goes.
+    returned: tokio::sync::Notify,
+    /// Where an instance's undo asks this thread to drop the instances of
+    /// ended generations; weak, so that the thread still stops once every
+    /// runtime handle is gone.
+    nudge: mpsc::WeakUnboundedSender<Sent>,
+    /// The installed packages operation calls are resolved against, and
+    /// guests' helpers found in.
+    directory: SharedDirectory,
+    /// Starts the commands guests launch.
+    launches: SharedLaunches,
+    /// Carries out the window and feedback host functions guests call.
+    host_functions: SharedHostFunctions,
+    /// What a designed view asking to be drawn again does
+    /// (`pane:extension/view`, #243).
+    view_asks: SharedViewAsks,
+    /// What measures text for a canvas's drawing
+    /// (`pane:extension/view.measure-text`, #242).
+    text_measures: SharedTextMeasures,
+    /// The helper processes guests started.
+    helpers: Helpers,
+    /// Told of each failure of a call into an installed package's code.
+    health: Arc<Mutex<Option<HealthReport>>>,
+    /// Where guests' output, and the failures reported, are logged.
+    logs: ExtensionLogs,
+    /// Faults injected into this thread, to check recovery.
+    faults: Arc<Faults>,
+    /// What the watchdog knows of this thread; whether Pane gave up on it.
+    watch: Arc<Watch>,
+    /// The limits guest calls run within, shared with the watchdog.
+    limits: Arc<Mutex<Limits>>,
+    /// This thread's number among those the runtime started.
+    number: u64,
+    /// Finds and opens the system's applications for guests.
+    applications: SharedApplications,
+    /// Guests' web requests, shared with the threads that replace this one.
+    network: Arc<http::Network>,
+    /// The granted folders and their listings.
+    files: FileAccess,
+    /// Keeps clipboard history for guests' packages.
+    clipboard: SharedClipboard,
+    /// What the packages' guests register at run time, shared with the
+    /// threads that replace this one and with the launcher (see
+    /// `registrations`).
+    registrations: Arc<Registrations>,
+    /// Snapshots staged for the new code of a replaced package to restore
+    /// (the state handoff, ADR 0041), shared with the threads that replace
+    /// this one.
+    snapshots: SharedSnapshots,
+}
+
+impl Code {
+    fn new(engine: Engine) -> Code {
+        let mut linker = Linker::new(&engine);
+        // Only WASI 0.3 is registered: no P2 linker and no stubs for unknown
+        // imports, so a mixed P2/P3 component cannot instantiate.
+        wasmtime_wasi::p3::add_to_linker(&mut linker)
+            .expect("registering WASI 0.3 in a fresh linker cannot conflict");
+        // Web requests (`wasi:http@0.3.0`'s client), sent by `http`.
+        wasmtime_wasi_http::p3::add_to_linker(&mut linker)
+            .expect("registering wasi:http in a fresh linker cannot conflict");
+        settings::add_to_linker::<_, wasmtime::component::HasSelf<_>>(&mut linker, |state| state)
+            .expect("registering settings in a fresh linker cannot conflict");
+        content::add_to_linker::<_, wasmtime::component::HasSelf<_>>(&mut linker, |state| state)
+            .expect("registering content in a fresh linker cannot conflict");
+        cache::add_to_linker::<_, wasmtime::component::HasSelf<_>>(&mut linker, |state| state)
+            .expect("registering the cache in a fresh linker cannot conflict");
+        credentials::add_to_linker::<_, wasmtime::component::HasSelf<_>>(&mut linker, |state| {
+            state
+        })
+        .expect("registering credentials in a fresh linker cannot conflict");
+        bindings::pane::extension::operations::add_to_linker::<_, operations::Calls>(
+            &mut linker,
+            |state| state,
+        )
+        .expect("registering operations in a fresh linker cannot conflict");
+        applications::add_to_linker::<_, wasmtime::component::HasSelf<_>>(&mut linker, |state| {
+            state
+        })
+        .expect("registering applications in a fresh linker cannot conflict");
+        clipboard_history::add_to_linker::<_, wasmtime::component::HasSelf<_>>(
+            &mut linker,
+            |state| state,
+        )
+        .expect("registering clipboard history in a fresh linker cannot conflict");
+        bindings::pane::extension::helpers::add_to_linker::<_, helpers::Runs>(
+            &mut linker,
+            |state| state,
+        )
+        .expect("registering helpers in a fresh linker cannot conflict");
+        bindings::pane::extension::programs::add_to_linker::<_, crate::programs::Calls>(
+            &mut linker,
+            |state| state,
+        )
+        .expect("registering system programs in a fresh linker cannot conflict");
+        bindings::pane::extension::files::add_to_linker::<_, wasmtime::component::HasSelf<_>>(
+            &mut linker,
+            |state| state,
+        )
+        .expect("registering files in a fresh linker cannot conflict");
+        bindings::pane::extension::file_index::add_to_linker::<_, wasmtime::component::HasSelf<_>>(
+            &mut linker,
+            |state| state,
+        )
+        .expect("registering the file index in a fresh linker cannot conflict");
+        typed_folder_host::add_to_linker::<_, wasmtime::component::HasSelf<_>>(
+            &mut linker,
+            |state| state,
+        )
+        .expect("registering the typed folder listing in a fresh linker cannot conflict");
+        launching::add_to_linker::<_, wasmtime::component::HasSelf<_>>(&mut linker, |state| state)
+            .expect("registering launching commands in a fresh linker cannot conflict");
+        view_host::add_to_linker::<_, wasmtime::component::HasSelf<_>>(&mut linker, |state| state)
+            .expect("registering the view's push in a fresh linker cannot conflict");
+        window_host::add_to_linker::<_, wasmtime::component::HasSelf<_>>(&mut linker, |state| {
+            state
+        })
+        .expect("registering the window functions in a fresh linker cannot conflict");
+        // Toasts and HUDs answer at once; `confirm` waits for the user with
+        // the store's accessor, as helpers do.
+        feedback_host::add_to_linker::<_, host_functions::Confirms>(&mut linker, |state| state)
+            .expect("registering toasts, HUDs and confirmations in a fresh linker cannot conflict");
+        system_host::add_to_linker::<_, wasmtime::component::HasSelf<_>>(&mut linker, |state| {
+            state
+        })
+        .expect("registering the system functions in a fresh linker cannot conflict");
+        run_host::add_to_linker::<_, wasmtime::component::HasSelf<_>>(&mut linker, |state| state)
+            .expect("registering the Run dialog's work in a fresh linker cannot conflict");
+        system_commands_host::add_to_linker::<_, wasmtime::component::HasSelf<_>>(
+            &mut linker,
+            |state| state,
+        )
+        .expect("registering the system commands in a fresh linker cannot conflict");
+        windows_host::add_to_linker::<_, wasmtime::component::HasSelf<_>>(&mut linker, |state| {
+            state
+        })
+        .expect("registering the open windows in a fresh linker cannot conflict");
+        preference_values::add_to_linker::<_, wasmtime::component::HasSelf<_>>(
+            &mut linker,
+            |state| state,
+        )
+        .expect("registering preferences in a fresh linker cannot conflict");
+        // What a command registers at run time it owns as a resource: the
+        // host side of the resources and of the functions that make them.
+        bindings::pane::extension::registrations::add_to_linker::<
+            _,
+            wasmtime::component::HasSelf<_>,
+        >(&mut linker, |state| state)
+        .expect("registering owned registrations in a fresh linker cannot conflict");
+        // The previous world's interfaces, served through the adapter:
+        // their instance names carry `@0.1.0`, so they cannot conflict
+        // with the current ones' (`@0.2.0`) in the one linker, and a
+        // component of either world instantiates against it (ADR 0046).
+        previous::add_to_linker(&mut linker)
+            .expect("registering the previous world in a fresh linker cannot conflict");
+        Code { engine, linker }
+    }
+
+    /// Compiles `path` and rejects components that import non-0.3 WASI.
+    fn compile(&self, path: &Path) -> Result<Component, CallError> {
+        let component = Component::from_file(&self.engine, path)
+            .map_err(|error| CallError::Load(format!("{}: {error:#}", path.display())))?;
+        let unsupported: Vec<String> = component
+            .component_type()
+            .imports(&self.engine)
+            .map(|(name, _)| name.to_owned())
+            .filter(|name| name.starts_with("wasi:") && !name.contains(WASI_VERSION))
+            .collect();
+        if !unsupported.is_empty() {
+            return Err(CallError::Incompatible(unsupported));
+        }
+        // The world the component's own exports name decides which
+        // world's shape check runs: the current one's, or the previous
+        // one's while its window lasts (see `previous`).
+        match previous::Which::of(&component, &self.engine) {
+            previous::Which::Current => {
+                self.check_exports(&component)?;
+                self.check_root_results(&component)?;
+            }
+            previous::Which::Previous => {
+                previous::check_exports(&component, &self.engine)?;
+                previous::check_root_results(&component, &self.engine)?;
+            }
+        }
+        Ok(component)
+    }
+
+    /// Type-checks the functions of the component's command interface
+    /// against those Pane calls, from the component's type alone, so no
+    /// guest code runs. Instantiating checks the same, but only when a
+    /// command opens; a component built for an older shape of the version
+    /// it names is refused here instead. A component without the interface
+    /// is left to [`Host::check`], which says so.
+    fn check_exports(&self, component: &Component) -> Result<(), CallError> {
+        use wasmtime::component::types::{ComponentFunc, ComponentItem};
+        use wasmtime::component::{ComponentNamedList, Lift, Lower, ResourceAny};
+
+        let ty = component.component_type();
+        let Some(ComponentItem::ComponentInstance(interface)) = ty
+            .get_export(&self.engine, COMMAND_INTERFACE)
+            .map(|export| export.ty)
+        else {
+            return Ok(());
+        };
+        let cx = ty.instance_type();
+        let older = |problem: String| CallError::OlderApiShape {
+            api: crate::packages::EXTENSION_API,
+            reason: problem,
+        };
+        let func = |name: &str| match interface.get_export(&self.engine, name).map(|e| e.ty) {
+            Some(ComponentItem::ComponentFunc(func)) => Ok(func),
+            _ => Err(older(format!("it has no function `{name}`"))),
+        };
+        fn check<P: ComponentNamedList + Lower, R: ComponentNamedList + Lift>(
+            name: &str,
+            func: ComponentFunc,
+            cx: &wasmtime::component::__internal::InstanceType<'_>,
+        ) -> Result<(), CallError> {
+            func.typecheck::<P, R>(cx)
+                .map_err(|error| CallError::OlderApiShape {
+                    api: crate::packages::EXTENSION_API,
+                    reason: format!("`{name}`: {error:#}"),
+                })
+        }
+        check::<(launching::LaunchRecord,), (Result<String, String>,)>(
+            "render",
+            func("render")?,
+            &cx,
+        )?;
+        check::<(String, launching::LaunchRecord), (Result<String, String>,)>(
+            "run",
+            func("run")?,
+            &cx,
+        )?;
+        check::<(String, String), (Result<String, String>,)>(
+            "handle-event",
+            func("handle-event")?,
+            &cx,
+        )?;
+        // The typed form of the interface's earlier shape: a component
+        // that still answers it is one built before the Form components of
+        // the designed tree replaced it (#241), refused naming the change
+        // instead of running a form Pane can no longer submit.
+        if interface.get_export(&self.engine, "submit-form").is_some() {
+            return Err(older(
+                "it still exports `submit-form`, the typed form of the command \
+                 interface that the designed tree's Form components replaced; \
+                 a form is now a tree whose fields are components"
+                    .into(),
+            ));
+        }
+        check::<(String, launching::LaunchRecord), (Result<ResourceAny, String>,)>(
+            "open-view",
+            func("open-view")?,
+            &cx,
+        )?;
+        let render = "[method]view.render";
+        check::<(ResourceAny, String), (Result<command::Rendered, String>,)>(
+            render,
+            func(render)?,
+            &cx,
+        )?;
+        let handle_event = "[method]view.handle-event";
+        check::<(ResourceAny, command::UiEvent), (Result<command::Outcome, String>,)>(
+            handle_event,
+            func(handle_event)?,
+            &cx,
+        )
+    }
+
+    /// Type-checks the component's root results' `results-for` against the
+    /// call Pane makes, when it exports them, from its type alone, as
+    /// [`Code::check_exports`] does its command's. The bindings an instance
+    /// takes the interface through are made without a word when they do
+    /// not fit, and a component that has the interface in another shape
+    /// would install and then fail when root search asks it ("it does not
+    /// export …"): a build of an older shape is refused here instead, saying
+    /// so (ADR 0046).
+    fn check_root_results(&self, component: &Component) -> Result<(), CallError> {
+        use wasmtime::component::types::ComponentItem;
+
+        let ty = component.component_type();
+        let Some(ComponentItem::ComponentInstance(interface)) = ty
+            .get_export(&self.engine, ROOT_RESULTS_INTERFACE)
+            .map(|export| export.ty)
+        else {
+            return Ok(());
+        };
+        let older = |reason: String| CallError::OlderApiShape {
+            api: crate::packages::EXTENSION_API,
+            reason,
+        };
+        let Some(ComponentItem::ComponentFunc(func)) = interface
+            .get_export(&self.engine, "results-for")
+            .map(|export| export.ty)
+        else {
+            return Err(older(
+                "its root results have no function `results-for`".into(),
+            ));
+        };
+        func.typecheck::<
+            (String, root_results::WallTime),
+            (Result<Vec<root_results::RootResult>, String>,),
+        >(&ty.instance_type())
+            .map_err(|error| older(format!("`results-for`: {error:#}")))
+    }
+
+    /// Type-checks `path` against the linker and the extension world, and
+    /// against each interface `exports` names too, without instantiating it,
+    /// so no guest code runs.
+    fn check(&self, path: &Path, exports: Exports) -> Result<Checked, CallError> {
+        let component = self.compile(path)?;
+        // A component built for the previous version is checked against
+        // that world, in `previous`: the one place its twin of everything
+        // below lives.
+        if previous::Which::of(&component, &self.engine) == previous::Which::Previous {
+            return previous::check(&self.linker, &self.engine, &component, exports);
+        }
+        let ty = component.component_type();
+        let network = ty
+            .imports(&self.engine)
+            .any(|(name, _)| name.starts_with("wasi:http/"));
+        let programs = ty
+            .imports(&self.engine)
+            .any(|(name, _)| name.starts_with(crate::programs::PROGRAMS_INTERFACE));
+        let interface = |error: wasmtime::Error| CallError::Interface(format!("{error:#}"));
+        let pre = self.linker.instantiate_pre(&component).map_err(interface)?;
+        if exports.root_results {
+            root_bindings::RootResultsProviderPre::new(pre.clone()).map_err(|error| {
+                CallError::Interface(format!(
+                    "its manifest says it computes root results, but it does not export \
+                     {ROOT_RESULTS_INTERFACE} with the functions Pane calls: {error:#}"
+                ))
+            })?;
+        }
+        if exports.indexed_results {
+            indexed_bindings::IndexedResultsProviderPre::new(pre.clone()).map_err(|error| {
+                CallError::Interface(format!(
+                    "its manifest says it supplies indexed results, but it does not export \
+                     {INDEXED_RESULTS_INTERFACE} with the functions Pane calls: {error:#}"
+                ))
+            })?;
+        }
+        if exports.operations {
+            operations_bindings::OperationsProviderPre::new(pre.clone()).map_err(|error| {
+                CallError::Interface(format!(
+                    "its manifest publishes operations it serves, but it does not export \
+                     {OPERATIONS_INTERFACE} with the functions Pane calls: {error:#}"
+                ))
+            })?;
+        }
+        if exports.service {
+            service_bindings::ServiceProviderPre::new(pre.clone()).map_err(|error| {
+                CallError::Interface(format!(
+                    "its manifest says it runs a continuing service, but it does not export \
+                     {SERVICE_INTERFACE} with the functions Pane calls: {error:#}"
+                ))
+            })?;
+        }
+        if exports.activate {
+            lifecycle_bindings::LifecycleProviderPre::new(pre.clone()).map_err(|error| {
+                CallError::Interface(format!(
+                    "its pane.json names it under `activate`, but it does not export \
+                     {LIFECYCLE_INTERFACE} with the functions Pane calls: {error:#}"
+                ))
+            })?;
+        }
+        // A component opts in to the state handoff (ADR 0041) by exporting
+        // the lifecycle interface, whether or not its package's `pane.json`
+        // names it under `activate`: installing detects the export here,
+        // without running guest code, so a component exporting another
+        // shape of it is refused.
+        if ty.get_export(&self.engine, LIFECYCLE_INTERFACE).is_some() {
+            lifecycle_bindings::LifecycleProviderPre::new(pre.clone()).map_err(|error| {
+                CallError::Interface(format!(
+                    "it does not export {LIFECYCLE_INTERFACE} with the functions Pane calls: \
+                     {error:#}"
+                ))
+            })?;
+        }
+        bindings::ExtensionWithTypedFolderPre::new(pre).map_err(interface)?;
+        Ok(Checked { network, programs })
+    }
+}
+
+impl Host {
+    fn new(
+        code: Arc<Code>,
+        shared: &Shared,
+        number: u64,
+        faults: Arc<Faults>,
+        watch: Arc<Watch>,
+        nudge: mpsc::WeakUnboundedSender<Sent>,
+    ) -> Host {
+        Host {
+            code,
+            components: RefCell::default(),
+            instances: RefCell::default(),
+            lanes: RefCell::default(),
+            waiting: RefCell::default(),
+            designed_views: RefCell::default(),
+            next_view: shared.next_view.clone(),
+            next_chain: Cell::new(0),
+            next_serial: Cell::new(0),
+            starts: shared.starts.clone(),
+            returned: tokio::sync::Notify::new(),
+            nudge,
+            directory: shared.directory.clone(),
+            launches: shared.launches.clone(),
+            host_functions: shared.host_functions.clone(),
+            view_asks: shared.view_asks.clone(),
+            text_measures: shared.text_measures.clone(),
+            helpers: shared.helpers.clone(),
+            health: shared.health.clone(),
+            logs: shared.logs.clone(),
+            faults,
+            watch,
+            limits: shared.limits.clone(),
+            number,
+            applications: shared.applications.clone(),
+            network: shared.network.clone(),
+            files: shared.files.clone(),
+            clipboard: shared.clipboard.clone(),
+            registrations: shared.registrations.clone(),
+            snapshots: shared.snapshots.clone(),
+        }
+    }
+
+    /// Serves requests until every handle is gone, Pane quits or Pane
+    /// gives up on this thread, each request a task of its own (see
+    /// [`Tasks`]): while one call waits on something outside its guest (the
+    /// user, a program, a helper, the network, a clock), the others run.
+    /// Calls into one instance still run one after another ([`Host::turn`]).
+    /// An injected [`Fault::Crash`] panics here, wherever the thread waits.
+    async fn serve(self, mut requests: mpsc::UnboundedReceiver<Sent>) {
+        let host = &self;
+        let mut tasks: Tasks<'_> = FuturesUnordered::new();
+        let faults = self.faults.clone();
+        let mut waiting = std::pin::pin!(faults.waiting());
+        loop {
+            let next = std::future::poll_fn(|cx| {
+                // Woken by an injection, it waits for the next one.
+                if waiting.as_mut().poll(cx).is_ready() {
+                    waiting.set(faults.waiting());
+                }
+                faults.check(waiting.as_mut(), cx);
+                // Given up on while it was stuck: it serves nothing more.
+                if host.watch.given_up() {
+                    return Poll::Ready(None);
+                }
+                // The work in progress first, then what is asked next.
+                while let Poll::Ready(Some(())) = tasks.poll_next_unpin(cx) {}
+                requests.poll_recv(cx).map(Some)
+            })
+            .await;
+            match next {
+                // Given up on, every handle gone, or Pane quitting: the work
+                // in progress is dropped with its instances, ending its
+                // waits (helpers, web requests) where they are.
+                None | Some(None) => return,
+                Some(Some(sent)) if matches!(sent.request, Request::Quit) => return,
+                Some(Some(sent)) => host.dispatch(sent, &mut tasks),
+            }
+        }
+    }
+
+    /// Starts serving `sent`: what it changes at once (forgetting
+    /// components, closing a view) is done here, in the order the requests
+    /// were sent, and its calls become a task in `tasks`, which holds it in
+    /// flight until it has been served.
+    fn dispatch<'a>(&'a self, sent: Sent, tasks: &mut Tasks<'a>) {
+        let Sent { request, in_flight } = sent;
+        let watch = self.watch.clone();
+        let _handling = watch.doing(Doing::Handling);
+        self.drop_stopped();
+        let task: Task<'a> = match request {
+            Request::Render {
+                component,
+                command,
+                launch,
+                data,
+                reply,
+            } => Box::pin(async move {
+                let call = CallFor::launched(command, &launch);
+                let _ = reply.send(self.render_tree(&component, call, &launch, data).await);
+            }),
+            Request::HandleEvent {
+                component,
+                command,
+                callback,
+                details,
+                data,
+                reply,
+            } => Box::pin(async move {
+                let result = self
+                    .handle_event(
+                        &component,
+                        CallFor::in_window(command),
+                        callback.clone(),
+                        details,
+                        data,
+                    )
+                    .await;
+                // An injected fault may lose this answer, after the action
+                // ran.
+                self.faults.before_answer(&callback);
+                let _ = reply.send(result);
+            }),
+            Request::RunItem {
+                component,
+                command,
+                item_id,
+                launch,
+                data,
+                reply,
+            } => Box::pin(async move {
+                let call = CallFor::launched(command, &launch);
+                let result = self
+                    .run_item(&component, call, &item_id, &launch, data)
+                    .await;
+                self.faults.before_answer(&item_id);
+                let _ = reply.send(result);
+            }),
+            Request::Run {
+                component,
+                command,
+                launch,
+                data,
+                reply,
+            } => Box::pin(async move {
+                let result = self.run(&component, command.clone(), &launch, data).await;
+                // An injected fault may lose this answer, after the command
+                // ran.
+                self.faults.before_answer(&command);
+                let _ = reply.send(result);
+            }),
+            Request::RunCycle {
+                component,
+                command,
+                data,
+                reply,
+            } => Box::pin(async move {
+                let _ = reply.send(self.run_cycle(&component, command, data).await);
+            }),
+            Request::Activate {
+                component,
+                data,
+                reply,
+            } => Box::pin(async move {
+                let _ = reply.send(self.activate(&component, data).await);
+            }),
+            Request::Snapshot {
+                component,
+                data,
+                reply,
+            } => Box::pin(async move {
+                let _ = reply.send(Ok(self.snapshot(&component, data).await));
+            }),
+            Request::Event {
+                component,
+                event,
+                data,
+                reply,
+            } => Box::pin(async move {
+                let _ = reply.send(self.event(&component, event, data).await);
+            }),
+            Request::IndexedResults {
+                component,
+                data,
+                reply,
+            } => Box::pin(async move {
+                let _ = reply.send(self.indexed_results(&component, data).await);
+            }),
+            Request::RootResults {
+                component,
+                query,
+                at,
+                data,
+                mut reply,
+            } => Box::pin(async move {
+                let result = self
+                    .root_results(&component, query, at, data, &mut reply)
+                    .await;
+                let _ = reply.send(result);
+            }),
+            Request::Forget { components } => {
+                self.forget(&components);
+                return;
+            }
+            Request::DropStopped | Request::Quit => return,
+            Request::NoteCanvasSize {
+                view,
+                key,
+                width,
+                height,
+            } => {
+                // Noted at once, for the render the requests sent after this
+                // ask for: the context of a view's renders names its
+                // canvases' sizes.
+                if let Some(open) = self.designed_views.borrow_mut().get_mut(&view) {
+                    open.canvases.borrow_mut().insert(key, (width, height));
+                }
+                Box::pin(async {})
+            }
+            Request::OpenDesignedView {
+                component,
+                command,
+                launch,
+                data,
+                reply,
+            } => Box::pin(async move {
+                let _ = reply.send(
+                    self.open_designed_view(&component, command, launch, data)
+                        .await,
+                );
+            }),
+            Request::DesignedViewEvent {
+                view,
+                event,
+                supersedes,
+                reply,
+            } => {
+                // The view as it is now: an event sent before the view was
+                // closed is still handled, before the view is dropped.
+                let open = self.designed_views.borrow().get(&view).cloned();
+                let Some(open) = open else {
+                    let _ = reply.send(Err(CallError::ViewClosed));
+                    return;
+                };
+                Box::pin(async move {
+                    let _ = reply.send(self.designed_view_event(open, event, supersedes).await);
+                })
+            }
+            Request::RefreshDesignedView {
+                view,
+                pushed,
+                reply,
+            } => {
+                // The view as it is now: a refresh asked for before the view
+                // was closed is still drawn, before the view is dropped.
+                let open = self.designed_views.borrow().get(&view).cloned();
+                let Some(open) = open else {
+                    let _ = reply.send(Err(CallError::ViewClosed));
+                    return;
+                };
+                Box::pin(async move {
+                    let _ = reply.send(self.draw_designed_view(open, pushed).await);
+                })
+            }
+            Request::Pump { component } => {
+                // At most one park at a time: the render whose answer asked
+                // for this one has ended, and the next that answers asks
+                // again, so a second would drive the same work twice. A
+                // lane already parking (running, or waiting for its turn)
+                // keeps the park it has.
+                let already = self
+                    .lanes
+                    .borrow_mut()
+                    .entry(component.clone())
+                    .or_default()
+                    .parking;
+                if already {
+                    return;
+                }
+                self.lanes
+                    .borrow_mut()
+                    .get_mut(&component)
+                    .expect("the lane was just made")
+                    .parking = true;
+                let chain = self.chain();
+                Box::pin(async move {
+                    // The instance's turn, as a call's: the park holds it
+                    // while it runs, and a call that wants it ends the park
+                    // (see [`Host::turn`]). Waiting for it here, the park
+                    // task may follow the render whose answer asked for it
+                    // still holding the turn — this waits behind it, and
+                    // drives the work both started.
+                    if let Ok(_turn) = self.turn_for(&component, &chain).await {
+                        self.park_guest(&component, &chain).await;
+                    }
+                    // The park is over: the next render's answer may ask for
+                    // another (never panics while the thread unwinds).
+                    if let Ok(mut lanes) = self.lanes.try_borrow_mut()
+                        && let Some(lane) = lanes.get_mut(&component)
+                    {
+                        lane.parking = false;
+                    }
+                })
+            }
+            Request::SetViewSelection { view, key } => {
+                if let Some(open) = self.designed_views.borrow().get(&view) {
+                    *open.selected.borrow_mut() = key;
+                }
+                return;
+            }
+            Request::CloseDesignedView { view } => {
+                // Closed at once, for the requests sent after this; its
+                // destructor runs in its instance's turn.
+                let open = self.designed_views.borrow_mut().remove(&view);
+                let Some(open) = open else {
+                    return;
+                };
+                Box::pin(self.close_designed_view(open))
+            }
+            Request::DesignedViewCount { reply } => Box::pin(async move {
+                self.settled().await;
+                let count = self.designed_views.borrow().len();
+                let _ = reply.send(Ok(count));
+            }),
+            Request::Running { reply } => Box::pin(async move {
+                self.settled().await;
+                let _ = reply.send(Ok(self.running()));
+            }),
+        };
+        // In flight until it has been served, or dropped with the thread.
+        let served: Task<'a> = Box::pin(async move {
+            let _in_flight = in_flight;
+            task.await;
+        });
+        tasks.push(served);
+    }
+
+    /// A new chain, for a request.
+    fn chain(&self) -> Chain {
+        let id = self.next_chain.get();
+        self.next_chain.set(id + 1);
+        Chain {
+            id,
+            ..Chain::default()
+        }
+    }
+
+    /// Waits for `path`'s turn for `chain`: one call into an instance at a
+    /// time, the others in the order they asked. `None` when waiting could
+    /// never end, because the turn's holder waits, through other chains, for
+    /// a turn `chain` holds: a call that would wait on itself is refused
+    /// rather than waited for.
+    async fn turn(&self, path: &Path, chain: u64) -> Option<Turn<'_>> {
+        let lane = self
+            .lanes
+            .borrow_mut()
+            .entry(path.to_path_buf())
+            .or_default()
+            .turn
+            .clone();
+        if self.would_deadlock(path, chain) {
+            return None;
+        }
+        let held = {
+            self.waiting.borrow_mut().insert(chain, path.to_path_buf());
+            let _waiting = Waiting { host: self, chain };
+            // A call waiting for the turn ends a park that holds it (#243,
+            // see [`Lane::wanted`]): the park gives the turn back, so the
+            // call never waits behind the guest's own work. Noted before
+            // the wait, and read again by the park whenever it is woken, so
+            // neither can miss the other on this one thread; however the
+            // wait ends, the note goes.
+            let (wanted, woken) = {
+                let mut lanes = self.lanes.borrow_mut();
+                let lane = lanes.entry(path.to_path_buf()).or_default();
+                let wanted = lane.wanted.clone();
+                let woken = lane.woken.clone();
+                wanted.store(true, Ordering::SeqCst);
+                (wanted, woken)
+            };
+            woken.notify_waiters();
+            let _wanting = Wanting(wanted);
+            lane.lock_owned().await
+        };
+        if let Some(lane) = self.lanes.borrow_mut().get_mut(path) {
+            lane.holder = Some(chain);
+        }
+        Some(Turn {
+            host: self,
+            component: path.to_path_buf(),
+            _held: held,
+        })
+    }
+
+    /// [`Host::turn`] for a request's own call, which holds no turn yet and
+    /// so never waits on itself.
+    async fn turn_for(&self, path: &Path, chain: &Chain) -> Result<Turn<'_>, CallError> {
+        self.turn(path, chain.id)
+            .await
+            .ok_or_else(|| CallError::RuntimeUnavailable("its call would wait on itself".into()))
+    }
+
+    /// Whether `chain` waiting for `path`'s turn would wait for ever: the
+    /// turn's holder waits for a turn whose holder waits ... for one
+    /// `chain` holds.
+    fn would_deadlock(&self, path: &Path, chain: u64) -> bool {
+        let lanes = self.lanes.borrow();
+        let waiting = self.waiting.borrow();
+        let mut lane = path;
+        // Each chain waits for one turn at most: the walk ends.
+        for _ in 0..=lanes.len() {
+            let Some(holder) = lanes.get(lane).and_then(|lane| lane.holder) else {
+                return false;
+            };
+            if holder == chain {
+                return true;
+            }
+            let Some(next) = waiting.get(&holder) else {
+                return false;
+            };
+            lane = next.as_path();
+        }
+        false
+    }
+
+    /// Takes the idle instance of `path` out for a call, noting it as out
+    /// (see [`Lane::out`]); with what to give [`Host::bring_back`].
+    fn take_out(&self, path: &Path) -> Option<(Instance, u64)> {
+        let instance = self.instances.borrow_mut().remove(path)?;
+        let generation = instance.store.data().generation().cloned();
+        let mut lanes = self.lanes.borrow_mut();
+        let lane = lanes.entry(path.to_path_buf()).or_default();
+        lane.out = Some((generation, lane.forgotten));
+        Some((instance, lane.forgotten))
+    }
+
+    /// Puts `instance`, taken out of `path` when its forget count was
+    /// `taken`, back for the next call, unless `path` was forgotten
+    /// meanwhile: then it goes, with its views.
+    fn bring_back(&self, path: &Path, taken: u64, instance: Instance) {
+        let keep = {
+            let mut lanes = self.lanes.borrow_mut();
+            let lane = lanes.entry(path.to_path_buf()).or_default();
+            lane.out = None;
+            lane.forgotten == taken
+        };
+        if keep {
+            self.instances
+                .borrow_mut()
+                .insert(path.to_path_buf(), instance);
+        } else {
+            drop(instance);
+        }
+        self.returned.notify_waiters();
+    }
+
+    /// Notes that the instance taken out of `path` went (its call stopped,
+    /// or it crashed), with its views.
+    fn gone(&self, path: &Path) {
+        if let Some(lane) = self.lanes.borrow_mut().get_mut(path) {
+            lane.out = None;
+        }
+        self.designed_views
+            .borrow_mut()
+            .retain(|_, view| view.component != path);
+        self.returned.notify_waiters();
+    }
+
+    /// Waits until no instance out for a call is going: one whose
+    /// generation ended, or that was forgotten, which its call drops as it
+    /// stops. Then what a diagnostic answers counts every request sent
+    /// before it that ends or forgets something.
+    async fn settled(&self) {
+        loop {
+            let notified = self.returned.notified();
+            let mut notified = std::pin::pin!(notified);
+            notified.as_mut().enable();
+            let going = self.lanes.borrow().values().any(|lane| {
+                lane.out.as_ref().is_some_and(|(generation, taken)| {
+                    *taken != lane.forgotten
+                        || generation.as_ref().is_some_and(|g| g.ended().is_some())
+                })
+            });
+            if !going {
+                return;
+            }
+            notified.await;
+        }
+    }
+
+    /// The components with a live instance, idle or running a call.
+    fn running(&self) -> Vec<PathBuf> {
+        let mut running: Vec<PathBuf> = self.instances.borrow().keys().cloned().collect();
+        running.extend(
+            self.lanes
+                .borrow()
+                .iter()
+                .filter(|(_, lane)| lane.out.is_some())
+                .map(|(path, _)| path.clone()),
+        );
+        running
+    }
+
+    /// Drops the compiled code and idle instances of `components`; an
+    /// instance running a call finishes it and then goes (see
+    /// [`Runtime::forget`]).
+    fn forget(&self, components: &[PathBuf]) {
+        for component in components {
+            self.components.borrow_mut().remove(component);
+            self.drop_instance(component);
+            if let Some(lane) = self.lanes.borrow_mut().get_mut(component) {
+                lane.forgotten += 1;
+            }
+        }
+    }
+
+    /// Asks the command in `path`, launched as `launch` says, for its
+    /// tree, and reads it: a tree Pane cannot read is
+    /// [`CallError::Unreadable`], and the instance stays.
+    async fn render_tree(
+        &self,
+        path: &Path,
+        call: CallFor,
+        launch: &LaunchRecord,
+        data: Option<PackageData>,
+    ) -> Result<View, CallError> {
+        let chain = self.chain();
+        let _turn = self.turn_for(path, &chain).await?;
+        self.render_in_turn(path, call, launch, data, &chain).await
+    }
+
+    /// [`Host::render_tree`] in `chain`, which holds `path`'s turn. The
+    /// host functions the guest calls act as `call` says.
+    async fn render_in_turn(
+        &self,
+        path: &Path,
+        call: CallFor,
+        launch: &LaunchRecord,
+        data: Option<PackageData>,
+        chain: &Chain,
+    ) -> Result<View, CallError> {
+        self.instance(path, data).await?;
+        let named = launch.command.as_deref().or(call.command.as_deref());
+        self.note_command(path, named);
+        let launch = launch_record(launch, named);
+        let result = self
+            .run_guest(path, chain, async |instance| {
+                instance.store.data_mut().set_call(call);
+                let command = instance.bindings.pane_extension_command();
+                instance
+                    .store
+                    .run_concurrent(async |store| command.call_render(store, launch).await)
+                    .await
+            })
+            .await?;
+        let tree = self.settle(path, result, CallError::Guest)?;
+        tree::read_view(&tree).map_err(CallError::Unreadable)
+    }
+
+    /// Runs the no-view command with manifest id `command` in `path`,
+    /// launched as `launch` says (`run`), and reads its answer: one Pane
+    /// cannot read is [`CallError::Unreadable`]. An error it answers with
+    /// is [`CallError::Guest`], never a failure of the package.
+    async fn run(
+        &self,
+        path: &Path,
+        command: String,
+        launch: &LaunchRecord,
+        data: Option<PackageData>,
+    ) -> Result<Answer, CallError> {
+        let chain = self.chain();
+        let _turn = self.turn_for(path, &chain).await?;
+        self.instance(path, data).await?;
+        let call = CallFor::launched(Some(command.clone()), launch);
+        self.note_command(path, Some(&command));
+        let launch = launch_record(launch, Some(&command));
+        let result = self
+            .run_guest(path, &chain, async |instance| {
+                instance.store.data_mut().set_call(call);
+                let exported = instance.bindings.pane_extension_command();
+                instance
+                    .store
+                    .run_concurrent(async |store| exported.call_run(store, command, launch).await)
+                    .await
+            })
+            .await?;
+        let answer = self.settle(path, result, CallError::Guest)?;
+        tree::read_answer(&answer).map_err(CallError::Unreadable)
+    }
+
+    /// Has the command in `path` handle `callback` with `details`, and reads
+    /// its answer: one Pane cannot read is [`CallError::Unreadable`].
+    async fn handle_event(
+        &self,
+        path: &Path,
+        call: CallFor,
+        callback: String,
+        details: String,
+        data: Option<PackageData>,
+    ) -> Result<Answer, CallError> {
+        let chain = self.chain();
+        let _turn = self.turn_for(path, &chain).await?;
+        self.handle_event_in_turn(path, call, callback, details, data, &chain)
+            .await
+    }
+
+    /// [`Host::handle_event`] in `chain`, which holds `path`'s turn. The
+    /// host functions the guest calls act as `call` says.
+    async fn handle_event_in_turn(
+        &self,
+        path: &Path,
+        call: CallFor,
+        callback: String,
+        details: String,
+        data: Option<PackageData>,
+        chain: &Chain,
+    ) -> Result<Answer, CallError> {
+        self.instance(path, data).await?;
+        let result = self
+            .run_guest(path, chain, async |instance| {
+                instance.store.data_mut().set_call(call);
+                let command = instance.bindings.pane_extension_command();
+                instance
+                    .store
+                    .run_concurrent(async |store| {
+                        command.call_handle_event(store, callback, details).await
+                    })
+                    .await
+            })
+            .await?;
+        let answer = self.settle(path, result, CallError::Guest)?;
+        tree::read_answer(&answer).map_err(CallError::Unreadable)
+    }
+
+    /// Runs the action of the item `item_id` of the command in `path`: its
+    /// tree, then the item's action's callback (see [`Runtime::run_item`]).
+    /// Both calls run in one turn, so no other call into the instance comes
+    /// between them.
+    async fn run_item(
+        &self,
+        path: &Path,
+        call: CallFor,
+        item_id: &str,
+        launch: &LaunchRecord,
+        data: Option<PackageData>,
+    ) -> Result<Answer, CallError> {
+        let chain = self.chain();
+        let _turn = self.turn_for(path, &chain).await?;
+        let view = self
+            .render_in_turn(path, call.clone(), launch, data.clone(), &chain)
+            .await?;
+        let Some(item) = view.items.iter().find(|item| item.id == item_id) else {
+            return Err(CallError::Guest(format!("unknown item: {item_id}")));
+        };
+        let Some(action) = item.action() else {
+            return Err(CallError::Guest(format!(
+                "the item {item_id} has no action"
+            )));
+        };
+        let Some(callback) = action.callback() else {
+            return Err(CallError::Guest(format!(
+                "the item {item_id}'s first action opens a submenu, which only the Actions \
+                 panel shows"
+            )));
+        };
+        self.handle_event_in_turn(path, call, callback.to_owned(), "{}".into(), data, &chain)
+            .await
+    }
+
+    /// The serial of the idle instance of `path`, if it has one.
+    fn serial(&self, path: &Path) -> Option<u64> {
+        self.instances
+            .borrow()
+            .get(path)
+            .map(|instance| instance.serial)
+    }
+
+    /// Opens the designed view of the command `command` in `path`, launched
+    /// as `launch` says (`open-view`), and draws it once: the first render,
+    /// numbered 1. A view whose first drawing fails is closed again.
+    async fn open_designed_view(
+        &self,
+        path: &Path,
+        command: String,
+        launch: LaunchRecord,
+        data: Option<PackageData>,
+    ) -> Result<(ViewId, DesignedRendered), CallError> {
+        let chain = self.chain();
+        let _turn = self.turn_for(path, &chain).await?;
+        self.instance(path, data).await?;
+        self.note_command(path, Some(&command));
+        let wit_launch = launch_record(&launch, Some(&command));
+        let result = self
+            .run_guest(path, &chain, async |instance| {
+                instance
+                    .store
+                    .data_mut()
+                    .set_call(CallFor::launched(Some(command.clone()), &launch));
+                let exported = instance.bindings.pane_extension_command();
+                instance
+                    .store
+                    .run_concurrent(async |store| {
+                        exported.call_open_view(store, command, wit_launch).await
+                    })
+                    .await
+            })
+            .await?;
+        let resource = self.settle(path, result, CallError::Guest)?;
+        // Its instance was forgotten while it opened: the view went with it.
+        let serial = self.serial(path).ok_or(CallError::ViewClosed)?;
+        let view = ViewId {
+            thread: self.number,
+            id: self.next_view.fetch_add(1, Ordering::Relaxed),
+        };
+        let open = LiveDesignedView {
+            id: view,
+            component: path.to_path_buf(),
+            resource,
+            serial,
+            rendered: 1,
+            depth: 1,
+            reported: RefCell::default(),
+            selected: RefCell::default(),
+            canvases: RefCell::default(),
+        };
+        self.designed_views.borrow_mut().insert(view, open);
+        match self.render_designed(view, 1, &chain, Why::Open).await {
+            Ok(rendered) => Ok((view, rendered)),
+            Err(error) => {
+                let closed = self.designed_views.borrow_mut().remove(&view);
+                if let Some(open) = closed {
+                    self.drop_designed_view(&open).await;
+                }
+                Err(error)
+            }
+        }
+    }
+
+    /// Has the open designed view `open` handle `event`, then draws what
+    /// the event answered it does next: the view again when the answer
+    /// carried nothing, the view the answer pushed above it or replaced it
+    /// with (now the top of the stack, drawn for the first time), or
+    /// nothing when the view popped itself — dropped, its result answered
+    /// to the launcher. An answer to an event older than another already
+    /// shown is dropped by the caller (the launcher).
+    async fn designed_view_event(
+        &self,
+        open: LiveDesignedView,
+        event: DesignedEvent,
+        supersedes: bool,
+    ) -> Result<DesignedNext, CallError> {
+        let chain = self.chain();
+        let view = open.id;
+        let path = open.component.clone();
+        // The newer event for this view supersedes the work its earlier
+        // event left in flight: the web requests the old event's work
+        // started are aborted here — after the turn is taken (the park
+        // that held the instance has ended and brought it back, so the
+        // instance is reachable) and before the guest runs, so their
+        // connections close (the guest cannot cancel its own fetch, the
+        // host must). The supersede signal is the event dispatch itself,
+        // not any turn-taking call: the view's own answer-push also takes
+        // the turn, and aborting there would kill the answer's own fetch.
+        // Only a search's event supersedes — the field's newer text,
+        // replacing the older query's requests. Every other event leaves
+        // the view's own background work to run to its end: a clear's
+        // answer is the field it left, and the fetch the cleared search
+        // started answers in the background, never replacing it.
+        let _turn = self.turn_for(&path, &chain).await?;
+        if supersedes
+            && let Some(instance) = self.instances.borrow().get(&path)
+            && let Some(generation) = instance.store.data().generation()
+        {
+            generation.abort_web_requests();
+        }
+        self.live_designed(&open)?;
+        let wit = command::UiEvent {
+            render: event.render,
+            key: event.key,
+            callback: event.callback,
+            payload: event.payload,
+        };
+        let resource = open.resource;
+        let result = self
+            .run_guest(&path, &chain, async |instance| {
+                instance.store.data_mut().set_call(CallFor::in_window(None));
+                // The handle is bound before the view it lends is taken:
+                // the view borrows it, as the current world's does the
+                // bindings' own. Only a component built for the current
+                // API holds a designed view (its `open-view` is the one
+                // that opened this), so the previous arm cannot be
+                // reached.
+                let command = instance.bindings.pane_extension_command();
+                let view = match command {
+                    previous::WorldCommand::Current(command) => command.view(),
+                    previous::WorldCommand::Previous(_) => {
+                        unreachable!("no designed view of the previous world")
+                    }
+                };
+                instance
+                    .store
+                    .run_concurrent(async |store| {
+                        view.call_handle_event(store, resource, wit).await
+                    })
+                    .await
+            })
+            .await?;
+        let outcome = self.settle(&path, result, CallError::Guest)?;
+        // What the event does next: at most one field of the outcome is
+        // acted on, a pop first, then a replace, then a push (the SDKs
+        // answer exactly one).
+        if let Some(result) = outcome.pop {
+            // The view is dropped, never used again, and the launcher
+            // drops the stack entry with it, answering the view below.
+            self.designed_views.borrow_mut().remove(&view);
+            self.drop_designed_view(&open).await;
+            return Ok(DesignedNext::Popped { result });
+        }
+        let (resource, depth, replacing) = match (outcome.replace, outcome.push) {
+            // A replace swaps this view, at its own depth; a push adds one
+            // above it, one deeper.
+            (Some(resource), _) => (resource, open.depth, true),
+            (None, Some(resource)) => (resource, open.depth + 1, false),
+            (None, None) => {
+                // The next render's number: taken now, so each render of a
+                // view is numbered however many were asked before it.
+                let render = {
+                    let mut views = self.designed_views.borrow_mut();
+                    match views.get_mut(&view) {
+                        Some(open) => {
+                            open.rendered += 1;
+                            open.rendered
+                        }
+                        None => return Err(CallError::ViewClosed),
+                    }
+                };
+                return self
+                    .render_designed(view, render, &chain, Why::Event)
+                    .await
+                    .map(DesignedNext::Tree);
+            }
+        };
+        // The depth bound: a push that would go beyond it is refused as
+        // the extension's error, the view keeping its last good tree; the
+        // view it would have opened is closed again.
+        if depth > MAX_NAVIGATION_DEPTH {
+            let serial = self.serial(&path).ok_or(CallError::ViewClosed)?;
+            self.drop_designed(&path, serial, resource).await;
+            return Err(CallError::Guest(format!(
+                "the navigation stack already holds {MAX_NAVIGATION_DEPTH} views; \
+                 a further push is refused"
+            )));
+        }
+        let opened = ViewId {
+            thread: self.number,
+            id: self.next_view.fetch_add(1, Ordering::Relaxed),
+        };
+        let serial = self.serial(&path).ok_or(CallError::ViewClosed)?;
+        self.designed_views.borrow_mut().insert(
+            opened,
+            LiveDesignedView {
+                id: opened,
+                component: path.clone(),
+                resource,
+                serial,
+                rendered: 1,
+                depth,
+                reported: RefCell::default(),
+                selected: RefCell::default(),
+                canvases: RefCell::default(),
+            },
+        );
+        match self.render_designed(opened, 1, &chain, Why::Open).await {
+            Ok(rendered) => {
+                if replacing {
+                    // The replaced view's resource goes, now that the view
+                    // replacing it drew; the launcher's stack entry with it.
+                    let replaced = self.designed_views.borrow_mut().remove(&view);
+                    if let Some(replaced) = replaced {
+                        self.drop_designed_view(&replaced).await;
+                    }
+                    Ok(DesignedNext::Replaced(opened, rendered))
+                } else {
+                    Ok(DesignedNext::Pushed(opened, rendered))
+                }
+            }
+            // The view the answer opened could not be drawn: it is closed
+            // again, as a view whose first drawing fails at open is, and
+            // the answering view keeps its last good tree (the error is
+            // shown; a replacing view was not replaced).
+            Err(error) => {
+                let closed = self.designed_views.borrow_mut().remove(&opened);
+                if let Some(closed) = closed {
+                    self.drop_designed_view(&closed).await;
+                }
+                Err(error)
+            }
+        }
+    }
+
+    /// Draws the open designed view `open` again, with no event: the
+    /// refresh its last render asked for by `refresh-after-ms`, or the
+    /// drawing its own push asked for (#243, `pushed`). The next render
+    /// after the last one asked, numbered as an event's render is, so a
+    /// late answer never replaces a newer tree.
+    async fn draw_designed_view(
+        &self,
+        open: LiveDesignedView,
+        pushed: bool,
+    ) -> Result<DesignedRendered, CallError> {
+        let chain = self.chain();
+        let view = open.id;
+        let path = open.component.clone();
+        let _turn = self.turn_for(&path, &chain).await?;
+        self.live_designed(&open)?;
+        let render = {
+            let mut views = self.designed_views.borrow_mut();
+            match views.get_mut(&view) {
+                Some(open) => {
+                    open.rendered += 1;
+                    open.rendered
+                }
+                None => return Err(CallError::ViewClosed),
+            }
+        };
+        let why = if pushed { Why::Push } else { Why::Refresh };
+        self.render_designed(view, render, &chain, why).await
+    }
+
+    /// Asks the guest to draw the open designed view `view`, in its
+    /// instance's turn, as render number `render`, asked for as `why`
+    /// names.
+    async fn render_designed(
+        &self,
+        view: ViewId,
+        render: u64,
+        chain: &Chain,
+        why: Why,
+    ) -> Result<DesignedRendered, CallError> {
+        // The view as it is now; the map entry holds its resource.
+        let open = self.designed_views.borrow().get(&view).cloned();
+        let Some(open) = open else {
+            return Err(CallError::ViewClosed);
+        };
+        self.live_designed(&open)?;
+        let path = &open.component;
+        let resource = open.resource;
+        let selected = self
+            .designed_views
+            .borrow()
+            .get(&view)
+            .and_then(|open| open.selected.borrow().clone());
+        let canvases = open.canvases.borrow().clone();
+        let context = render_context(view, render, why, selected.as_deref(), &canvases);
+        let result = self
+            .run_guest(path, chain, async |instance| {
+                // The handle is bound before the view it lends is taken:
+                // the view borrows it, as the current world's does the
+                // bindings' own. Only a component built for the current
+                // API holds a designed view (its `open-view` is the one
+                // that opened this), so the previous arm cannot be
+                // reached.
+                let command = instance.bindings.pane_extension_command();
+                let view = match command {
+                    previous::WorldCommand::Current(command) => command.view(),
+                    previous::WorldCommand::Previous(_) => {
+                        unreachable!("no designed view of the previous world")
+                    }
+                };
+                instance
+                    .store
+                    .run_concurrent(async |store| view.call_render(store, resource, context).await)
+                    .await
+            })
+            .await?;
+        let rendered = self.settle(path, result, CallError::Guest)?;
+        let tree = DesignedTree::read(&rendered.tree).map_err(|error| match error {
+            designed::ReadError::Guest(message) => CallError::Guest(message),
+            designed::ReadError::Unreadable(message) => CallError::Unreadable(message),
+        })?;
+        // A tree of a developed package reports its key problems — keys
+        // shared by siblings, stateful nodes without one — once each, in
+        // the extension's log; Pane matches both by position.
+        self.report_key_problems(path, view, &tree);
+        // The guest may still have work this render started — the load a
+        // loading state waits for: keep its instance running between
+        // Pane's calls, so the work can land and ask for another drawing
+        // (#243). A view whose render failed is left as it was; the work
+        // it started waits for the next call, as every guest's did before.
+        if self.designed_views.borrow().contains_key(&view) {
+            self.nudge_park(path);
+        }
+        // `refresh-after-ms` asks for the next drawing: the launcher's
+        // refresh thread (see `launcher/refresh`) schedules it through it.
+        Ok(DesignedRendered {
+            tree,
+            render,
+            refresh_after_ms: rendered.refresh_after_ms,
+        })
+    }
+
+    /// Reports the key problems of the view `view`'s tree that were not
+    /// already reported for it, in the developed package's log — one line
+    /// each, in development only.
+    fn report_key_problems(&self, path: &Path, view: ViewId, tree: &DesignedTree) {
+        let data = self
+            .instances
+            .borrow()
+            .get(path)
+            .map(|instance| instance.store.data().data.clone());
+        let Some(Some(data)) = data else {
+            return;
+        };
+        if !self.logs.developed(data.owner()) {
+            return;
+        }
+        let problems = designed::key_problems(tree);
+        if problems.is_empty() {
+            return;
+        }
+        let reported = self
+            .designed_views
+            .borrow()
+            .get(&view)
+            .map(|open| open.reported.clone());
+        let Some(reported) = reported else {
+            return;
+        };
+        for problem in problems {
+            if reported.borrow_mut().insert(problem.clone()) {
+                self.logs.pane(
+                    data.owner(),
+                    data.generation().number(),
+                    LogLevel::Warn,
+                    &problem,
+                );
+            }
+        }
+    }
+
+    /// Asks the runtime thread to keep `path`'s instance running between
+    /// Pane's calls (see [`Host::park_guest`], #243): the request joins the
+    /// others the thread serves at once — a render's answer does not wait
+    /// for the park — and a lane already parking keeps the park it has.
+    fn nudge_park(&self, path: &Path) {
+        let Some(requests) = self.nudge.upgrade() else {
+            return;
+        };
+        let _ = requests.send(Sent {
+            request: Request::Pump {
+                component: path.to_path_buf(),
+            },
+            in_flight: Some(self.watch.call()),
+        });
+    }
+
+    /// Whether the instance holding `open` still runs, and its code may:
+    /// otherwise the view went with it.
+    fn live_designed(&self, open: &LiveDesignedView) -> Result<(), CallError> {
+        let live = self
+            .instances
+            .borrow()
+            .get(&open.component)
+            .is_some_and(|instance| {
+                instance.serial == open.serial && instance.store.data().stopped().is_none()
+            });
+        live.then_some(()).ok_or(CallError::ViewClosed)
+    }
+
+    /// Drops the guest's designed view `open`, running its destructor, in
+    /// its instance's turn.
+    async fn close_designed_view(&self, open: LiveDesignedView) {
+        let chain = self.chain();
+        let Some(_turn) = self.turn(&open.component, chain.id).await else {
+            return;
+        };
+        self.drop_designed_view(&open).await;
+    }
+
+    /// Runs the destructor of the designed view `open`; the caller holds its
+    /// instance's turn.
+    async fn drop_designed_view(&self, open: &LiveDesignedView) {
+        self.drop_designed(&open.component, open.serial, open.resource)
+            .await;
+    }
+
+    /// Drops the guest's designed view resource `resource`, of the instance
+    /// of `path` in `serial`, running its destructor; the caller holds the
+    /// instance's turn. A view whose instance has gone (a crash, a reload,
+    /// a generation's end) is already dropped with it.
+    async fn drop_designed(&self, path: &Path, serial: u64, resource: ResourceAny) {
+        let live = self.instances.borrow().get(path).is_some_and(|instance| {
+            instance.serial == serial && instance.store.data().stopped().is_none()
+        });
+        if !live {
+            return;
+        }
+        let Some((mut instance, taken)) = self.take_out(path) else {
+            return;
+        };
+        let data = instance.store.data().data.clone();
+        let dropped = deadlines::metered(
+            self.watch.clone(),
+            self.limits.clone(),
+            resource.resource_drop_async(&mut instance.store),
+        )
+        .await;
+        let health = match dropped {
+            Ok(Ok(())) => {
+                self.bring_back(path, taken, instance);
+                return;
+            }
+            // The destructor trapped: the instance cannot be re-entered. It
+            // is a crash of the package, reported as any other.
+            Ok(Err(trap)) => Health::Crashed(crashed(&trap, instance.store.data().out_of_memory)),
+            // It computed for too long: it is stopped where it yielded.
+            Err(reason) => Health::Unresponsive(CallError::Unresponsive(reason)),
+        };
+        drop(instance);
+        self.gone(path);
+        if data.as_ref().is_some_and(|data| data.stopped().is_none()) {
+            self.report(path, data.as_ref(), health);
+        }
+    }
+
+    /// Whether the instance holding `open` still runs, and its code may:
+    /// otherwise the view went with it.
+    /// Drops the idle instance of `path` and forgets the designed views open
+    /// in it, which went with it.
+    fn drop_instance(&self, path: &Path) {
+        let dropped = self.instances.borrow_mut().remove(path);
+        drop(dropped);
+        self.designed_views
+            .borrow_mut()
+            .retain(|_, view| view.component != path);
+    }
+
+    /// Drops the idle instances whose generation has ended, with everything
+    /// their stores hold.
+    fn drop_stopped(&self) {
+        let stopped: Vec<PathBuf> = self
+            .instances
+            .borrow()
+            .iter()
+            .filter(|(_, instance)| instance.store.data().stopped().is_some())
+            .map(|(path, _)| path.clone())
+            .collect();
+        for path in stopped {
+            self.drop_instance(&path);
+        }
+    }
+
+    /// Asks the command in `path` for its root results for `query`, unless
+    /// its caller gives up on the answer (drops the receiver of `reply`)
+    /// first: then the call is not started, or is stopped where the guest
+    /// waits, and the instance goes with it (see [`Host::run_guest_until`]).
+    async fn root_results(
+        &self,
+        path: &Path,
+        query: String,
+        at: WallTime,
+        data: Option<PackageData>,
+        reply: &mut oneshot::Sender<Result<Vec<RootResult>, CallError>>,
+    ) -> Result<Vec<RootResult>, CallError> {
+        // Its search was replaced or left before the call started.
+        if reply.is_closed() {
+            return Err(CallError::Cancelled);
+        }
+        let chain = self.chain();
+        let _turn = match unless(self.turn_for(path, &chain), reply.closed()).await {
+            Ok(turn) => turn?,
+            // Replaced or left while it waited for its turn.
+            Err(()) => return Err(CallError::Cancelled),
+        };
+        self.instance(path, data).await?;
+        let provider = self
+            .instances
+            .borrow()
+            .get(path)
+            .and_then(|instance| instance.root_results.as_ref())
+            .map(|provider| provider.pane_extension_root_results().clone())
+            .ok_or_else(|| {
+                CallError::Interface(format!("it does not export {ROOT_RESULTS_INTERFACE}"))
+            })?;
+        // The moment the query was asked about, as the interface carries it.
+        let at = root_results::WallTime {
+            milliseconds: at.milliseconds,
+            offset: at.offset,
+        };
+        let result = self
+            .run_guest_until(
+                path,
+                &chain,
+                async |instance| {
+                    instance
+                        .store
+                        .run_concurrent(async |store| {
+                            provider.call_results_for(store, query, at).await
+                        })
+                        .await
+                },
+                reply.closed(),
+            )
+            .await?;
+        let results = self.settle(path, result, CallError::Guest)?;
+        Ok(results
+            .into_iter()
+            .map(|result| RootResult {
+                listing: ResultListing {
+                    id: result.id,
+                    title: result.title,
+                    subtitle: result.subtitle,
+                },
+                action: match result.action {
+                    root_results::RootAction::Copy(text) => RootAction::Copy(text),
+                    root_results::RootAction::OpenUrl(url) => RootAction::OpenUrl(url),
+                    root_results::RootAction::OpenFile(path) => RootAction::OpenFile(path),
+                },
+                answer: result.answer.map(|answer| AnswerDetail {
+                    section: answer.section,
+                    swatch: answer.swatch,
+                    copies: answer
+                        .copies
+                        .into_iter()
+                        .map(|copy| AnswerCopy {
+                            title: copy.title,
+                            text: copy.text,
+                        })
+                        .collect(),
+                }),
+            })
+            .collect())
+    }
+
+    /// Runs one cycle of the continuing service of the command with
+    /// manifest id `command` in `component` (see `Runtime::run_cycle_with`).
+    /// Asks the command in `component`, which supplies root results ahead
+    /// of the query, for all of them; the command reads and saves `data`.
+    async fn indexed_results(
+        &self,
+        path: &Path,
+        data: Option<PackageData>,
+    ) -> Result<Vec<IndexedResult>, CallError> {
+        let chain = self.chain();
+        let _turn = self.turn_for(path, &chain).await?;
+        self.instance(path, data).await?;
+        let indexed = self
+            .instances
+            .borrow()
+            .get(path)
+            .and_then(|instance| instance.indexed_results.as_ref())
+            .map(|provider| provider.pane_extension_indexed_results().clone())
+            .ok_or_else(|| {
+                CallError::Interface(format!("it does not export {INDEXED_RESULTS_INTERFACE}"))
+            })?;
+        let result = self
+            .run_guest(path, &chain, async |instance| {
+                instance
+                    .store
+                    .run_concurrent(async |store| indexed.call_results(store).await)
+                    .await
+            })
+            .await?;
+        let results = self.settle(path, result, CallError::Guest)?;
+        Ok(results
+            .into_iter()
+            .map(|result| IndexedResult {
+                listing: ResultListing {
+                    id: result.id,
+                    title: result.title,
+                    subtitle: result.subtitle,
+                },
+                alternate_titles: result.alternate_titles,
+                keywords: result.keywords,
+                action: match result.action {
+                    indexed_results::IndexedAction::OpenApplication(id) => {
+                        IndexedAction::OpenApplication(id)
+                    }
+                    indexed_results::IndexedAction::Open(target) => IndexedAction::Open {
+                        target: target.target,
+                        application: target.application,
+                    },
+                },
+            })
+            .collect())
+    }
+
+    async fn run_cycle(
+        &self,
+        path: &Path,
+        command: String,
+        data: Option<PackageData>,
+    ) -> Result<Cycle, CallError> {
+        let chain = self.chain();
+        let _turn = self.turn_for(path, &chain).await?;
+        self.instance(path, data).await?;
+        self.note_command(path, Some(&command));
+        let service = self
+            .instances
+            .borrow()
+            .get(path)
+            .and_then(|instance| instance.service.as_ref())
+            .map(|provider| provider.pane_extension_service().clone())
+            .ok_or_else(|| {
+                CallError::Interface(format!("it does not export {SERVICE_INTERFACE}"))
+            })?;
+        let result = self
+            .run_guest(path, &chain, async |instance| {
+                instance
+                    .store
+                    .run_concurrent(async |store| service.call_run_cycle(store, command).await)
+                    .await
+            })
+            .await?;
+        self.settle(path, result, CallError::Guest)
+            .map(|cycle| Cycle {
+                status: cycle.status,
+                next_seconds: cycle.next_seconds,
+            })
+    }
+
+    /// Activates the package of `data`: calls `path`'s `activate` export
+    /// (the activation entry point its `pane.json` names, ADR 0041), and
+    /// notes that it ran in this instance of this generation, so it runs
+    /// again only when this instance goes while the generation continues.
+    /// A trap is a crash of the package like any call's, counted towards
+    /// pausing it ([`Health`]); the caller that runs it while starting
+    /// reloaded code takes the failure as a startup failure instead.
+    async fn activate(&self, path: &Path, data: Option<PackageData>) -> Result<(), CallError> {
+        let chain = self.chain();
+        let _turn = self.turn_for(path, &chain).await?;
+        self.instance(path, data.clone()).await?;
+        let lifecycle = self
+            .instances
+            .borrow()
+            .get(path)
+            .and_then(|instance| instance.lifecycle.as_ref())
+            .map(|provider| provider.pane_extension_lifecycle().clone())
+            .ok_or_else(|| {
+                CallError::Interface(format!("it does not export {LIFECYCLE_INTERFACE}"))
+            })?;
+        // Noted before the call runs, so a second arrival of the same
+        // activation (the launcher looking again while this runs) starts
+        // none, and the instance that runs it is the one the registry
+        // notes.
+        if let Some(data) = data.as_ref() {
+            let identity = self
+                .instances
+                .borrow()
+                .get(path)
+                .map(|instance| instance.store.data().identity)
+                .unwrap_or_default();
+            self.registrations
+                .activated(data.owner(), data.generation(), identity);
+        }
+        let result = self
+            .run_guest(path, &chain, async |instance| {
+                instance
+                    .store
+                    .run_concurrent(async |store| lifecycle.call_activate(store).await)
+                    .await
+            })
+            .await?;
+        // Activate answers nothing; only a trap fails it, as a crash of
+        // the package like any call's, dropping the instance it ran in.
+        match result {
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(trap)) | Err(trap) => {
+                self.drop_instance(path);
+                let error = crashed(&trap, false);
+                self.report(path, data.as_ref(), Health::Crashed(error.clone()));
+                Err(error)
+            }
+        }
+    }
+
+    /// Asks `path`'s running instance for the state it hands to the code
+    /// replacing it (see [`Runtime::snapshot_of`]): only an idle instance
+    /// (no call pending in it), only one that exports `snapshot`, within
+    /// [`SNAPSHOT_DEADLINE`], of at most the operation JSON limit. `None`
+    /// whenever it gives none — a busy instance is stopped as today and
+    /// answers nothing — and never a failure of the package: the old
+    /// code's crash while it answers is only logged, since the code is
+    /// going either way.
+    async fn snapshot(&self, path: &Path, data: Option<PackageData>) -> Option<Vec<u8>> {
+        // A call pending in the instance, or holding its turn: stopped as
+        // today, no snapshot.
+        let busy = self
+            .lanes
+            .borrow()
+            .get(path)
+            .is_some_and(|lane| lane.out.is_some() || lane.holder.is_some());
+        if busy {
+            self.handoff_report(
+                data.as_ref(),
+                "a call was still running in the old code's instance",
+            );
+            return None;
+        }
+        let chain = self.chain();
+        let deadline = tokio::time::Instant::now() + SNAPSHOT_DEADLINE;
+        // The turn is waited for within the deadline too: a call that
+        // started meanwhile cannot delay the replacement past it.
+        let turn = unless(
+            self.turn_for(path, &chain),
+            tokio::time::sleep_until(deadline),
+        )
+        .await;
+        let _turn = match turn {
+            Ok(Ok(turn)) => turn,
+            // A fresh chain never waits on itself.
+            Ok(Err(_)) => return None,
+            Err(()) => {
+                self.handoff_report(data.as_ref(), "the old code did not answer within 1 second");
+                return None;
+            }
+        };
+        let lifecycle = self
+            .instances
+            .borrow()
+            .get(path)
+            .and_then(|instance| instance.lifecycle.as_ref())
+            .map(|provider| provider.pane_extension_lifecycle().clone());
+        // An instance that is not running, or exports no snapshot: nothing
+        // to ask. Exporting the interface opts in, whatever the manifest
+        // says.
+        let lifecycle = lifecycle?;
+        let answered = self
+            .run_guest_until(
+                path,
+                &chain,
+                async |instance| {
+                    instance
+                        .store
+                        .run_concurrent(async |store| lifecycle.call_snapshot(store).await)
+                        .await
+                },
+                tokio::time::sleep_until(deadline),
+            )
+            .await;
+        // The deadline passed (the instance goes with the call, as a
+        // stopped search's does), or the generation ended, the code was
+        // replaced again, the guest stopped responding or the thread was
+        // given up on: no snapshot and no delay.
+        let answered = match answered {
+            Ok(answered) => answered,
+            Err(CallError::Cancelled) => {
+                self.handoff_report(data.as_ref(), "the old code did not answer within 1 second");
+                return None;
+            }
+            Err(_) => return None,
+        };
+        let state = match answered {
+            Ok(Ok(state)) => state,
+            // A trap while it answers: the old code is going anyway, so it
+            // is logged where its author sees it, not counted against the
+            // new code.
+            Ok(Err(trap)) | Err(trap) => {
+                let out_of_memory = self
+                    .instances
+                    .borrow()
+                    .get(path)
+                    .is_some_and(|instance| instance.store.data().out_of_memory);
+                self.drop_instance(path);
+                let error = crashed(&trap, out_of_memory);
+                self.handoff_report(
+                    data.as_ref(),
+                    &format!("the old code crashed answering it: {error}"),
+                );
+                return None;
+            }
+        };
+        let state = state?;
+        if state.len() > operations::MAX_OPERATION_JSON {
+            self.handoff_report(
+                data.as_ref(),
+                &format!(
+                    "the old code answered {} bytes, and at most {} are handed over",
+                    state.len(),
+                    operations::MAX_OPERATION_JSON
+                ),
+            );
+            return None;
+        }
+        Some(state)
+    }
+
+    /// Restores the state an instance of `path`'s component handed to its
+    /// replacement (ADR 0041), on this instance's first start and before
+    /// any other call into it: the snapshot staged for the package of
+    /// `data` for this component, in the generation that directly replaced
+    /// the code the state came from. An error the new code answers with is
+    /// not a failure: the state is discarded and the extension starts
+    /// fresh. A trap is a crash of the package; during a reload's start,
+    /// where the caller pauses it, a startup failure. The caller holds
+    /// `path`'s turn.
+    async fn restore(&self, path: &Path, data: Option<&PackageData>) -> Result<(), CallError> {
+        let Some(data) = data else {
+            return Ok(());
+        };
+        let staged = lock(&self.snapshots).remove(&(data.owner().to_owned(), path.to_path_buf()));
+        let Some(staged) = staged else {
+            return Ok(());
+        };
+        // Only the generation that directly replaced the old code restores
+        // the state: a later one (a disable followed by an enable, a pause,
+        // a retry) hands nothing over.
+        if staged.generation.number() != data.generation().number() {
+            return Ok(());
+        }
+        let lifecycle = self
+            .instances
+            .borrow()
+            .get(path)
+            .and_then(|instance| instance.lifecycle.as_ref())
+            .map(|provider| provider.pane_extension_lifecycle().clone());
+        // The new code exports no snapshot entry point: the state has
+        // nowhere to go, and is discarded.
+        let Some(lifecycle) = lifecycle else {
+            return Ok(());
+        };
+        let chain = self.chain();
+        let state = staged.state;
+        let restored = self
+            .run_guest(path, &chain, async |instance| {
+                instance
+                    .store
+                    .run_concurrent(async |store| lifecycle.call_restore(store, state).await)
+                    .await
+            })
+            .await?;
+        match restored {
+            Ok(Ok(Ok(()))) => Ok(()),
+            // An error the new code answers with is not a failure: the
+            // state is discarded and it starts fresh.
+            Ok(Ok(Err(rejected))) => {
+                self.handoff_report(Some(data), &format!("the new code rejected it: {rejected}"));
+                Ok(())
+            }
+            Ok(Err(trap)) | Err(trap) => {
+                self.drop_instance(path);
+                let error = crashed(&trap, false);
+                self.report(path, Some(data), Health::Crashed(error.clone()));
+                Err(error)
+            }
+        }
+    }
+
+    /// Reports `why` a state handoff did not happen, or the state was
+    /// rejected, to the package's extension log: development mode's
+    /// diagnostics (the Logs screen); silent everywhere else, where
+    /// nothing of a dropped snapshot is shown.
+    fn handoff_report(&self, data: Option<&PackageData>, why: &str) {
+        let Some(data) = data else {
+            return;
+        };
+        self.logs.pane(
+            data.owner(),
+            data.generation().number(),
+            LogLevel::Warn,
+            &format!("the state was not handed over to the new code: {why}"),
+        );
+    }
+
+    /// Delivers one event of what the package of `data` registered — a
+    /// timer's firing, a watcher's coalesced changes — to `path`'s `events`
+    /// export. The call belongs to the generation of the code that
+    /// registered, so a disable, a reload, an update, an uninstall or a
+    /// pause stops it, and a trap counts towards pausing the package as
+    /// any call's does. An error the guest answers with is its own, logged
+    /// to its package's extension log.
+    async fn event(
+        &self,
+        path: &Path,
+        event: crate::registrations::GuestEvent,
+        data: Option<PackageData>,
+    ) -> Result<(), CallError> {
+        let chain = self.chain();
+        let _turn = self.turn_for(path, &chain).await?;
+        self.instance(path, data.clone()).await?;
+        let events = self
+            .instances
+            .borrow()
+            .get(path)
+            .and_then(|instance| instance.events.as_ref())
+            .map(|provider| provider.pane_extension_events().clone())
+            .ok_or_else(|| {
+                CallError::Interface(format!("it does not export {EVENTS_INTERFACE}"))
+            })?;
+        let result = self
+            .run_guest(path, &chain, async |instance| {
+                let event = events::Event::from(event.clone());
+                instance
+                    .store
+                    .run_concurrent(async |store| events.call_handle_event(store, event).await)
+                    .await
+            })
+            .await?;
+        let outcome = self.settle(path, result, CallError::Guest);
+        // An error the guest answered with is its own: logged, where its
+        // author sees it, and not a failure of the package.
+        if let Err(CallError::Guest(message)) = &outcome
+            && let Some(data) = data.as_ref()
+        {
+            self.logs.pane(
+                data.owner(),
+                data.generation().number(),
+                LogLevel::Error,
+                message,
+            );
+        }
+        outcome.map(|_: ()| ())
+    }
+
+    /// Runs `call` on the live instance of `path`, in `chain`, serving the
+    /// operation calls its guest makes while it runs. Without a live
+    /// instance (a view's instance has stopped) it is
+    /// [`CallError::ViewClosed`]. The caller holds the instance's turn.
+    ///
+    /// The instance is taken out of the host for the call, so the host can
+    /// serve an operation call its guest makes while the guest waits for
+    /// the answer: the guest's call is not polled until the operation's
+    /// answer is sent, and then resumes. The component is on the call chain
+    /// meanwhile, so a call back into its package is refused rather than
+    /// waiting on itself.
+    ///
+    /// While the guest waits on anything outside itself (the user, a
+    /// program, a helper, a web request, a clock, another extension's
+    /// operation), this call only awaits, and the thread serves the other
+    /// requests: a wait is never the guest's computing.
+    ///
+    /// The call stops as soon as the instance's generation, or that of any
+    /// call further out in the chain, ends: the guest's call is dropped where
+    /// it waits, and so is the instance, since Wasmtime keeps a dropped call's
+    /// task in the store, where it would resume on the next call. A result
+    /// that completes after its generation ended is discarded the same way.
+    /// The generation is checked each time the guest yields, which it does
+    /// at every epoch tick even while it computes (see `deadlines`).
+    ///
+    /// A call whose guest computed for [`COMPUTE_LIMIT`] without finishing
+    /// is stopped the same way, as unresponsive: a failure of the guest's
+    /// own package, reported as such ([`Health::Unresponsive`]). Time spent
+    /// serving its operation calls counts for their targets, not for it.
+    async fn run_guest<R>(
+        &self,
+        path: &Path,
+        chain: &Chain,
+        call: impl AsyncFnOnce(&mut Instance) -> R,
+    ) -> Result<R, CallError> {
+        self.run_guest_until(path, chain, call, std::future::pending())
+            .await
+    }
+
+    /// Like [`Host::run_guest`], and the call also stops, as when its
+    /// generation ends, once `cancelled` resolves: its caller no longer
+    /// wants the answer. It is then [`CallError::Cancelled`]; the instance is
+    /// dropped all the same (Wasmtime would resume the dropped call's task),
+    /// and it is not a failure of the package.
+    async fn run_guest_until<R>(
+        &self,
+        path: &Path,
+        chain: &Chain,
+        call: impl AsyncFnOnce(&mut Instance) -> R,
+        cancelled: impl Future<Output = ()>,
+    ) -> Result<R, CallError> {
+        /// What happened next while the guest's call ran.
+        enum Next<R> {
+            Returned(R),
+            Stopped(End),
+            Cancelled,
+            Called(OperationCall),
+            /// It computed for too long, as this says.
+            Unresponsive(String),
+            /// Pane gave up on this thread while it was stuck.
+            GivenUp,
+        }
+
+        /// Why the call ended without its result.
+        enum Halt {
+            Stopped(End),
+            Cancelled,
+            Unresponsive(String),
+            GivenUp,
+        }
+
+        let (mut instance, taken) = self.take_out(path).ok_or(CallError::ViewClosed)?;
+        let own = instance.store.data().generation().cloned();
+        let mut inner = chain.clone();
+        inner.components.push(path.to_path_buf());
+        inner.owners.extend(own.clone());
+        let mut ends = std::pin::pin!(first_end(&inner.owners));
+        // The guest's operation calls, served by this frame only.
+        let mut calls = instance
+            .calls
+            .take()
+            .unwrap_or_else(|| operations::channel().1);
+        instance.store.data_mut().serving = true;
+        // No command and no window unless the call says otherwise (see
+        // `CallFor`): an operation's or a root search's call has none.
+        instance.store.data_mut().set_call(CallFor::default());
+        let mut cancelled = std::pin::pin!(cancelled);
+        let faults = self.faults.clone();
+        let watch = self.watch.clone();
+        let limits = self.limits.clone();
+        let result = {
+            // Only the guest's own computing counts (see `deadlines`).
+            let mut running = std::pin::pin!(deadlines::metered(
+                watch.clone(),
+                limits,
+                call(&mut instance)
+            ));
+            let mut waiting = std::pin::pin!(faults.waiting());
+            loop {
+                let next = std::future::poll_fn(|cx| {
+                    faults.check(waiting.as_mut(), cx);
+                    // Given up on while it was stuck: the guest runs no more.
+                    if watch.given_up() {
+                        return Poll::Ready(Next::GivenUp);
+                    }
+                    if let Poll::Ready(end) = ends.as_mut().poll(cx) {
+                        return Poll::Ready(Next::Stopped(end));
+                    }
+                    if cancelled.as_mut().poll(cx).is_ready() {
+                        return Poll::Ready(Next::Cancelled);
+                    }
+                    {
+                        let _running = watch.doing(Doing::Running);
+                        match running.as_mut().poll(cx) {
+                            Poll::Ready(Ok(result)) => return Poll::Ready(Next::Returned(result)),
+                            Poll::Ready(Err(why)) => return Poll::Ready(Next::Unresponsive(why)),
+                            Poll::Pending => {}
+                        }
+                    }
+                    match calls.poll_recv(cx) {
+                        Poll::Ready(Some(call)) => Poll::Ready(Next::Called(call)),
+                        // The instance holds the sender: never closed here.
+                        _ => Poll::Pending,
+                    }
+                })
+                .await;
+                match next {
+                    Next::Returned(result) => match own.as_ref().and_then(Generation::ended) {
+                        Some(end) => break Err(Halt::Stopped(end)),
+                        None => break Ok(result),
+                    },
+                    Next::Stopped(end) => break Err(Halt::Stopped(end)),
+                    Next::Cancelled => break Err(Halt::Cancelled),
+                    Next::Unresponsive(why) => break Err(Halt::Unresponsive(why)),
+                    Next::GivenUp => break Err(Halt::GivenUp),
+                    Next::Called(operation_call) => {
+                        Box::pin(self.serve_operation(operation_call, &inner)).await;
+                    }
+                }
+            }
+        };
+        instance.store.data_mut().serving = false;
+        // A helper or a program runs no longer than the call that started
+        // it: one the guest left running when its call ended is ended too,
+        // with what it started, and the ids of those it spawned name
+        // nothing more.
+        let state = instance.store.data_mut();
+        state.helpers.stop_owned_by(state.owner);
+        state.programs.clear();
+        // A call the guest's own frame sent but did not wait for has no
+        // frame to serve it — but the work a view's own Pending started
+        // (#243) outlives the frame that spawned it, and the park keeps
+        // driving it: the calls that work made are put back with the
+        // instance, not stranded, so the park serves them. Only calls of
+        // a dropped instance — its generation ended, its code stopped —
+        // are stranded with the refusal.
+        let stranding = result.is_err();
+        if stranding {
+            while let Ok(stranded) = calls.try_recv() {
+                let answer = stranded.unanswered(operations::outside_a_call());
+                let _ = stranded.reply.send(answer);
+            }
+        }
+        instance.calls = Some(calls);
+        match result {
+            Ok(result) => {
+                self.bring_back(path, taken, instance);
+                Ok(result)
+            }
+            Err(halt) => {
+                let data = instance.store.data().data.clone();
+                // The instance is dropped with its store: the abandoned
+                // task, its host tasks (web requests too), streams, futures
+                // and views.
+                drop(instance);
+                self.gone(path);
+                match halt {
+                    Halt::Stopped(end) => Err(ended(end)),
+                    Halt::Cancelled => Err(CallError::Cancelled),
+                    Halt::Unresponsive(why) => {
+                        let error = CallError::Unresponsive(why);
+                        crate::diagnostic!("pane: {} stopped responding: {error}", path.display());
+                        self.report(path, data.as_ref(), Health::Unresponsive(error.clone()));
+                        Err(error)
+                    }
+                    Halt::GivenUp => Err(given_up()),
+                }
+            }
+        }
+    }
+
+    /// Keeps the guest's instance of `path` running between Pane's calls
+    /// (#243, the real-push slice of #121): after a designed view's render
+    /// answers, the guest may still have work its answer started — the load
+    /// a loading state waits for, a call it has not awaited — and this frame
+    /// drives the store's event loop, which advances that work, until the
+    /// guest has none left or a call wants the instance ([`Lane::wanted`]).
+    /// So the instance runs between Pane's calls: work that lands there can
+    /// ask Pane, through `pane:extension/view`, to draw the view again. The
+    /// caller holds the instance's turn ([`Host::turn_for`]).
+    ///
+    /// The guest's own computing is bounded as any call's is: metered
+    /// against the compute limit, yielding at every epoch tick, and a
+    /// guest that computes for too long is stopped as unresponsive — its
+    /// instance dropped, its package reported, as a call's is. A trap
+    /// driving its own work is a crash, reported the same way. The
+    /// operation calls the guest makes while it runs are served as a
+    /// call's are, in the same chain, and its generation's end, or Pane
+    /// giving up on this thread, stops the park as it stops a call. A
+    /// call that wants the instance ends the park and the instance is
+    /// lent on whole: the park owns no answer, and nothing of the guest
+    /// is mid-flight inside the frame it leaves behind (its tasks park in
+    /// the store, and the next call's event loop carries on driving
+    /// them), so it is put back rather than dropped, as a cancelled call's
+    /// instance is not.
+    async fn park_guest(&self, path: &Path, chain: &Chain) {
+        /// What happened next while the guest ran between Pane's calls.
+        enum Next {
+            /// The park ended: the guest went idle, or a call wants the
+            /// instance — or it trapped driving its own work.
+            Parked(wasmtime::Result<()>),
+            Stopped(End),
+            /// It computed for too long, as this says.
+            Unresponsive(String),
+            /// Pane gave up on this thread while it was stuck.
+            GivenUp,
+            Called(OperationCall),
+        }
+
+        /// Why the park ended without the guest going idle by itself: the
+        /// guest stopped (its generation ended), computed for too long, or
+        /// Pane gave up on the thread. A trap is not one of these — it
+        /// answers the park as an ordinary result, and is a crash of the
+        /// guest's package.
+        enum Halt {
+            Stopped(End),
+            Unresponsive(String),
+            GivenUp,
+        }
+
+        let Some((mut instance, taken)) = self.take_out(path) else {
+            return;
+        };
+        let own = instance.store.data().generation().cloned();
+        let mut inner = chain.clone();
+        inner.components.push(path.to_path_buf());
+        inner.owners.extend(own.clone());
+        let mut ends = std::pin::pin!(first_end(&inner.owners));
+        // The guest's operation calls, served by this frame only.
+        let mut calls = instance
+            .calls
+            .take()
+            .unwrap_or_else(|| operations::channel().1);
+        instance.store.data_mut().serving = true;
+        // No command and no window: the park runs no call of the user's.
+        instance.store.data_mut().set_call(CallFor::default());
+        let (wanted, woken) = {
+            let mut lanes = self.lanes.borrow_mut();
+            let lane = lanes.entry(path.to_path_buf()).or_default();
+            (lane.wanted.clone(), lane.woken.clone())
+        };
+        let faults = self.faults.clone();
+        let watch = self.watch.clone();
+        let limits = self.limits.clone();
+        let result = {
+            let park = async |instance: &mut Instance| {
+                instance
+                    .store
+                    .run_concurrent(async |accessor| {
+                        // The park itself: the store's event loop runs while
+                        // this pends — it is polled first on every wake —
+                        // advancing whatever the guest left pending. It ends
+                        // when the guest has no task of its own left, or a
+                        // call wants the instance: `wanted` is re-read on
+                        // every wake, so a call noting itself and this going
+                        // to sleep cannot miss each other on this thread.
+                        //
+                        // The Notified registration is held for the park's
+                        // whole duration: a registration created and dropped
+                        // within a single poll is gone before the turn
+                        // waiter's notify_waiters() arrives, and
+                        // notify_waiters() leaves no permit for a later
+                        // registration to find — the wake was lost, and the
+                        // park slept on until the store's own last task
+                        // drained (a fetch held for seconds). The future is
+                        // created once, polled on every wake, and its
+                        // registration persists until the park ends.
+                        let mut notified = std::pin::pin!(woken.notified());
+                        std::future::poll_fn(|cx| {
+                            if wanted.load(Ordering::SeqCst) {
+                                return Poll::Ready(());
+                            }
+                            if notified.as_mut().poll(cx).is_ready() {
+                                return Poll::Ready(());
+                            }
+                            accessor.poll_no_interesting_tasks(cx)
+                        })
+                        .await
+                    })
+                    .await
+            };
+            let mut running = std::pin::pin!(deadlines::metered(
+                watch.clone(),
+                limits,
+                park(&mut instance),
+            ));
+            let mut waiting = std::pin::pin!(faults.waiting());
+            loop {
+                let next = std::future::poll_fn(|cx| {
+                    faults.check(waiting.as_mut(), cx);
+                    // Given up on while it was stuck: the guest runs no more.
+                    if watch.given_up() {
+                        return Poll::Ready(Next::GivenUp);
+                    }
+                    if let Poll::Ready(end) = ends.as_mut().poll(cx) {
+                        return Poll::Ready(Next::Stopped(end));
+                    }
+                    {
+                        let _running = watch.doing(Doing::Running);
+                        match running.as_mut().poll(cx) {
+                            Poll::Ready(Ok(parked)) => return Poll::Ready(Next::Parked(parked)),
+                            Poll::Ready(Err(why)) => return Poll::Ready(Next::Unresponsive(why)),
+                            Poll::Pending => {}
+                        }
+                    }
+                    match calls.poll_recv(cx) {
+                        Poll::Ready(Some(call)) => Poll::Ready(Next::Called(call)),
+                        // The instance holds the sender: never closed here.
+                        _ => Poll::Pending,
+                    }
+                })
+                .await;
+                match next {
+                    Next::Parked(parked) => break Ok(parked),
+                    Next::Stopped(end) => break Err(Halt::Stopped(end)),
+                    Next::Unresponsive(why) => break Err(Halt::Unresponsive(why)),
+                    Next::GivenUp => break Err(Halt::GivenUp),
+                    Next::Called(operation_call) => {
+                        Box::pin(self.serve_operation(operation_call, &inner)).await;
+                    }
+                }
+            }
+        };
+        instance.store.data_mut().serving = false;
+        // What the park's guest left running ends with it, as a call's
+        // does: a helper or a program no call waits on.
+        let state = instance.store.data_mut();
+        state.helpers.stop_owned_by(state.owner);
+        state.programs.clear();
+        // A call the guest's own frame sent but did not wait for has no
+        // frame to serve it — but the park's whole purpose is driving
+        // what the guest left pending, so its calls are put back with
+        // the instance, not stranded. Only calls of a dropped instance
+        // are stranded with the refusal.
+        let stranding = result.is_err();
+        if stranding {
+            while let Ok(stranded) = calls.try_recv() {
+                let answer = stranded.unanswered(operations::outside_a_call());
+                let _ = stranded.reply.send(answer);
+            }
+        }
+        instance.calls = Some(calls);
+        match result {
+            // The guest went idle, or a call wants the instance: it is put
+            // back whole, for that call or the next.
+            Ok(Ok(())) => self.bring_back(path, taken, instance),
+            outcome => {
+                let data = instance.store.data().data.clone();
+                let out_of_memory = instance.store.data().out_of_memory;
+                // The instance is dropped with its store: the work it left
+                // pending, its host tasks and streams with it.
+                drop(instance);
+                self.gone(path);
+                match outcome {
+                    Ok(Err(trap)) => {
+                        let error = crashed(&trap, out_of_memory);
+                        crate::diagnostic!(
+                            "pane: {} stopped running on its own: {error}",
+                            path.display()
+                        );
+                        self.report(path, data.as_ref(), Health::Crashed(error));
+                    }
+                    Err(Halt::Stopped(end)) => {
+                        let _ = ended(end);
+                    }
+                    Err(Halt::Unresponsive(why)) => {
+                        let error = CallError::Unresponsive(why);
+                        crate::diagnostic!("pane: {} stopped responding: {error}", path.display());
+                        self.report(path, data.as_ref(), Health::Unresponsive(error));
+                    }
+                    Err(Halt::GivenUp) => {}
+                    Ok(Ok(())) => unreachable!("matched above"),
+                }
+            }
+        }
+    }
+
+    /// Serves one operation call a guest in `chain` made, answering it.
+    async fn serve_operation(&self, mut call: OperationCall, chain: &Chain) {
+        // Its caller gave up on it before it started: it is not started.
+        if call.reply.is_closed() {
+            return;
+        }
+        let answer = match call.addressed {
+            Addressed::Every { .. } => OperationAnswer::Every(self.every(&mut call, chain).await),
+            _ => OperationAnswer::One(self.operation(&mut call, chain).await),
+        };
+        let _ = call.reply.send(answer);
+    }
+
+    /// Serves a fan-out call to every provider of the capability `call`
+    /// names, as the packages are now: each provider that can serve the
+    /// call is called in turn, as its own call in the chain, and answers
+    /// with its identity, title and result or error. The providers that
+    /// cannot serve — disabled, paused, waiting or for another system — are
+    /// skipped, and with none available the answer is an empty list. Only
+    /// the call as a whole can fail: a use the caller's `pane.json` does
+    /// not declare, or does not declare `"use": "all"`, is refused.
+    async fn every(
+        &self,
+        call: &mut OperationCall,
+        chain: &Chain,
+    ) -> Result<Vec<operations::ProviderAnswer>, OperationError> {
+        self.check_call(call, chain)?;
+        let targets = self.resolve_every(call)?;
+        let mut answers = Vec::new();
+        for target in targets {
+            // Each provider is its own call in the chain: one already
+            // serving a call in it is refused in its own answer, and the
+            // others are still called.
+            let answer = match self.in_chain(chain, &target) {
+                Some(error) => Err(error),
+                None => self.operation_in(call, chain, &target).await,
+            };
+            answers.push(operations::ProviderAnswer {
+                identity: target.identity.clone(),
+                title: target.title.clone(),
+                answer,
+            });
+            // The caller gave up on the fan-out: the providers after this
+            // are not called, and the answer has nowhere to go.
+            if call.reply.is_closed() {
+                break;
+            }
+        }
+        Ok(answers)
+    }
+
+    /// Serves `call`: checks it, resolves its target, runs the operation
+    /// (starting the target if it is not running) and checks the answer.
+    async fn operation(
+        &self,
+        call: &mut OperationCall,
+        chain: &Chain,
+    ) -> Result<String, OperationError> {
+        self.check_call(call, chain)?;
+        let target = self.resolve_target(call, chain)?;
+        self.operation_in(call, chain, &target).await
+    }
+
+    /// Runs `call`'s operation in `target`'s component, in its turn,
+    /// starting it if it is not running, and returns its answer: the step
+    /// every call to one target ends with, and each provider of a fan-out
+    /// is run as.
+    async fn operation_in(
+        &self,
+        call: &mut OperationCall,
+        chain: &Chain,
+        target: &Target,
+    ) -> Result<String, OperationError> {
+        // Disabled or replaced while it was serving the call, it was
+        // stopped, and its answer is not passed on.
+        let answer = self.run_operation(target, call, chain).await?;
+        operations::check_json(&answer, &format!("result of {}", target.title))?;
+        Ok(answer)
+    }
+
+    /// Refuses a call whose input is not JSON within the limit, or that would
+    /// make the chain too deep.
+    fn check_call(&self, call: &OperationCall, chain: &Chain) -> Result<(), OperationError> {
+        operations::check_json(&call.input, "input")?;
+        if chain.components.len() >= operations::MAX_CALL_DEPTH {
+            return Err(OperationError::refused(format!(
+                "the chain of calls is {} deep; Pane allows at most {}",
+                chain.components.len(),
+                operations::MAX_CALL_DEPTH
+            )));
+        }
+        Ok(())
+    }
+
+    /// The installed package and component serving `call`, by its package
+    /// source or by its capability, unless its package already serves a
+    /// call in the chain, through whichever of its components.
+    fn resolve_target(
+        &self,
+        call: &OperationCall,
+        chain: &Chain,
+    ) -> Result<Target, OperationError> {
+        let directory = lock(&self.directory).clone();
+        let installed = match directory {
+            Some(directory) => directory(),
+            None => operations::Installed::default(),
+        };
+        let target = match &call.addressed {
+            Addressed::Package { source, version } => {
+                installed.resolve(&call.caller, source, &call.operation, *version)?
+            }
+            Addressed::Capability { capability } => {
+                installed.resolve_capability(&call.caller, capability, &call.operation)?
+            }
+            Addressed::Every { .. } => unreachable!("a fan-out resolves to several targets"),
+        };
+        match self.in_chain_of(&installed, chain, &target) {
+            Some(error) => Err(error),
+            None => Ok(target),
+        }
+    }
+
+    /// The providers serving a fan-out `call` to every provider of a
+    /// capability, as the packages are now, in the order Pane calls them.
+    /// The providers that cannot serve are already skipped: each answer
+    /// the fan-out returns was served, or refused by the chain rules.
+    fn resolve_every(&self, call: &OperationCall) -> Result<Vec<Target>, OperationError> {
+        let directory = lock(&self.directory).clone();
+        let installed = match directory {
+            Some(directory) => directory(),
+            None => operations::Installed::default(),
+        };
+        let Addressed::Every { capability } = &call.addressed else {
+            unreachable!("only a fan-out resolves to several targets");
+        };
+        installed.resolve_every(&call.caller, capability, &call.operation)
+    }
+
+    /// Why `target` cannot serve a call in `chain` now — it already serves
+    /// a call in it, through whichever of its components — or `None` when
+    /// it can. Shared by a call to one target and each provider of a
+    /// fan-out, so the chain rules hold for both.
+    fn in_chain(&self, chain: &Chain, target: &Target) -> Option<OperationError> {
+        let directory = lock(&self.directory).clone();
+        let installed = match directory {
+            Some(directory) => directory(),
+            None => operations::Installed::default(),
+        };
+        self.in_chain_of(&installed, chain, target)
+    }
+
+    /// [`Host::in_chain`] against `installed`, the packages as they now
+    /// are.
+    fn in_chain_of(
+        &self,
+        installed: &operations::Installed,
+        chain: &Chain,
+        target: &Target,
+    ) -> Option<OperationError> {
+        let in_chain = chain.components.iter().any(|component| {
+            *component == target.component
+                || installed.package_of(component) == Some(&target.identity)
+        });
+        in_chain.then(|| {
+            OperationError::refused(format!(
+                "{} is already serving a call in this chain; an extension cannot be \
+                 called back while its own call waits",
+                target.title
+            ))
+        })
+    }
+
+    /// Runs the operation of `call` in `target`'s component, in its turn,
+    /// starting it if it is not running, and returns its answer.
+    async fn run_operation(
+        &self,
+        target: &Target,
+        call: &mut OperationCall,
+        chain: &Chain,
+    ) -> Result<String, OperationError> {
+        let failed = |error| match error {
+            // Only a caller that no longer waits cancels a call.
+            CallError::Cancelled => {
+                OperationError::refused("the caller no longer waits for this call")
+            }
+            error => OperationError::from_call(&target.title, error),
+        };
+        // Its caller gave up on it: the check the call was sent with can
+        // miss a give-up that lands while the call waits to be served, so
+        // the check is made again just before the operation runs, and the
+        // instance the call started for it is dropped again.
+        if call.reply.is_closed() {
+            return Err(failed(CallError::Cancelled));
+        }
+        // One call into the target's instance at a time: this one waits for
+        // its turn, unless the chain's code stops meanwhile. A turn that
+        // would come only once this chain's own calls return is refused.
+        let _turn = match unless(
+            self.turn(&target.component, chain.id),
+            first_end(&chain.owners),
+        )
+        .await
+        {
+            Ok(Some(turn)) => turn,
+            Ok(None) => {
+                return Err(OperationError::refused(format!(
+                    "{} is serving another call that waits for this one; call it again once \
+                     that call is done",
+                    target.title
+                )));
+            }
+            Err(end) => return Err(failed(ended(end))),
+        };
+        self.instance(&target.component, target.data.clone())
+            .await
+            .map_err(failed)?;
+        let provider = self
+            .instances
+            .borrow()
+            .get(&target.component)
+            .and_then(|instance| instance.operations.as_ref())
+            .map(|provider| provider.pane_extension_published_operations().clone())
+            // The install check requires the export, so only a component
+            // replaced behind Pane's back lacks it.
+            .ok_or_else(|| {
+                failed(CallError::Interface(format!(
+                    "it does not export {OPERATIONS_INTERFACE}"
+                )))
+            })?;
+        if call.reply.is_closed() {
+            self.drop_instance(&target.component);
+            return Err(failed(CallError::Cancelled));
+        }
+        let (name, input) = (
+            call.addressed.operation_name(&call.operation),
+            call.input.clone(),
+        );
+        // A call whose caller gives up on it while it runs is stopped, as
+        // a search's call is (the caller is gone; the answer has nowhere
+        // to go).
+        let result = self
+            .run_guest_until(
+                &target.component,
+                chain,
+                async |instance| {
+                    instance
+                        .store
+                        .run_concurrent(async |store| {
+                            provider.call_run_operation(store, name, input).await
+                        })
+                        .await
+                },
+                call.reply.closed(),
+            )
+            .await
+            .map_err(failed)?;
+        self.settle(&target.component, result, CallError::Guest)
+            .map_err(failed)
+    }
+
+    /// Maps a call outcome to the caller's result, turning the guest's own
+    /// error with `guest_error`. A trapped instance cannot be re-entered, so
+    /// it is dropped and the next call starts a fresh one.
+    fn settle<T, E>(
+        &self,
+        path: &Path,
+        outcome: wasmtime::Result<wasmtime::Result<Result<T, E>>>,
+        guest_error: impl FnOnce(E) -> CallError,
+    ) -> Result<T, CallError> {
+        let (data, out_of_memory) = self
+            .instances
+            .borrow()
+            .get(path)
+            .map(|instance| {
+                let state = instance.store.data();
+                (state.data.clone(), state.out_of_memory)
+            })
+            .unwrap_or_default();
+        match outcome.and_then(|inner| inner) {
+            Ok(result) => result.map_err(guest_error),
+            Err(trap) => {
+                self.drop_instance(path);
+                let error = crashed(&trap, out_of_memory);
+                self.report(path, data.as_ref(), Health::Crashed(error.clone()));
+                Err(error)
+            }
+        }
+    }
+
+    /// Tells the health report how a call into `path`, of an installed
+    /// package whose extension data is `data`, failed; nothing for a command
+    /// built into Pane.
+    fn report(&self, path: &Path, data: Option<&PackageData>, health: Health) {
+        // Code of a thread Pane gave up on is stopped where it runs (a
+        // guest traps at its next tick): no failure of its package.
+        if self.watch.given_up() {
+            return;
+        }
+        let Some(data) = data else {
+            return;
+        };
+        // The package's log has each failure, with a crash's backtrace.
+        let (Health::Crashed(error) | Health::Unresponsive(error) | Health::FailedToStart(error)) =
+            &health;
+        self.logs.pane(
+            data.owner(),
+            data.generation().number(),
+            LogLevel::Error,
+            &error.to_string(),
+        );
+        let report = lock(&self.health).clone();
+        if let Some(report) = report {
+            report(path, data, health);
+        }
+    }
+
+    /// Notes that the call `path`'s instance runs next is for `command`,
+    /// when the call names one: the command whose preferences the guest
+    /// reads when it names none (`pane:extension/preferences`). Called once
+    /// the instance is live, in the call's turn.
+    fn note_command(&self, path: &Path, command: Option<&str>) {
+        if let Some(command) = command
+            && let Some(instance) = self.instances.borrow_mut().get_mut(path)
+        {
+            let state = instance.store.data_mut();
+            state.command = Some(command.to_owned());
+            if state.call.command.is_none() {
+                state.log_command.set(state.command.clone());
+            }
+        }
+    }
+
+    /// Makes sure `path` has a live instance in the generation of `data`,
+    /// instantiating it on first use. A call whose generation has ended (its
+    /// package was disabled, reloaded or updated since it was asked for) gets
+    /// none and is not started: it cannot bring its instance back. The
+    /// caller holds the component's turn.
+    async fn instance(&self, path: &Path, data: Option<PackageData>) -> Result<(), CallError> {
+        // An instance of an ended generation goes; one of the package's
+        // current generation stays, even for a stale call, which is refused.
+        let stopped = self
+            .instances
+            .borrow()
+            .get(path)
+            .is_some_and(|instance| instance.store.data().stopped().is_some());
+        if stopped {
+            self.drop_instance(path);
+        }
+        if let Some(end) = data.as_ref().and_then(PackageData::stopped) {
+            return Err(ended(end));
+        }
+        let live = self.instances.borrow().contains_key(path);
+        if !live {
+            let started = self.start_instance(path, data.clone()).await;
+            // One stopped while it started (disabled, say) did not fail.
+            let stopped = data.as_ref().and_then(PackageData::stopped).is_some();
+            if let Err(error) = &started
+                && !stopped
+                && !self.watch.given_up()
+            {
+                self.report(path, data.as_ref(), Health::FailedToStart(error.clone()));
+            }
+            started?;
+            // The state an instance of this component handed to the code
+            // that replaced it (ADR 0041) is restored on this instance's
+            // first start, before any other call into it.
+            self.restore(path, data.as_ref()).await?;
+        }
+        Ok(())
+    }
+
+    /// Loads and instantiates `path` as a live instance with `data`.
+    async fn start_instance(
+        &self,
+        path: &Path,
+        data: Option<PackageData>,
+    ) -> Result<(), CallError> {
+        let component = self.component(path)?;
+        let watch = self.watch.clone();
+        // Its code is stopped once Pane gives up on this thread.
+        let data = data.map(|data| data.fenced(watch.fence().clone()));
+        let generation = data.as_ref().map(|data| data.generation().clone());
+        let mut end = std::pin::pin!(first_end(generation.as_slice()));
+        let (calls, calls_received) = operations::channel();
+        // What an installed package's code writes goes to its extension log;
+        // a command built into Pane writes nowhere.
+        let log_command = CurrentCommand::default();
+        let mut wasi = WasiCtx::builder();
+        if let Some(data) = &data {
+            let generation = data.generation().number();
+            // A development build of JavaScript or TypeScript keeps a
+            // source map beside its component: what the package writes has
+            // the frames of its stacks mapped back to the sources its
+            // bundle was built from as the lines are captured. Read once
+            // here, per instance, rather than per line: the file is small,
+            // and the instance runs beside it for its whole life.
+            let map = crate::source_map::SourceMap::beside(path).map(Arc::new);
+            let output = |stream| {
+                self.logs.output(
+                    data.owner(),
+                    generation,
+                    stream,
+                    log_command.clone(),
+                    map.clone(),
+                )
+            };
+            wasi.stdout(output(LogStream::Stdout))
+                .stderr(output(LogStream::Stderr));
+        }
+        let mut store = Store::new(
+            &self.code.engine,
+            GuestState {
+                wasi: wasi.build(),
+                table: ResourceTable::new(),
+                http: WasiHttpCtx::new(),
+                sender: http::Sender::new(data.clone(), self.network.clone(), watch.clone()),
+                out_of_memory: false,
+                data,
+                component: path.to_path_buf(),
+                calls,
+                serving: false,
+                applications: self.applications.clone(),
+                files: self.files.clone(),
+                clipboard: self.clipboard.clone(),
+                directory: self.directory.clone(),
+                launches: self.launches.clone(),
+                host_functions: self.host_functions.clone(),
+                view_asks: self.view_asks.clone(),
+                text_measures: self.text_measures.clone(),
+                call: CallFor::default(),
+                log_command,
+                owner: self.helpers.new_owner(),
+                programs: crate::programs::Processes::default(),
+                helpers: self.helpers.clone(),
+                watch: self.watch.clone(),
+                command: None,
+                registrations: self.registrations.clone(),
+                identity: (self.number, 0),
+                events: false,
+            },
+        );
+        store.limiter(|state| state);
+        // The guest yields to this thread at every epoch tick, however long
+        // it computes, which is progress for the watchdog (see `deadlines`);
+        // once Pane gave up on this thread, it traps there instead.
+        store.set_epoch_deadline(1);
+        store.epoch_deadline_callback(|store| {
+            let watch = &store.data().watch;
+            if watch.given_up() {
+                return Ok(wasmtime::UpdateDeadline::Interrupt);
+            }
+            watch.beat();
+            Ok(wasmtime::UpdateDeadline::Yield(1))
+        });
+        let load = |error: wasmtime::Error| CallError::Load(format!("{error:#}"));
+        // Starting is not metered: a slow start is not a failure of the
+        // package. It stops once its generation ends (it was disabled, say):
+        // one that never finishes holds its component's turn until then.
+        let instance = {
+            let mut instantiating =
+                std::pin::pin!(self.code.linker.instantiate_async(&mut store, &component));
+            std::future::poll_fn(|cx| {
+                if watch.given_up() {
+                    return Poll::Ready(Err(given_up()));
+                }
+                if let Poll::Ready(end) = end.as_mut().poll(cx) {
+                    return Poll::Ready(Err(ended(end)));
+                }
+                let _starting = watch.doing(Doing::Starting);
+                instantiating
+                    .as_mut()
+                    .poll(cx)
+                    .map(|started| started.map_err(load))
+            })
+            .await
+        };
+        // One that asked for more memory than it may have while it started
+        // says so, not where it gave up.
+        let instance = match instance {
+            Err(CallError::Load(_)) if store.data().out_of_memory => {
+                return Err(CallError::Load(memory::out_of_memory()));
+            }
+            started => started?,
+        };
+        // The world the component's own exports name decides which
+        // world's bindings this instance is: the current one's, or the
+        // previous one's, served through the adapter (see `previous`).
+        let which = previous::Which::of(&component, &self.code.engine);
+        let bindings = match which {
+            previous::Which::Current => previous::World::Current(
+                bindings::ExtensionWithTypedFolder::new(&mut store, &instance).map_err(load)?,
+            ),
+            previous::Which::Previous => previous::World::Previous(
+                previous::bindings::ExtensionWithTypedFolder::new(&mut store, &instance)
+                    .map_err(load)?,
+            ),
+        };
+        // Only a command that computes root results exports them.
+        let root_results = match which {
+            previous::Which::Current => {
+                root_bindings::RootResultsProvider::new(&mut store, &instance)
+                    .ok()
+                    .map(previous::WorldRootResults::Current)
+            }
+            previous::Which::Previous => {
+                previous::root_bindings::RootResultsProvider::new(&mut store, &instance)
+                    .ok()
+                    .map(previous::WorldRootResults::Previous)
+            }
+        };
+        // Only a command that supplies results ahead of the query exports
+        // them.
+        let indexed_results = match which {
+            previous::Which::Current => {
+                indexed_bindings::IndexedResultsProvider::new(&mut store, &instance)
+                    .ok()
+                    .map(previous::WorldIndexedResults::Current)
+            }
+            previous::Which::Previous => {
+                previous::indexed_bindings::IndexedResultsProvider::new(&mut store, &instance)
+                    .ok()
+                    .map(previous::WorldIndexedResults::Previous)
+            }
+        };
+
+        // Only a component serving published operations exports them.
+        let operations = match which {
+            previous::Which::Current => {
+                operations_bindings::OperationsProvider::new(&mut store, &instance)
+                    .ok()
+                    .map(previous::WorldOperations::Current)
+            }
+            previous::Which::Previous => {
+                previous::operations_bindings::OperationsProvider::new(&mut store, &instance)
+                    .ok()
+                    .map(previous::WorldOperations::Previous)
+            }
+        };
+        // Only a command that runs a continuing service exports it.
+        let service = match which {
+            previous::Which::Current => {
+                service_bindings::ServiceProvider::new(&mut store, &instance)
+                    .ok()
+                    .map(previous::WorldService::Current)
+            }
+            previous::Which::Previous => {
+                previous::service_bindings::ServiceProvider::new(&mut store, &instance)
+                    .ok()
+                    .map(previous::WorldService::Previous)
+            }
+        };
+        // Only a component that registers timers or watchers exports the
+        // events they are delivered to.
+        let events = match which {
+            previous::Which::Current => events_bindings::EventsProvider::new(&mut store, &instance)
+                .ok()
+                .map(previous::WorldEvents::Current),
+            previous::Which::Previous => {
+                previous::events_bindings::EventsProvider::new(&mut store, &instance)
+                    .ok()
+                    .map(previous::WorldEvents::Previous)
+            }
+        };
+        // Only the component a package's `pane.json` names under
+        // `activate` exports the activation entry point.
+        let lifecycle = match which {
+            previous::Which::Current => {
+                lifecycle_bindings::LifecycleProvider::new(&mut store, &instance)
+                    .ok()
+                    .map(previous::WorldLifecycle::Current)
+            }
+            previous::Which::Previous => {
+                previous::lifecycle_bindings::LifecycleProvider::new(&mut store, &instance)
+                    .ok()
+                    .map(previous::WorldLifecycle::Previous)
+            }
+        };
+        // The instance's identity, which tags what it registers, and
+        // whether events can be delivered to it.
+        let serial = self.next_serial.get();
+        self.next_serial.set(serial + 1);
+        store.data_mut().identity = (self.number, serial);
+        store.data_mut().events = events.is_some();
+        // On its generation's undo list: the generation's end has this
+        // thread drop it at once, as only this thread may, even while no
+        // call asks for it.
+        let undo = generation.map(|generation| {
+            let nudge = self.nudge.clone();
+            generation.on_end("extension instance", move || {
+                if let Some(requests) = nudge.upgrade() {
+                    let _ = requests.send(Sent {
+                        request: Request::DropStopped,
+                        in_flight: None,
+                    });
+                }
+                Ok(())
+            })
+        });
+        // Counted for the diagnostic of when a component starts again
+        // (#202): a cancelled call drops its instance, so the call after
+        // it starts one.
+        *lock(&self.starts).entry(path.to_path_buf()).or_insert(0) += 1;
+        self.instances.borrow_mut().insert(
+            path.to_path_buf(),
+            Instance {
+                store,
+                bindings,
+                root_results,
+                indexed_results,
+                operations,
+                service,
+                events,
+                lifecycle,
+                calls: Some(calls_received),
+                serial,
+                _undo: undo,
+            },
+        );
+        Ok(())
+    }
+
+    /// Compiles `path` once (see [`Code::compile`]).
+    fn component(&self, path: &Path) -> Result<Component, CallError> {
+        let compiled = self.components.borrow().get(path).cloned();
+        if let Some(component) = compiled {
+            return Ok(component);
+        }
+        // Compiling may take long without anything being stuck.
+        let _compiling = self.watch.exempt();
+        let component = self.code.compile(path)?;
+        self.components
+            .borrow_mut()
+            .insert(path.to_path_buf(), component.clone());
+        Ok(component)
+    }
+}
+
+/// Resolves once any of `owners` ends, with why; never without any.
+fn first_end(owners: &[Generation]) -> impl Future<Output = End> + use<> {
+    let mut ends: Vec<_> = owners
+        .iter()
+        .map(|owner| Box::pin(owner.wait_end()))
+        .collect();
+    std::future::poll_fn(move |cx| {
+        for end in &mut ends {
+            if let Poll::Ready(end) = end.as_mut().poll(cx) {
+                return Poll::Ready(end);
+            }
+        }
+        Poll::Pending
+    })
+}
+
+/// Awaits `work`, unless `stop` resolves first: then its output, and `work`
+/// is dropped where it waits.
+async fn unless<T, S>(
+    work: impl Future<Output = T>,
+    stop: impl Future<Output = S>,
+) -> Result<T, S> {
+    let (mut work, mut stop) = (std::pin::pin!(work), std::pin::pin!(stop));
+    std::future::poll_fn(|cx| {
+        if let Poll::Ready(stopped) = stop.as_mut().poll(cx) {
+            return Poll::Ready(Err(stopped));
+        }
+        work.as_mut().poll(cx).map(Ok)
+    })
+    .await
+}
+
+impl From<crate::registrations::GuestEvent> for events::Event {
+    fn from(event: crate::registrations::GuestEvent) -> events::Event {
+        match event {
+            crate::registrations::GuestEvent::Timer { tag } => events::Event::Timer(tag),
+            crate::registrations::GuestEvent::Watcher { tag, changes } => {
+                events::Event::Watcher(events::WatcherEvent {
+                    tag,
+                    changes: match changes {
+                        crate::registrations::WatcherChanges::Paths(paths) => {
+                            events::WatcherChanges::Paths(paths)
+                        }
+                        crate::registrations::WatcherChanges::Rescan => {
+                            events::WatcherChanges::Rescan
+                        }
+                    },
+                })
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::extension_data::ExtensionData;
+    use crate::packages::PackageIdentity;
+    use futures::executor::block_on;
+    use std::time::Duration;
+
+    fn settings_sample() -> PathBuf {
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../target/guests/sample_settings.wasm");
+        assert!(
+            path.exists(),
+            "{} is missing; run `cargo xtask guests`",
+            path.display()
+        );
+        path
+    }
+
+    /// Quitting Pane drops the launcher, and with it the last runtime
+    /// handle: a helper still running then ends too.
+    #[test]
+    fn dropping_the_last_runtime_handle_ends_running_helpers() {
+        let target = pane_target::Target::current().expect("a known target");
+        let program = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../target/guests/packages/sample-helper/helpers")
+            .join(target.id())
+            .join(format!("pane-echo{}", target.exe_suffix()));
+        assert!(
+            program.exists(),
+            "{} is missing; run `cargo xtask guests`",
+            program.display()
+        );
+        let runtime = Runtime::start().unwrap();
+        let helpers = runtime.shared.helpers.clone();
+        let running = helpers
+            .start(runner::Spec {
+                fence: None,
+                name: "echo".into(),
+                program,
+                args: vec!["--wait".into(), "5".into()],
+                input: "hi".into(),
+                generation: None,
+                owner: helpers.new_owner(),
+            })
+            .unwrap();
+        let clone = runtime.clone();
+        drop(runtime);
+        assert_eq!(helpers.running().len(), 1, "a clone keeps the runtime");
+
+        let dropped = std::time::Instant::now();
+        drop(clone);
+
+        assert_eq!(helpers.running(), Vec::<u32>::new());
+        let error = block_on(running.finish()).unwrap_err();
+        assert_eq!(error.kind, HelperErrorKind::Refused, "{error:?}");
+        assert!(dropped.elapsed() < std::time::Duration::from_secs(4));
+        // Nothing starts once it is gone.
+        assert!(
+            helpers
+                .start(runner::Spec {
+                    fence: None,
+                    name: "echo".into(),
+                    program: PathBuf::from("unused"),
+                    args: vec![],
+                    input: String::new(),
+                    generation: None,
+                    owner: 0,
+                })
+                .is_err()
+        );
+    }
+
+    /// A call for a package that was disabled, served after its instances
+    /// were dropped, must not start a new instance of it.
+    #[test]
+    fn a_disabled_package_command_starts_no_instance() {
+        let data = tempfile::tempdir().unwrap();
+        let settings = ExtensionData::open(data.path());
+        let identity = PackageIdentity::local(data.path()).unwrap();
+        let owned = settings.owned_by(&identity);
+        let component = settings_sample();
+        let runtime = Runtime::start().unwrap();
+        block_on(runtime.render_with(&component, Some(owned.clone()))).unwrap();
+
+        settings.set_enabled(&identity, false);
+        runtime.forget([component.clone()]);
+        let queued = runtime.render_with(&component, Some(owned));
+
+        assert_eq!(block_on(queued), Err(CallError::Disabled));
+    }
+
+    fn guest(file: &str) -> PathBuf {
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../target/guests")
+            .join(file);
+        assert!(path.exists(), "{} is missing", path.display());
+        path
+    }
+
+    /// Stopping a call releases what its instance holds: a stream open to
+    /// the host with the future of its write pending, the clock the call
+    /// awaits and a designed view open in the same instance.
+    #[test]
+    fn stopping_a_call_releases_the_stream_future_and_view_its_instance_holds() {
+        use std::time::{Duration, Instant};
+
+        let data = tempfile::tempdir().unwrap();
+        let packages = ExtensionData::open(data.path());
+        let identity = PackageIdentity::local(data.path()).unwrap();
+        let owned = packages.owned_by(&identity);
+        let component = guest("faulty.wasm");
+        let runtime = Runtime::start().unwrap();
+        let (view, _) = block_on(runtime.open_designed_view_with(
+            &component,
+            "counter",
+            &LaunchRecord::default(),
+            Some(owned.clone()),
+        ))
+        .unwrap();
+        let holding = {
+            let (runtime, component) = (runtime.clone(), component.clone());
+            std::thread::spawn(move || {
+                // Not listed: the fixture runs it as a callback no item names.
+                block_on(runtime.handle_event_with(&component, None, "hold", "{}", Some(owned)))
+            })
+        };
+        let started = Instant::now();
+        let saved =
+            || std::fs::read_to_string(data.path().join("settings.json")).unwrap_or_default();
+        while !saved().contains("\"holding\": \"started\"") {
+            assert!(
+                started.elapsed() < Duration::from_secs(6),
+                "it did not start"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+
+        packages.set_enabled(&identity, false);
+
+        assert_eq!(holding.join().unwrap(), Err(CallError::Disabled));
+        assert!(started.elapsed() < Duration::from_secs(6));
+        assert!(!saved().contains("finished"));
+        assert_eq!(block_on(runtime.running()), Vec::<PathBuf>::new());
+        assert_eq!(block_on(runtime.designed_view_count()), 0);
+        assert_eq!(
+            block_on(runtime.designed_view_event(view, designed_key_event(), false)),
+            Err(CallError::ViewClosed)
+        );
+    }
+
+    /// A designed view the window still shows from a crashed runtime thread
+    /// names no view of the thread that replaced it: ids are never reused.
+    #[test]
+    fn a_restarted_runtime_never_reuses_a_view_id_of_the_crashed_one() {
+        let component = guest("sample_rust.wasm");
+        let runtime = Runtime::start().unwrap();
+        let (old, _) =
+            block_on(runtime.open_designed_view(&component, "color", &default_launch())).unwrap();
+
+        runtime.inject(Fault::Crash);
+        let started = std::time::Instant::now();
+        while runtime.status() == RuntimeStatus::Running {
+            assert!(started.elapsed() < std::time::Duration::from_secs(8));
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+
+        assert!(matches!(runtime.status(), RuntimeStatus::Restarted { .. }));
+        let (new, _) =
+            block_on(runtime.open_designed_view(&component, "color", &default_launch())).unwrap();
+        assert_ne!(old, new);
+        assert_eq!(
+            block_on(runtime.designed_view_event(old, designed_key_event(), false)),
+            Err(CallError::ViewClosed)
+        );
+        assert!(block_on(runtime.designed_view_event(new, designed_key_event(), false)).is_ok());
+        assert_eq!(block_on(runtime.designed_view_count()), 1);
+    }
+
+    /// A settings sample instance of a package in `data`, and its data.
+    fn settings_package(data: &tempfile::TempDir) -> (ExtensionData, PackageIdentity) {
+        let packages = ExtensionData::open(data.path());
+        let identity = PackageIdentity::local(data.path()).unwrap();
+        (packages, identity)
+    }
+
+    /// The one check every host interface goes through stops code whose
+    /// runtime thread's fence closed, also through package data that was
+    /// not fenced with it; a generation that ended says why first.
+    #[test]
+    fn code_is_stopped_by_its_thread_s_fence_with_or_without_data() {
+        let data = tempfile::tempdir().unwrap();
+        let (packages, identity) = settings_package(&data);
+        let unfenced = packages.owned_by(&identity);
+        let fence = Fence::default();
+        assert_eq!(code_stopped(Some(&unfenced), &fence), None);
+        assert_eq!(code_stopped(None, &fence), None);
+
+        fence.close();
+
+        assert_eq!(code_stopped(Some(&unfenced), &fence), Some(End::Abandoned));
+        assert_eq!(code_stopped(None, &fence), Some(End::Abandoned));
+        packages.set_enabled(&identity, false);
+        assert_eq!(code_stopped(Some(&unfenced), &fence), Some(End::Disabled));
+    }
+
+    /// What the settings sample saved under `key` in `identity`'s settings.
+    fn saved(packages: &ExtensionData, identity: &PackageIdentity, key: &str) -> Option<String> {
+        packages
+            .owned_by(identity)
+            .get(DataKind::Settings, key)
+            .unwrap()
+    }
+
+    /// Waits, generously, until `done` holds.
+    fn until(what: &str, done: impl Fn() -> bool) {
+        let started = std::time::Instant::now();
+        while !done() {
+            assert!(
+                started.elapsed() < std::time::Duration::from_secs(60),
+                "{what} did not happen"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    }
+
+    /// Short limits, so tests reach them quickly (see [`Limits`]).
+    fn short_limits() -> Limits {
+        Limits {
+            compute: Duration::from_secs(1),
+            warn: Duration::from_millis(500),
+            unresponsive: Duration::from_secs(2),
+        }
+    }
+
+    /// A runtime with [`short_limits`], and every failure it reports.
+    fn watched_runtime() -> (Runtime, Arc<Mutex<Vec<Health>>>) {
+        let runtime = Runtime::start().unwrap();
+        runtime.set_limits(short_limits());
+        let reported = Arc::new(Mutex::new(Vec::new()));
+        {
+            let reported = reported.clone();
+            runtime.set_health(Arc::new(move |_, _, health| {
+                lock(&reported).push(health);
+            }));
+        }
+        (runtime, reported)
+    }
+
+    /// Runs `item` of the settings sample on another thread.
+    fn run_in_background(
+        runtime: &Runtime,
+        packages: &ExtensionData,
+        identity: &PackageIdentity,
+        item: &str,
+    ) -> std::thread::JoinHandle<Result<Answer, CallError>> {
+        let (runtime, owned, item) = (
+            runtime.clone(),
+            packages.owned_by(identity),
+            item.to_owned(),
+        );
+        std::thread::spawn(move || {
+            block_on(runtime.run_item_with(&settings_sample(), &item, Some(owned)))
+        })
+    }
+
+    /// A guest computing without waiting yields at every tick: after the
+    /// compute limit its call is stopped as unresponsive, reported as its
+    /// package's failure, and its instance is gone, while the runtime
+    /// serves the next call.
+    #[test]
+    fn a_guest_computing_without_waiting_is_stopped_after_the_compute_limit() {
+        let data = tempfile::tempdir().unwrap();
+        let (packages, identity) = settings_package(&data);
+        let component = settings_sample();
+        let (runtime, reported) = watched_runtime();
+        // Another command is active meanwhile, and stays so.
+        let other = guest("sample_rust.wasm");
+        let (view, _) =
+            block_on(runtime.open_designed_view(&other, "color", &default_launch())).unwrap();
+
+        let busy =
+            block_on(runtime.run_item_with(&component, "busy", Some(packages.owned_by(&identity))));
+
+        let Err(CallError::Unresponsive(reason)) = &busy else {
+            panic!("expected it stopped as unresponsive, got {busy:?}");
+        };
+        assert!(reason.contains("computed for 1 second without"), "{reason}");
+        assert_eq!(
+            saved(&packages, &identity, "busy").as_deref(),
+            Some("started")
+        );
+        assert!(matches!(
+            lock(&reported).as_slice(),
+            [Health::Unresponsive(CallError::Unresponsive(_))]
+        ));
+        assert_eq!(block_on(runtime.running()), vec![other.clone()]);
+        // The other command's view is still open, and the package runs
+        // again from a fresh instance.
+        assert!(block_on(runtime.designed_view_event(view, designed_key_event(), false)).is_ok());
+        assert!(
+            block_on(runtime.render_with(&component, Some(packages.owned_by(&identity)))).is_ok()
+        );
+        assert_eq!(runtime.status(), RuntimeStatus::Running);
+    }
+
+    /// Ending a generation stops a guest that computes without waiting at
+    /// its next tick, rather than when it yields by itself or reaches the
+    /// compute limit (which it would report as its failure).
+    #[test]
+    fn disabling_a_package_stops_its_computing_guest_at_once() {
+        let data = tempfile::tempdir().unwrap();
+        let (packages, identity) = settings_package(&data);
+        let (runtime, reported) = watched_runtime();
+        runtime.set_limits(Limits {
+            compute: Duration::from_secs(600),
+            ..Limits::default()
+        });
+        let busy = run_in_background(&runtime, &packages, &identity, "busy");
+        until("it started computing", || {
+            saved(&packages, &identity, "busy").as_deref() == Some("started")
+        });
+
+        packages.set_enabled(&identity, false);
+
+        assert_eq!(busy.join().unwrap(), Err(CallError::Disabled));
+        assert!(lock(&reported).is_empty());
+        packages.set_enabled(&identity, true);
+        assert_eq!(
+            saved(&packages, &identity, "busy").as_deref(),
+            Some("started")
+        );
+    }
+
+    /// A guest whose host calls are slow (Pane's own work, here computing
+    /// for three times the compute limit and past the time the watchdog
+    /// gives up after) is never stopped nor blamed, and the runtime thread
+    /// inside the host call is never given up on.
+    #[test]
+    fn a_guest_whose_host_calls_are_slow_is_never_stopped_or_blamed() {
+        let data = tempfile::tempdir().unwrap();
+        let (packages, identity) = settings_package(&data);
+        let component = settings_sample();
+        let (runtime, reported) = watched_runtime();
+        let slow = short_limits().compute * 3;
+        assert!(slow > short_limits().unresponsive);
+
+        runtime.inject(Fault::SlowHostCall(slow));
+        let saved_note =
+            block_on(runtime.run_item_with(&component, "note", Some(packages.owned_by(&identity))));
+
+        assert_eq!(saved_note, Ok(Answer::default()));
+        assert!(lock(&reported).is_empty(), "{:?}", lock(&reported));
+        assert_eq!(runtime.status(), RuntimeStatus::Running);
+        assert_eq!(runtime.abandoned_threads(), 0);
+        assert_eq!(block_on(runtime.running()), vec![component]);
+    }
+
+    /// Clipboard history's host calls (#35) are marked like every other
+    /// host call: the slow host call computes inside the view's first one,
+    /// so the view takes at least that long, yet the guest is never stopped
+    /// or blamed and the thread is never given up on. The JavaScript
+    /// clipboard sample's view is the component: its render asks the
+    /// clipboard history's status first (the default extension's own
+    /// component lives in its repository, #285).
+    #[test]
+    fn a_guest_whose_clipboard_host_calls_are_slow_is_never_stopped_or_blamed() {
+        let data = tempfile::tempdir().unwrap();
+        let (packages, identity) = settings_package(&data);
+        let component = guest("sample_clipboard_js.wasm");
+        let (runtime, reported) = watched_runtime();
+        let slow = short_limits().compute * 3;
+        assert!(slow > short_limits().unresponsive);
+
+        runtime.inject(Fault::SlowHostCall(slow));
+        let started = std::time::Instant::now();
+        let view = block_on(runtime.render_with(&component, Some(packages.owned_by(&identity))));
+
+        assert_eq!(
+            view.expect("the view is shown").title,
+            "Clipboard history (JavaScript)"
+        );
+        assert!(
+            started.elapsed() >= slow,
+            "the slow host call was not one of clipboard history's: {:?}",
+            started.elapsed()
+        );
+        assert!(lock(&reported).is_empty(), "{:?}", lock(&reported));
+        assert_eq!(runtime.status(), RuntimeStatus::Running);
+        assert_eq!(runtime.abandoned_threads(), 0);
+        assert_eq!(block_on(runtime.running()), vec![component]);
+    }
+
+    /// Waits until Pane gave up on the runtime thread, as it does once the
+    /// thread made no progress for its limit.
+    fn until_given_up(runtime: &Runtime) {
+        until("Pane gave up on the thread", || {
+            runtime.status() != RuntimeStatus::Running
+        });
+    }
+
+    /// A runtime thread stuck outside any guest (made to hang) is given up
+    /// on: the call it held answers that the runtime stopped responding, a
+    /// fresh thread serves, no package is reported, and once the stuck
+    /// thread returns it runs nothing more.
+    #[test]
+    fn a_runtime_thread_that_stops_responding_is_replaced_and_runs_nothing_more() {
+        let data = tempfile::tempdir().unwrap();
+        let (packages, identity) = settings_package(&data);
+        let component = settings_sample();
+        let (runtime, reported) = watched_runtime();
+        let slow = run_in_background(&runtime, &packages, &identity, "slow");
+        until("it started waiting", || {
+            saved(&packages, &identity, "slow-save").as_deref() == Some("started")
+        });
+
+        runtime.inject(Fault::Hang);
+
+        let Err(CallError::RuntimeUnavailable(reason)) = slow.join().unwrap() else {
+            panic!("expected the runtime unavailable");
+        };
+        assert!(
+            reason.contains("stopped responding before answering and was started again"),
+            "{reason}"
+        );
+        let RuntimeStatus::Restarted { failure, why } = runtime.status() else {
+            panic!("expected a restart, got {:?}", runtime.status());
+        };
+        assert_eq!(failure, RuntimeFailure::Unresponsive);
+        assert!(why.contains("made no progress for 2 seconds"), "{why}");
+        assert!(why.contains("which code held it is not known"), "{why}");
+        assert_eq!(runtime.abandoned_threads(), 1);
+        assert!(lock(&reported).is_empty(), "no package is named");
+        // A fresh thread serves.
+        assert!(
+            block_on(runtime.render_with(&component, Some(packages.owned_by(&identity)))).is_ok()
+        );
+
+        runtime.inject(Fault::Release);
+        until("the stuck thread ended", || {
+            runtime.abandoned_threads() == 0
+        });
+
+        // It ran nothing more: its instance, and the guest's wait, went
+        // with it.
+        assert_eq!(
+            saved(&packages, &identity, "slow-save").as_deref(),
+            Some("started")
+        );
+        assert_eq!(block_on(runtime.running()), vec![component]);
+        assert!(lock(&reported).is_empty());
+    }
+
+    /// Asking which instances run, or how many views are open, answers
+    /// once Pane gave up on a thread that held the request, rather than
+    /// waiting for it for ever.
+    #[test]
+    fn running_and_view_count_answer_when_the_thread_is_given_up_on() {
+        let (runtime, _) = watched_runtime();
+        let other = guest("sample_rust.wasm");
+        block_on(runtime.open_designed_view(&other, "color", &default_launch())).unwrap();
+
+        runtime.inject(Fault::Hang);
+        let (running, views) = {
+            let (a, b) = (runtime.clone(), runtime.clone());
+            (
+                std::thread::spawn(move || block_on(a.try_running())),
+                std::thread::spawn(move || block_on(b.designed_view_count())),
+            )
+        };
+
+        assert!(matches!(
+            running.join().unwrap(),
+            Err(CallError::RuntimeUnavailable(_))
+        ));
+        assert_eq!(views.join().unwrap(), 0);
+        until_given_up(&runtime);
+        assert_eq!(block_on(runtime.try_running()), Ok(Vec::new()));
+        runtime.inject(Fault::Release);
+        until("the stuck thread ended", || {
+            runtime.abandoned_threads() == 0
+        });
+    }
+
+    /// A package reloaded while the runtime thread is stuck runs its new
+    /// code on the fresh thread; the obsolete generation's instance, held by
+    /// the stuck thread, is never restored, even once that thread returns.
+    #[test]
+    fn a_reload_during_a_hang_never_restores_the_obsolete_generation() {
+        let data = tempfile::tempdir().unwrap();
+        let (packages, identity) = settings_package(&data);
+        let component = settings_sample();
+        let (runtime, reported) = watched_runtime();
+        let obsolete = packages.owned_by(&identity);
+        let slow = run_in_background(&runtime, &packages, &identity, "slow");
+        until("it started waiting", || {
+            saved(&packages, &identity, "slow-save").as_deref() == Some("started")
+        });
+
+        runtime.inject(Fault::Hang);
+        packages.replace_code(&identity);
+        runtime.forget([component.clone()]);
+
+        assert!(matches!(
+            slow.join().unwrap(),
+            Err(CallError::RuntimeUnavailable(_))
+        ));
+        until_given_up(&runtime);
+        let current = packages.owned_by(&identity);
+        assert!(block_on(runtime.render_with(&component, Some(current.clone()))).is_ok());
+        runtime.inject(Fault::Release);
+        until("the stuck thread ended", || {
+            runtime.abandoned_threads() == 0
+        });
+
+        // A call of the obsolete generation starts nothing.
+        assert_eq!(
+            block_on(runtime.run_item_with(&component, "slow", Some(obsolete))),
+            Err(CallError::Replaced)
+        );
+        assert_eq!(block_on(runtime.running()), vec![component.clone()]);
+        assert_eq!(
+            block_on(runtime.run_item_with(&component, "note", Some(current))),
+            Ok(Answer::default())
+        );
+        assert_eq!(
+            saved(&packages, &identity, "slow-save").as_deref(),
+            Some("started")
+        );
+        assert!(lock(&reported).is_empty());
+    }
+
+    /// A call of an ended generation served after the package's next
+    /// generation started an instance at the same component is refused, and
+    /// leaves that instance and its open view alone.
+    #[test]
+    fn a_stale_call_leaves_the_current_generation_running() {
+        let data = tempfile::tempdir().unwrap();
+        let packages = ExtensionData::open(data.path());
+        let identity = PackageIdentity::local(data.path()).unwrap();
+        let old = packages.owned_by(&identity);
+        packages.set_enabled(&identity, false);
+        packages.set_enabled(&identity, true);
+        let current = packages.owned_by(&identity);
+        let component = guest("sample_rust.wasm");
+        let runtime = Runtime::start().unwrap();
+        let (view, _) = block_on(runtime.open_designed_view_with(
+            &component,
+            "color",
+            &default_launch(),
+            Some(current),
+        ))
+        .unwrap();
+
+        let stale = runtime.render_with(&component, Some(old));
+
+        assert_eq!(block_on(stale), Err(CallError::Disabled));
+        assert_eq!(block_on(runtime.designed_view_count()), 1);
+        assert!(block_on(runtime.designed_view_event(view, designed_key_event(), false)).is_ok());
+    }
+
+    /// The launch record every designed view of these tests opens with:
+    /// none of them reads it.
+    fn default_launch() -> LaunchRecord {
+        LaunchRecord::default()
+    }
+
+    /// A key event for an open designed view: the canvas's key handler,
+    /// whatever callback id the view's tree named for it.
+    fn designed_key_event() -> DesignedEvent {
+        DesignedEvent {
+            render: 1,
+            key: "canvas".into(),
+            callback: 999,
+            payload: r#"{"key":"up"}"#.into(),
+        }
+    }
+}

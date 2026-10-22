@@ -1,0 +1,98 @@
+{
+    "script":  "capture-pane-windows.ps1",
+    "applicationRevision":  "70fd205",
+    "installFolder":  "",
+    "binarySha256":  "B4EEABBA65B91E29CB7F9D86783306787977280E9D4C0E2448EF51405639E053",
+    "osVersion":  "Microsoft Windows NT 10.0.26200.0",
+    "windowsBuild":  {
+                         "DisplayVersion":  "25H2",
+                         "CurrentBuild":  "26200",
+                         "UBR":  8737
+                     },
+    "transparencySetting":  1,
+    "startedUtc":  "2026-10-02T01:16:34.3326933Z",
+    "binary":  "C:\\Users\\ADMIN\\Desktop\\nguyenvu\\pane-ui-64\\.scratch\\pane-ui64.exe",
+    "runDir":  "C:\\Users\\ADMIN\\Desktop\\nguyenvu\\pane\\.scratch\\ui-native\\opaque-light-form\\run-20261002-081634-d4d4b4f0",
+    "paneDataDir":  "C:\\Users\\ADMIN\\Desktop\\nguyenvu\\pane\\.scratch\\ui-native\\opaque-light-form\\run-20261002-081634-d4d4b4f0\\pane-data",
+    "localAppData":  "C:\\Users\\ADMIN\\Desktop\\nguyenvu\\pane\\.scratch\\ui-native\\opaque-light-form\\run-20261002-081634-d4d4b4f0\\localappdata",
+    "cacheLocation":  "C:\\Users\\ADMIN\\Desktop\\nguyenvu\\pane\\.scratch\\ui-native\\opaque-light-form\\run-20261002-081634-d4d4b4f0\\localappdata\\Pane\\cache",
+    "cacheDirExisted":  true,
+    "extensionsDir":  "C:\\Users\\ADMIN\\Desktop\\nguyenvu\\pane\\scripts\\..\\target\\guests",
+    "theme":  "light",
+    "material":  "opaque",
+    "keysRequested":  [
+                          "rust",
+                          "{ENTER}",
+                          "{DOWN 4}{ENTER}",
+                          "{TAB}{ENTER}",
+                          "Vu",
+                          "{TAB}{ENTER}"
+                      ],
+    "keysAbortedAt":  null,
+    "captureMode":  "window",
+    "backdrop":  null,
+    "zOrderVerified":  null,
+    "pid":  54440,
+    "windowTitle":  "Pane",
+    "windowRect":  "32,32,808,500",
+    "frameBounds":  "39,32,801,493",
+    "requestedWindowSize":  null,
+    "positionedTopLeft":  true,
+    "dpi":  96,
+    "focusAchieved":  true,
+    "activationMethod":  "guarded-click",
+    "foregroundHwnd":  "hwnd 0x6430c9e pid 54440",
+    "foregroundPid":  54440,
+    "foregroundIsPane":  true,
+    "foregroundBeforeFallback":  "hwnd 0xa109a0 pid 64848",
+    "clickToFocusPoint":  "420,64",
+    "clickToFocusGuards":  "guard1: hit 0x6430c9e root 0x6430c9e pid 54440 | guard2: hit 0x6430c9e root 0x6430c9e pid 54440",
+    "cursorSaved":  "2313,252",
+    "cursorRestored":  true,
+    "screenshots":  [
+                        {
+                            "file":  "00-initial-window.png",
+                            "label":  "initial",
+                            "utc":  "2026-10-02T01:16:40.5822698Z"
+                        },
+                        {
+                            "file":  "01-after-rust-window.png",
+                            "label":  "after \u0027rust\u0027",
+                            "utc":  "2026-10-02T01:16:41.4352660Z"
+                        },
+                        {
+                            "file":  "02-after-ENTER-window.png",
+                            "label":  "after \u0027{ENTER}\u0027",
+                            "utc":  "2026-10-02T01:16:42.1944380Z"
+                        },
+                        {
+                            "file":  "03-after-DOWN-4-ENTER-window.png",
+                            "label":  "after \u0027{DOWN 4}{ENTER}\u0027",
+                            "utc":  "2026-10-02T01:16:43.0763680Z"
+                        },
+                        {
+                            "file":  "04-after-TAB-ENTER-window.png",
+                            "label":  "after \u0027{TAB}{ENTER}\u0027",
+                            "utc":  "2026-10-02T01:16:43.8716648Z"
+                        },
+                        {
+                            "file":  "05-after-Vu-window.png",
+                            "label":  "after \u0027Vu\u0027",
+                            "utc":  "2026-10-02T01:16:44.6950953Z"
+                        },
+                        {
+                            "file":  "06-after-TAB-ENTER-window.png",
+                            "label":  "after \u0027{TAB}{ENTER}\u0027",
+                            "utc":  "2026-10-02T01:16:45.4850163Z"
+                        }
+                    ],
+    "windowChecks":  [
+
+                     ],
+    "backdropClosed":  null,
+    "processClosed":  true,
+    "processExited":  true,
+    "exitCode":  null,
+    "errorMessage":  null,
+    "finishedUtc":  "2026-10-02T01:16:45.5642786Z"
+}

@@ -1,0 +1,43 @@
+File index benchmark: a generated tree of about 450000 entries, 8 walker threads at background priority, windows on x86_64
+run 1: 450000 entries in 12.42 s (walk 9.18 s), 44.3 MB on disk, 0 folders unreadable
+run 2: 450000 entries in 10.98 s (walk 7.55 s), 44.3 MB on disk, 0 folders unreadable
+run 3: 450000 entries in 11.84 s (walk 8.48 s), 44.3 MB on disk, 0 folders unreadable
+
+| Measure | Pane | Target (#126) | Raycast |
+| --- | --- | --- | --- |
+| Entries indexed | 450000 | | 450,097 |
+| First index, run 1 (cold only if first since a restart) | 12.42 s | below 12.9 s, aim 6.45 s | 12.9 s |
+| First index, warm (median of 2 runs) | 11.84 s | below 12.9 s, aim 6.45 s | |
+| Index on disk | 44.3 MB (98 B per entry) | below 61.8 MB | 61.8 MB (≈137 B per entry) |
+| Query, 95th percentile, one segment (first pass after opening) | 26.56 ms | under 10 ms | not measured |
+| Query, 95th percentile, one segment (warm) | 25.88 ms (p50 10.08 ms, p99 1156.64 ms, max 1288.73 ms) | under 10 ms | not measured |
+| Query, 95th percentile, several segments and changes in memory (first pass after the stream) | 264.84 ms | under 10 ms | not measured |
+| Query, 95th percentile, several segments and changes in memory (warm) | 259.44 ms (p50 34.30 ms, p99 1536.43 ms, max 1797.30 ms) | under 10 ms | not measured |
+| Query, 95th percentile, while changes arrive and segments merge | 219.06 ms (p50 23.58 ms, p99 1515.22 ms, max 1677.48 ms) | under 10 ms | not measured |
+| A changed file re-indexed near the root, 95th percentile | 0.35 ms (p50 0.26 ms) | under 10 ms | 4–10 ms |
+| A changed file re-indexed in a deep folder under ignore files, 95th percentile | 0.62 ms (p50 0.46 ms; 7 folders down, 2 of them or the root with ignore files) | under 10 ms | 4–10 ms |
+| A changed file re-indexed in a deep folder under ignore files, nothing kept (every folder above read again), 95th percentile | 1.82 ms (p50 1.17 ms) | under 10 ms | 4–10 ms |
+| Catch-up after 10,000 changes | 0.879 s (30037 records) | under 1 s | not measured |
+| Opening the index at start | 6.22 ms | | |
+| Private memory added by the open index, idle | 0.1 MB (after queries: 80.1 MB) | after measuring (#4) | |
+| Peak memory of the benchmark while indexing | 242.6 MB | | |
+
+Queries: 998 of 11 kinds (a typed-out name counts each keystroke), limit 20, the same set on both shapes of the index; every query above counts in the 95th percentile. A miss finds nothing; a kind filter runs as Search Files runs it (Folder in the index's own query, Document by asking for more and keeping documents).
+Several segments and changes in memory: 5 segments and 9012 changes in memory, left by a stream of 44159 changes in 5 batches of about 9000, the background merges held off while they were timed.
+Re-indexed: each row's 100 changes are applied as a batch is, the file's own folder read again and the folders above it kept from the change before (#186); the row with nothing kept reads every folder above again each time, as the first change after a start does.
+While changes arrive: 330706 changes applied while the queries ran, in batches of about 900 each written as a segment, a pause of 100 ms after every 5; 7 segments at the end.
+
+| Query kind (warm) | Queries | One segment: p50 | p95 | p99 | Several segments and changes in memory: p50 | p95 | p99 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| whole name | 90 | 4.70 ms | 10.81 ms | 12.96 ms | 5.12 ms | 11.23 ms | 11.72 ms |
+| name prefix (3 letters) | 90 | 11.08 ms | 18.90 ms | 20.97 ms | 38.96 ms | 52.55 ms | 62.69 ms |
+| a word | 90 | 10.29 ms | 19.62 ms | 22.54 ms | 32.86 ms | 56.29 ms | 62.54 ms |
+| folder and name words | 90 | 13.85 ms | 20.42 ms | 26.95 ms | 37.27 ms | 54.89 ms | 58.53 ms |
+| one letter | 90 | 12.87 ms | 21.03 ms | 22.26 ms | 42.17 ms | 55.15 ms | 58.46 ms |
+| miss: an absent word | 90 | 0.01 ms | 0.02 ms | 0.02 ms | 0.03 ms | 0.04 ms | 0.05 ms |
+| miss: a word, then an absent one | 90 | 5.25 ms | 9.63 ms | 10.08 ms | 5.31 ms | 11.84 ms | 13.26 ms |
+| typed out, each keystroke | 98 | 11.25 ms | 18.29 ms | 21.03 ms | 36.44 ms | 60.64 ms | 67.96 ms |
+| kind filter: Folder | 90 | 6.22 ms | 12.06 ms | 14.76 ms | 18.98 ms | 44.91 ms | 47.38 ms |
+| kind filter: Document | 90 | 38.59 ms | 1188.38 ms | 1275.48 ms | 323.57 ms | 1606.12 ms | 1641.77 ms |
+| inside a word | 90 | 11.74 ms | 19.28 ms | 20.62 ms | 49.21 ms | 75.31 ms | 80.49 ms |
+| all kinds | 998 | 10.08 ms | 25.88 ms | 1156.64 ms | 34.30 ms | 259.44 ms | 1536.43 ms |

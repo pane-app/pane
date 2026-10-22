@@ -1,0 +1,19 @@
+# Pi platform support (Q34)
+
+Research date: 2026-09-27. Scope: conventional Pi coding-agent extensions at commit [`2b0a123de98318c2ff8069661721ce0c3794c34e`](https://github.com/earendil-works/pi/tree/2b0a123de98318c2ff8069661721ce0c3794c34e), not the separate Chord runtime. Source inspection only; no extension executed.
+
+## No supported-OS declaration on the inspected Pi surface
+
+The `PiManifest` interface and reader recognize only resource arrays: `extensions`, `skills`, `prompts`, and `themes`. The package documentation describes resource paths, filtering, and dependency installation, but does not document a Pi-specific supported-OS declaration. The command and tool registration types also contain no OS-support field. This finding is limited to these inspected declarations; it does not establish that every Pi subsystem or third-party package lacks platform metadata. [Manifest reader](https://github.com/earendil-works/pi/blob/2b0a123de98318c2ff8069661721ce0c3794c34e/packages/coding-agent/src/core/pi-manifest.ts), [package docs](https://github.com/earendil-works/pi/blob/2b0a123de98318c2ff8069661721ce0c3794c34e/packages/coding-agent/docs/packages.md), [tool definition](https://github.com/earendil-works/pi/blob/2b0a123de98318c2ff8069661721ce0c3794c34e/packages/coding-agent/src/core/extensions/types.ts#L430), [command definition](https://github.com/earendil-works/pi/blob/2b0a123de98318c2ff8069661721ce0c3794c34e/packages/coding-agent/src/core/extensions/types.ts#L1252).
+
+## Platform behavior belongs to extension code
+
+Pi invokes an extension factory, whose code registers commands and tools. An author can therefore check `process.platform` before registering an operation, select an implementation, or report an unsupported operation from its handler. That is an implementation option inferred from the programmatic API, not an automatic Pi compatibility policy. [Factory invocation and registration](https://github.com/earendil-works/pi/blob/2b0a123de98318c2ff8069661721ce0c3794c34e/packages/coding-agent/src/core/extensions/loader.ts#L547).
+
+The official `mac-system-theme.ts` example invokes macOS `osascript` directly and catches failures, returning `false`. It contains no OS guard or manifest declaration. This is concrete evidence of author-owned platform behavior; it is not evidence that Pi automatically hides or blocks macOS-specific extensions elsewhere. [Official example](https://github.com/earendil-works/pi/blob/2b0a123de98318c2ff8069661721ce0c3794c34e/packages/coding-agent/examples/extensions/mac-system-theme.ts).
+
+## npm metadata is separate
+
+Ordinary npm `package.json` supports top-level `os` and `cpu` constraints, evaluated against `process.platform` and `process.arch`. Those describe the package, not individual Pi commands. Pi delegates managed package installation to its selected package-manager command; local packages are loaded without dependency installation. Accordingly, npm installation constraints should not be described as a Pi-wide runtime gate covering npm, Git, local files, and individual actions. Other package managers may have their own behavior. [npm metadata documentation](https://docs.npmjs.com/cli/v11/configuring-npm/package-json/#os), [Pi installation implementation](https://github.com/earendil-works/pi/blob/2b0a123de98318c2ff8069661721ce0c3794c34e/packages/coding-agent/src/core/package-manager.ts), [local package behavior](https://github.com/earendil-works/pi/blob/2b0a123de98318c2ff8069661721ce0c3794c34e/packages/coding-agent/docs/packages.md#declare-dependencies).
+
+For our launcher, extension-level or action-level supported-OS declarations would be our own explicit host policy. Pi provides a precedent for platform branching in author code, not a verified precedent for declarative host filtering on these inspected surfaces.

@@ -1,0 +1,91 @@
+[package]
+name = "pane"
+version = "0.1.0"
+edition.workspace = true
+publish.workspace = true
+license.workspace = true
+rust-version.workspace = true
+# The test target is listed at the end.
+autotests = false
+
+[dependencies]
+pane-core = { path = "../pane-core" }
+gpui = { package = "gpui-ce", git = "https://github.com/hoangvu12/gpui-ce", rev = "beb5a6dada242a4aad9f972546021a6fb6c869ba", default-features = false }
+# Editable text with input-method support, for form text fields.
+gpui_elements = { package = "gpui_ce_elements", git = "https://github.com/hoangvu12/gpui-ce", rev = "beb5a6dada242a4aad9f972546021a6fb6c869ba" }
+# font-kit is the macOS text system; without it no text renders on macOS.
+gpui_platform = { package = "gpui_ce_platform", git = "https://github.com/hoangvu12/gpui-ce", rev = "beb5a6dada242a4aad9f972546021a6fb6c869ba", features = ["font-kit"] }
+# The launcher's background image (ADR 0028): decoding the picture the user
+# chooses, keeping Pane's own copy of it, and baking the launcher's backdrop
+# into the frame GPUI draws; already in the tree through GPUI.
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp", "gif", "bmp"] }
+# A canvas stroke's end caps and corner joins (#242): the path builder's
+# `StrokeOptions` takes them, and GPUI exports the options but not the
+# enum types; already in the tree through GPUI.
+lyon = "1.0"
+# Opens web links (quicklinks) and files (file search) with the system's
+# handler. On Windows 5.4.4 passes the target to its PowerShell opener through
+# an environment variable, not the command line, and opens an existing path
+# with `Invoke-Item -LiteralPath` (anything else with `Start-Process`); review
+# the Windows path before widening this.
+open = "~5.4.4"
+# The launcher window's own platform handle, for the placement's move and
+# the DWM call; GPUI exports no raw-window-handle types of its own.
+raw-window-handle = "0.6"
+
+[target.'cfg(target_os = "windows")'.dependencies]
+# Read system transparency/high-contrast preferences once at startup, round
+# the window's own corners through the Desktop Window Manager, place the
+# launcher window on the display the Launcher page's choice resolves to
+# (the monitors the GDI API lists, the pointer, the foreground window's
+# monitor, and the move itself), and show the taskbar while the launcher
+# is open (#268: the AppBar message over the taskbar's own window); already
+# in the tree through pane-core's Windows adapters.
+windows = { workspace = true, features = ["UI_ViewManagement", "Wdk_System_SystemServices", "Win32_System_SystemInformation", "Win32_Foundation", "Win32_Graphics_Dwm", "Win32_Graphics_Gdi", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
+# The channel the reduced-motion watch reports Windows' preference changes
+# over, from the WinRT event's thread to the app's thread — the same hop
+# pane-core's global-hotkey presses take, so no second mechanism is added.
+# The `net` feature is what pane-core already turns on for this build; the
+# update tests' closed port binds a socket of it.
+tokio = { workspace = true, features = ["net", "sync"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# The displays the launcher's placement reads on X11 (the RandR monitors,
+# the pointer, the window manager's active window) and the move it applies
+# (a configure request on the window's own X window); already in the tree
+# through pane-core's X11 adapters.
+x11rb = { workspace = true, features = ["randr"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# The displays the launcher's placement reads on macOS (the CoreGraphics
+# display list, the main display, the pointer's position from a fresh
+# event) — already in the tree through GPUI CE's macOS platform.
+core-graphics = "0.24"
+# The move the placement applies: `setFrameTopLeftPoint` on the AppKit
+# window behind the view; already in the tree through pane-core's macOS
+# adapters.
+objc2.workspace = true
+
+[dev-dependencies]
+futures.workspace = true
+tempfile.workspace = true
+# The update tests' closed port, which binds a tokio socket that never
+# listens; `pane-core` turns the feature on for this build already.
+tokio = { workspace = true, features = ["net"] }
+tar.workspace = true
+flate2.workspace = true
+# The zip packer of that same test support, which the Settings tests now
+# reuse for the local artifact source's application packages; already in the
+# tree through `pane-core`'s zip reader.
+crc32fast.workspace = true
+# The tests' settings records and accessibility trees, and the npm and
+# artifact test support's integrity hashes.
+serde_json.workspace = true
+sha2.workspace = true
+gpui ={ package = "gpui-ce", git = "https://github.com/hoangvu12/gpui-ce", rev = "beb5a6dada242a4aad9f972546021a6fb6c869ba", default-features = false, features = ["test-support"] }
+
+# The integration tests are one binary, whose `tests/main.rs` declares each
+# file: a binary per file meant a link, and a debug file, for each of them.
+[[test]]
+name = "integration"
+path = "tests/main.rs"

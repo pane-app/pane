@@ -1,0 +1,18 @@
+running 15 tests
+test direct_write::tests::test_cluster_map ... ok
+test platform::tests::test_encode_restart_arguments ... ok
+test directx_renderer::shader_resources::tests::every_generated_dx11_artifact_is_available ... ok
+test directx_renderer::shader_resources::tests::instanced_pipelines_declare_draw_constants ... ok
+test keyboard::tests::test_keyboard_mapper ... ok
+test window::tests::test_double_click_interval ... ok
+test window::tests::test_double_click_spatial_tolerance ... ok
+test platform::tests::test_clipboard ... ok
+test directx_renderer::tests::every_batch_reads_its_own_instances ... ok
+test directx_atlas::tests::test_remove_deallocates_tile_space_for_reuse ... ok
+test direct_write::tests::color_emoji_composites_over_cleared_texture ... ok
+test directx_renderer::tests::configurable_dashes_reach_both_directx_quad_pipelines ... ok
+test directx_renderer::tests::translucent_quads_preserve_source_over_output ... ok
+test directx_renderer::tests::translucent_path_sprite_preserves_source_over_output ... ok
+test direct_write::tests::color_emoji_rasterization_is_stable_across_batches ... ok
+
+test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.36s
