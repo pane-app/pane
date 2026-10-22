@@ -392,7 +392,7 @@ waiting).
   asks for another package's identity, a name, and whether to ask once or
   twice at once: [Rust](../guests/sample-operations/src/lib.rs),
   [JavaScript](../guests/sample-operations-js/src/index.js) and
-  [TypeScript](../guests/sample-operations-ts/src/index.ts). They answer
+  [TypeScript](../guests/sample-operations-ts/src/index.tsx). They answer
   "Hello, Rust, from JavaScript" and so on, show the target's own error
   ("failed: a name is needed") and a missing package (`not-found`). They
   also publish `wait` version 1, which waits ten seconds, and a second item,

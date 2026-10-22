@@ -401,7 +401,7 @@ The record is dropped only once every kind is deleted:
 
 - `get` and `set` only: an extension cannot delete one value or list its keys.
 - Local credentials are kept in Pane's data folder, not in the system's
-  keychain ([decision](current-decisions.md#cross-cutting-details-preserved)).
+  keychain ([decision](https://github.com/pane-app/pane/blob/archive/docs-history-2026-10-23/docs/current-decisions.md#cross-cutting-details-preserved)).
   On macOS and Linux `credentials.json` holds them as they are, created with
   mode 0600, so other users of the computer cannot read it; on Windows (since
   #35's review) each version of it is created with a protected DACL giving

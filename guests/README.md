@@ -503,7 +503,7 @@ cache.set("last-greeting", greeting);
 ## Writing a JavaScript or TypeScript command
 
 The [JavaScript](sample-js/src/index.js) and
-[TypeScript](sample-ts/src/index.ts) samples are complete examples. A command
+[TypeScript](sample-ts/src/index.tsx) samples are complete examples. A command
 is an npm package whose `main` module exports `command` with `render`, its
 list, whose items' actions are functions (`onAction`), and opens its
 designed views (see [Forms](#forms) and
@@ -1122,7 +1122,7 @@ try {
 }
 ```
 
-The [Files](files) default extension lists a typed folder this way, and so
+The [Files](https://github.com/pane-app/files) default extension lists a typed folder this way, and so
 do [`sample-files`](sample-files), [`sample-files-js`](sample-files-js) and
 [`sample-files-ts`](sample-files-ts) in Rust, JavaScript and TypeScript.
 
@@ -2094,7 +2094,7 @@ needing Node.js or browser `fetch`, do not. Rust crates must build for
 
 The samples ([Rust](sample-search/src/lib.rs),
 [JavaScript](sample-search-js/src/index.js),
-[TypeScript](sample-search-ts/src/index.ts)) search the fixture service, a
+[TypeScript](sample-search-ts/src/index.tsx)) search the fixture service, a
 made-up package registry on this computer: run
 `cargo run -p pane-core --example fixture_service` (port 8740, their
 default address; `-- --port N` for another, which their item "Service
@@ -2209,7 +2209,7 @@ call another package's operations; the full contract, errors and limits are
 in [docs/operations.md](../docs/operations.md). The operations samples show
 both sides in [Rust](sample-operations/src/lib.rs),
 [JavaScript](sample-operations-js/src/index.js) and
-[TypeScript](sample-operations-ts/src/index.ts).
+[TypeScript](sample-operations-ts/src/index.tsx).
 
 Publish in `pane.json`; only listed operations are callable:
 
@@ -2406,7 +2406,7 @@ const item = registrations.rootItem("focus", {
 registrations.every(1, async () => item.update({ ... }));
 ```
 
-A dynamic item is in the [item shape](list-tree.md) a list's items are
+A dynamic item is in the [item shape](../docs/list-tree.md) a list's items are
 (id, title, subtitle, icon, accessories, actions), matched and ranked
 like an indexed result. One that declares a `mode` (`"view"` or
 `"no-view"`) is a **dynamic command**: invoking it launches its command

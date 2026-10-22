@@ -137,7 +137,7 @@ untouched: what the command saved before the helper was stopped is kept
   removal still fails, the folder is left over and removed at the next
   start, as for any folder in use.
 - **No time limit of Pane's own** (#136, which replaced #18's provisional
-  30 seconds; [current decisions](current-decisions.md) item 11): a helper
+  30 seconds; [current decisions](https://github.com/pane-app/pane/blob/archive/docs-history-2026-10-23/docs/current-decisions.md) item 11): a helper
   runs until it exits, the command cancels it (its own timeout: the
   samples' "Echo within a second" races the run against a timer and drops
   it), the call that started it returns or the package stops. While a

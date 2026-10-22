@@ -9,7 +9,8 @@
 //! global hotkey can be recorded ahead of the run. The real platform
 //! halves (the GDI, RandR and CoreGraphics display lists, and the moves
 //! through `SetWindowPos`, a configure request and `setFrameTopLeftPoint`)
-//! are recorded natively in `docs/evidence/settings-78/`.
+//! are recorded natively in
+//! <https://github.com/pane-app/pane/tree/archive/docs-history-2026-10-23/docs/evidence/settings-78>.
 
 use std::cell::RefCell;
 use std::fs;

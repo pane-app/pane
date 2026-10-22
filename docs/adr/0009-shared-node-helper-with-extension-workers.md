@@ -1,6 +1,6 @@
 # Run JS extensions in workers within a shared Node helper
 
-**Historical; superseded as the current baseline:** the post-Q32 WIT/Wasmtime reevaluation and subsequent WASI3 requirement replace this execution choice as the direction under evaluation. Optional native helpers remain accepted under Q33; final JS engine, helper topology and crash boundaries still need validation. Preserve the original rationale below; use [current decisions](../current-decisions.md#runtime-direction-and-evidence) for current status.
+**Historical; superseded as the current baseline:** the post-Q32 WIT/Wasmtime reevaluation and subsequent WASI3 requirement replace this execution choice as the direction under evaluation. Optional native helpers remain accepted under Q33; final JS engine, helper topology and crash boundaries still need validation. Preserve the original rationale below; use [current decisions](https://github.com/pane-app/pane/blob/archive/docs-history-2026-10-23/docs/current-decisions.md#runtime-direction-and-evidence) for current status.
 
 Accepted in Q23 after the Raycast/Pi comparison: keep the GPUI launcher in its own process and use one managed Node helper with a worker per active JS/TS extension as the initial arrangement, subject to prototype checks. This provides separate JavaScript execution contexts and replaceable workers without making a separate Node process the default for every extension; Rust extensions retain their accepted native helper processes.
 

@@ -72,7 +72,7 @@ feedback. Do not transplant transcript spring constants into GPUI's different
 integration model or add a slider outside the milestone's scope.
 
 Keep Settings controls on Pane's existing semantic theme/material, Geist
-typography, focus ring and row primitives ([component baseline](settings-component-design.md)).
+typography, focus ring and row primitives ([component baseline](https://github.com/pane-app/pane/blob/archive/docs-history-2026-10-23/docs/research/settings-component-design.md)).
 Prefer opacity and positional motion; layout animation needs profiling and
 should not resize the native window continuously. Do not delay input,
 persistence, focus, or native actions. Use stable control/option IDs, cancel visual exits before

@@ -1,2 +1,0 @@
-# Keep the saved source diff directly applicable to LF source checkouts.
-glass-follow-up.patch text eol=lf

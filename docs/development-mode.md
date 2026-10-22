@@ -430,7 +430,7 @@ These are implementation choices of #12/#13, not user decisions:
   type error names the file as the package has it (`src/index.ts(12,7)`).
 - Reloading on save starts every available command, as a manual reload does
   (the provisional exception to lazy activation in
-  [current decisions](current-decisions.md)).
+  [current decisions](https://github.com/pane-app/pane/blob/archive/docs-history-2026-10-23/docs/current-decisions.md)).
 - The rows are near the end of Settings › Extensions, one per enabled
   package, after the hotkey rows and before retained data.
 

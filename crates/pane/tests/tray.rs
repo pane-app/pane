@@ -10,7 +10,8 @@
 //! the seam the application's selection loop calls. The entry's real OS
 //! behavior (the icon in the notification area, the menu's labels, the
 //! status item in the menu bar, the system's refusal of an add) is
-//! recorded natively in `docs/evidence/settings-79/`.
+//! recorded natively in
+//! <https://github.com/pane-app/pane/tree/archive/docs-history-2026-10-23/docs/evidence/settings-79>.
 
 use std::fs;
 use std::path::Path;

@@ -70,7 +70,7 @@ npm offers an analogous existing authority for scoped package identities: regist
 
 Raycast's manifest defines `name` as unique, separates the display `title`, and uses the author's Raycast Store handle (or an organization owner). Cross-extension calls address author/owner plus extension name and command. Public publishing opens a pull request into Raycast's extensions repository; Raycast reviews and merges it before Store publication. Thus names participate in an account-backed, coordinated publishing workflow. The public manifest does not require an author-generated permanent UUID. [Manifest](https://developers.raycast.com/information/manifest), [command addressing](https://developers.raycast.com/api-reference/command#interextensionlaunchoptions), [publishing flow](https://developers.raycast.com/basics/publish-an-extension)
 
-Do not infer exact global name uniqueness across public, private and local extensions, or the closed Store database's internal ID format, from the word unique or the public repository layout. See the separate [Raycast collision audit](raycast-identity-collisions.md) for the inspected CLI's name-and-author lookup and limitations. No local Raycast duplicate-install experiment was run.
+Do not infer exact global name uniqueness across public, private and local extensions, or the closed Store database's internal ID format, from the word unique or the public repository layout. See the separate [Raycast collision audit](https://github.com/pane-app/pane/blob/archive/docs-history-2026-10-23/docs/research/raycast-identity-collisions.md) for the inspected CLI's name-and-author lookup and limitations. No local Raycast duplicate-install experiment was run.
 
 ### Implication for the pending decision
 

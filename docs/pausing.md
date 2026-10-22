@@ -129,7 +129,7 @@ pause and its record forgets that pause.
 
 | Action | Effect |
 | --- | --- |
-| **Retry** | Starts the same code in a new generation, asking each available command for its view (as a reload does; see [current decisions](current-decisions.md) on this exception to lazy activation). If that fails to start, it is paused again; if Pane's runtime is unavailable, it stays paused as it was. The crash count starts afresh. |
+| **Retry** | Starts the same code in a new generation, asking each available command for its view (as a reload does; see [current decisions](https://github.com/pane-app/pane/blob/archive/docs-history-2026-10-23/docs/current-decisions.md) on this exception to lazy activation). If that fails to start, it is paused again; if Pane's runtime is unavailable, it stays paused as it was. The crash count starts afresh. |
 | Reload or update | New code, which has not failed: the pause and its record go. |
 | Disable or enable | Ends the pause too (as a disable ended a startup failure before): the package starts afresh. |
 | Uninstall | The record goes with the package. An uninstall that cannot be recorded leaves it installed and still paused. |
@@ -145,7 +145,7 @@ US80, T18, T19, G3; contributions, not a claim that the whole scenario or
 gate passes). The [extension runtime](../CONTEXT.md) runs every
 extension; it is a thread in Pane's process today (the ticket speaks of
 killing the runtime process; whether it becomes one is pending the user's
-decision, see [current decisions](current-decisions.md) Q39). A **runtime crash** is a panic of
+decision, see [current decisions](https://github.com/pane-app/pane/blob/archive/docs-history-2026-10-23/docs/current-decisions.md) Q39). A **runtime crash** is a panic of
 that thread: a fault in Pane's host code or in Wasmtime, not a guest trap
 (a trap is caught and counts as a crash of its package, above). Pane cannot
 tell which extension, if any, caused it, so:
@@ -390,7 +390,7 @@ never metered; the operation error kind for a target that stops
 responding is `crashed` (the WIT has no kind of its own); a helper past
 its limit fails with `failed`, not `refused`; compiling is exempt from the
 watchdog; the stuck thread is abandoned, since the runtime stays a thread
-in Pane's process ([Q39](current-decisions.md)).
+in Pane's process ([Q39](https://github.com/pane-app/pane/blob/archive/docs-history-2026-10-23/docs/current-decisions.md)).
 
 Faults and limits for tests and smokes (debug builds only, like #17's):
 `Runtime::inject(Fault::Hang)` blocks the runtime thread wherever it next

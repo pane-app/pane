@@ -1,5 +1,7 @@
 # UI port (#90) progress — branch impl/ui-91 (local only, never pushed)
 
+**Note (2026-10-23):** the `docs/evidence/` folders and the `docs/research/ui-port-*.md` notes named below are no longer on `main`; they are kept at the tag [`archive/docs-history-2026-10-23`](https://github.com/pane-app/pane/tree/archive/docs-history-2026-10-23/docs).
+
 Handoff: %TEMP%/pane-ui-90-handoff.md. One signed-off commit per ticket (`git commit -s`), ticket number in subject.
 Never stage .scratch/, docs/research/ui-port/, docs/research/ui-port-native-audit.md, docs/research/ui-port-secondary-boards.md.
 

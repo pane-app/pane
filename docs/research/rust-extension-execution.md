@@ -11,11 +11,11 @@ Researched 2026-09-27. The user subsequently accepted the recommended native exe
 | Native dynamic library loaded into the host | Direct in-process calls with a deliberately designed ABI | ABI/ownership compatibility and unloading callbacks/resources during reload |
 | Rust Node add-on via Node-API | Rust implementation callable from JS; useful mixed-language package | Coupling to the JS extension host and native-addon packaging/lifecycle |
 
-These are alternatives, not an obligation to ship four execution modes. [Nushell and Zed precedents](rust-plugin-precedents.md) illustrate executable and Wasm approaches. [NAPI-RS](https://napi.rs/) is a framework for Rust Node add-ons, not an independent launcher extension protocol.
+These are alternatives, not an obligation to ship four execution modes. [Nushell and Zed precedents](https://github.com/pane-app/pane/blob/archive/docs-history-2026-10-23/docs/research/rust-plugin-precedents.md) illustrate executable and Wasm approaches. [NAPI-RS](https://napi.rs/) is a framework for Rust Node add-ons, not an independent launcher extension protocol.
 
 Rust's ordinary ABI provides no stability guarantee. Loading a dynamic library with a C entry point can define a controlled boundary, but does not make arbitrary Rust structs, GPUI entities or closures stable across independently built packages. Unloading also requires ensuring no callbacks, threads or resources retain code pointers into the old library. [Rust ABI reference](https://doc.rust-lang.org/reference/items/external-blocks.html#abi)
 
-The `wasm32-wasip2` Rust target produces components for WASI 0.2 hosts; this is a distinct target from a native desktop process. Our earlier Rust component smoke test establishes basic invocation, not unrestricted native-crate compatibility or GPUI UI support. [Rust target documentation](https://doc.rust-lang.org/rustc/platform-support/wasm32-wasip2.html), [prior measurements](wasm-extension-feasibility.md)
+The `wasm32-wasip2` Rust target produces components for WASI 0.2 hosts; this is a distinct target from a native desktop process. Our earlier Rust component smoke test establishes basic invocation, not unrestricted native-crate compatibility or GPUI UI support. [Rust target documentation](https://doc.rust-lang.org/rustc/platform-support/wasm32-wasip2.html), [prior measurements](https://github.com/pane-app/pane/blob/archive/docs-history-2026-10-23/docs/research/wasm-extension-feasibility.md)
 
 ## Accepted initial path
 
@@ -25,7 +25,7 @@ Developers compile the package for supported OS/architecture targets. Normal use
 
 During development, build a new artifact while the old instance continues running. If the build fails, show diagnostics and retain the old instance. If it succeeds, clean up/stop the old instance and launch the replacement, restoring saved or explicitly exported state. Use separate versioned artifact paths where required to avoid overwriting an executing file, especially on Windows. Startup failure and storage migration recovery remain open; this is not universal rollback.
 
-GPUI CE renders the UI in the main application. Rust authors use Rust helpers to describe controls, custom layout/drawing and respond to events. Arbitrary native GPUI objects cannot simply be sent between processes; the UI protocol must expose enough functionality, including custom views, to satisfy the accepted capability requirement. Verify the same representative custom interaction from Rust and JS/TS before committing to the protocol. See [UI boundary proposal](gpui-extension-bridge.md).
+GPUI CE renders the UI in the main application. Rust authors use Rust helpers to describe controls, custom layout/drawing and respond to events. Arbitrary native GPUI objects cannot simply be sent between processes; the UI protocol must expose enough functionality, including custom views, to satisfy the accepted capability requirement. Verify the same representative custom interaction from Rust and JS/TS before committing to the protocol. See [UI boundary proposal](https://github.com/pane-app/pane/blob/archive/docs-history-2026-10-23/docs/research/gpui-extension-bridge.md).
 
 ## Trade-offs to measure
 

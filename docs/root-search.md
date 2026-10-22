@@ -647,7 +647,7 @@ comes from the extension, through the same guest boundary as its command:
 - Computed results are listed **above** every title match, in the order the
   commands and their answers give them; they are not ranked against titles
   (provisional, pending user confirmation; see
-  [current decisions](current-decisions.md) item 10). Those that open a
+  [current decisions](https://github.com/pane-app/pane/blob/archive/docs-history-2026-10-23/docs/current-decisions.md) item 10). Those that open a
   file (**open-file**, since #29) are listed **after** the title matches
   instead, since a folder can hold many files matching a short query; of
   the file index's entries (#175), at most 5 per command, followed by a

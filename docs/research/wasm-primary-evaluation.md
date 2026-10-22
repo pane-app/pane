@@ -8,9 +8,9 @@
 
 ## Result
 
-**Yes, the architecture is feasible enough to pursue as the primary runtime.** A new Windows experiment compiled one TypeScript guest through both QuickJS and SpiderMonkey componentizers, and ran both in Wasmtime using the same WIT contract as the earlier Rust/wit-bindgen component. All sampled queries returned the expected results. [Reproducible experiment and measurements](wasm-primary-spike/README.md)
+**Yes, the architecture is feasible enough to pursue as the primary runtime.** A new Windows experiment compiled one TypeScript guest through both QuickJS and SpiderMonkey componentizers, and ran both in Wasmtime using the same WIT contract as the earlier Rust/wit-bindgen component. All sampled queries returned the expected results. [Reproducible experiment and measurements](https://github.com/pane-app/pane/blob/archive/docs-history-2026-10-23/docs/research/wasm-primary-spike/README.md)
 
-For JS/TS, wit-bindgen alone is insufficient: a JS engine/componentizer is also needed. Wasmtime executes the generated component. The engine choice changes package/build/resource costs substantially. Current Jco has experimental Node adapters, so it is inaccurate to say every Node API is inherently unavailable; it is equally inaccurate to promise full Node/npm/native-addon compatibility. Some adapters require our own host imports and shipped reference adapters target a real Node host. [JS/TS tooling audit](wasm-primary-js-review.md)
+For JS/TS, wit-bindgen alone is insufficient: a JS engine/componentizer is also needed. Wasmtime executes the generated component. The engine choice changes package/build/resource costs substantially. Current Jco has experimental Node adapters, so it is inaccurate to say every Node API is inherently unavailable; it is equally inaccurate to promise full Node/npm/native-addon compatibility. Some adapters require our own host imports and shipped reference adapters target a real Node host. [JS/TS tooling audit](https://github.com/pane-app/pane/blob/archive/docs-history-2026-10-23/docs/research/wasm-primary-js-review.md)
 
 ## Recommended prototype architecture
 
@@ -27,7 +27,7 @@ GPUI CE UI process <-> launcher messages <-> helper embedding Wasmtime
 
 Use QuickJS as the next JS backend to validate, based on the measured package/build costs; keep it provisional until representative dependencies, async and lifecycle behavior pass. Rust and JS/TS remain launch authoring targets; Python/C# remain later work, not automatically supported by the component format. Pin released toolchain versions behind our SDK rather than exposing upstream churn to every extension author.
 
-The separate helper is a proposed adaptation of the earlier GUI/runtime process split. WIT defines the guest-to-runtime API; it does not automatically define the helper-to-GPUI IPC protocol. Keep GPUI objects in the UI process and expose typed view/event/resource operations. No GPUI bridge has yet been implemented. [Host design review](wasm-primary-host-review.md)
+The separate helper is a proposed adaptation of the earlier GUI/runtime process split. WIT defines the guest-to-runtime API; it does not automatically define the helper-to-GPUI IPC protocol. Keep GPUI objects in the UI process and expose typed view/event/resource operations. No GPUI bridge has yet been implemented. [Host design review](https://github.com/pane-app/pane/blob/archive/docs-history-2026-10-23/docs/research/wasm-primary-host-review.md)
 
 ## Capability and compatibility
 
@@ -47,7 +47,7 @@ Rust dependencies compile into the guest when they support the chosen WASI targe
 
 The toy Rust component is 63,347 bytes; the same TypeScript query produced 1,044,344 bytes with QuickJS and 11,963,710 bytes with SpiderMonkey. Precompiled fresh CLI process median peak working sets were 14.22 MiB, 18.82 MiB and 80.13 MiB respectively. These include Wasmtime process overhead; they are not additive per-plugin memory figures or a persistent-host benchmark. First-time compilation peaks were materially higher, and native compiled caches add disk usage. The full Wasmtime CLI executable is about 41 MB, not a minimal embedding measurement.
 
-This does not prove the primary architecture is smaller/faster than the previously proposed shared persistent Node worker design. The Node comparator is a fresh toy process, and no native Rust process baseline was added. Single observed componentization calls were about 0.36 seconds for QuickJS and 23.30 seconds for SpiderMonkey; that is not a real save-to-view hot-reload benchmark. [Raw measurements and exact scope](wasm-primary-spike/results.json)
+This does not prove the primary architecture is smaller/faster than the previously proposed shared persistent Node worker design. The Node comparator is a fresh toy process, and no native Rust process baseline was added. Single observed componentization calls were about 0.36 seconds for QuickJS and 23.30 seconds for SpiderMonkey; that is not a real save-to-view hot-reload benchmark. [Raw measurements and exact scope](https://github.com/pane-app/pane/blob/archive/docs-history-2026-10-23/docs/research/wasm-primary-spike/results.json)
 
 ## What must be resolved before final runtime adoption
 

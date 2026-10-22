@@ -314,7 +314,7 @@ then Pane deletes it ([ADR 0023](adr/0023-host-expires-clipboard-history-by-its-
   kept and the excluded programs: it stays when the items go, and in
   retained data ("keeps clipboard history settings").
 - The defaults and choices are provisional, pending the user's decision
-  ([current decisions](current-decisions.md)).
+  ([current decisions](https://github.com/pane-app/pane/blob/archive/docs-history-2026-10-23/docs/current-decisions.md)).
 
 ## Deleting
 

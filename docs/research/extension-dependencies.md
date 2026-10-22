@@ -14,20 +14,20 @@ Its `launchCommand` API throws when a target command does not exist or is disabl
 
 ## VS Code
 
-VS Code declares required extension identities in `extensionDependencies` and installs missing required extensions recursively. `extensionPack` instead describes a collection installed together; its members are not necessarily runtime requirements. Dependencies are plain extension IDs, not npm-style per-dependency version ranges. See [the manifest reference](https://code.visualstudio.com/api/references/extension-manifest) and [the source audit](vscode-extension-dependencies.md).
+VS Code declares required extension identities in `extensionDependencies` and installs missing required extensions recursively. `extensionPack` instead describes a collection installed together; its members are not necessarily runtime requirements. Dependencies are plain extension IDs, not npm-style per-dependency version ranges. See [the manifest reference](https://code.visualstudio.com/api/references/extension-manifest) and [the source audit](https://github.com/pane-app/pane/blob/archive/docs-history-2026-10-23/docs/research/vscode-extension-dependencies.md).
 
-The source audit also finds that enabling an extension can recursively enable installed dependencies and extension-pack members. Dependency removal/disable flows account for dependents. Therefore VS Code is useful precedent for automatic installation, but is not evidence for our proposal to preserve a deliberately disabled dependency in every flow. Exact behavior depends on the operation; see [enablement and removal paths](vscode-extension-dependencies.md).
+The source audit also finds that enabling an extension can recursively enable installed dependencies and extension-pack members. Dependency removal/disable flows account for dependents. Therefore VS Code is useful precedent for automatic installation, but is not evidence for our proposal to preserve a deliberately disabled dependency in every flow. Exact behavior depends on the operation; see [enablement and removal paths](https://github.com/pane-app/pane/blob/archive/docs-history-2026-10-23/docs/research/vscode-extension-dependencies.md).
 
 ## Pi
 
-Pi installs npm library dependencies for managed npm/Git packages. Authors can bundle other Pi packages and explicitly expose their extension resources, including through declared `node_modules` paths. However, automatic discovery skips `node_modules`; installing a library dependency does not automatically activate it as another separately managed extension. [Pi source audit](pi-extension-dependencies.md)
+Pi installs npm library dependencies for managed npm/Git packages. Authors can bundle other Pi packages and explicitly expose their extension resources, including through declared `node_modules` paths. However, automatic discovery skips `node_modules`; installing a library dependency does not automatically activate it as another separately managed extension. [Pi source audit](https://github.com/pane-app/pane/blob/archive/docs-history-2026-10-23/docs/research/pi-extension-dependencies.md)
 
-The inspected Pi manifest/resource resolver has no dedicated required/optional dependency graph between separately installed extensions. Package-source pins and resource enablement are separate mechanisms. Our proposed relationship declarations and conflict handling would therefore add behavior beyond Pi's conventional package model. [Pi source audit](pi-extension-dependencies.md)
+The inspected Pi manifest/resource resolver has no dedicated required/optional dependency graph between separately installed extensions. Package-source pins and resource enablement are separate mechanisms. Our proposed relationship declarations and conflict handling would therefore add behavior beyond Pi's conventional package model. [Pi source audit](https://github.com/pane-app/pane/blob/archive/docs-history-2026-10-23/docs/research/pi-extension-dependencies.md)
 
 ## Detailed primary-source audits
 
-- [VS Code dependency installation, enablement and versions](vscode-extension-dependencies.md).
-- [Pi package dependencies versus installed extension resources](pi-extension-dependencies.md).
+- [VS Code dependency installation, enablement and versions](https://github.com/pane-app/pane/blob/archive/docs-history-2026-10-23/docs/research/vscode-extension-dependencies.md).
+- [Pi package dependencies versus installed extension resources](https://github.com/pane-app/pane/blob/archive/docs-history-2026-10-23/docs/research/pi-extension-dependencies.md).
 
 ## Accepted launcher direction and remaining implementation work
 

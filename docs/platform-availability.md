@@ -64,7 +64,7 @@ in [clipboard history](clipboard-history.md#per-platform)).
 
 The components themselves are the same WASI 0.3 components on every system;
 the declaration is the author's statement of where the package works, and it
-is not evidence that it does ([record limits](current-decisions.md#record-limits)).
+is not evidence that it does ([record limits](https://github.com/pane-app/pane/blob/archive/docs-history-2026-10-23/docs/current-decisions.md#record-limits)).
 
 ## An action's supported systems
 
@@ -144,7 +144,7 @@ from the Rust sample with the two other systems in `platforms`.
   command unavailable here ([#31](aliases.md)) keeps the command's reason and
   runs nothing.
 - `platforms` on `item` was added to extension API 0.1 without a version
-  bump ([current decisions](current-decisions.md#explicitly-unresolved-or-deferred),
+  bump ([current decisions](https://github.com/pane-app/pane/blob/archive/docs-history-2026-10-23/docs/current-decisions.md#explicitly-unresolved-or-deferred),
   item 5); a component built against the older shape is refused when it is
   installed, and when a built-in command of it loads.
 - Other runtime availability (a missing app or setting) is not modelled; a

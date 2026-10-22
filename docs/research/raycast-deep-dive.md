@@ -1,8 +1,8 @@
 # Raycast deep dive: what an extension can do, how Raycast is built, and what Pane lacks
 
 Researched 2026-10-06. Unlike the earlier documentation-only notes
-([raycast.md](raycast.md), [raycast-extension-ui.md](raycast-extension-ui.md),
-[raycast-root-search.md](raycast-root-search.md),
+([raycast.md](https://github.com/pane-app/pane/blob/archive/docs-history-2026-10-23/docs/research/raycast.md), [raycast-extension-ui.md](https://github.com/pane-app/pane/blob/archive/docs-history-2026-10-23/docs/research/raycast-extension-ui.md),
+[raycast-root-search.md](https://github.com/pane-app/pane/blob/archive/docs-history-2026-10-23/docs/research/raycast-root-search.md),
 [raycast-inspiration.md](raycast-inspiration.md)), this note also reads the
 **installed Raycast for Windows 2.6.1.0** and the **open-source extension
 corpus**. It is research, not decisions: items that reverse something Pane

@@ -13,7 +13,7 @@ release tags that the Pane release pins
 with retries and the rows that try a failed one again, while the core (the
 window, root search, the install rows, Settings › Extensions) stays usable. This is
 the internet-first setup the specification chose
-([decision 20](launcher-design-interview.md)); the installer carries no
+([decision 20](https://github.com/pane-app/pane/blob/archive/docs-history-2026-10-23/docs/launcher-design-interview.md)); the installer carries no
 payloads and installs no runtime, and the user installs no Node, Rust,
 npm, Git or compiler: Pane's extension runtime is part of Pane's own
 process (Wasmtime), so nothing is acquired for it.
@@ -23,7 +23,7 @@ source serves: Pane's own updates. Pane checks the artifact source for a
 newer version of itself when it starts and tells the user, who alone
 chooses whether to download and install it — Pane never downloads,
 installs or restarts itself unprompted
-([decision 17](https://github.com/pane-app/pane/issues/1), [Q38](current-decisions.md)).
+([decision 17](https://github.com/pane-app/pane/issues/1), [Q38](https://github.com/pane-app/pane/blob/archive/docs-history-2026-10-23/docs/current-decisions.md)).
 [#55](https://github.com/pane-app/pane/issues/55) wires the macOS half:
 the Windows and macOS installs are below; the check, the download, the
 verification and the swap are platform-independent and live in
@@ -381,7 +381,7 @@ source that cannot be reached (tried three times, like an interrupted
 acquisition). An equal or older version says nothing: no downgrades are
 offered or picked. The check reads only the index: **nothing is
 downloaded until the user chooses**, and Pane does nothing else — no
-download, no install, no restart (US76, [Q38](current-decisions.md)). The
+download, no install, no restart (US76, [Q38](https://github.com/pane-app/pane/blob/archive/docs-history-2026-10-23/docs/current-decisions.md)). The
 status line says what was found ("Pane 99.0.0 is available"), and root
 search lists the offer, after the install rows and before Manage
 extensions: **Update Pane to 99.0.0**, its subtitle saying what
