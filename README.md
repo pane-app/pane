@@ -1,89 +1,70 @@
 # Pane
 
-A small, extensible desktop launcher for Windows, macOS and Linux, inspired by Raycast and Pi.
+A keyboard launcher for Windows, macOS and Linux that you extend in Rust, JavaScript or TypeScript. Inspired by Raycast and Pi.
 
-Pane is in early development. It is a native GPUI CE launcher with root search, a Settings window and a global hotkey, running Rust, JavaScript and TypeScript extensions through a WASI 0.3 component interface, installing local, npm and Git extension packages, and, on Linux, Windows and macOS, one package a clean machine installs whose first setup installs Pane's default extensions from the commits of their own repositories' release tags that the Pane release pins ([installer](docs/installer.md)); the artifact source that serves Pane's own application updates is not deployed yet, and no published installer exists. JavaScript and TypeScript run on a pinned, patched componentize-qjs (QuickJS), which remains provisional.
+![Pane on Windows in dark glass, with a background picture, searching for "window"](docs/media/readme/pane.jpg)
 
-## Build, run and test
+Pane is in early development. There is no installer to download yet, so for now you build it from source.
 
-The same commands work on Windows, macOS and Linux.
+## What it does
 
-Prerequisites:
+- Press the hotkey from any app and start typing. By default it's the Windows key on Windows, Option+Space on macOS and Ctrl+Alt+Space on Linux, and you can change it in Settings.
+- Root search finds commands and apps, does arithmetic, and learns which results you pick. You can give any command an alias or a hotkey of its own.
+- Everyday features are extensions you choose at first setup: Calculator, Applications, Quicklinks, Files and Clipboard History, plus Run, System Commands and Switch Windows on Windows.
+- You can install more from npm, a Git repository or a folder. Pane downloads them itself, and nothing in a package runs to install it.
+- In Settings you pick a light or dark theme, a glass or solid window, and a background picture of your own, with an effect such as scanlines or halftone if you like.
 
-- [rustup](https://rustup.rs). Run `rustup toolchain install` once in the repository to install the toolchain pinned in `rust-toolchain.toml` (Rust 1.98.1 with the `wasm32-wasip2` target, rustfmt and clippy).
-- **Windows:** Visual Studio Build Tools with the "Desktop development with C++" workload (MSVC and a Windows SDK).
-- **macOS:** Xcode Command Line Tools (`xcode-select --install`).
-- **Linux (Debian/Ubuntu names):** `libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libxcb1-dev libfontconfig1-dev libfreetype-dev libvulkan1` and a Vulkan driver (`mesa-vulkan-drivers` provides a software fallback).
+## Build and run
 
-Commands, from the repository root:
+You need [rustup](https://rustup.rs). Run `rustup toolchain install` once in the repository to get the pinned toolchain (Rust 1.98.1 with the `wasm32-wasip2` target). Then, per system:
 
-```sh
-cargo xtask guests   # build the Rust guests; copy them and the prebuilt JS/TS samples into target/guests/
-cargo run -p pane    # open the launcher window
-cargo xtask ci       # build guests, check the prebuilt JS/TS samples, then formatting, lints and tests
-cargo xtask package-linux  # build Pane's Linux package and the artifacts of its own updates into target/dist/
-cargo xtask package-windows  # build the Windows package the same way (on Windows; see docs/installer.md)
-cargo xtask package-macos  # build the macOS package the same way (on macOS; see docs/installer.md)
-```
+- Windows: Visual Studio Build Tools with the "Desktop development with C++" workload.
+- macOS: the Xcode Command Line Tools (`xcode-select --install`).
+- Linux (Debian/Ubuntu names): `libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libxcb1-dev libfontconfig1-dev libfreetype-dev libvulkan1` and a Vulkan driver (`mesa-vulkan-drivers` has a software fallback).
 
-Every build sets up the default extensions at first setup from the commits
-this release pins, fetching them with Pane's own Git client once the user
-has chosen which to set up (the official extensions are listed with the
-defaults ticked): a development
-build takes its pins from `PANE_DEFAULTS` when that names a pins file of its
-own (the tests' and smokes' do, pointing at repositories served on this
-computer), and otherwise from the committed pins
-([installer](docs/installer.md#trying-a-first-setup-by-hand)); a release
-build always uses the committed pins. Pane checks for its own application
-updates at start; a development build checks only where `PANE_ARTIFACTS`
-names an artifact source on this computer, and otherwise not at all, while
-a release build reads Pane's published downloads.
-
-No JavaScript toolchain is needed for these: the JS and TS sample components are committed prebuilt in `guests/prebuilt/`. Rebuilding them from source with `cargo xtask js-guests` also needs Node.js 22+ with npm on any of the three OSes, and nothing else: no Python, nightly Rust or wasi-sdk; see [guests/README.md](guests/README.md#writing-a-javascript-or-typescript-command).
-
-In the window, use the arrow keys to select, Enter to open a command or run an item, and Escape to go back; clicking a row runs it too. An open command's view starts with its content, with no heading line above it; the footer's left shows the command's icon and title. Pane registers no sample command of its own: root search lists the commands of installed packages (the default extensions, once set up), Pane's install rows and Settings…. To try the Rust, JavaScript and TypeScript samples, install them by hand (below). In each sample command, "Greet someone" opens a form: type a name, Tab to the greeting, arrow keys to choose, Enter to submit. "Choose a color", after it, opens a color picker the extension draws itself: arrow keys, Home and End, or a click or drag on the swatches, choose a color. The last two items are declared for some operating systems only; on another system they stay listed with the reason and do not run. **Install extension from folder…** installs a local extension package; see [Packaging and installing a local extension](guests/README.md#packaging-and-installing-a-local-extension). Extensions are managed in Settings (**Manage Extensions** in root search opens it there): each installed package has a page under the sidebar's Extensions group, whose switch disables or enables it — a disabled package keeps its settings across restarts — and whose **Reload** replaces its code with its source folder's current build while Pane stays open; see [Reloading a package](guests/README.md#reloading-a-package-while-pane-stays-open).
-
-To try a package without the folder picker, open the launcher on its install screen, then press Enter to install it:
+From the repository root:
 
 ```sh
-cargo run -p pane -- --install target/guests/packages/sample-rust   # pane --install <folder>
-cargo run -p pane -- --install target/guests/packages/sample-js     # the JavaScript sample
-cargo run -p pane -- --install target/guests/packages/sample-ts     # the TypeScript sample
+cargo xtask guests   # build the sample extensions and dev tools into target/guests/
+cargo run -p pane    # open the launcher
+cargo xtask ci       # formatting, lints and tests, as CI runs them
 ```
 
-Every sample under `target/guests/packages/` (assembled by `cargo xtask guests`) installs this way; none is built into Pane or acquired as a default extension.
+On its first start Pane asks which official extensions to set up and fetches them from their GitHub repositories. [docs/building.md](docs/building.md) has the rest: packaging Pane for each system, trying the sample extensions, where Pane keeps its data and how the repository is laid out.
 
-Installed packages go in Pane's data folder (`%LOCALAPPDATA%\Pane\data` on Windows, `~/Library/Application Support/Pane` on macOS, `$XDG_DATA_HOME/pane` or `~/.local/share/pane` on Linux). Set `PANE_DATA_DIR` to another folder to keep test installs out of it; the GUI smoke scripts use `<output-dir>/data`.
+## Write an extension
 
-Layout:
+Extensions are WebAssembly components, and the SDKs are on npm and crates.io. To start a TypeScript extension:
 
-- `wit/extension.wit`: the host/guest contract for one extension command: a list view, item actions, [forms](docs/forms.md) and [designed views](docs/designed-tree.md) (whose canvas is what a custom view was).
-- `crates/pane-core`: the launcher model (the public host interface the tests drive), extension packages (manifest, identity, managed copies) and the extension runtime, a Wasmtime 49.0.1 engine registering only WASI 0.3.
-- `crates/pane`: the GPUI CE window, with [root search](docs/root-search.md) as its first screen, and the Settings window.
-- `crates/pane-build`: how a package is built from its source folder, once or after each save; development mode and `pane-ext` both build with it.
-- `crates/pane-ext`: `pane-ext`, the command-line tool beside the app; `pane-ext dev` builds a package in the terminal and hands each build to the running Pane ([development mode](docs/development-mode.md#from-the-terminal-pane-ext-dev)).
-- `crates/pane-target`: the operating-system and processor names shared by the core, `xtask` and native helpers.
-- `xtask/`: the `cargo xtask` build, CI and packaging commands above.
-- `guests/`: extension guests, including [the Rust, JavaScript and TypeScript sample commands](guests/README.md) (installed by hand, as above), TypeScript declarations for the contract, the prebuilt JS/TS components and test fixtures.
-- `tools/componentize-js`: the JS/TS toolchain, pinned upstream componentize-qjs plus Pane's patch queue, and its build script.
-- `scripts/smoke-*`: native GUI smoke runs used by CI, which uploads their screenshots.
+```sh
+npm create @pane-app my-extension
+cd my-extension
+npm install
+npm run dev
+```
 
-## Project documents
+`npm run dev` builds the extension and hands each build to the running Pane, which reloads it as you save. Start Pane first with `cargo run -p pane`, since there's no installed copy for it to find yet.
 
-- [Specification](https://github.com/pane-app/pane/issues/1)
-- [Implementation tickets](https://github.com/pane-app/pane/issues?q=is%3Aissue+label%3Aimplementation)
-- [Cross-platform contributor requirements](https://github.com/pane-app/pane/issues/1#cross-platform-contributor-requirement)
-- [Domain vocabulary](CONTEXT.md)
+The language and the template are options:
 
-Contributors on all three operating systems have working build/run/test workflows, and CI builds and tests on all three; per-platform support evidence is in [docs/platforms/](docs/platforms/). Research scripts may depend on the temporary toolchains and local paths documented alongside them.
+```sh
+npm create @pane-app my-extension -- --language rust --template form
+```
 
-Work is tracked as specifications and implementation issues; an issue's work starts when its blockers are complete. Research results and prototype source are under `docs/research/`; they are not production support guarantees.
+The templates are `list` (the default), `detail`, `form` and `no-view`. A Rust extension needs the `wasm32-wasip2` target and depends on [`pane-extension`](https://crates.io/crates/pane-extension) from crates.io (`pane-extension = "0.2"`). The npm packages are [`@pane-app/extension`](https://www.npmjs.com/package/@pane-app/extension), [`@pane-app/cli`](https://www.npmjs.com/package/@pane-app/cli) (the `pane-ext` tool) and [`@pane-app/create`](https://www.npmjs.com/package/@pane-app/create).
 
-## Licensing
+The [author guide](guests/README.md) covers the whole extension API, and [development mode](docs/development-mode.md) explains build-and-reload. When you're ready to share an extension, see [publishing to npm](guests/README.md#publishing-a-package-to-npm) or [publishing from a Git repository](guests/README.md#publishing-a-package-from-a-git-repository).
 
-- The application (everything not listed below, including `crates/`, `xtask/` and `scripts/`) is licensed under [GPL-3.0-or-later](LICENSE-GPL).
-- The extension contract (`wit/`), everything under `guests/` (guest bindings, TypeScript declarations, sample extensions and fixtures) and Pane's own files in `tools/componentize-js/` are licensed under [Apache-2.0](guests/LICENSE-APACHE) OR [MIT](guests/LICENSE-MIT), at your option. Code compiled into an extension therefore imposes no license on it.
-- The patches in `tools/componentize-js/patches/` modify componentize-qjs and are licensed under [Apache-2.0](tools/componentize-js/patches/LICENSE-componentize-qjs), like it. The QuickJS runtime they build is part of every JS/TS component, so the prebuilt components in `guests/prebuilt/` also carry that runtime's terms; see [its notice](guests/prebuilt/NOTICE.md). The WIT files in `wit/deps/` (`wasi:clocks`, `wasi:http` and the packages it names) are WASI's, copied unchanged from wasmtime-wasi-http 49.0.1 (Apache-2.0 WITH LLVM-exception).
-- Contributions are accepted under the same terms with a DCO sign-off; see [CONTRIBUTING.md](.github/CONTRIBUTING.md).
+## Learn more
 
-Third-party dependencies keep their own licenses; `cargo deny` checks them in CI ([audit](docs/research/licensing-audit.md)). Release notice bundles and the per-release source procedure follow that audit and are not yet produced.
+- [docs/](docs/) has a page per feature, such as [root search](docs/root-search.md), [hotkeys](docs/hotkeys.md), [appearance](docs/launcher-appearance.md) and [installing and updating](docs/installer.md).
+- [CONTEXT.md](CONTEXT.md) defines the words the project uses, and [docs/adr/](docs/adr/) records the decisions behind the design.
+- [docs/platforms/](docs/platforms/) records what has been tested on each system.
+- The [specification](https://github.com/pane-app/pane/issues/1) and [implementation tickets](https://github.com/pane-app/pane/issues?q=is%3Aissue+label%3Aimplementation) are on GitHub Issues.
+- [CONTRIBUTING.md](.github/CONTRIBUTING.md) explains how to send a change.
+
+The background picture in the screenshot is artwork by [alinalal_](https://x.com/alinalal_/status/2017273281582449068), found on [wallhaven](https://wallhaven.cc/w/gw5ypd).
+
+## Licence
+
+Pane is [GPL-3.0-or-later](LICENSE-GPL). The extension contract and everything under `guests/`, including the SDKs and the samples, are [Apache-2.0](guests/LICENSE-APACHE) OR [MIT](guests/LICENSE-MIT), so the code compiled into your extension puts no licence on it. [docs/licensing.md](docs/licensing.md) has the details, including the QuickJS runtime and third-party terms.
