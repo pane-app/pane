@@ -259,7 +259,7 @@ version.
 
 - The operations samples ([Rust](../guests/sample-operations/src/lib.rs),
   [JavaScript](../guests/sample-operations-js/src/index.js),
-  [TypeScript](../guests/sample-operations-ts/src/index.ts)) publish
+  [TypeScript](../guests/sample-operations-ts/src/index.tsx)) publish
   `wait`, which saves `waiting` as "started", waits ten seconds and saves
   "finished"; their "Wait in another extension" item calls it in another
   package.

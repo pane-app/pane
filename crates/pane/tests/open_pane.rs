@@ -8,7 +8,7 @@
 //! exercised at the same boundary a user sees them. The key's real OS
 //! behavior (native registration, activation from another application, key
 //! repeat at the OS level) is recorded natively in
-//! `docs/evidence/settings-74/`.
+//! <https://github.com/pane-app/pane/tree/archive/docs-history-2026-10-23/docs/evidence/settings-74>.
 
 use std::fs;
 use std::path::Path;

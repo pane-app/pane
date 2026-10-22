@@ -12,7 +12,7 @@ smoke job, the hidden phases on Windows on the user's machine (see
 measures nothing itself. Every target below is proposed in shape only,
 pending the user's confirmation of the ceilings. No target
 is inferred from the older CLI peaks ([the QuickJS spike's
-measurements](qjs-p3-port-spike/README.md) stay what they are: same-workload
+measurements](https://github.com/pane-app/pane/blob/archive/docs-history-2026-10-23/docs/research/qjs-p3-port-spike/README.md) stay what they are: same-workload
 CLI comparisons, not launcher budgets); Q3's numerical budgets remain open
 until the numbers exist and are accepted.
 
@@ -309,7 +309,7 @@ the posted Escape; no other `pane` process ran, and the launch-at-login
 registration was untouched. Discord, a browser and a few background apps
 ran (load about 40–50%). Each run: 60 s sampled hidden after 30 s of
 settling, samples a second; the whole records are in
-[`docs/evidence/resource-189`](../evidence/resource-189).
+[`docs/research/resource-189`](resource-189).
 
 | `hidden-idle` | before `d5534f45` | after `26c8e224` (main) |
 | --- | --- | --- |

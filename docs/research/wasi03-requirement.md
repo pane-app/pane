@@ -18,7 +18,7 @@ The published `wasip3` bindings (observed 0.9.0+wasi-0.3.0) provide 0.3 imports 
 
 The installed componentize-qjs 0.4.5 documentation supports async WIT exports, futures and streams with its default async engine. However, examples also import WASI 0.2.12 interfaces. Component-model async support alone does not establish all required WASI 0.3 interfaces. Our prior build explicitly used `sync: true`; its timings cannot validate the required async configuration. [QuickJS documentation](https://github.com/andreiltd/componentize-qjs).
 
-Installed ComponentizeJS 0.23.0 documents Promise exports resolved through synchronous component functions and synchronous imports; our test disabled stdio, clocks, random and HTTP. It did not exercise a WASI 0.3 host. Jco's ability to host/transpile p3 components is distinct from JS guest generation through this backend. [ComponentizeJS](https://github.com/bytecodealliance/ComponentizeJS), [prior test source](wasm-primary-spike/build.mjs).
+Installed ComponentizeJS 0.23.0 documents Promise exports resolved through synchronous component functions and synchronous imports; our test disabled stdio, clocks, random and HTTP. It did not exercise a WASI 0.3 host. Jco's ability to host/transpile p3 components is distinct from JS guest generation through this backend. [ComponentizeJS](https://github.com/bytecodealliance/ComponentizeJS), [prior test source](https://github.com/pane-app/pane/blob/archive/docs-history-2026-10-23/docs/research/wasm-primary-spike/build.mjs).
 
 ## Validation required
 

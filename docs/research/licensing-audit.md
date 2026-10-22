@@ -4,7 +4,7 @@ Audited 2026-09-27 against commit `b1a005d` for planning prerequisite [#3](https
 
 > **Not legal advice.** This is an engineering inventory and a proposal to support a decision. It is not a legal opinion. It draws no conclusion about whether an extension is a derivative work of Pane, and it draws none from the use of WIT/WASI alone. Get the consequential choices in [section 3](#3-decisions-needed-from-the-user) reviewed by a qualified lawyer before release.
 
-No license has been applied. There is no `LICENSE` file, no `license` field has been added to any manifest, and every first-party crate has `publish = false`. The document has three parts: **facts found** (section 1), **proposal** (section 2) and **decisions needed from the user** (section 3). The direction it starts from is the provisional one recorded in [Q40](pane-license-options-q40.md) and spec decision 22 (#1): Zed-style, primarily GPL-3.0-or-later. That direction does not prohibit compliant paid forks and does not automatically assign one license to every third-party extension.
+No license has been applied. There is no `LICENSE` file, no `license` field has been added to any manifest, and every first-party crate has `publish = false`. The document has three parts: **facts found** (section 1), **proposal** (section 2) and **decisions needed from the user** (section 3). The direction it starts from is the provisional one recorded in [Q40](https://github.com/pane-app/pane/blob/archive/docs-history-2026-10-23/docs/research/pane-license-options-q40.md) and spec decision 22 (#1): Zed-style, primarily GPL-3.0-or-later. That direction does not prohibit compliant paid forks and does not automatically assign one license to every third-party extension.
 
 ## 1. Facts found
 
@@ -95,7 +95,7 @@ There are 31 build-time-only guest packages (wit-bindgen macro/codegen, `wit-par
 | Build-time crates (proc-macros, `cc`, `pkg-config`, `wit-parser`, `codespan-reporting`, …) | all permissive (tables in 1.2/1.3) | Their code does not ship, except as generated code |
 | CI: GitHub Actions, xvfb, xdotool, ImageMagick | various | Smoke tests only; not distributed |
 
-### 1.5 JS backend candidate (**candidate, not yet selected**; see #2, [QJS spike](qjs-p3-port-spike/README.md))
+### 1.5 JS backend candidate (**candidate, not yet selected**; see #2, [QJS spike](https://github.com/pane-app/pane/blob/archive/docs-history-2026-10-23/docs/research/qjs-p3-port-spike/README.md))
 
 | Component | License found | Ends up in |
 | --- | --- | --- |

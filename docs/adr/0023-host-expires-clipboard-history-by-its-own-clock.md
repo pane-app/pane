@@ -8,4 +8,4 @@ Deleting (one item, several, Clear, turning history off and deleting it, uninsta
 
 Asking the extension to expire its own items was not used: it may be disabled, uninstalled or never run (on macOS and Linux it is unavailable). Expiring only on a timer was not used either: after downtime the file holds expired items until the timer runs, and a read could come first. Keeping deadlines instead of copy times was not used, since the retention would then apply only to later items.
 
-The default retention, 7 days, and the offered choices (1 hour, 1 day, 7, 30 or 90 days; the host accepts 1 minute to 365 days) are provisional, pending the user's decision ([current decisions](../current-decisions.md)).
+The default retention, 7 days, and the offered choices (1 hour, 1 day, 7, 30 or 90 days; the host accepts 1 minute to 365 days) are provisional, pending the user's decision ([current decisions](https://github.com/pane-app/pane/blob/archive/docs-history-2026-10-23/docs/current-decisions.md)).

@@ -12,7 +12,7 @@ Store guidance permits system executables and some downloaded/packaged binaries,
 
 ## Pi and Tinycast
 
-See [the pinned source comparison](pi-tinycast-node-compatibility.md). Pi's npm distribution uses Node; the inspected standalone build script embeds Bun, and its loader also handles bundled Node/Node SEA cases. Runtime details therefore depend on distribution. Tinycast uses JavaScriptCore and handwritten compatibility layers. Neither the existence of a JavaScript engine nor successful bundling proves Node API compatibility.
+See [the pinned source comparison](https://github.com/pane-app/pane/blob/archive/docs-history-2026-10-23/docs/research/pi-tinycast-node-compatibility.md). Pi's npm distribution uses Node; the inspected standalone build script embeds Bun, and its loader also handles bundled Node/Node SEA cases. Runtime details therefore depend on distribution. Tinycast uses JavaScriptCore and handwritten compatibility layers. Neither the existence of a JavaScript engine nor successful bundling proves Node API compatibility.
 
 ## Native dependency distinction
 

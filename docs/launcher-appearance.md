@@ -1,8 +1,8 @@
 # Launcher appearance
 
 [#64](https://github.com/pane-app/pane/issues/64) applies the
-[retained authored reference and reviewed native proof](evidence/ui-prototype/README.md)
-to the working launcher. The [presentation ownership](launcher-presentation.md)
+[retained authored reference and reviewed native proof](https://github.com/pane-app/pane/blob/archive/docs-history-2026-10-23/docs/evidence/ui-prototype/README.md)
+to the working launcher. The [presentation ownership](https://github.com/pane-app/pane/blob/archive/docs-history-2026-10-23/docs/launcher-presentation.md)
 from #62 is kept: the app supplies identities and behavior; shared UI owns
 colors, type, geometry, row chrome, glyphs and surfaces.
 
@@ -47,7 +47,7 @@ Windows/macOS and normalizes to opaque on Linux; the Appearance page says
 so under the material choice where it happens. On Linux that normalization
 is the intentional opaque launcher, pinned by a policy test, with its
 tiered CI evidence and the outstanding native X11/Wayland validation
-recorded in [the validation report](launcher-ui-validation.md). On macOS the
+recorded in [the validation report](https://github.com/pane-app/pane/blob/archive/docs-history-2026-10-23/docs/launcher-ui-validation.md). On macOS the
 request reaches the fork's under-window vibrancy material (see [docs/gpui-fork.md](gpui-fork.md));
 no suppression check runs there, and the page's caveat that a glass request
 is not proof of blur still applies. On Windows, the material's
@@ -63,8 +63,8 @@ output. GPUI exposes no reliable visible-blur query. A driver/compositor
 failure after the checks may leave the tint without blur; the page says a
 glass request is not proof of blur, and choosing the solid surface gives
 a deterministic panel everywhere. Native glass evidence and remaining
-Windows conditions are recorded in [the validation report](launcher-ui-validation.md)
-and [the Settings appearance validation plan](evidence/settings-73/native-validation.md).
+Windows conditions are recorded in [the validation report](https://github.com/pane-app/pane/blob/archive/docs-history-2026-10-23/docs/launcher-ui-validation.md)
+and [the Settings appearance validation plan](https://github.com/pane-app/pane/blob/archive/docs-history-2026-10-23/docs/evidence/settings-73/native-validation.md).
 
 ## Visual behavior
 
@@ -76,7 +76,7 @@ desktop shows through the curve) or platform-rounded (macOS's authored
 curve stands over the window's vibrancy, which the fork's under-window
 material now requests — see [docs/gpui-fork.md](gpui-fork.md); native macOS
 material validation is outstanding in
-[docs/launcher-ui-validation.md](launcher-ui-validation.md)); on Windows the panel
+[the archived launcher UI validation](https://github.com/pane-app/pane/blob/archive/docs-history-2026-10-23/docs/launcher-ui-validation.md)); on Windows the panel
 fills the window to its edges and the Desktop Window Manager rounds the
 window's own corners (`pane::prefer_rounded_window_corners`), so neither
 the acrylic frost nor the opaque surface shows as a plate behind the
@@ -119,7 +119,7 @@ Windows checks on 2026-10-02:
 - `cargo check -p pane --tests --locked -j 1`: pass, no warnings.
 - `cargo test -p pane --test window --test command_search --locked -j 1`:
   **50 window + 1 command-search tests pass**, including the carried footer
-  regression. [Raw results](evidence/ui-64/window-search-tests.log).
+  regression. [Raw results](https://github.com/pane-app/pane/blob/archive/docs-history-2026-10-23/docs/evidence/ui-64/window-search-tests.log).
 - Source audit: no core imports in shared UI; extension drawing colors
   remain unchanged; the original unavailable-reason element ID is retained.
 

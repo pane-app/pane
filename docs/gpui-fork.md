@@ -37,7 +37,7 @@ appearance, plus in-scene backdrop blur. The launcher never requests a
 blurred window on Linux: the material policy normalizes a glass request to
 the opaque window and solid panel at construction, so no Zui blur patch or
 compositor-specific integration is imported for Linux (see
-[docs/launcher-ui-validation.md](launcher-ui-validation.md)).
+[the archived launcher UI validation](https://github.com/pane-app/pane/blob/archive/docs-history-2026-10-23/docs/launcher-ui-validation.md)).
 
 This renderer correction alone does not establish useful native glass. The
 prototype also removed outer panel shadows that obscured the desktop. Its branch,
@@ -196,7 +196,7 @@ exercises the default-glass startup path post-merge. None of this establishes
 native vibrancy quality: the dark/light desktop-blur validation with an
 external edge pattern, window movement/resize/activation, scaled/Retina
 displays and reduced-transparency behavior remain outstanding native work,
-recorded in [docs/launcher-ui-validation.md](launcher-ui-validation.md).
+recorded in [the archived launcher UI validation](https://github.com/pane-app/pane/blob/archive/docs-history-2026-10-23/docs/launcher-ui-validation.md).
 
 The pin now sits above `70ed267181dc56e4739d5782eb56fae51a2afd29` (Pane
 #251's empty-copy propagation, consumed by the in-flight launcher-polish

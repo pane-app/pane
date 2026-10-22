@@ -4,7 +4,7 @@ Research completed 2026-10-04; specification and tickets published after user ap
 
 Pane's UI differs because the previous work ported a restricted styling slice, retained several incompatible component recipes, and verified functionality rather than reference fidelity. Another palette adjustment will not fix it. The port needs exact control families, input-state behavior, complete screen composition, and a repeatable native/reference comparison.
 
-Start with [the published specification and self-contained tickets](tickets.md). For implementation evidence, use the [native source audit](../ui-port-native-audit.md) and [all secondary boards](../ui-port-secondary-boards.md). The user approved the breakdown and delegated the remaining choices. [Specification #90](https://github.com/hoangvu12/pane/issues/90) and its native sub-issues are now authoritative; [the decision record](https://github.com/hoangvu12/pane/issues/100) records the settled contracts.
+Start with [the published specification and self-contained tickets](tickets.md). For implementation evidence, use the [native source audit](https://github.com/pane-app/pane/blob/archive/docs-history-2026-10-23/docs/research/ui-port-native-audit.md) and [all secondary boards](https://github.com/pane-app/pane/blob/archive/docs-history-2026-10-23/docs/research/ui-port-secondary-boards.md). The user approved the breakdown and delegated the remaining choices. [Specification #90](https://github.com/hoangvu12/pane/issues/90) and its native sub-issues are now authoritative; [the decision record](https://github.com/hoangvu12/pane/issues/100) records the settled contracts.
 
 ## Authority and research record
 
@@ -20,7 +20,7 @@ Start with [the published specification and self-contained tickets](tickets.md).
 
 ## What was missed before
 
-The [old reference summary](https://github.com/hoangvu12/pane/blob/archive/impl-ui-91-2026-10-06/docs/evidence/ui-prototype/reference/REFERENCE.md) explicitly left several boards unmined and reported panel height as unknown. The source actually specifies 64px search + 404px list + 50px footer = **518px**. The [earlier interview](https://github.com/hoangvu12/pane/blob/archive/impl-ui-91-2026-10-06/docs/evidence/ui-prototype/reference/ui-rework-interview.md) explicitly excluded pinned slots, Actions, Settings, Store and the snap HUD from its first slice. The [previous review](../../launcher-ui-review.md) assessed that smaller scope. Its success is not evidence of this requested port.
+The [old reference summary](https://github.com/hoangvu12/pane/blob/archive/impl-ui-91-2026-10-06/docs/evidence/ui-prototype/reference/REFERENCE.md) explicitly left several boards unmined and reported panel height as unknown. The source actually specifies 64px search + 404px list + 50px footer = **518px**. The [earlier interview](https://github.com/hoangvu12/pane/blob/archive/impl-ui-91-2026-10-06/docs/evidence/ui-prototype/reference/ui-rework-interview.md) explicitly excluded pinned slots, Actions, Settings, Store and the snap HUD from its first slice. The [previous review](https://github.com/pane-app/pane/blob/archive/docs-history-2026-10-23/docs/launcher-ui-review.md) assessed that smaller scope. Its success is not evidence of this requested port.
 
 The native screenshot checker checks colors/text/presence, not corresponding reference components. A 460px panel, incorrect keycap font and wrong hover behavior can all pass. The current tests even assert the introduced pointer fade. New acceptance must compare the same data in the same states, rather than treating those old tests as a design oracle.
 
@@ -94,7 +94,7 @@ Keep GPUI CE and the accepted `features/`, `extension_views/`, `ui/` organizatio
 4. A narrow, read-only projection may expose result kind, alias, effective shortcut, match spans and computed-result display data. Keep GPUI types out of core and preserve result ranking and activation IDs. Existing `Row` is insufficient for full rich-row composition.
 5. Existing extension-owned custom drawing stays extension-owned. Theme only host framing. Host forms, installation/confirmation screens, errors and all Settings pages must migrate through actual shared consumers; adding unused tokens is not extraction.
 
-Detailed current entry points and line references are in the [native audit](../ui-port-native-audit.md). The current no-core-import claim is already violated by keycap's `pane_core::Binding`; move binding formatting into an adapter when separating keycap presentation.
+Detailed current entry points and line references are in the [native audit](https://github.com/pane-app/pane/blob/archive/docs-history-2026-10-23/docs/research/ui-port-native-audit.md). The current no-core-import claim is already violated by keycap's `pane_core::Binding`; move binding formatting into an adapter when separating keycap presentation.
 
 ## Decisions and limitations that cannot be hidden in a styling ticket
 
