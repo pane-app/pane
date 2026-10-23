@@ -1,12 +1,22 @@
 # Contributing to Pane
 
-Work is tracked in [GitHub Issues](https://github.com/pane-app/pane/issues). See [Building and running Pane](../docs/building.md) for build, run and test commands on Windows, macOS and Linux; run `cargo xtask ci` before sending a change.
+Work is tracked in [GitHub Issues](https://github.com/pane-app/pane/issues).
+See [Building and running Pane](../docs/building.md) for build, run and test
+commands on Windows, macOS and Linux. Run `cargo xtask ci` before sending a
+change.
 
 ## Licensing of contributions
 
-Pane uses inbound = outbound licensing: a contribution is licensed under the terms that already apply to the files it changes (see [Licensing](../docs/licensing.md)). Copyright stays with each contributor; notices name "The Pane contributors".
+Pane uses inbound = outbound licensing: a contribution is licensed under the
+terms that already apply to the files it changes (see
+[Licensing](../docs/licensing.md)). Copyright stays with each contributor,
+and notices name "The Pane contributors".
 
-Every commit must carry a `Signed-off-by` line certifying the [Developer Certificate of Origin 1.1](https://developercertificate.org/), which `git commit -s` adds:
+### Signing off
+
+Every commit must carry a `Signed-off-by` line certifying the
+[Developer Certificate of Origin 1.1](https://developercertificate.org/).
+`git commit -s` adds it:
 
 ```text
 Signed-off-by: Your Name <you@example.com>

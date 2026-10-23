@@ -2,15 +2,29 @@
 
 Write [Pane](https://github.com/pane-app/pane) extensions in Rust. An
 extension is a WebAssembly component implementing Pane's `pane:extension`
-contract; this crate is its bindings, the host functions (feedback, the
-window, data, preferences, operations, system programs, web requests and
-the rest), the extension UI builder and the print and log macros. It is
-`no_std`, so the component imports only WASI 0.3 interfaces, and it supplies
-the allocator and a panic handler.
+contract, and this crate has what such a component needs:
 
-You need only rustup's stable toolchain and the `wasm32-wasip2` target
-(`rustup target add wasm32-wasip2`), and this crate from crates.io; no
-checkout of Pane's repository.
+- the contract's bindings
+- the host functions: feedback, the window, data, preferences, operations,
+  system programs, web requests and the rest
+- the extension UI builder
+- the print and log macros
+
+The crate is `no_std`, so the component imports only WASI 0.3 interfaces.
+It supplies the allocator and a panic handler.
+
+## What you need
+
+Only rustup's stable toolchain with the `wasm32-wasip2` target, and this
+crate from crates.io. You do not need a checkout of Pane's repository.
+
+```sh
+rustup target add wasm32-wasip2
+```
+
+## A first command
+
+`Cargo.toml`:
 
 ```toml
 [package]
@@ -24,6 +38,8 @@ crate-type = ["cdylib"]
 [dependencies]
 pane-extension = "0.2"
 ```
+
+`src/lib.rs`:
 
 ```rust
 #![no_std]
@@ -55,8 +71,13 @@ impl Command for Hello {
 }
 ```
 
-Build it with `cargo build --release --target wasm32-wasip2`, and name the
-component in the package's `pane.json`:
+Build it:
+
+```sh
+cargo build --release --target wasm32-wasip2
+```
+
+Then name the component in the package's `pane.json`:
 
 ```json
 {
@@ -76,18 +97,21 @@ component in the package's `pane.json`:
 
 ## Versions
 
-The crate's version follows the extension API it targets: 0.2.x builds
+The crate's version follows the extension API it targets. 0.2.x builds
 components for API 0.2 (`"apiVersion": "0.2"`, the WIT package
-`pane:extension@0.2.0`), writing version 1 of the list tree. A new API
-version is a new minor version of the crate before 1.0, and a new major
-version from 1.0.
+`pane:extension@0.2.0`) and writes version 1 of the list tree.
+
+A new API version gets a new minor version of the crate before 1.0, and a
+new major version from 1.0.
 
 ## More
 
 The guide to writing commands, with an example of every interface, is
 [`guests/README.md`](https://github.com/pane-app/pane/blob/main/guests/README.md)
-in Pane's repository; the contract itself is the WIT in this crate's `wit/`
+in Pane's repository. The contract itself is the WIT in this crate's `wit/`
 folder.
+
+## License
 
 Licensed under either of [Apache-2.0](LICENSE-APACHE) or [MIT](LICENSE-MIT),
 at your option.
