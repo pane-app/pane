@@ -4,10 +4,10 @@ This tree is upstream
 [componentize-qjs](https://github.com/andreiltd/componentize-qjs) at the
 commit [`tools/componentize-js/pins.json`](../pins.json) names, with Pane's
 patch queue from [`tools/componentize-js/patches`](../patches) applied **in
-this source** rather than with `git apply` (which
-[`pane_js.py`](../pane_js.py) used to do to a fresh download). It is licensed
-as upstream is ([`LICENSE`](LICENSE), Apache-2.0), and the patches modify it
-under that same license.
+this source** rather than with `git apply` to a fresh download, which the
+retired `pane_js.py` used to do. It is licensed as upstream is
+([`LICENSE`](LICENSE), Apache-2.0), and the patches modify it under that
+same license.
 
 Pane links it in-process: `crates/core` (`componentize-qjs`) is a member of
 the repository's workspace, built with the repository's stable Rust, and
@@ -15,9 +15,10 @@ the repository's workspace, built with the repository's stable Rust, and
 `componentize_qjs::componentize` with the committed wasm parts
 ([`../wasm-parts`](../wasm-parts)). `crates/runtime`
 (`componentize-qjs-runtime`) builds the QuickJS runtime for `wasm32-wasip3`
-with the pinned nightly Rust and wasi-sdk — only
-[`pane_js.py wasm-parts`](../pane_js.py) builds it, so the crate is excluded
-from the workspace and nothing in Pane compiles it. `cargo xtask guests`
+with the pinned nightly Rust and wasi-sdk. Only
+[`cargo xtask wasm-parts <folder>`](../../../xtask/src/cli_packages.rs)
+builds it, so the crate is excluded from the workspace and nothing in Pane
+compiles it. `cargo xtask guests`
 builds `crates/core`'s `p3_build` example and puts it, with the wasm parts,
 in `target/guests/componentizer/`, the binary a development build spawns
 when it does not link the componentizer.
@@ -69,6 +70,6 @@ And this tree's own changes, beyond the queue:
    `python tools/componentize-js/pane_js.py wasm-parts
    tools/componentize-js/wasm-parts` (which also rewrites `wasm-parts.json`),
    then `cargo xtask js-guests` and commit the rebuilt `guests/prebuilt/`.
-3. `cargo xtask ci` — and expect [`componentizer.yml`](../../
+3. `cargo xtask ci`, and expect [`componentizer.yml`](../../
    .github/workflows/componentizer.yml) to build the componentizer for all
    six platforms on the next push to `main`.

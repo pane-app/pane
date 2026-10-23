@@ -1,21 +1,14 @@
 # @pane-app/extension
 
 Write [Pane](https://github.com/pane-app/pane) extensions in JavaScript or
-TypeScript. This package is the types of Pane's extension contract, the
-adapter that turns what a command throws into an answer Pane shows, and
-the helpers commands import:
+TypeScript. This package has the types of Pane's extension contract and the
+helpers your commands import. It also has the adapter that turns what a
+command throws into an answer Pane shows.
 
-- `@pane-app/extension`: the types (`Command`, `List`, `Item`, `Form`, ...).
-- `@pane-app/extension/http`: web requests.
-- `@pane-app/extension/feedback`: toasts, HUDs, confirmations and the window.
-- `@pane-app/extension/system`: the clipboard, opening, revealing and
-  recycling, with the standard actions.
-- `@pane-app/extension/preferences`: the package's preferences.
-- `@pane-app/extension/icons`: icon helpers.
-- `@pane-app/extension/programs`: the system's own programs.
+There is no build tool in it. Pane's tools bundle a command and build it
+into a WASI 0.3 component.
 
-It carries no build tool: a command is bundled and built into a WASI 0.3
-component by Pane's tools.
+## A first command
 
 ```ts
 import type { Command } from "@pane-app/extension";
@@ -42,16 +35,32 @@ export const command: Command = {
 };
 ```
 
+## What you can import
+
+| Import | What it has |
+| --- | --- |
+| `@pane-app/extension` | The types (`Command`, `List`, `Item`, `Form`, ...). |
+| `@pane-app/extension/http` | Web requests. |
+| `@pane-app/extension/feedback` | Toasts, HUDs, confirmations and the window. |
+| `@pane-app/extension/system` | The clipboard, opening, revealing and recycling, with the standard actions. |
+| `@pane-app/extension/preferences` | The package's preferences. |
+| `@pane-app/extension/icons` | Icon helpers. |
+| `@pane-app/extension/programs` | The system's own programs. |
+
 ## Versions
 
-The package's version follows the extension API it targets: 0.2.x is for
-API 0.2 (`"apiVersion": "0.2"` in a package's `pane.json`). A new API
-version is a new minor version before 1.0, and a new major version from 1.0.
+The package's version follows the extension API it targets. 0.2.x is for
+API 0.2 (`"apiVersion": "0.2"` in a package's `pane.json`).
+
+A new API version gets a new minor version before 1.0, and a new major
+version from 1.0.
 
 ## More
 
 The guide to writing commands, with an example of every interface, is
 [`guests/README.md`](https://github.com/pane-app/pane/blob/main/guests/README.md)
 in Pane's repository.
+
+## License
 
 Licensed under either of Apache-2.0 or MIT, at your option.
