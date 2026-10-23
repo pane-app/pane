@@ -132,15 +132,9 @@ mod windows {
             if IsIconic(hwnd).as_bool() {
                 let _ = ShowWindow(hwnd, SW_RESTORE);
             }
-            let started = std::time::Instant::now();
-            let path = if GetForegroundWindow() == hwnd {
-                "already"
-            } else if SetForegroundWindow(hwnd).as_bool() {
-                "plain"
-            } else {
-                attached(hwnd)
-            };
-            let switched = started.elapsed();
+            if GetForegroundWindow() != hwnd && !SetForegroundWindow(hwnd).as_bool() {
+                attached(hwnd);
+            }
             let front = GetForegroundWindow() == hwnd;
             if front {
                 // This thread's own idea of its active window and focus,
@@ -149,37 +143,31 @@ mod windows {
                 let _ = SetActiveWindow(hwnd);
                 let _ = SetFocus(Some(hwnd));
             }
-            eprintln!(
-                "[467 trace] {:?} take_foreground: {path}, in front {front}, {switched:?} then {:?}",
-                std::time::SystemTime::now(),
-                started.elapsed()
-            );
             front
         }
     }
 
     /// The same call, with this thread attached to the input of the
     /// thread in front, unless that thread is not responding.
-    unsafe fn attached(hwnd: HWND) -> &'static str {
+    unsafe fn attached(hwnd: HWND) {
         // SAFETY: as in `take_foreground`; the attachment is undone before
         // return.
         unsafe {
             let front = GetForegroundWindow();
             if front.is_invalid() || IsHungAppWindow(front).as_bool() {
-                return "refused (hung or none in front)";
+                return;
             }
             let theirs = GetWindowThreadProcessId(front, None);
             let ours = GetCurrentThreadId();
             if theirs == 0 || theirs == ours {
-                return "refused (own thread)";
+                return;
             }
             if !AttachThreadInput(ours, theirs, true).as_bool() {
-                return "refused (attach)";
+                return;
             }
             let _ = BringWindowToTop(hwnd);
             let _ = SetForegroundWindow(hwnd);
             let _ = AttachThreadInput(ours, theirs, false);
-            "attached"
         }
     }
 

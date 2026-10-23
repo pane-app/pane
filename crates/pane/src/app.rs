@@ -1752,15 +1752,7 @@ impl LauncherWindow {
     /// Pane keeps running in the background, the Settings window stays
     /// open and the next press reuses the same live launcher.
     fn open_pane_pressed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let front = crate::front::in_front(window);
-        let press = self.presence.press(front);
-        eprintln!(
-            "[467 trace] {:?} press: in front {front}, hidden {}, active {}, -> {press:?}",
-            std::time::SystemTime::now(),
-            self.presence.hidden(),
-            window.is_window_active()
-        );
-        match press {
+        match self.presence.press(crate::front::in_front(window)) {
             Press::Hide => self.hide(window, cx),
             Press::Summon => self.summon(window, cx),
         }

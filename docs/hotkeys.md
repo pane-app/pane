@@ -214,8 +214,9 @@ Every press toggles, however soon it follows the last one (#467). A key
 held down is reported once: `MOD_NOREPEAT` and the hook's repeat rule on
 Windows, the grab's held state on X11, and the Carbon hot key's release
 on macOS keep its repeats from reaching the window. A press that comes
-before the summoned launcher is seen to take the focus (a quick second
-press, a press while it opens) hides it.
+before the summoned launcher has come forward (a quick second press, a
+press while it opens) hides it. On Windows "has the focus" is the
+system's foreground window, what the user sees in front.
 
 On Windows the launcher comes forward through the system's own calls
 (`SetForegroundWindow`, attached to the input of the thread in front if
@@ -593,7 +594,7 @@ extension cannot assign, read or declare one (no WIT or manifest change).
   held by the other program (the hook takes it) and the Windows key
   alone:
   - every press toggles at a person's pace, quickly (150 ms apart) and
-    in bursts (30 ms apart), the show and hide times measured from the
+    in bursts (50 ms apart), the show and hide times measured from the
     key event and printed
   - Alt+Space held with the Space repeating as the launcher comes
     forward opens no menu, and Down then moves the list's selection

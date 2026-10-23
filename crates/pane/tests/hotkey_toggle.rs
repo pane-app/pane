@@ -121,6 +121,7 @@ mod windows {
         lines: Vec<String>,
         failures: Vec<String>,
         shows: Vec<Duration>,
+        visibles: Vec<Duration>,
         hides: Vec<Duration>,
     }
 
@@ -183,6 +184,10 @@ mod windows {
         for line in &report.lines {
             eprintln!("  {line}");
         }
+        eprintln!(
+            "  {}",
+            summary("visible (key event to shown)", &report.visibles)
+        );
         eprintln!(
             "  {}",
             summary("show (key event to shown and in front)", &report.shows)
@@ -265,6 +270,7 @@ mod windows {
                 report.lines.append(&mut seen.lines);
                 report.failures.append(&mut seen.failures);
                 report.shows.append(&mut seen.shows);
+                report.visibles.append(&mut seen.visibles);
                 report.hides.append(&mut seen.hides);
                 done.store(true, Ordering::SeqCst);
             });
@@ -356,23 +362,22 @@ mod windows {
                 }
             }
         }
-        // A burst, the presses 30 ms apart whatever the window does: an
+        // A burst, the presses 50 ms apart whatever the window does: an
         // odd number of them from hidden leaves the launcher shown, an
         // even number from shown leaves it shown.
         for presses in [5, 4] {
             let before = in_front(launcher);
             let started = Instant::now();
-            let wall = std::time::SystemTime::now();
             for _ in 0..presses {
                 press(binding);
-                std::thread::sleep(Duration::from_millis(30));
+                std::thread::sleep(Duration::from_millis(50));
             }
             let expected = before ^ (presses % 2 == 1);
             std::thread::sleep(Duration::from_millis(1500));
             let after = in_front(launcher);
             let hidden_now = !visible(launcher);
             report.log(format!(
-                "burst of {presses} at {wall:?} from {} ({} presses reached the window): {}",
+                "burst of {presses} from {} ({} presses reached the window): {}",
                 if before { "shown" } else { "hidden" },
                 arrived(started).0,
                 if after {
@@ -527,8 +532,12 @@ mod windows {
     ) -> bool {
         let started = Instant::now();
         press(binding);
+        let seen_visible = std::cell::Cell::new(None);
         let reached = wait_for(|| {
             if shown {
+                if seen_visible.get().is_none() && visible(launcher) {
+                    seen_visible.set(Some(started.elapsed()));
+                }
                 in_front(launcher)
             } else {
                 !visible(launcher)
@@ -547,6 +556,9 @@ mod windows {
             ));
             if shown {
                 report.shows.push(took);
+                if let Some(visible) = seen_visible.get() {
+                    report.visibles.push(visible);
+                }
             } else {
                 report.hides.push(took);
             }
