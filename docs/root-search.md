@@ -789,12 +789,19 @@ fit its column (past that it wraps).
 
 The card shows only what the launcher holds (`ComputedAnswer`): the query,
 the text Enter copies, the command and, since #196, the colour of its
-swatch when the answer is one (see [the calculator](#the-calculator)). The
-board's units, "Also" conversions and recent calculations have no provider
-and are not drawn.
+swatch when the answer is one (see [the calculator](#the-calculator)).
+Since #472 the query is typeset as an expression, `*`, `·` and a `x`
+between two numbers as ×, `/` before a number as ÷ and a minus as −, each
+operator between two operands with one space either side (`2*3` as
+`2 × 3`); `0xff`, `km/h`, `1e-3`, `2026-12-25` and words stay as typed.
+The command sends only its answer, so Pane typesets the query it owns.
+"Expression" is under the query and "Result" under the answer, as
+Raycast's calculator labels its two sides, in the board's caption type;
+a colour's swatch takes the answer's caption's place. The board's "Also"
+conversions and recent calculations have no provider and are not drawn.
 
 It is a row like any other: selected first, moved to by the keys or the
-pointer, with the primary action "Copy answer". It is named "6*7 = 42" for
+pointer, with the primary action "Copy answer". It is named "6 × 7 = 42" for
 assistive technology, and the swatch is a colour well named by the
 colour's value. Its accent ring shows while it is selected.
 
@@ -1089,73 +1096,55 @@ pane --install git:https://github.com/pane-app/calculator
 
 ### What it calculates
 
-Its expression scope is deliberately small (US06; no symbolic algebra and
-no arbitrary code evaluation):
+Since #472 it reads what Raycast's calculator reads, offline. Its
+repository's README and sources say exactly what; in short:
 
-- numbers with an optional decimal point: `12`, `3.5`, `.5` (no thousands
-  separators, exponents or other bases);
-- `+`, `-` (or `−`), `*` (or `×`), `/` (or `÷`) and `^` for a power with a
-  whole-number exponent. `^` binds tightest and right to left, then `*`
-  and `/`, then `+` and `-`, left to right. A leading `-` or `+` applies
-  to what follows, so `-2^2` is -4, and any number of signs may lead;
-- the percentage phrases (#196), within those number rules: `p% of x`,
-  `p% off x` (x reduced by p%), `p% on x` (x increased), `x + p%`, `x − p%`
-  and `x as a % of y`, their words the language's own, lowercase;
-- parentheses, nested at most 64 deep, and spaces anywhere;
-- at most 256 characters in all.
+- arithmetic with `+ - * / ^`, `×`, `x`, `÷`, `−`, `mod` and their words,
+  `5!`, `5²`, `√16`, constants (`pi`, `e`), functions (`sqrt`, `sin`, `ln`,
+  `log`, `round`…), parentheses and multiplication without a sign (`2pi`,
+  `3(4 + 5)`), numbers written `1,000`, `1e3`, `10k`, `0xff`, `0b1010`;
+- percentages: `20% of 50`, `50 + 10%`, `10% off 50`, `10 is what % of 50`,
+  `what % of 50 is 10`, `10 as a % of 50`;
+- units of length, mass, volume, area, time, speed, temperature, data,
+  angle and CSS pixels, converted with `in`, `to` or `as`
+  (`5 km in miles`, `100 f to c`, `1 GB in MB`), and number bases
+  (`255 in hex`, `0xff in decimal`);
+- dates and times from the moment of the query (`now + 3 days`,
+  `35 days ago`, `next monday`, `days until christmas`, `time in Tokyo`,
+  `5pm London in New York`, `1700000000 to date`), its places' time zones
+  a table of its own with the daylight-saving rules they follow;
+- colours (#196): `#RGB` to `#RRGGBBAA`, `rgb()`, `rgba()`, `hsl()`,
+  `hsla()` and `oklch()`.
 
-A query has an answer only if it applies at least one operator or is a
-percentage phrase: "42" or "(5)" is not a calculation. Everything else has
-no answer and lists nothing:
-
-- incomplete input ("2 +", "(1 + 2");
-- invalid input ("2 + * 3", "2 3", letters, functions, constants, units,
-  other percentages, deeper nesting or a longer query, so that no query
-  can exhaust the guest's stack);
-- undefined or unrepresentable values ("1 / 0", "2 ^ 0.5", "1 as a % of
-  0", overflow).
-
-Arithmetic is IEEE double precision. The answer shows at most 15
-significant digits and at most 10 decimals, without trailing zeros
-(0.1 + 0.2 is 0.3, 1 / 3 is 0.3333333333), and uses scientific notation
-from 10^15 up or below 10^-6 (`1.00000000000001e15`, `1e-7`).
+Currencies are not converted (#475): their rates need a network. A query
+has an answer only if it calculates something: "42", "(5)", "pi" or "5 km"
+alone is no calculation, and incomplete or invalid input has no answer and
+lists nothing. A query longer than 256 characters, or nesting parentheses
+more than 64 deep, is not read, so that no query can exhaust the guest's
+stack. Arithmetic is IEEE double precision; a number shows at most 15
+significant digits, its thousands grouped (`4,096`), and uses scientific
+notation from 10^15 up or below 10^-6.
 
 The row shows the answer as its title and "<query> = <answer> · Enter
 copies the answer" as its subtitle. Root search draws it as a
-[computed answer's card](#the-computed-answer-card).
+[computed answer's card](#the-computed-answer-card), under the section its
+answer detail ([`wit/root-results.wit`](../wit/root-results.wit)) names:
+"Calculator", "Date & Time" or "Color". Enter copies the answer as it is
+shown, as Raycast's does, and the Actions panel offers its further copies:
 
-### Colours, dates and times
-
-Since #196 the calculator answers three more kinds of query, each through
-its answer detail ([`wit/root-results.wit`](../wit/root-results.wit)). The
-detail names the section the answer sits under, a swatch and further ways
-to copy it.
-
-- Colours: `#RGB`, `#RGBA`, `#RRGGBB`, `#RRGGBBAA` (either case, each
-  short digit standing for two of it), `rgb()`, `rgba()`, `hsl()`,
-  `hsla()` (comma-separated, as CSS writes them) and `oklch()`
-  (space-separated, its lightness 0-1, with an optional `/ a` alpha). An
-  argument out of range is clipped as CSS clips it. A colour name is not a
-  colour, as Raycast leaves names out on purpose ("red" is also a word).
-  The answer is the colour as uppercase hex (`#RRGGBBAA` while it is not
-  fully opaque), drawn with a swatch under the section "Color", and Enter
-  copies it. The Actions panel offers copying it as hex, RGB, HSL and
-  OKLCH.
-- Date and time words: "now", "time", "today", "date", "tomorrow" and
-  "yesterday" answer at once with the local date or time in the layout
-  Pane's own dates use ("Jun 1, 2025, 14:23"), under "Date & Time". Enter
-  copies it. The Actions panel offers ISO 8601 (a date for a date word,
-  the whole moment otherwise, in the local zone) and a Unix timestamp (a
-  date word's at its local midnight).
+- a number with grouped thousands, without them ("Copy Unformatted
+  Answer");
+- a date or time, in the layout Pane's own dates use ("Jun 1, 2025",
+  "Jun 1, 2025, 14:23"; `time` alone "14:23"), as ISO 8601 (a date, or the
+  moment with its offset) and as a Unix timestamp (a date's at its local
+  midnight);
+- a colour, answered as uppercase hex (`#RRGGBBAA` while it is not fully
+  opaque) with a swatch, as hex, RGB, HSL and OKLCH. A colour name is not
+  a colour, as Raycast leaves names out on purpose ("red" is also a word).
 
 The moment is Pane's. The query is asked about at the moment the user
 stopped at it, by the clock root search's own dates are shown by, with the
-local time's offset from UTC, so a test can hold the clock still. Date
-arithmetic and time zones stay out: a query about another moment than now
-is not answered.
-
-Units, currencies and conversion between them stay out (CONTEXT: Pane has
-no unit conversion).
+local time's offset from UTC, so a test can hold the clock still.
 
 ## Understanding the typed query
 

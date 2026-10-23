@@ -181,7 +181,7 @@ A root result an extension command computes from the query itself, such as the c
 _Avoid_: Suggestion, answer card, inline result
 
 **Computed answer**:
-A computed result whose action copies text, such as the calculator's answer: root search draws it as a card showing the query it answers and the text invoking it copies, and nothing else — Pane has no unit conversion and keeps no calculation history. It stays a root result: selectable, with its own id and its copy action.
+A computed result whose action copies text, such as the calculator's answer: root search draws it as a card showing the query it answers, typeset as an expression, over "Expression", and the text invoking it copies over "Result", and nothing else — conversions are the command's, not Pane's, and Pane keeps no calculation history. It stays a root result: selectable, with its own id and its copy action.
 _Avoid_: Calculation, conversion, answer card (the card is how it is drawn)
 
 **No-results notice**:
