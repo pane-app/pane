@@ -851,9 +851,11 @@ with `&`).
   package finds no newer version and offers none. A development build
   checks only where `PANE_RELEASES` names a stand-in. First setup is
   unaffected: it fetches the default extensions' pinned commits from
-  their repositories. Publishing a release (the release workflow drafts
-  one; a person publishes it) is an execution step, like the signing
-  credentials below.
+  their repositories. Publishing a release is an execution step, like
+  the signing credentials below: pushing a `v<version>` tag runs the
+  release workflow (`.github/workflows/release.yml`), which drafts a
+  prerelease with the three packages, their `.sha256` files, the source
+  archive and the notes, and a person publishes the draft.
 - Nothing is signed. No signing credentials exist, so the package is not
   signed: its `.sha256` says only what was packed, and the application
   package an update downloads is checked only against the sha256 of the

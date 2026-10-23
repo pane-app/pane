@@ -1,0 +1,44 @@
+name: Package
+
+# Each system's release package (`cargo xtask package-<system>`, release
+# profile; x86_64 on Linux and Windows, aarch64 on macOS), uploaded as the
+# run's `<system>-package` artifact: `target/dist/`, whose `release/`
+# folder holds the assets a GitHub release carries for that system (the
+# package and its .sha256, named as Pane's updater looks for them, ADR
+# 0048). Called by the release matrix (ci.yml), where it runs beside the
+# smoke, and by the release workflow (release.yml), which drafts a
+# prerelease from what it builds.
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    name: Package (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            system: linux
+          - os: windows-2025
+            system: windows
+          - os: macos-15
+            system: macos
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+      - name: Build the guests
+        run: cargo xtask guests
+      # Release, x86_64 on Linux and Windows, aarch64 on macOS.
+      - name: Build the package
+        run: cargo xtask package-${{ matrix.system }}
+      - name: Upload the package and its release assets
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.system }}-package
+          path: target/dist/
+          if-no-files-found: error
