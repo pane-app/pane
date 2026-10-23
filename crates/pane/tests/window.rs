@@ -1861,7 +1861,8 @@ fn replace_query(window: &Entity<LauncherWindow>, cx: &mut VisualTestContext, qu
 }
 
 /// A computed answer is drawn as the answer card (#96): under its
-/// command's title, named for what was typed and its answer, the selected
+/// command's title, its two sides over their captions (#472), named for
+/// what was typed and its answer, the selected
 /// result, whose primary action copies the answer. An expression with no
 /// answer shows the notice in its place and the field keeps focus; the
 /// expression completed brings the card back, selected.
@@ -1883,7 +1884,8 @@ fn a_computed_answer_shows_as_the_card_under_its_commands_title(cx: &mut TestApp
         label.bottom() + px(4.),
         "the list's gap and the card's margin"
     );
-    assert_eq!(card.size.height, px(20. + 44. + 16.));
+    // The values over their captions ("Expression", "Result"), 4 apart.
+    assert_eq!(card.size.height, px(20. + 44. + 4. + 17. + 16.));
     let nodes = accessible_nodes(cx);
     node(&nodes, "ListBoxOption", "reverse 42 = 24");
     // The footer's primary button gives way to the install's status

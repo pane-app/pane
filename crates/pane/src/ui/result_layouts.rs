@@ -77,8 +77,9 @@ pub(crate) fn no_results_notice(copy: &NoticeCopy, theme: &Theme) -> Div {
         )
 }
 
-/// One side of the answer card: a value, and the caption under it where
-/// a board authors one ("Inches"); a computed answer has none.
+/// One side of the answer card: a value, and the caption under it ("Inches"
+/// on the reference board; "Expression" and "Result" for a computed
+/// answer).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct AnswerSide {
     pub(crate) value: SharedString,
