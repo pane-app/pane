@@ -49,8 +49,9 @@ pub(crate) const CONTEXT: &str = "RootSearch";
 /// input's wrapper carries it, so the keys bound to the query field (its
 /// selection keys, and the argument fields' edge keys, #205) take the
 /// keystrokes only there — an argument field's input, another editable
-/// text under the search field, keeps the element's own keys.
-const QUERY_FIELD: &str = "QueryField";
+/// text under the search field, keeps the element's own keys. A designed
+/// List's search field is the same input and carries it too (#470).
+pub(crate) const QUERY_FIELD: &str = "QueryField";
 /// The query field's placeholder on root search: the reference's "Search
 /// apps, commands, plugins…" in Pane's own terms — root search finds
 /// installed applications and commands, and Pane has extensions, not
