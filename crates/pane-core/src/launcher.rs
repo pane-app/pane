@@ -66,6 +66,7 @@ mod launching;
 mod network;
 mod own_actions;
 mod pane_form;
+mod prefetch;
 mod presentation;
 mod programs;
 mod providers;
@@ -980,6 +981,9 @@ struct State {
     /// is made, which defaults the user declined, and whether it was asked
     /// this session (see `acquire`).
     first_setup: acquire::FirstSetup,
+    /// The official extensions' revisions first setup's list fetched as
+    /// it opened (#466), for its icons and for Set Up (see `prefetch`).
+    prefetches: prefetch::Prefetches,
     /// Pane's own update: what the last check found, and what is running
     /// now (see `application_update`).
     updates: Updates,
@@ -1892,6 +1896,7 @@ impl Launcher {
             quick_slots: quick_slots::Kept::default(),
             acquisitions: Acquisitions::default(),
             first_setup,
+            prefetches: prefetch::Prefetches::default(),
             updates: Updates::default(),
             crash: crash_notice::Notice::default(),
             clipboard_records: clipboard_view::Projected::default(),
@@ -2965,7 +2970,8 @@ impl Launcher {
     }
 
     /// Opens the installed application `id`, named `name`, off the calling
-    /// thread, and reports whether the system opened it.
+    /// thread: once the system opened it, the window closes and root
+    /// search returns (#468); what failed is said on the screen.
     async fn open_application(&self, epoch: u64, id: String, name: String) {
         let opened = match self.runtime() {
             Ok(runtime) => {
@@ -2974,18 +2980,35 @@ impl Launcher {
             }
             Err(error) => Err(error.to_string()),
         };
-        let Some(mut state) = self.lock_if_current(epoch) else {
-            return;
-        };
-        state.view.status = match opened {
-            Ok(()) => Status::Result(format!("Opened {name}")),
-            Err(problem) => Status::Error(format!("Could not open {name}: {problem}")),
-        };
+        self.end_open(
+            epoch,
+            opened.map_err(|problem| format!("Could not open {name}: {problem}")),
+        );
+    }
+
+    /// Says how one of Pane's own opens of the screen of `epoch` ended,
+    /// while that screen is still on display: one that opened hands the
+    /// user off to what it opened, so the window closes and root search
+    /// returns with its query empty (#468, see `close_after_opening`); one
+    /// that failed says `Err`'s explanation in the status line, and the
+    /// window stays.
+    fn end_open(&self, epoch: u64, opened: Result<(), String>) {
+        {
+            let Some(mut state) = self.lock_if_current(epoch) else {
+                return;
+            };
+            match opened {
+                Ok(()) => self.close_after_opening(&mut state),
+                Err(why) => state.view.status = Status::Error(why),
+            }
+        }
+        self.changed();
     }
 
     /// Opens `target`, named `name`, with `application` or the system's
     /// handler, through the system the `system.open` host function acts
-    /// on, off the calling thread, and reports whether it opened.
+    /// on, off the calling thread: once it opened, the window closes and
+    /// root search returns (#468); what failed is said on the screen.
     async fn open_target(
         &self,
         epoch: u64,
@@ -3007,13 +3030,10 @@ impl Launcher {
             crate::system::System::open(system.as_ref(), &target, application.as_deref())
         })
         .await;
-        let Some(mut state) = self.lock_if_current(epoch) else {
-            return;
-        };
-        state.view.status = match opened {
-            Ok(()) => Status::Result(format!("Opened {name}")),
-            Err(problem) => Status::Error(format!("Could not open {name}: {problem}")),
-        };
+        self.end_open(
+            epoch,
+            opened.map_err(|problem| format!("Could not open {name}: {problem}")),
+        );
     }
 
     /// Begins the search for `query`: the field shows it at once, and the
@@ -5465,21 +5485,19 @@ impl Launcher {
         );
     }
 
-    /// Opens `url` with the link opener, off the calling thread, and reports
-    /// the outcome while the screen is the one it was opened from.
+    /// Opens `url` with the link opener, off the calling thread: once it
+    /// opened, the window closes and root search returns (#468); what
+    /// failed is said while the screen is the one it was opened from.
     async fn open_url(&self, epoch: u64, url: String) {
         let links = self.links.clone();
         let opened = {
             let url = url.clone();
             off_thread(move || links.open(&url)).await
         };
-        let Some(mut state) = self.lock_if_current(epoch) else {
-            return;
-        };
-        state.view.status = match opened {
-            Ok(()) => Status::Result(format!("Opened {url}")),
-            Err(reason) => Status::Error(format!("Could not open {url}: {reason}")),
-        };
+        self.end_open(
+            epoch,
+            opened.map_err(|reason| format!("Could not open {url}: {reason}")),
+        );
     }
 
     /// Has the open command in `component` handle `callback`, which the

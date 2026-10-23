@@ -333,6 +333,46 @@ fn a_key_pressed_between_the_press_and_the_release_breaks_the_tap() {
 }
 
 #[test]
+fn a_mask_key_another_tool_injects_does_not_break_the_tap() {
+    let mut recognizer = Recognizer::default();
+    recognizer.add(1, tap(WIN_AT, Side::Any));
+    let injected = |key, pressed, time| KeyEvent {
+        injected: true,
+        ..at(key, pressed, time)
+    };
+    // Another tool with a Windows-key hotkey of its own masks the key's
+    // release with an injected key no keyboard has (0xE8, AutoHotkey's;
+    // 0xFF; 0x07): it passes, and the tap is still the user's lone tap
+    // (#467).
+    for (round, mask) in [0xE8, 0xFF, 0x07].into_iter().enumerate() {
+        let start = round as u64 * 1000;
+        assert_eq!(recognizer.step(at(LWIN, true, start)), Decision::Pass);
+        assert_eq!(
+            recognizer.step(injected(mask, true, start + 40)),
+            Decision::Pass
+        );
+        assert_eq!(
+            recognizer.step(injected(mask, false, start + 41)),
+            Decision::Pass
+        );
+        assert_eq!(
+            recognizer.step(at(LWIN, false, start + 100)),
+            Decision::Tap {
+                binding: 1,
+                mask: true,
+            },
+            "masked with {mask:#x}"
+        );
+    }
+    // A real key another tool injects still breaks it, as the user's
+    // does: Win+E sent by a remapper keeps Windows' meaning.
+    recognizer.step(at(LWIN, true, 10_000));
+    assert_eq!(recognizer.step(injected(E, true, 10_050)), Decision::Pass);
+    assert_eq!(recognizer.step(injected(E, false, 10_080)), Decision::Pass);
+    assert_eq!(recognizer.step(at(LWIN, false, 10_100)), Decision::Pass);
+}
+
+#[test]
 fn a_tap_bound_to_one_side_fires_only_on_that_side_s_key() {
     let mut recognizer = Recognizer::default();
     recognizer.add(1, tap(CTRL_AT, Side::Right));

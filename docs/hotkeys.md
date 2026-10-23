@@ -142,7 +142,16 @@ other key pressed with it passes through untouched, so Win+E, Win+R and
 Win+D keep Windows' meaning. Pane injects a tagged neutral key before the
 tap's release reaches Explorer, so the Start menu does not open as well.
 The Start menu stays reachable from the taskbar's Start button and
-Ctrl+Esc. The "Show the taskbar when Pane opens" choice keeps a taskbar
+Ctrl+Esc.
+
+Other tools that take the Windows key (AutoHotkey, PowerToys, a launcher
+with a Windows-key hotkey of its own) mask its release the same way,
+with an injected key no keyboard has (0x07, 0xE8, 0xFC or 0xFF). Such a
+key between the press and the release does not break Pane's tap
+(#467), so the tap still opens Pane while they run. A real key between,
+injected or pressed, still makes it Win+&lt;key&gt;. Two tools bound to
+the same tap both act on it: a Windows-key binding in another launcher
+is best removed while Pane has the Windows key. The "Show the taskbar when Pane opens" choice keeps a taskbar
 that hides itself on screen while the launcher is open, so the Start
 button stays one click away.
 
@@ -199,9 +208,26 @@ application, not to any extension or command. It is set on Settings'
 - If it is shown and focused, it is hidden.
 
 Hidden is not closed: Pane keeps running, the Settings window stays open,
-and the next press shows the same launcher again. A second press within
-600 ms of an accepted one is taken as the repeat of a key still held and
-does nothing.
+and the next press shows the same launcher again.
+
+Every press toggles, however soon it follows the last one (#467). A key
+held down is reported once: `MOD_NOREPEAT` and the hook's repeat rule on
+Windows, the grab's held state on X11, and the Carbon hot key's release
+on macOS keep its repeats from reaching the window. A press that comes
+before the summoned launcher has come forward (a quick second press, a
+press while it opens) hides it. On Windows "has the focus" is the
+system's foreground window, what the user sees in front.
+
+On Windows the launcher comes forward through the system's own calls
+(`SetForegroundWindow`, attached to the input of the thread in front if
+the plain call is refused), not GPUI's activation, which injects an Alt
+press that raced the call and reached the application behind. And the
+launcher never opens Windows' system menu: with Alt+Space as the hotkey,
+a Space still held as the launcher came forward reached it as Alt+Space,
+the menu's own shortcut, and the arrows then moved through that menu
+instead of Pane's list. The launcher's window ends the keyboard's menu
+command (`SC_KEYMENU`) and the menu characters (`WM_SYSCHAR`); Alt+F4
+still closes it, which quits Pane on Windows as before.
 
 ### Defaults
 
@@ -519,7 +545,7 @@ extension cannot assign, read or declare one (no WIT or manifest change).
   on GPUI's test platform with a fake system:
   - the default registered at start, and a press toggling the launcher
     (shown, focused, hidden)
-  - a held key not toggling again
+  - presses in quick succession each toggling (#467)
   - the Settings window's focus not counting
   - recording swapping the registration and the record
   - a shortcut another application has and a command's hotkey refused
@@ -559,6 +585,19 @@ extension cannot assign, read or declare one (no WIT or manifest change).
     use
   - the diagnostics copy holds the hook's state
     ([#259](https://github.com/pane-app/pane/issues/259))
+- Toggling with real keys
+  ([`crates/pane/tests/hotkey_toggle.rs`](../crates/pane/tests/hotkey_toggle.rs),
+  #467), on Windows where `PANE_TEST_REAL_INPUT=1` and
+  `PANE_TEST_REAL_WINDOWS=1` are set (CI's Windows runner): Pane's real
+  launcher window and the system's adapter, with another program's
+  window in front, for Alt+Space registered with the system, Alt+Space
+  held by the other program (the hook takes it) and the Windows key
+  alone:
+  - every press toggles at a person's pace, quickly (150 ms apart) and
+    in bursts (50 ms apart), the show and hide times measured from the
+    key event and printed
+  - Alt+Space held with the Space repeating as the launcher comes
+    forward opens no menu, and Down then moves the list's selection
 - The taskbar choice
   ([`crates/pane/tests/settings.rs`](../crates/pane/tests/settings.rs)),
   on GPUI's test platform with a fake taskbar seam (#268):
@@ -580,7 +619,8 @@ extension cannot assign, read or declare one (no WIT or manifest change).
     tools' injected keys firing the binding without being swallowed or
     counted as the user's
   - #260's kinds: taps within and beyond the window, double taps
-    likewise, a key between breaking both, sides serving only their own
+    likewise, a key between breaking both (another tool's injected mask
+    key excepted, #467), sides serving only their own
     chords, the numpad's Enter told from the main one, the Windows key's
     release masked after a chord Pane swallowed, a single and a double tap
     of the same modifier each firing where a record holds both, and a

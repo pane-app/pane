@@ -19,7 +19,7 @@ use std::time::Duration;
 use futures::executor::block_on;
 use pane_core::applications::icons::{Extracted, IconExtractor};
 use pane_core::applications::{Application, Applications, Cached, Discovery, Key, Source};
-use pane_core::{Launcher, PinTarget, ResultAction, Runtime, SlotChange, Status};
+use pane_core::{Launcher, PinTarget, ResultAction, Runtime, SlotChange, Status, WindowPresence};
 use tempfile::TempDir;
 
 #[path = "support/feedback.rs"]
@@ -208,10 +208,10 @@ fn two_shortcuts_to_one_program_are_one_result_opened_by_the_preferred_one() {
     assert_eq!(titles(&launcher), ["Launch My Editor"]);
     block_on(launcher.activate_selected());
     assert_eq!(system.opened(), [r"C:\Places\0\My Editor.lnk"]);
-    assert_eq!(
-        launcher.view().status,
-        Status::Result("Opened Launch My Editor".into())
-    );
+    // Opened, the launcher closed, back on root search with its query
+    // empty, as Raycast pops to root (#468).
+    assert_eq!(launcher.view().status, Status::Idle);
+    assert_eq!(launcher.view().query(), Some(""));
 }
 
 #[test]
@@ -369,10 +369,8 @@ fn pins_made_before_identities_resolve_keep_their_slots_and_are_rewritten() {
     // Invoked, the carried pin opens the application's preferred source.
     block_on(launcher.activate_quick_slot(1));
     assert_eq!(system.opened(), std::slice::from_ref(&mine.path));
-    assert_eq!(
-        shown(&launcher),
-        Status::Result("Opened Launch Mail".into())
-    );
+    assert_eq!(shown(&launcher), Status::Idle);
+    assert_eq!(launcher.view().query(), Some(""));
 }
 
 #[test]
@@ -411,7 +409,9 @@ fn a_js_command_opens_an_application_by_its_stable_id(package: &str, language: &
     block_on(launcher.activate_selected());
     assert_eq!(system.opened(), [r"C:\Places\2\Firefox.lnk"]);
 
-    // Its command lists the application once and opens it by its id.
+    // Its command lists the application once and opens it by its id, in
+    // the launcher shown again: the open above closed it (#468).
+    launcher.set_window_presence(WindowPresence::Shown);
     let sample = format!("{language} applications sample");
     search(&launcher, &sample.to_lowercase());
     select_title(&launcher, &sample);

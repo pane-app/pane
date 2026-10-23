@@ -397,6 +397,12 @@ impl LauncherWindow {
         .detach();
         cx.observe_window_activation(window, |this, window, cx| {
             let active = window.is_window_active();
+            // Active, the window's own focus decides the Open Pane
+            // hotkey's next press again (#467). (On Windows the summon
+            // says so itself once it has brought the window forward.)
+            if active {
+                this.presence.activated();
+            }
             // A pending HUD's work is done once the launcher is active
             // again (#250).
             if active {
@@ -545,8 +551,12 @@ impl LauncherWindow {
                 let shown = this.update_in(cx, |this, window, cx| {
                     if this.launcher.take_window_request() {
                         this.show(window, cx);
-                        window.activate_window();
-                        cx.activate(true);
+                        crate::front::bring_forward(
+                            window,
+                            cx,
+                            |this: &Self| !this.presence.hidden(),
+                            |_| {},
+                        );
                     }
                     // Game mode paused or resumed Pane's hotkeys for a
                     // game in front (#125): the tray icon's tooltip
@@ -628,8 +638,7 @@ impl LauncherWindow {
             return false;
         }
         self.show(window, cx);
-        window.activate_window();
-        cx.activate(true);
+        crate::front::bring_forward(window, cx, |this: &Self| !this.presence.hidden(), |_| {});
         self.motion.land_at_once();
         true
     }
@@ -1233,6 +1242,25 @@ impl LauncherWindow {
         true
     }
 
+    /// A click on the search header's back button (#469): back one level,
+    /// as Raycast's back button goes, whatever the search field holds.
+    /// The back key clears a typed search before it leaves; the click does
+    /// both at once. Like the Back-a-level key it never hides the
+    /// launcher, and the keyboard stays where it was: the button takes no
+    /// focus, and the screen it lands on puts it in its own field.
+    pub(crate) fn back_clicked(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let typed = self
+            .launcher
+            .screen()
+            .search_field()
+            .is_some_and(|text| !text.is_empty());
+        if typed && self.menu.is_none() && self.actions.is_none() {
+            // The launcher's back clears the search first.
+            self.launcher.back();
+        }
+        self.back_one_level(window, cx);
+    }
+
     /// The Back-a-level key's act (#258): the Back action's order,
     /// without its text clearing — an open footer menu closes, an open
     /// Actions panel steps back one level, and only then is the screen
@@ -1545,8 +1573,7 @@ impl LauncherWindow {
         };
         if shows_window {
             self.show(window, cx);
-            window.activate_window();
-            cx.activate(true);
+            crate::front::bring_forward(window, cx, |this: &Self| !this.presence.hidden(), |_| {});
             // A hotkey is a keyboard open: the command's view lands at once.
             self.motion.land_at_once();
         }
@@ -1725,10 +1752,7 @@ impl LauncherWindow {
     /// Pane keeps running in the background, the Settings window stays
     /// open and the next press reuses the same live launcher.
     fn open_pane_pressed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let now = cx.background_executor().now();
-        match self.presence.press(now, window.is_window_active()) {
-            // The repeat of a key still held, not a new press.
-            Press::Repeat => {}
+        match self.presence.press(crate::front::in_front(window)) {
             Press::Hide => self.hide(window, cx),
             Press::Summon => self.summon(window, cx),
         }
@@ -1762,8 +1786,16 @@ impl LauncherWindow {
             NextShowing::Restore => false,
         };
         self.show(window, cx);
-        window.activate_window();
-        cx.activate(true);
+        // Forward with the focus, without the injected Alt GPUI's own
+        // activation uses on Windows (#467, see `front`). Until it is
+        // forward, an Open Pane press hides it again.
+        let summon = self.presence.summoned();
+        crate::front::bring_forward(
+            window,
+            cx,
+            |this: &Self| !this.presence.hidden(),
+            move |this: &mut Self| this.presence.brought_forward(summon),
+        );
         if pops || !self.launcher.restorable_view() {
             self.launcher.show_root_search();
             // Popping to root search leaves the open views, as

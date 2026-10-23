@@ -49,8 +49,9 @@ pub(crate) const CONTEXT: &str = "RootSearch";
 /// input's wrapper carries it, so the keys bound to the query field (its
 /// selection keys, and the argument fields' edge keys, #205) take the
 /// keystrokes only there — an argument field's input, another editable
-/// text under the search field, keeps the element's own keys.
-const QUERY_FIELD: &str = "QueryField";
+/// text under the search field, keeps the element's own keys. A designed
+/// List's search field is the same input and carries it too (#470).
+pub(crate) const QUERY_FIELD: &str = "QueryField";
 /// The query field's placeholder on root search: the reference's "Search
 /// apps, commands, plugins…" in Pane's own terms — root search finds
 /// installed applications and commands, and Pane has extensions, not
@@ -276,6 +277,9 @@ impl LauncherWindow {
         // Root search's inline argument fields, when the selected row's
         // command declares any (#205): after the query, in this field.
         let arguments = self.render_argument_fields(cx);
+        // A command's search, or the update results, is a pushed view: its
+        // header shows the back button in the magnifier's place (#469).
+        let back = !matches!(self.launcher.screen(), Screen::Root { .. });
         div()
             .id("search")
             .debug_selector(|| "search".into())
@@ -297,6 +301,7 @@ impl LauncherWindow {
                 placeholder,
                 arguments,
                 loading,
+                back,
                 &visuals.theme,
                 cx,
             ))
@@ -305,12 +310,72 @@ impl LauncherWindow {
     }
 }
 
+/// The search header's magnifier, root search's: the drag region the
+/// window is moved by (see [`search_header`]).
+pub(crate) fn magnifier(theme: &Theme) -> AnyElement {
+    div()
+        .debug_selector(|| "search-magnifier".into())
+        .window_control_area(WindowControlArea::Drag)
+        .flex_none()
+        .flex()
+        .items_center()
+        .justify_center()
+        .size(px(44.))
+        .mx(px(-12.))
+        .child(glyph(
+            Glyph::Search,
+            theme.geometry.search_glyph_size,
+            theme.text_muted,
+        ))
+        .into_any_element()
+}
+
+/// A pushed view's back button in the search header, in the magnifier's
+/// place (#469), as Raycast's search bar shows one: the split views' back
+/// button (32 square, radius 8, the left arrow, washing on hover) centred
+/// in the magnifier's 44px hit target, whose layout box keeps the
+/// magnifier's 20px (−12px margins), so the field's text stays where it
+/// was when the button takes the magnifier's place. Its tooltip names the
+/// back key. A click goes back one level whatever the field holds
+/// ([`LauncherWindow::back_clicked`]); the button takes no focus, so the
+/// keyboard stays in the search field.
+pub(crate) fn back_button(theme: &Theme, cx: &mut Context<LauncherWindow>) -> AnyElement {
+    let hovered = theme.footer_button_open;
+    div()
+        .id("search-back")
+        .debug_selector(|| "search-back".into())
+        .group("search-back")
+        .flex_none()
+        .flex()
+        .items_center()
+        .justify_center()
+        .size(px(44.))
+        .mx(px(-12.))
+        .cursor_pointer()
+        .role(Role::Button)
+        .aria_label("Back")
+        .tooltip(crate::ui::tooltip::text_tooltip(
+            crate::ui::split_view::back_tooltip(cx),
+            crate::ui::tooltip::TooltipLook::of(theme),
+        ))
+        .on_click(cx.listener(|this, _: &gpui::ClickEvent, window, cx| {
+            this.back_clicked(window, cx);
+        }))
+        .child(
+            crate::ui::split_view::back_button(theme)
+                .group_hover("search-back", move |button| button.bg(hovered)),
+        )
+        .into_any_element()
+}
+
 /// The search header's chrome: the reference's 64px row — the magnifier,
 /// the 20px horizontal padding, the 14px gap and the hairline below —
 /// around the editable text element `input`, which is the caller's own
 /// (the launcher's query field, or another search field built the same
 /// way), and root search's inline argument fields after the query, when
-/// the selected row's command declares any (#205).
+/// the selected row's command declares any (#205). With `back` — a pushed
+/// view's header — the back button ([`back_button`]) takes the
+/// magnifier's place (#469).
 ///
 /// The magnifier's wrapper is the search header's drag region: with the
 /// native title bar hidden, the window can be moved by grabbing the icon —
@@ -343,11 +408,17 @@ pub(crate) fn search_header(
     placeholder: &str,
     arguments: Option<AnyElement>,
     loading: Option<loading::LoadingBar>,
+    back: bool,
     theme: &Theme,
     cx: &mut Context<LauncherWindow>,
 ) -> Div {
     let geometry = &theme.geometry;
     let typography = &theme.typography;
+    let lead = if back {
+        back_button(theme, cx)
+    } else {
+        magnifier(theme)
+    };
     let field = div()
         .flex()
         .items_center()
@@ -356,21 +427,7 @@ pub(crate) fn search_header(
         .on_action(cx.listener(LauncherWindow::field_right))
         .on_action(cx.listener(LauncherWindow::field_home))
         .on_action(cx.listener(LauncherWindow::field_end))
-        .child(
-            div()
-                .window_control_area(WindowControlArea::Drag)
-                .flex_none()
-                .flex()
-                .items_center()
-                .justify_center()
-                .size(px(44.))
-                .mx(px(-12.))
-                .child(glyph(
-                    Glyph::Search,
-                    geometry.search_glyph_size,
-                    theme.text_muted,
-                )),
-        )
+        .child(lead)
         .child(
             div().key_context(QUERY_FIELD).flex_1().min_w(px(0.)).child(
                 text_input("query")

@@ -13,14 +13,6 @@
 
 use std::time::{Duration, Instant};
 
-/// How long after an accepted Open Pane press another press of the same
-/// binding is treated as the repeat of a key still held, not a new press.
-/// The Windows and X11 adapters stop the system's key repeat at its source
-/// (`MOD_NOREPEAT`, detectable auto-repeat); macOS's Carbon hot keys
-/// report a held key again, so the window keeps the guard itself. A
-/// genuine second press after this long toggles again.
-const OPEN_PANE_REPEAT: Duration = Duration::from_millis(600);
-
 /// A window size in logical pixels, as the window reports it.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct WindowSize {
@@ -31,9 +23,8 @@ pub(crate) struct WindowSize {
 /// What an Open Pane press does (see [`Presence::press`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Press {
-    /// The repeat of a key still held: nothing.
-    Repeat,
-    /// Hide the launcher: it is shown and has the focus.
+    /// Hide the launcher: it is shown and has the focus, or was summoned
+    /// and has not been seen to lose it since.
     Hide,
     /// Show and focus the launcher: it is hidden, or shown without the
     /// focus (another application's, or the Settings window's — its focus
@@ -62,9 +53,14 @@ pub(crate) struct Fit {
 /// The launcher window's presence (see the module docs).
 #[derive(Default)]
 pub(crate) struct Presence {
-    /// When the Open Pane hotkey was last accepted, so the repeats of a
-    /// held key do not toggle again and again (see [`OPEN_PANE_REPEAT`]).
-    open_pane_press: Option<Instant>,
+    /// The summon still bringing the launcher forward, by its number: the
+    /// system brings a window forward on its own time, so a press that
+    /// comes before the window is active — a quick second press, a press
+    /// while it opens — hides the launcher the first one summoned rather
+    /// than summoning it again (#467).
+    summoning: Option<u64>,
+    /// The number the last summon was given.
+    summons: u64,
     /// Whether the launcher window is hidden by the Open Pane hotkey —
     /// hidden, not closed: Pane keeps running, and the next press shows
     /// the same window and the same launcher again. Drives the toggle's
@@ -86,28 +82,48 @@ impl Presence {
         self.hidden
     }
 
-    /// An Open Pane press at `now`, with the window `active` or not: a
-    /// press within [`OPEN_PANE_REPEAT`] of the last one accepted is the
-    /// repeat of a key still held; otherwise the launcher hides when it is
-    /// shown and has the focus, and is summoned when it does not.
-    pub(crate) fn press(&mut self, now: Instant, active: bool) -> Press {
-        if self
-            .open_pane_press
-            .is_some_and(|last| now.duration_since(last) < OPEN_PANE_REPEAT)
-        {
-            return Press::Repeat;
-        }
-        self.open_pane_press = Some(now);
-        if !self.hidden && active {
+    /// An Open Pane press, with the window `active` or not: the launcher
+    /// hides when it is shown and has the focus — or was just summoned,
+    /// its activation not seen yet — and is summoned when it does not.
+    /// Every press is a toggle, however soon after the last one: the
+    /// system adapters report a held key once (`MOD_NOREPEAT` and the
+    /// hook's repeat rule on Windows, the grab's held state on X11, the
+    /// Carbon hot key's release on macOS), so a press here is always the
+    /// user's (#467).
+    pub(crate) fn press(&mut self, active: bool) -> Press {
+        if !self.hidden && (active || self.summoning.is_some()) {
             Press::Hide
         } else {
             Press::Summon
         }
     }
 
+    /// The launcher is being summoned: until the summon this answers is
+    /// over ([`Presence::brought_forward`]), a press hides it.
+    pub(crate) fn summoned(&mut self) -> u64 {
+        self.summons += 1;
+        self.summoning = Some(self.summons);
+        self.summons
+    }
+
+    /// The summon `summon` has brought the launcher forward, or tried to:
+    /// from now on the window's own focus decides what a press does. A
+    /// later summon's is not ended by an earlier one's.
+    pub(crate) fn brought_forward(&mut self, summon: u64) {
+        if self.summoning == Some(summon) {
+            self.summoning = None;
+        }
+    }
+
+    /// The window became active: whatever summon brought it, it is over.
+    pub(crate) fn activated(&mut self) {
+        self.summoning = None;
+    }
+
     /// The launcher was hidden at `now`.
     pub(crate) fn hide(&mut self, now: Instant) {
         self.hidden = true;
+        self.summoning = None;
         self.hidden_at = Some(now);
     }
 
@@ -218,36 +234,57 @@ mod tests {
     }
 
     #[test]
-    fn a_press_within_600ms_of_the_last_accepted_one_is_a_repeat() {
-        let start = Instant::now();
+    fn a_press_hides_only_a_launcher_shown_with_the_focus() {
         let mut presence = Presence::default();
-        assert_eq!(presence.press(start, true), Press::Hide);
-        presence.hide(start);
-        let held = start + Duration::from_millis(599);
-        assert_eq!(presence.press(held, true), Press::Repeat);
-        // A repeat is not accepted, so the guard still counts from the
-        // first press.
-        let again = start + Duration::from_millis(600);
-        assert_eq!(presence.press(again, true), Press::Summon);
+        assert_eq!(presence.press(false), Press::Summon, "shown, no focus");
+        assert_eq!(presence.press(true), Press::Hide, "shown, focused");
+        presence.hide(Instant::now());
+        assert_eq!(presence.press(true), Press::Summon, "hidden");
+        assert_eq!(presence.press(false), Press::Summon, "hidden");
     }
 
     #[test]
-    fn a_press_hides_only_a_launcher_shown_with_the_focus() {
-        let mut now = Instant::now();
+    fn every_press_toggles_however_soon_it_follows_the_last() {
         let mut presence = Presence::default();
-        let mut press = |presence: &mut Presence, active| {
-            now += OPEN_PANE_REPEAT;
-            presence.press(now, active)
-        };
-        assert_eq!(
-            press(&mut presence, false),
-            Press::Summon,
-            "shown, no focus"
-        );
-        assert_eq!(press(&mut presence, true), Press::Hide, "shown, focused");
         presence.hide(Instant::now());
-        assert_eq!(press(&mut presence, true), Press::Summon, "hidden");
-        assert_eq!(press(&mut presence, false), Press::Summon, "hidden");
+        // Pressed again and again with no time between: each press is
+        // the user's, and toggles. The summoned launcher's activation is
+        // not seen yet when the next press comes, and it still hides.
+        for _ in 0..3 {
+            assert_eq!(presence.press(false), Press::Summon);
+            assert!(presence.show());
+            presence.summoned();
+            assert_eq!(presence.press(false), Press::Hide);
+            presence.hide(Instant::now());
+        }
+        // A summon over before the next press: the window's focus
+        // decides again.
+        assert_eq!(presence.press(false), Press::Summon);
+        presence.show();
+        let summon = presence.summoned();
+        presence.brought_forward(summon);
+        assert_eq!(presence.press(true), Press::Hide);
+    }
+
+    #[test]
+    fn a_summoned_launcher_that_lost_the_focus_is_brought_forward_again() {
+        let mut presence = Presence::default();
+        presence.hide(Instant::now());
+        assert_eq!(presence.press(false), Press::Summon);
+        presence.show();
+        presence.summoned();
+        // An earlier summon's end does not end a later one's.
+        let first = presence.summoned();
+        let second = presence.summoned();
+        presence.brought_forward(first);
+        assert_eq!(presence.press(false), Press::Hide, "the second still runs");
+        // It came forward, then another window took the focus: a press
+        // brings it forward rather than hiding it.
+        presence.brought_forward(second);
+        assert_eq!(presence.press(false), Press::Summon);
+        presence.summoned();
+        presence.activated();
+        assert_eq!(presence.press(false), Press::Summon, "active, then not");
     }
 
     #[test]

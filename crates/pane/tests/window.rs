@@ -1491,6 +1491,26 @@ fn query_has_focus(window: &Entity<LauncherWindow>, cx: &mut VisualTestContext) 
     cx.update(|window, cx| input.focus_handle(cx).is_focused(window))
 }
 
+/// Whether the launcher's window is hidden.
+fn hidden(window: &Entity<LauncherWindow>, cx: &mut VisualTestContext) -> bool {
+    cx.read_entity(window, |window, _| window.hidden())
+}
+
+/// Checks that an open handed the user off: the launcher closed, back on
+/// root search with its query empty and no status of its own, as Raycast
+/// pops to root (#468). Then shows it again, as the Open Pane hotkey
+/// does, on that root search.
+fn closed_to_root_and_shown_again(window: &Entity<LauncherWindow>, cx: &mut VisualTestContext) {
+    let view = settle(window, cx);
+    assert!(hidden(window, cx), "the launcher closed");
+    assert_eq!(view.query(), Some(""), "root search, its query empty");
+    assert_eq!(view.status, Status::Idle);
+    window.update_in(cx, |window, w, cx| window.show_again(w, cx));
+    let view = settle(window, cx);
+    assert!(!hidden(window, cx));
+    assert_eq!(view.query(), Some(""));
+}
+
 #[gpui::test]
 fn typing_in_root_search_narrows_the_results_and_enter_opens_the_best_match(
     cx: &mut TestAppContext,
@@ -1861,7 +1881,8 @@ fn replace_query(window: &Entity<LauncherWindow>, cx: &mut VisualTestContext, qu
 }
 
 /// A computed answer is drawn as the answer card (#96): under its
-/// command's title, named for what was typed and its answer, the selected
+/// command's title, its two sides over their captions (#472), named for
+/// what was typed and its answer, the selected
 /// result, whose primary action copies the answer. An expression with no
 /// answer shows the notice in its place and the field keeps focus; the
 /// expression completed brings the card back, selected.
@@ -1883,7 +1904,8 @@ fn a_computed_answer_shows_as_the_card_under_its_commands_title(cx: &mut TestApp
         label.bottom() + px(4.),
         "the list's gap and the card's margin"
     );
-    assert_eq!(card.size.height, px(20. + 44. + 16.));
+    // The values over their captions ("Expression", "Result"), 4 apart.
+    assert_eq!(card.size.height, px(20. + 44. + 4. + 17. + 16.));
     let nodes = accessible_nodes(cx);
     node(&nodes, "ListBoxOption", "reverse 42 = 24");
     // The footer's primary button gives way to the install's status
@@ -1997,9 +2019,11 @@ fn typing_an_applications_name_shows_it_and_enter_opens_it(cx: &mut TestAppConte
     until_announced(cx, "Launch Firefox, 1 of 3");
 
     cx.simulate_keystrokes("enter");
-    let view = settle(&window, cx);
-    assert_eq!(view.status, Status::Result("Opened Launch Firefox".into()));
+    settle(&window, cx);
     assert_eq!(*system.opened.lock().unwrap(), ["/apps/Firefox.desktop"]);
+    // The application opened: the launcher closed, and shows root search
+    // afresh next time, the field ready for typing (#468).
+    closed_to_root_and_shown_again(&window, cx);
     assert!(query_has_focus(&window, cx), "typing goes on in the field");
 }
 
@@ -2023,6 +2047,24 @@ impl pane_core::applications::Applications for TwoPythons {
     fn open(&self, _id: &str) -> Result<(), String> {
         Ok(())
     }
+}
+
+/// Chooses the Python of `Python312`, the second of [`TwoPythons`], from
+/// the rows listed: the arrows move the selection to its row, wherever
+/// what was learned so far ranks it, and Enter opens it.
+fn choose_python_312(window: &Entity<LauncherWindow>, cx: &mut VisualTestContext) {
+    let view = settle(window, cx);
+    let at = view
+        .rows
+        .iter()
+        .position(|row| row.id.ends_with("python-Python312"))
+        .expect("the second Python is listed");
+    let selected = view.selected.expect("a row is selected");
+    let key = if at > selected { "down" } else { "up" };
+    for _ in 0..at.abs_diff(selected) {
+        cx.simulate_keystrokes(key);
+    }
+    cx.simulate_keystrokes("enter");
 }
 
 /// What root search learns from what the user chooses (#199): choosing
@@ -2055,12 +2097,14 @@ fn choosing_the_second_of_two_equal_results_a_few_times_puts_it_first(cx: &mut T
         listed(cx)
     );
 
-    // The second Python is chosen three times; Enter opens it, and root
-    // search stays as it was.
+    // The second Python is chosen three times; Enter opens it, and the
+    // launcher closes back to root search (#468), where it is looked for
+    // again.
     for _ in 0..3 {
-        cx.simulate_keystrokes("down enter");
-        let view = settle(&window, cx);
-        assert_eq!(view.status, Status::Result("Opened Launch Python".into()));
+        choose_python_312(&window, cx);
+        closed_to_root_and_shown_again(&window, cx);
+        cx.simulate_input("python");
+        wait_for_rows(&window, cx, &["Launch Python", "Launch Python"]);
     }
     assert!(
         cx.read_entity(&window, |window, _| window
@@ -2070,10 +2114,6 @@ fn choosing_the_second_of_two_equal_results_a_few_times_puts_it_first(cx: &mut T
     );
 
     // The query again: the Python the user chose is first, for that query.
-    cx.simulate_keystrokes("escape");
-    settle(&window, cx);
-    cx.simulate_input("python");
-    wait_for_rows(&window, cx, &["Launch Python", "Launch Python"]);
     let view = settle(&window, cx);
     assert!(
         view.rows[0].id.ends_with("python-Python312"),
@@ -2100,13 +2140,15 @@ fn reset_ranking_from_the_actions_panel_clears_that_result(cx: &mut TestAppConte
     let (window, cx) = open_launcher(cx, launcher);
 
     // The second Python is chosen three times: it ranks first for that
-    // query, and its use is written.
+    // query, and its use is written. Each open closes the launcher back
+    // to root search (#468), where it is looked for again.
     cx.simulate_input("python");
     wait_for_rows(&window, cx, &["Launch Python", "Launch Python"]);
     for _ in 0..3 {
-        cx.simulate_keystrokes("down enter");
-        let view = settle(&window, cx);
-        assert_eq!(view.status, Status::Result("Opened Launch Python".into()));
+        choose_python_312(&window, cx);
+        closed_to_root_and_shown_again(&window, cx);
+        cx.simulate_input("python");
+        wait_for_rows(&window, cx, &["Launch Python", "Launch Python"]);
     }
     assert!(
         cx.read_entity(&window, |window, _| window
@@ -2598,7 +2640,8 @@ fn a_running_action_cannot_be_dispatched_again_through_the_footer_button(cx: &mu
     cx.simulate_click(button.center(), Modifiers::none());
 
     let view = settle(&window, cx);
-    assert_eq!(view.status, Status::Result("Opened Launch Firefox".into()));
+    assert_eq!(view.status, Status::Idle);
+    assert!(hidden(&window, cx), "the open closed the launcher (#468)");
     assert_eq!(
         *system.opened.lock().unwrap(),
         ["/apps/Firefox.desktop"],

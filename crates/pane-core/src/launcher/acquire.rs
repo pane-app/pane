@@ -14,7 +14,9 @@
 //! setup has not chosen, [`Launcher::first_setup`] lists the official
 //! extensions this system sets up, by their pins' titles and
 //! descriptions, with the defaults ticked (the choice screen, `choice`),
-//! and nothing is fetched until the user chooses Set Up. The choice is
+//! and nothing is installed until the user chooses Set Up — the list
+//! fetches each pinned revision in the background for its icon, and Set
+//! Up installs what it fetched (#466, `prefetch`). The choice is
 //! recorded with the packages: a default the user unticked is declined,
 //! as an uninstall declines one, and a declined default is never acquired
 //! by itself; Settings' Extensions group offers every official extension
@@ -40,6 +42,7 @@ use std::future::Future;
 use std::sync::Arc;
 
 use super::install::Stopped;
+use super::prefetch::Taken;
 use super::{DOWNLOADS_DIR, Entry, Launcher, Mode, Row, Screen, State, Status, off_thread};
 use crate::defaults::DefaultExtension;
 use crate::packages::{PackageIdentity, SourcePackage};
@@ -95,8 +98,13 @@ impl FirstSetup {
         }
     }
 
+    /// Whether the user made the choice.
+    pub(in crate::launcher) fn chosen(&self) -> bool {
+        self.chosen
+    }
+
     /// Whether the user declined the default extension `id`.
-    fn declines(&self, id: &str) -> bool {
+    pub(in crate::launcher) fn declines(&self, id: &str) -> bool {
         self.declined.iter().any(|declined| declined == id)
     }
 
@@ -325,13 +333,18 @@ impl Launcher {
 
     /// Shows first setup's choice (#283): the official extensions this
     /// system sets up, by their pins, the defaults ticked, and the Set Up
-    /// row selected.
+    /// row selected. Each pinned revision not fetched yet is fetched in
+    /// the background, and its row draws its own icon once it lands
+    /// (#466); one fetched already draws it at once.
     pub(in crate::launcher) fn show_first_setup(&self, state: &mut State) {
         let Some(defaults) = self.defaults.clone() else {
             return;
         };
-        let listed = super::choice::Listed::first_setup(&defaults.extensions);
+        let listed = super::choice::Listed::first_setup(&defaults.extensions, |id| {
+            state.prefetches.icon(id)
+        });
         self.show_choice(state, listed);
+        self.prefetch(state, &defaults.extensions);
     }
 
     /// Records first setup's choice — the ids of the defaults the user
@@ -556,10 +569,23 @@ impl Launcher {
         self.changed();
         // The fetch runs off the thread. A Git fetch has no byte progress
         // to follow (its answer is one pack), so the status line says what
-        // is being set up and nothing more until it ends.
+        // is being set up and nothing more until it ends. First setup's
+        // list may have fetched the revision already, or be fetching it
+        // (#466): it is taken, or its fetch's answer awaited, rather than
+        // fetched twice.
         let pin = extension.clone();
         let downloads = installation.dir.join(DOWNLOADS_DIR);
-        let fetched = off_thread(move || crate::defaults::fetch(&pin, &downloads)).await;
+        let fetch = move || off_thread(move || crate::defaults::fetch(&pin, &downloads));
+        let taken = self.lock().prefetches.take(&id);
+        let fetched = match taken {
+            Taken::Fetched(fetched) => Ok(fetched),
+            Taken::Landing(landing) => match landing.await {
+                Ok(fetched) => fetched,
+                // The fetch was forgotten without an answer.
+                Err(_) => fetch().await,
+            },
+            Taken::Nothing => fetch().await,
+        };
         let fetched = match fetched {
             Ok(fetched) => fetched,
             Err(why) => return failed(self, why.to_string()),

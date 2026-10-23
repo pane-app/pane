@@ -16,6 +16,7 @@ mod app;
 mod background;
 mod extension_views;
 mod features;
+mod front;
 mod keyboard;
 mod links;
 mod off_taskbar;
@@ -147,10 +148,11 @@ pub const APP_ID: &str = "pane";
 /// The committed pins name the eight repositories under
 /// `https://github.com/pane-app/<id>`, each at the commit of its
 /// repository's release for extension API 0.2 (ADR 0046), built from the
-/// published `pane-extension` crate (#287) — v0.6.1 for the calculator,
-/// applications and quicklinks, v0.9.1 for files, v0.7.1 for the clipboard
-/// history (#279, #282), v0.3.1 for Run and v0.2.1 for System Commands and
-/// Switch Windows (#301). A release's pins are what a fresh
+/// published `pane-extension` crate (#287) — v0.6.3 for the calculator
+/// (#472), v0.6.1 for applications and quicklinks, v0.9.1 for files,
+/// v0.7.1 for the clipboard history (#279, #282), v0.3.2 for Run and
+/// v0.2.2 for System Commands (#471), and v0.2.1 for Switch Windows
+/// (#301). A release's pins are what a fresh
 /// install acquires, so they are moved with the release that tested
 /// them, not between releases. A development build can replace them
 /// with a file of its own through `PANE_DEFAULTS` (see
@@ -235,6 +237,9 @@ pub fn open_launcher_window<V: 'static + gpui::Render>(
         #[cfg(target_os = "macos")]
         hide_window_buttons(window);
         off_taskbar::keep_off_taskbar(window);
+        // Alt+Space, or a lone Alt, never opens Windows' system menu on
+        // the launcher (#467).
+        front::keep_system_menu_closed(window);
         build(window, cx)
     })?;
     // Shown as GPUI shows a window it opens visible, taking the focus.

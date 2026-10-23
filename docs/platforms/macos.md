@@ -255,7 +255,8 @@ The smoke's last phase (screenshots 44 and 45):
    applications to root search as the [Applications](../applications.md)
    default extension does.
 3. Types "pane smoke", checks the selected row and presses Return.
-4. Checks "Opened Launch Pane Smoke App" and the marker.
+4. Checks the marker; the launcher closed (#468), which the screenshot
+   shows.
 
 The adapter tests also open such a bundle and require Calculator among
 the system's applications.

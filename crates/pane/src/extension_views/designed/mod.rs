@@ -249,37 +249,42 @@ impl LauncherWindow {
             .min_w(px(0.))
             .items_center()
             .gap(geometry.search_gap)
+            // The caret keys the query field's context binds (#205) move
+            // the caret here as in root search's field, which has no
+            // argument fields to cross into on this screen.
+            .on_action(cx.listener(Self::field_left))
+            .on_action(cx.listener(Self::field_right))
+            .on_action(cx.listener(Self::field_home))
+            .on_action(cx.listener(Self::field_end))
+            // A designed List is a pushed view: the back button in the
+            // magnifier's place (#469).
+            .child(crate::features::root_search::back_button(&theme, cx))
+            // The query input under the query field's own context, as root
+            // search's is: the selection keys bound there take Up and Down
+            // ahead of the text element's own, which would move the caret
+            // to the text's start or end instead of the selection (#470).
             .child(
                 div()
-                    .window_control_area(gpui::WindowControlArea::Drag)
-                    .flex_none()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .size(px(44.))
-                    .mx(px(-12.))
-                    .child(crate::ui::icon::glyph(
-                        crate::ui::icon::Glyph::Search,
-                        geometry.search_glyph_size,
-                        theme.text_muted,
-                    )),
-            )
-            .child(
-                gpui_elements::editable_text::text_input("query")
-                    .state(input.downgrade())
-                    .placeholder(placeholder.clone())
-                    .placeholder_color(theme.text_placeholder)
-                    .caret_color(theme.accent_text)
-                    .selection_color(theme.selection_wash)
-                    .marked_color(theme.accent_text)
-                    .text_size(theme.typography.search_size)
-                    .text_color(theme.text_query)
-                    .font_family(theme.typography.family.clone())
-                    .font_features(theme.typography.features.clone())
-                    .w_full()
+                    .key_context(crate::features::root_search::QUERY_FIELD)
+                    .flex_1()
                     .min_w(px(0.))
-                    .whitespace_nowrap()
-                    .overflow_x_scroll(),
+                    .child(
+                        gpui_elements::editable_text::text_input("query")
+                            .state(input.downgrade())
+                            .placeholder(placeholder.clone())
+                            .placeholder_color(theme.text_placeholder)
+                            .caret_color(theme.accent_text)
+                            .selection_color(theme.selection_wash)
+                            .marked_color(theme.accent_text)
+                            .text_size(theme.typography.search_size)
+                            .text_color(theme.text_query)
+                            .font_family(theme.typography.family.clone())
+                            .font_features(theme.typography.features.clone())
+                            .w_full()
+                            .min_w(px(0.))
+                            .whitespace_nowrap()
+                            .overflow_x_scroll(),
+                    ),
             )
             .when_some(dropdown, |field, dropdown| field.child(dropdown));
         let header = div()
