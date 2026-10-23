@@ -105,9 +105,10 @@ bash install.sh --app-dir DIR  # or into another folder
 The script (`scripts/install-macos.sh`) installs for one user. It builds
 the `Pane.app` bundle in `$HOME/Applications`, a folder of the user's own,
 so no administrator rights are needed. The bundle is made from the
-package's `pane` program and `Info.plist` (`Contents/MacOS/pane` and
-`Contents/Info.plist`), and the script checks what it installed by
-running that program's `--version`.
+package's `pane` program, `Info.plist` and the icon it names
+(`Contents/MacOS/pane`, `Contents/Info.plist` and
+`Contents/Resources/pane.icns`), and the script checks what it installed
+by running that program's `--version`.
 
 Nothing is put on the PATH. The bundle opens with a double-click in
 Finder or `open ~/Applications/Pane.app`, and the program for a terminal
@@ -165,6 +166,18 @@ runs on, and the artifacts an artifact source serves:
   program (release profile), the PowerShell install script and a
   `README.txt`. It is a zip because a Windows user unzips with whatever is
   at hand, and Windows has no tar of its own a user can rely on.
+  `pane.exe` carries Pane's icon and version information, which the pane
+  crate's build script compiles in (`crates/pane/build.rs`).
+- `pane-<version>-macos-<arch>.zip` is the macOS package, built by
+  `cargo xtask package-macos`. Under `pane/` it holds the `pane` program
+  (release profile), the install script, a `README.txt`, and the
+  `Info.plist` and icon (`pane.icns`) of the `Pane.app` bundle the script
+  builds.
+- Every package also holds Pane's licence (`LICENSE.txt`) and the
+  third-party notices (`THIRD-PARTY-NOTICES.txt`), and its README says
+  where the source of its version is ([licensing](licensing.md)). The
+  icons are drawn from Pane's mark by `scripts/icons/app-icons.py` and
+  committed (`crates/pane/assets/app/`).
 - `artifacts/` is what an artifact source serves
   ([below](#the-artifact-source)): the index `pane-defaults.json`, naming
   the application package a Pane application update downloads, and the

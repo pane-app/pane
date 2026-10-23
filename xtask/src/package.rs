@@ -6,9 +6,11 @@
 //!
 //! - `pane-<version>-<os>-<arch>[-dev].tar.gz` (Linux) or `.zip`
 //!   (Windows and macOS) — the package a clean machine of that system
-//!   installs from: the `pane` program, the install script and a README
-//!   (and, on Linux, a desktop entry, on macOS the `Info.plist` of the
-//!   `Pane.app` bundle the install script makes), and none of the default
+//!   installs from: the `pane` program, the install script, a README, Pane's
+//!   licence (`LICENSE.txt`) and the third-party notices
+//!   (`THIRD-PARTY-NOTICES.txt`, see `notices.rs`) (and, on Linux, a
+//!   desktop entry, on macOS the `Info.plist` and icon of the `Pane.app`
+//!   bundle the install script makes), and none of the default
 //!   extensions (internet-first: Pane fetches them at first setup, from
 //!   the commits this release pins). A `.sha256` file beside it names its
 //!   digest; nothing is signed, since no signing credentials exist yet.
@@ -100,17 +102,33 @@ impl System {
         }
     }
 
-    /// The one file this system's package holds besides the program, the
-    /// install script and the README: Linux's desktop entry, which Windows'
-    /// install script replaces with a Start-menu shortcut and macOS's
-    /// `Info.plist`, which its script builds the `Pane.app` bundle around and
-    /// which names the package's `version`.
-    fn extra_file(self, version: &str) -> Option<(&'static str, String)> {
-        match self {
-            System::Linux => Some(("pane.desktop", desktop_entry())),
-            System::Windows => None,
-            System::Macos => Some(("Info.plist", app_plist(version))),
-        }
+    /// The files this system's package holds besides the program, the
+    /// install script, the README and the notices: Linux's desktop entry,
+    /// which Windows' install script replaces with a Start-menu shortcut
+    /// (pane.exe carries its own icon, from the pane crate's build script),
+    /// and macOS's `Info.plist` and the icon it names, which its script
+    /// builds the `Pane.app` bundle around (the `Info.plist` naming the
+    /// package's `version`).
+    fn extra_files(
+        self,
+        root: &Path,
+        version: &str,
+    ) -> Result<Vec<(&'static str, Vec<u8>)>, String> {
+        Ok(match self {
+            System::Linux => vec![("pane.desktop", desktop_entry().into_bytes())],
+            System::Windows => Vec::new(),
+            System::Macos => {
+                let icon = root.join("crates/pane/assets/app/pane.icns");
+                vec![
+                    ("Info.plist", app_plist(version).into_bytes()),
+                    (
+                        "pane.icns",
+                        fs::read(&icon)
+                            .map_err(|error| format!("read {} failed: {error}", icon.display()))?,
+                    ),
+                ]
+            }
+        })
     }
 }
 
@@ -393,7 +411,8 @@ fn pack_tgz(
 }
 
 /// Assembles the package: the `pane` program, the install script, a
-/// README (and, on Linux, a desktop entry) in `pane/`, packed as
+/// README, the licence and the notices (and the system's extra files) in
+/// `pane/`, packed as
 /// `pane-<version>-<os>-<arch>[-dev].tar.gz` on Linux and
 /// `pane-<version>-<os>-<arch>[-dev].zip` on Windows, with a `.sha256`
 /// file beside it. The package is the same bytes wherever it is built: the
@@ -427,7 +446,16 @@ fn assemble_package(
     }
     fs::write(stage.join("README.txt"), readme(system, dev, version))
         .map_err(|error| error.to_string())?;
-    if let Some((file, contents)) = system.extra_file(version.unwrap_or(VERSION)) {
+    // Pane's licence, with `\n` line endings whatever the checkout's, so the
+    // package is the same bytes from any checkout; and the notices of the
+    // third-party parts the program is built from.
+    let licence = fs::read_to_string(root.join("LICENSE-GPL"))
+        .map_err(|error| format!("read LICENSE-GPL failed: {error}"))?
+        .replace("\r\n", "\n");
+    fs::write(stage.join("LICENSE.txt"), licence).map_err(|error| error.to_string())?;
+    let notices = crate::notices::third_party_notices(root, version.unwrap_or(VERSION))?;
+    fs::write(stage.join("THIRD-PARTY-NOTICES.txt"), notices).map_err(|error| error.to_string())?;
+    for (file, contents) in system.extra_files(root, version.unwrap_or(VERSION))? {
         fs::write(stage.join(file), contents).map_err(|error| error.to_string())?;
     }
     let files = read_files(&stage, "")?;
@@ -465,11 +493,35 @@ fn arch() -> Option<&'static str> {
 /// reports.
 fn readme(system: System, dev: bool, version: Option<&str>) -> String {
     let version = version.unwrap_or(VERSION);
-    match system {
+    let readme = match system {
         System::Linux => readme_linux(dev, version),
         System::Windows => readme_windows(dev, version),
         System::Macos => readme_macos(dev, version),
-    }
+    };
+    format!("{}\n\n{}", readme.trim_end(), licence_and_source(version))
+}
+
+/// The README's last section, the same on every system: the licence the
+/// GPL asks a copy of the program to come with, the notices, and where the
+/// source of this version is (`docs/licensing.md`).
+fn licence_and_source(version: &str) -> String {
+    format!(
+        "LICENCE AND SOURCE
+
+  Pane is free software: you can redistribute it and modify it under
+  the GNU General Public License, version 3 or (at your option) any
+  later version, in LICENSE.txt beside this README. It comes with no
+  warranty. The third-party parts the program is built from, and their
+  licences, are in THIRD-PARTY-NOTICES.txt.
+
+  The source code of this version is the v{version} tag of Pane's
+  repository: browse it at https://github.com/pane-app/pane/tree/v{version}
+  or download it from the release's page,
+  https://github.com/pane-app/pane/releases/tag/v{version}. The
+  third-party crates' sources are the versions its Cargo.lock pins, from
+  crates.io and the git repositories it names.
+"
+    )
 }
 
 fn readme_linux(dev: bool, version: &str) -> String {
@@ -623,8 +675,8 @@ INSTALL
 
   It builds the Pane.app bundle in ~/Applications — a folder of your
   own, so no administrator rights are needed — around the pane program
-  and this package's Info.plist, and runs `pane --version` to check
-  what it installed. Open Pane with a double-click in Finder, or:
+  and this package's Info.plist and icon, and runs `pane --version` to
+  check what it installed. Open Pane with a double-click in Finder, or:
 
     open ~/Applications/Pane.app
 
@@ -678,6 +730,7 @@ Categories=Utility;\n"
 
 /// The `Info.plist` of the `Pane.app` bundle the install script builds:
 /// the minimum Launch Services reads — the executable to run, the bundle's
+/// icon (`pane.icns`, which the script puts in `Contents/Resources`), its
 /// identity and name, and its version: the package's, which the program
 /// reports too. Nothing more is declared, because nothing more is honestly
 /// known: the bundle declares no document types, no services and no
@@ -692,6 +745,7 @@ fn app_plist(version: &str) -> String {
 <plist version=\"1.0\">\n\
 <dict>\n\
 \t<key>CFBundleExecutable</key><string>pane</string>\n\
+\t<key>CFBundleIconFile</key><string>pane.icns</string>\n\
 \t<key>CFBundleIdentifier</key><string>dev.pane.launcher</string>\n\
 \t<key>CFBundleName</key><string>Pane</string>\n\
 \t<key>CFBundlePackageType</key><string>APPL</string>\n\

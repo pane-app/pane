@@ -4642,6 +4642,7 @@ version = "0.1.0"
 dependencies = [
  "core-graphics",
  "crc32fast",
+ "embed-resource",
  "flate2",
  "futures",
  "gpui-ce",
