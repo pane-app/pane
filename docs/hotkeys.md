@@ -142,7 +142,16 @@ other key pressed with it passes through untouched, so Win+E, Win+R and
 Win+D keep Windows' meaning. Pane injects a tagged neutral key before the
 tap's release reaches Explorer, so the Start menu does not open as well.
 The Start menu stays reachable from the taskbar's Start button and
-Ctrl+Esc. The "Show the taskbar when Pane opens" choice keeps a taskbar
+Ctrl+Esc.
+
+Other tools that take the Windows key (AutoHotkey, PowerToys, a launcher
+with a Windows-key hotkey of its own) mask its release the same way,
+with an injected key no keyboard has (0x07, 0xE8, 0xFC or 0xFF). Such a
+key between the press and the release does not break Pane's tap
+(#467), so the tap still opens Pane while they run. A real key between,
+injected or pressed, still makes it Win+&lt;key&gt;. Two tools bound to
+the same tap both act on it: a Windows-key binding in another launcher
+is best removed while Pane has the Windows key. The "Show the taskbar when Pane opens" choice keeps a taskbar
 that hides itself on screen while the launcher is open, so the Start
 button stays one click away.
 
@@ -580,7 +589,8 @@ extension cannot assign, read or declare one (no WIT or manifest change).
     tools' injected keys firing the binding without being swallowed or
     counted as the user's
   - #260's kinds: taps within and beyond the window, double taps
-    likewise, a key between breaking both, sides serving only their own
+    likewise, a key between breaking both (another tool's injected mask
+    key excepted, #467), sides serving only their own
     chords, the numpad's Enter told from the main one, the Windows key's
     release masked after a chord Pane swallowed, a single and a double tap
     of the same modifier each firing where a record holds both, and a

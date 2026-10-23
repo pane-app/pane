@@ -37,6 +37,13 @@
 //!   keyboard's; see [`Recognizer::physical_events`]) — but the hook
 //!   still sees them, which the liveness watchdog counts
 //!   ([`Recognizer::events`]);
+//! - a mask key another tool injected — one of [`MASK_KEYS`], keys no
+//!   keyboard has, which AutoHotkey, PowerToys and launchers with a
+//!   Windows-key hotkey of their own inject to keep the Start menu
+//!   closed, as Pane's own mask does — is passed through and breaks
+//!   nothing: a lone tap of the Windows key with such a key between is
+//!   still a lone tap to Pane, so its Windows-key hotkey works beside
+//!   them (#467);
 //! - while the Windows key is held, a key Pane took — the key of a chord
 //!   it swallowed, or the second press of a double tap it fired — makes
 //!   the Windows key's release carry [`Decision::Tap`] with its mask, or
@@ -383,6 +390,14 @@ struct Double {
 /// modifier it is.
 const TAP_MS: u64 = 500;
 
+/// The keys tools inject to mask a modifier's release — to keep the
+/// Start menu closed, or a menu bar from taking an Alt — and that no
+/// keyboard has: 0x07 (unassigned), 0xE8 (unassigned, AutoHotkey's mask
+/// key), `VK_NONAME` (0xFC, Pane's own) and 0xFF (no key). Injected by
+/// another tool, one breaks no tap (see the module's notes); reported by
+/// a keyboard, which never sends them, one is a key like any other.
+const MASK_KEYS: [u32; 4] = [0x07, 0xE8, 0xFC, 0xFF];
+
 /// How long a double tap's two presses may be apart, with nothing between
 /// them: 400 ms, as the parent specification proposes (#260).
 const DOUBLE_MS: u64 = 400;
@@ -469,6 +484,10 @@ impl Recognizer {
         }
         if !event.injected {
             self.physical += 1;
+        } else if MASK_KEYS.contains(&event.key) {
+            // Another tool's mask: its key is nothing the user pressed,
+            // so it breaks no tap and binds nothing (#467).
+            return Decision::Pass;
         }
         let Some((at, physical)) = modifier(event.key) else {
             return self.step_key(event);
