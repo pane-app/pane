@@ -25,10 +25,9 @@ use gpui::{
 use pane::{APP_VERSION, LauncherWindow, SettingsWindow};
 use pane_core::autostart::{Autostart, Registration};
 use pane_core::changes;
-use pane_core::defaults::ArtifactSource;
 use pane_core::develop::{Build, BuildJob, BuildOutcome, Builder, Toolchains};
 use pane_core::hotkeys::{HookHealth, HotkeyError, Hotkeys, Shortcut};
-use pane_core::{Launcher, PackageIdentity, Runtime, Screen, Status, Target};
+use pane_core::{Launcher, PackageIdentity, ReleaseSource, Runtime, Screen, Status, Target};
 use tempfile::TempDir;
 
 #[path = "support/settle.rs"]
@@ -42,10 +41,10 @@ mod samples;
 #[path = "support/paint.rs"]
 mod paint;
 
-#[path = "../../pane-core/tests/support/artifacts.rs"]
-mod artifacts;
+#[path = "../../pane-core/tests/support/releases.rs"]
+mod releases;
 
-use artifacts::Artifacts;
+use releases::Releases;
 
 // The default extensions' repositories, pane-core's test support.
 #[path = "../../pane-core/tests/support/defaults.rs"]
@@ -1343,15 +1342,16 @@ fn a_refused_documentation_link_is_explained_on_the_page(cx: &mut TestAppContext
 }
 
 /// The world of one About-page update test: the folder Pane's program is
-/// installed in, the folder its data lives in, and a local artifact source
-/// on 127.0.0.1 (pane-core's test support; nothing reaches the network or
-/// Pane's published downloads) serving the index an update check reads —
+/// installed in, the folder its data lives in, and a stand-in for Pane's
+/// releases on 127.0.0.1 (pane-core's test support; nothing reaches the
+/// network or Pane's published releases) serving the listing an update
+/// check reads —
 /// the same fixture `pane-core`'s application-update tests use, driven
 /// here through the highest boundary, the Settings window's own page.
 struct UpdateDirs {
     install: TempDir,
     data: TempDir,
-    artifacts: Artifacts,
+    releases: Releases,
 }
 
 impl UpdateDirs {
@@ -1359,7 +1359,7 @@ impl UpdateDirs {
         UpdateDirs {
             install: tempfile::tempdir().unwrap(),
             data: tempfile::tempdir().unwrap(),
-            artifacts: Artifacts::start(),
+            releases: Releases::start(),
         }
     }
 
@@ -1377,17 +1377,17 @@ impl UpdateDirs {
     /// `program` as the program an install replaces this Pane's with, as
     /// `pane-core`'s own tests publish one.
     fn publish_update(&self, version: &str, program: &[u8]) {
-        let zip = artifacts::pack_zip(&[("pane", program.to_vec())]);
+        let zip = releases::pack_zip(&[("pane", program.to_vec())]);
         let target = Target::current()
             .expect("Pane names this system's target")
             .id()
             .to_owned();
-        self.artifacts.publish_application(version, &target, &zip);
+        self.releases.publish_application(version, &target, &zip);
     }
 }
 
 /// Opens the launcher window over a launcher that checks the local
-/// artifact source for updates of the version `version` it runs from
+/// releases for updates of the version `version` it runs from
 /// `dirs`' program file — the same wiring the binary's is, including the
 /// changes channel whose other end the window follows, so background
 /// changes (a check's answer, an install's progress) redraw the windows
@@ -1405,7 +1405,7 @@ fn open_updating_launcher<'a>(
     )
     .with_application_update(
         version,
-        ArtifactSource::local(dirs.artifacts.url()).unwrap(),
+        ReleaseSource::local(dirs.releases.url()).unwrap(),
         dirs.program(),
     )
     .with_development(Arc::new(Toolchains::from_env(None)), sender);
@@ -1445,8 +1445,8 @@ fn the_about_page_explains_where_no_release_source_is_configured(cx: &mut TestAp
     let (_launcher, _links, cx) = open_launcher(cx);
     let (_settings, mut settings_cx) = open_about(cx);
 
-    // A launcher with no updater wired — no artifact source given, as a
-    // development checkout without PANE_ARTIFACTS runs — is explained as
+    // A launcher with no updater wired — no release source given, as a
+    // development checkout without PANE_RELEASES runs — is explained as
     // what it is: no release to check, no claim of a feed or an available
     // release, and no row to click.
     until_text(&mut settings_cx, "This build has no update source.");
@@ -1493,9 +1493,8 @@ fn an_unreachable_release_source_is_explained_on_the_page(cx: &mut TestAppContex
     dirs.publish_update("99.0.0", b"the 99.0.0 program");
     dirs.running(b"the 0.1.0 program");
     let (launcher, cx) = open_updating_launcher(cx, &dirs, "0.1.0");
-    // Nothing answers where the artifact source is: the check cannot be
-    // made.
-    drop(dirs.artifacts);
+    // Nothing answers where the releases are: the check cannot be made.
+    drop(dirs.releases);
     let (_settings, mut settings_cx) = open_about(cx);
 
     click_row(&mut settings_cx, "about-check-update");
@@ -1520,7 +1519,7 @@ fn an_unreachable_release_source_is_explained_on_the_page(cx: &mut TestAppContex
     let view = cx.read_entity(&launcher, |window, _| window.launcher().view());
     assert!(
         matches!(&view.status, Status::Error(text) if text.starts_with(
-            "Could not check for a Pane update: Pane's downloads at"
+            "Could not check for a Pane update: Pane's releases at"
         )),
         "the status line says it too: {:?}",
         view.status
@@ -1531,10 +1530,10 @@ fn an_unreachable_release_source_is_explained_on_the_page(cx: &mut TestAppContex
 fn a_failed_check_is_tried_again_from_the_page_and_finds_the_update(cx: &mut TestAppContext) {
     let dirs = UpdateDirs::new();
     dirs.running(b"the 0.1.0 program");
-    // The source answers its index with an error, retried as an
+    // The source answers its listing with an error, retried as an
     // interrupted acquisition is, so the check fails.
-    dirs.artifacts
-        .fail_status("pane-defaults.json", 503, usize::MAX);
+    dirs.releases
+        .fail_status(releases::LISTING, 503, usize::MAX);
     let (launcher, cx) = open_updating_launcher(cx, &dirs, "0.1.0");
     let (_settings, mut settings_cx) = open_about(cx);
 
@@ -1543,7 +1542,7 @@ fn a_failed_check_is_tried_again_from_the_page_and_finds_the_update(cx: &mut Tes
 
     // The source works again, with a newer version published: the retry
     // from the page finds it, and both entry points show the offer.
-    dirs.artifacts.stop_failing("pane-defaults.json");
+    dirs.releases.stop_failing(releases::LISTING);
     dirs.publish_update("99.0.0", b"the 99.0.0 program");
     click_row(&mut settings_cx, "about-check-update");
     until_text(&mut settings_cx, "Pane 99.0.0 is available");
@@ -1577,7 +1576,8 @@ fn the_page_offers_the_update_and_installs_it_by_the_users_choice(cx: &mut TestA
     // The package arrives in two pieces, so the page is seen following the
     // download as it goes.
     let file = format!("pane-99.0.0-{}.zip", Target::current().unwrap().id());
-    dirs.artifacts.stall(&file, 8, Duration::from_millis(1200));
+    dirs.releases
+        .stall(&releases::asset_path(&file), 8, Duration::from_millis(1200));
 
     // Installing is the user's choice, the row clicked: the page follows
     // the install's progress, and the answer when it lands.
@@ -1620,9 +1620,9 @@ fn a_failed_install_is_explained_and_the_offer_stays_to_try_again(cx: &mut TestA
     let (_settings, mut settings_cx) = open_about(cx);
     click_row(&mut settings_cx, "about-check-update");
     until_text(&mut settings_cx, "Pane 99.0.0 is available");
-    // The package the index names is not what arrives: its bytes were
-    // damaged, so they do not match the integrity the index gives.
-    dirs.artifacts.corrupt_application();
+    // The package the release names is not what arrives: its bytes were
+    // damaged, so they do not match the sha256 its `.sha256` gives.
+    dirs.releases.corrupt_application();
 
     click_row(&mut settings_cx, "about-update");
     until_text(&mut settings_cx, "Couldn't update to 99.0.0: ");
@@ -1630,10 +1630,7 @@ fn a_failed_install_is_explained_and_the_offer_stays_to_try_again(cx: &mut TestA
     // The failure is explained with the offer still offered, ready to be
     // chosen again; nothing changed.
     let (_, json) = accessibility(&mut settings_cx);
-    assert!(
-        json.contains("does not match the sha512 integrity"),
-        "{json}"
-    );
+    assert!(json.contains("does not match the sha256"), "{json}");
     assert!(
         settings_cx.debug_bounds("about-update").is_some(),
         "the offer stays"
@@ -1674,7 +1671,8 @@ fn an_interrupted_download_from_the_page_is_tried_again_and_lands(cx: &mut TestA
     // itself makes — the same retry the root row's install does — and
     // lands.
     let file = format!("pane-99.0.0-{}.zip", Target::current().unwrap().id());
-    dirs.artifacts.drop_after(&file, 16, 1);
+    dirs.releases
+        .drop_after(&releases::asset_path(&file), 16, 1);
 
     click_row(&mut settings_cx, "about-update");
     until_text(
@@ -1688,12 +1686,7 @@ fn an_interrupted_download_from_the_page_is_tried_again_and_lands(cx: &mut TestA
     );
     // The package was downloaded twice: the interrupted one, and the
     // retry that landed.
-    let downloads = dirs
-        .artifacts
-        .requests()
-        .iter()
-        .filter(|path| path.ends_with(".zip"))
-        .count();
+    let downloads = dirs.releases.downloaded(".zip");
     assert_eq!(downloads, 2, "the interrupted download was retried");
     // The status line answered the same landing, and neither entry
     // point offers the update any more.
@@ -1713,10 +1706,10 @@ fn leaving_the_page_while_a_check_runs_cancels_nothing(cx: &mut TestAppContext) 
     let dirs = UpdateDirs::new();
     dirs.publish_update("99.0.0", b"the 99.0.0 program");
     dirs.running(b"the 0.1.0 program");
-    // The index answers slowly, so the check is still running when the
+    // The listing answers slowly, so the check is still running when the
     // user leaves the page.
-    dirs.artifacts
-        .stall("pane-defaults.json", 8, Duration::from_millis(1200));
+    dirs.releases
+        .stall(releases::LISTING, 8, Duration::from_millis(1200));
     let (launcher, cx) = open_updating_launcher(cx, &dirs, "0.1.0");
     let (_settings, mut settings_cx) = open_about(cx);
 

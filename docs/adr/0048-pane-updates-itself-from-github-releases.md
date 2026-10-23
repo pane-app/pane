@@ -1,0 +1,23 @@
+# Pane updates itself from its GitHub releases
+
+Accepted 2026-10-23 by the user's decisions for Pane's first downloadable version ([#451](https://github.com/pane-app/pane/issues/451)): Pane's own update channel is GitHub Releases on `pane-app/pane`, and everything tied to the downloads domain Pane was to run goes. It settles what [ADR 0045](0045-official-extensions-live-in-their-own-repositories.md) left open ("the artifact source remains for Pane's own application updates, whose hosting stays open").
+
+Pane's application updates were to come from its own artifact source, a downloads host on a domain of Pane's own serving an index (`pane-defaults.json`) that named one package per system with its sha512 integrity. It was never deployed, so a release build's check always failed. Running it would have meant a server, a domain and an index to keep in step with every release.
+
+**One release serves every system.** A release of Pane is a GitHub release of `pane-app/pane`, tagged `v<version>`. Its assets are the packages `cargo xtask package-*` builds, one per system, named `pane-<version>-<os>-<arch>.zip` (Windows, macOS) or `.tar.gz` (Linux), each with a `<package>.sha256` beside it, as `sha256sum` writes one. The asset names are the contract between the packaging task and the updater; no index is published.
+
+**The check.** At start (and when the user asks), Pane lists the repository's newest releases through GitHub's API (`api.github.com/repos/pane-app/pane/releases`), without signing in. Drafts are left out; prereleases are kept while every release of Pane is a preview. Pane takes the newest release, by version, that carries this system's package, and offers it if it is newer than the version Pane runs. A release that carries only other systems' packages is passed over. A newer package with no `.sha256` beside it is explained, not offered.
+
+**The download.** Only the user's choice downloads anything (US76 stands: Pane never installs, or restarts, on its own). Pane downloads the `.sha256`, then the package, from `github.com`, and checks the package against the digest before the swap.
+
+**Redirects, narrowly.** Pane's own downloads follow no redirect, and ADR 0045 rejected GitHub release assets for the default extensions partly because their downloads redirect to another host. For Pane's own package the redirect is followed, but only to GitHub's own hosts (`github.com`, `release-assets.githubusercontent.com`, `objects.githubusercontent.com`), only over HTTPS, and at most five times. A redirect anywhere else is refused and explained. Every other download Pane makes still follows none.
+
+**Rate limits.** GitHub allows an address that does not sign in 60 API requests an hour. One check per start, and one per check the user asks for, stays far inside it. When the limit is used up anyway (`403` or `429`, no requests remaining), the check says so and when it lifts, and does not try again at once. The asset downloads themselves are not API requests.
+
+**Trust.** The `.sha256` comes from the same release as the package, over HTTPS from GitHub, so it guards against a damaged or truncated download, not against a release published by someone who controls the repository. Signing the packages remains a release prerequisite, as before.
+
+**Tests and development builds.** A development build checks only where `PANE_RELEASES` names a stand-in on a loopback address (it replaces `PANE_ARTIFACTS`). The stand-in answers the same API path and serves the downloads under the same paths, and a redirect from it is followed only to itself. A release build has no way to replace the published releases.
+
+**Rejected.** Keeping the artifact source on another host: a server and an index to run for nothing GitHub does not already do. GitHub's `releases/latest`: it leaves prereleases out, and every release of Pane is one for now. A separate index asset in each release naming the packages: the asset names already say what the index would.
+
+**Consequences.** `cargo xtask package-*` writes a release's assets for its system into `target/dist/release/`, and the release workflow ([#453](https://github.com/pane-app/pane/issues/453)) uploads them to a draft prerelease that a person publishes. The smokes serve that folder from 127.0.0.1 as the stand-in (`scripts/release_server.py`). Once Pane has a stable channel, whether prereleases are offered to everyone becomes a choice to make.

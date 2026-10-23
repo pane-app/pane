@@ -4,12 +4,12 @@
 //! are the same on every system, and another OS's slice wires the same
 //! machinery to its own program).
 //!
-//! Pane never updates itself on its own: it checks the artifact source
-//! ([`crate::defaults`], which now serves Pane's own application updates
-//! alone) when it starts, reading the index's `application` entry, and
-//! tells the user what it found — a row in root search and a word on the
-//! status line. Only the user's choice downloads the package (with
-//! progress and retries, checked against the sha512 integrity the index
+//! Pane never updates itself on its own: it lists the releases of its own
+//! repository on GitHub ([`crate::releases`], ADR 0048) when it starts,
+//! takes the newest one that carries this system's package, and tells the
+//! user what it found — a row in root search and a word on the status
+//! line. Only the user's choice downloads the package (with progress and
+//! retries, checked against the sha256 the release's `.sha256` file
 //! gives) and installs it; nothing is ever downloaded, installed or
 //! restarted automatically
 //! ([decision](https://github.com/pane-app/pane/issues/1): US76).
@@ -24,22 +24,34 @@
 //! Pane's data (its installed extensions, their settings and everything
 //! else it keeps) lives beside the program, untouched by the swap.
 //!
-//! The package installed is the one the artifact source serves: the
-//! package built for this Pane's system — a zip holding `pane.exe` under
-//! `pane/` on Windows, a gzipped tarball holding `pane` under `pane/` on
-//! Linux — each read as strictly as an npm package's tarball is
-//! ([`crate::zip`], [`crate::archive::unpack_within`]).
+//! The package installed is the release's package for this Pane's
+//! system, named as `cargo xtask package-*` names it
+//! (`pane-<version>-<target>.zip` or `.tar.gz`): a zip holding `pane.exe`
+//! under `pane/` on Windows, a gzipped tarball holding `pane` under
+//! `pane/` on Linux — each read as strictly as an npm package's tarball
+//! is ([`crate::zip`], [`crate::archive::unpack_within`]).
 
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
-use crate::defaults::{ArtifactSource, Failure, answer, failed, interrupted, with_retries};
+use sha2::Digest;
+
+use crate::defaults::{Failure, answer, failed, with_retries};
+use crate::releases::{Asset, Release, ReleaseSource};
 
 /// The largest application package Pane downloads, packed: the package
 /// holds the whole program, so it is far larger than any other package
 /// Pane downloads for itself (and it unpacks to [`crate::zip`]'s own,
 /// larger, bound).
 pub(crate) const MAX_PACKAGE: u64 = 512 << 20;
+
+/// The largest `.sha256` file Pane reads: one digest and one file name.
+const MAX_CHECKSUM: u64 = 4 << 10;
+
+/// The archives a package is packed as, as `cargo xtask package-*`
+/// names them: the zip of Windows and macOS, the gzipped tarball of
+/// Linux.
+const ARCHIVES: [&str; 2] = ["zip", "tar.gz"];
 
 /// The name of the folder a package's files are staged in, inside the
 /// install folder until the swap ends, and of the file the running program
@@ -88,6 +100,18 @@ impl Program {
         self.folder.join(STAGING)
     }
 
+    /// The `Info.plist` of the macOS application bundle the program runs
+    /// from, when it runs from one: the install script puts the program at
+    /// `Pane.app/Contents/MacOS/pane`, beside `Pane.app/Contents/Info.plist`.
+    /// A program anywhere else (Windows', Linux's) is in no bundle.
+    fn bundle_info(&self) -> Option<PathBuf> {
+        let contents = self.folder.parent()?;
+        let in_bundle = self.folder.file_name()? == "MacOS"
+            && contents.file_name()? == "Contents"
+            && contents.parent()?.extension()? == "app";
+        in_bundle.then(|| contents.join("Info.plist"))
+    }
+
     /// Removes what earlier updates left in the install folder, as Pane
     /// starts: the program an update renamed out of its way, and a staging
     /// folder a Pane stopped mid-install left. The old program may still
@@ -111,97 +135,107 @@ pub(crate) enum Found {
     UpToDate,
 }
 
-/// An offered Pane version: the newer application package the artifact
-/// source's index names, already checked.
+/// An offered Pane version: the newer release's package for this
+/// system, already checked.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Offer {
     pub(crate) version: String,
-    /// The package's file name, one plain name, as the index gives it.
+    /// The package's file name, as the release names it.
     file: String,
-    /// `sha512-<base64>`, which the package's bytes must match.
-    integrity: String,
-    /// The package's size in bytes, as the index gives it, for progress.
+    /// Where the package is downloaded from.
+    url: String,
+    /// Where the `.sha256` file beside it is downloaded from.
+    checksum: String,
+    /// The package's size in bytes, as the release gives it, for
+    /// progress.
     pub(crate) size: u64,
 }
 
 impl Offer {
-    /// The offer the index's `application` entry describes, if it is one
-    /// for this Pane: a readable version newer than `current`, a sha512
-    /// integrity, a plain file name, its size and this system's target.
-    /// `None` when the entry is absent (a source that serves no
-    /// application package), names another system's package, or names no
-    /// newer version: none of those is this Pane's business, so each
-    /// stays silent. An entry for this system that names a newer version
-    /// but cannot be used is an error, so the check explains it.
+    /// The offer `releases` make this Pane: the newest release that
+    /// carries the package for `target` (`pane-<version>-<target>.zip` or
+    /// `.tar.gz`), if its version is newer than `current`. `None` when no
+    /// release carries this system's package or none is newer: neither is
+    /// this Pane's business, so each stays silent (a release that carries
+    /// only other systems' packages is passed over). A newer release whose
+    /// package cannot be checked — no `.sha256` beside it — or that is not
+    /// downloaded from Pane's releases is an error, so the check explains
+    /// it.
     pub(crate) fn of(
-        entry: &Option<serde_json::Value>,
+        releases: &[Release],
+        source: &ReleaseSource,
         current: &str,
         target: &str,
     ) -> Result<Option<Offer>, String> {
-        let Some(entry) = entry else {
+        let mut newest: Option<(&Release, &Asset)> = None;
+        for release in releases {
+            let Some(package) = package_of(release, target) else {
+                continue;
+            };
+            // Both versions are dotted numbers (the listing keeps only
+            // release tags), so the comparison cannot fail.
+            if newest.is_none_or(|(other, _)| newer(&release.version, &other.version) == Ok(true)) {
+                newest = Some((release, package));
+            }
+        }
+        let Some((release, package)) = newest else {
             return Ok(None);
         };
-        let field = |name: &str| entry.get(name).and_then(serde_json::Value::as_str);
-        let missing = |what: &str| {
-            format!(
-                "the index's application entry names no {what}, which Pane needs to offer an \
-                 update"
-            )
-        };
-        let version = field("version").ok_or_else(|| missing("version"))?;
-        let integrity = field("integrity").ok_or_else(|| missing("integrity"))?;
-        let file = field("file").ok_or_else(|| missing("file"))?;
-        let named = field("target").ok_or_else(|| missing("target"))?;
-        let size = entry
-            .get("size")
-            .and_then(serde_json::Value::as_u64)
+        if !newer(&release.version, current)? {
+            return Ok(None);
+        }
+        let checksum_name = format!("{}.sha256", package.name);
+        let checksum = release
+            .assets
+            .iter()
+            .find(|asset| asset.name == checksum_name)
             .ok_or_else(|| {
-                "the index's application entry names no size, which Pane needs to show the \
-                 download's progress"
-                    .to_owned()
+                format!(
+                    "the release of Pane {} has the package `{}` but no `{checksum_name}` to \
+                     check it against, which Pane needs to offer the update",
+                    release.version, package.name
+                )
             })?;
-        // A package for another system, or a version this one does not
-        // need, is not this Pane's business: it stays silent (and a broken
-        // entry for it is never read), exactly as an equal or older
-        // version does.
-        if named != target || !newer(version, current)? {
-            return Ok(None);
+        for asset in [package, checksum] {
+            if !source.is_download(&asset.url) {
+                return Err(format!(
+                    "the release of Pane {} gives `{}` from `{}`, which is not where Pane's \
+                     releases are downloaded from",
+                    release.version, asset.name, asset.url
+                ));
+            }
         }
-        let offer = Offer {
-            version: version.to_owned(),
-            file: file.to_owned(),
-            integrity: integrity.to_owned(),
-            size,
-        };
-        if !crate::integrity::has_sha512(&offer.integrity) {
-            return Err(
-                "the index's application entry gives no sha512 integrity, which Pane needs to \
-                 check its download"
-                    .to_owned(),
-            );
-        }
-        crate::downloads::check_part(&offer.file).map_err(|why| {
-            format!(
-                "the index's application entry names the package file `{}`, {}",
-                offer.file, why
-            )
-        })?;
-        Ok(Some(offer))
+        Ok(Some(Offer {
+            version: release.version.clone(),
+            file: package.name.clone(),
+            url: package.url.clone(),
+            checksum: checksum.url.clone(),
+            size: package.size,
+        }))
     }
 }
 
-/// Reads the index of `source` and finds what it says of a newer Pane for
-/// `target` than `current`. Blocks on the network, and tries an
-/// unreachable source again up to [`ATTEMPTS`] times before explaining,
-/// exactly as acquiring a default extension does.
-pub(crate) fn check(source: &ArtifactSource, current: &str, target: &str) -> Result<Found, String> {
-    with_retries(|| read_and_find(source, current, target))
+/// The package `release` carries for `target`, named as
+/// `cargo xtask package-*` names it.
+fn package_of<'a>(release: &'a Release, target: &str) -> Option<&'a Asset> {
+    ARCHIVES.iter().find_map(|archive| {
+        let name = format!("pane-{}-{target}.{archive}", release.version);
+        release.assets.iter().find(|asset| asset.name == name)
+    })
 }
 
-/// One attempt: read the index, then take its application entry.
-fn read_and_find(source: &ArtifactSource, current: &str, target: &str) -> Result<Found, Failure> {
-    let index = crate::defaults::read_index(source)?;
-    let offer = Offer::of(&index.application, current, target).map_err(failed)?;
+/// Lists the releases of `source` and finds what they say of a newer Pane
+/// for `target` than `current`. Blocks on the network, and tries an
+/// unreachable source again up to [`crate::defaults::ATTEMPTS`] times
+/// before explaining, exactly as acquiring a default extension does.
+pub(crate) fn check(source: &ReleaseSource, current: &str, target: &str) -> Result<Found, String> {
+    with_retries(|| list_and_find(source, current, target))
+}
+
+/// One attempt: list the releases, then take the newest for this system.
+fn list_and_find(source: &ReleaseSource, current: &str, target: &str) -> Result<Found, Failure> {
+    let releases = source.list()?;
+    let offer = Offer::of(&releases, source, current, target).map_err(failed)?;
     Ok(match offer {
         Some(offer) => Found::Offered(offer),
         None => Found::UpToDate,
@@ -209,58 +243,86 @@ fn read_and_find(source: &ArtifactSource, current: &str, target: &str) -> Result
 }
 
 /// Downloads the offered update's package, telling `progress` of its
-/// bytes as they arrive (of the size the index gave), checked against the
-/// integrity its index entry gives. Blocks on the network, and tries an
-/// interrupted download again up to [`ATTEMPTS`] times before explaining.
+/// bytes as they arrive (of the size the release gave), checked against
+/// the sha256 its `.sha256` file gives. Blocks on the network, and tries
+/// an interrupted download again up to [`crate::defaults::ATTEMPTS`]
+/// times before explaining.
 pub(crate) fn fetch(
-    source: &ArtifactSource,
+    source: &ReleaseSource,
     offer: &Offer,
     progress: &(dyn Fn(u64, u64) + Send + Sync),
 ) -> Result<Vec<u8>, String> {
     with_retries(|| download(source, offer, progress))
 }
 
-/// Downloads the package `offer` names, checked against the offer's
-/// integrity before it is returned.
+/// Downloads the `.sha256` file and the package `offer` names, and checks
+/// the package against the digest before it is returned.
 fn download(
-    source: &ArtifactSource,
+    source: &ReleaseSource,
     offer: &Offer,
     progress: &(dyn Fn(u64, u64) + Send + Sync),
 ) -> Result<Vec<u8>, Failure> {
-    let url = source.payload_url(&offer.file);
-    let (file, size) = (offer.file.clone(), offer.size);
-    let told = move |bytes: u64| progress(bytes, size);
-    let read = source
-        .get(&url, &[], MAX_PACKAGE, &told)
-        .map_err(|error| match error {
-            crate::http::GetError::TooLarge => failed(format!(
-                "the package `{file}` is larger than the {} MiB Pane downloads",
-                MAX_PACKAGE >> 20
-            )),
-            crate::http::GetError::Failed(why) => interrupted(format!(
-                "Pane's downloads at {} could not be reached: {why}",
-                source.url()
-            )),
-        })?;
+    let file = offer.file.clone();
+    let checksum_file = format!("{file}.sha256");
+    let read = source.download(
+        &offer.checksum,
+        &format!("the checksum `{checksum_file}`"),
+        MAX_CHECKSUM,
+        &|_| {},
+    )?;
     if read.status != 200 {
-        let why = match read.status {
-            404 => format!("the package `{file}` its index names is not there"),
-            status => format!("it answered {status} for the package `{file}`"),
-        };
-        return Err(answer(read.status, why));
+        return Err(not_there(read.status, &checksum_file));
+    }
+    let digest = sha256_of(&read.body)
+        .ok_or_else(|| failed(format!("`{checksum_file}` gives no sha256 digest")))?;
+    let size = offer.size;
+    let told = move |bytes: u64| progress(bytes, size);
+    let read = source.download(
+        &offer.url,
+        &format!("the package `{file}`"),
+        MAX_PACKAGE,
+        &told,
+    )?;
+    if read.status != 200 {
+        return Err(not_there(read.status, &file));
     }
     let package = read.body;
-    crate::integrity::check_integrity(&package, &offer.integrity)
-        .map_err(|why| failed(format!("the downloaded package `{file}` {why}")))?;
+    if crate::integrity::hex(&sha2::Sha256::digest(&package)) != digest {
+        return Err(failed(format!(
+            "the downloaded package `{file}` does not match the sha256 `{checksum_file}` gives"
+        )));
+    }
     Ok(package)
+}
+
+/// Why `file` of a release was not downloaded, when its download answered
+/// `status`.
+fn not_there(status: u16, file: &str) -> Failure {
+    let why = match status {
+        404 => format!("the release's `{file}` is not there"),
+        status => format!("the release's `{file}` was answered with {status}"),
+    };
+    answer(status, why)
+}
+
+/// The digest a `.sha256` file gives, lowercase, as `sha256sum` writes
+/// one (`<digest>  <file name>`); `None` when its first word is not a
+/// sha256 digest.
+fn sha256_of(text: &[u8]) -> Option<String> {
+    let text = std::str::from_utf8(text).ok()?;
+    let digest = text.split_whitespace().next()?;
+    (digest.len() == 64 && digest.chars().all(|c| c.is_ascii_hexdigit()))
+        .then(|| digest.to_ascii_lowercase())
 }
 
 /// Unpacks the downloaded `package` into the staging folder and swaps the
 /// running program for the new one: the old program is renamed out of its
 /// way, the new one takes its name, and the staging folder goes. The new
 /// version is used the next time Pane starts; nothing of Pane's data is
-/// touched. On failure nothing is left behind: the staging folder goes,
-/// the running program is the one it was, and the user can try again.
+/// touched. For a program inside a macOS `Pane.app`, the bundle's
+/// `Info.plist` is then given the new version. On failure nothing is left
+/// behind: the staging folder goes, the running program is the one it
+/// was, and the user can try again.
 pub(crate) fn swap(package: &[u8], offer: &Offer, program: &Program) -> Result<(), String> {
     let staging = program.staging();
     // A staging folder a stopped Pane left, or another Pane holds, goes:
@@ -340,6 +402,17 @@ pub(crate) fn swap(package: &[u8], offer: &Offer, program: &Program) -> Result<(
     };
     let swapped = swap();
     let _ = fs::remove_dir_all(&staging);
+    // On macOS the program is replaced inside its `Pane.app`, whose
+    // `Info.plist` names the version Finder's "Get Info" shows: it is given
+    // the new version too, so the bundle and its program agree. The new
+    // program is already in place, so a plist that cannot be rewritten
+    // does not undo the update; it keeps naming the old version until the
+    // bundle is reinstalled from a package.
+    if swapped.is_ok()
+        && let Some(info) = program.bundle_info()
+    {
+        let _ = set_bundle_version(&info, &offer.version);
+    }
     swapped
 }
 
@@ -347,6 +420,58 @@ pub(crate) fn swap(package: &[u8], offer: &Offer, program: &Program) -> Result<(
 /// itself with.
 fn why_files(what: &str, error: std::io::Error) -> String {
     format!("{what} could not be replaced: {error}")
+}
+
+/// The `Info.plist` keys that name a bundle's version: the version Finder
+/// shows and the build's, both of which Pane's bundle sets to Pane's
+/// version (`xtask`'s `app_plist`).
+const BUNDLE_VERSION_KEYS: [&str; 2] = ["CFBundleShortVersionString", "CFBundleVersion"];
+
+/// Writes `version` into the bundle's `Info.plist` at `info`. The new plist
+/// is written beside it and renamed over it, so nothing ever reads half a
+/// plist; a plist that names no version is left as it is.
+fn set_bundle_version(info: &Path, version: &str) -> std::io::Result<()> {
+    let plist = fs::read_to_string(info)?;
+    let Some(rewritten) = with_bundle_version(&plist, version) else {
+        return Ok(());
+    };
+    let written = info.with_file_name("Info.plist.update");
+    let result = fs::write(&written, rewritten).and_then(|()| fs::rename(&written, info));
+    if result.is_err() {
+        let _ = fs::remove_file(&written);
+    }
+    result
+}
+
+/// `plist`, an XML property list, with the string each of
+/// [`BUNDLE_VERSION_KEYS`] it gives replaced by `version`; `None` when that
+/// changes nothing (a plist that gives neither key a string, or already
+/// names `version`). Only the values change, so the rest of the plist, its
+/// layout included, stays as the install script wrote it.
+fn with_bundle_version(plist: &str, version: &str) -> Option<String> {
+    let version = version
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;");
+    let mut rewritten = plist.to_owned();
+    for key in BUNDLE_VERSION_KEYS {
+        let tag = format!("<key>{key}</key>");
+        let Some(at) = rewritten.find(&tag) else {
+            continue;
+        };
+        let Some(value) = rewritten[at + tag.len()..]
+            .trim_start()
+            .strip_prefix("<string>")
+        else {
+            continue;
+        };
+        let Some(length) = value.find("</string>") else {
+            continue;
+        };
+        let start = rewritten.len() - value.len();
+        rewritten.replace_range(start..start + length, &version);
+    }
+    (rewritten != plist).then_some(rewritten)
 }
 
 /// Whether `asked` is a newer version than `current`: versions are dotted
@@ -360,8 +485,8 @@ pub(crate) fn newer(asked: &str, current: &str) -> Result<bool, String> {
             .map(|part| {
                 part.parse::<u64>().map_err(|_| {
                     format!(
-                        "the version `{version}` the index gives is not dotted numbers, which \
-                         Pane cannot compare with the version it runs"
+                        "the version `{version}` is not dotted numbers, which Pane cannot \
+                         compare with another version"
                     )
                 })
             })
@@ -379,7 +504,6 @@ pub(crate) fn newer(asked: &str, current: &str) -> Result<bool, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sha2::Digest;
 
     #[test]
     fn a_newer_version_is_greater_and_an_older_one_is_not() {
@@ -447,111 +571,281 @@ mod tests {
         assert!(!program.staging().exists());
     }
 
+    /// A release of `version` carrying `assets` (name, with or without its
+    /// `.sha256` beside it), downloaded from Pane's published releases.
+    fn release(version: &str, packages: &[&str], checksums: bool) -> Release {
+        let asset = |name: String| Asset {
+            url: format!("https://github.com/pane-app/pane/releases/download/v{version}/{name}"),
+            name,
+            size: 12,
+        };
+        let mut assets = Vec::new();
+        for package in packages {
+            assets.push(asset((*package).to_owned()));
+            if checksums {
+                assets.push(asset(format!("{package}.sha256")));
+            }
+        }
+        Release {
+            version: version.to_owned(),
+            assets,
+        }
+    }
+
     #[test]
-    fn an_offer_needs_every_field_and_this_systems_target() {
-        // The entry is read as it is written (a JSON object), so a broken
-        // one is explained here rather than making the index unreadable.
-        let entry = |version: serde_json::Value,
-                     file: serde_json::Value,
-                     integrity: serde_json::Value,
-                     target: serde_json::Value| {
-            serde_json::json!({
-                "version": version,
-                "file": file,
-                "integrity": integrity,
-                "target": target,
-                "size": 12,
-            })
-        };
-        let integrity = format!(
-            "sha512-{}",
-            crate::integrity::base64(&sha2::Sha512::digest(b"the package"))
-        );
-        let none = entry(
-            serde_json::Value::Null,
-            "pane.zip".into(),
-            integrity.as_str().into(),
-            "windows-x86_64".into(),
-        );
-        assert!(Offer::of(&Some(none), "0.1.0", "windows-x86_64").is_err());
-        // Every field present and this system's target, with a version
-        // this Pane reads: an offer.
-        let whole = entry(
-            "99.0.0".into(),
-            "pane-99.0.0.zip".into(),
-            integrity.as_str().into(),
-            "windows-x86_64".into(),
-        );
+    fn the_offer_is_the_newest_release_with_this_systems_package() {
+        let source = ReleaseSource::published();
+        let releases = [
+            // The newest release carries another system's package only
+            // (a fix for one system, say): passed over.
+            release("0.4.0", &["pane-0.4.0-linux-x86_64.tar.gz"], true),
+            release(
+                "0.3.0",
+                &[
+                    "pane-0.3.0-windows-x86_64.zip",
+                    "pane-0.3.0-linux-x86_64.tar.gz",
+                    "pane-0.3.0-macos-aarch64.zip",
+                ],
+                true,
+            ),
+            // Listed later but numbered lower: the version decides, not
+            // the order.
+            release("0.2.0", &["pane-0.2.0-windows-x86_64.zip"], true),
+        ];
+        let offer = Offer::of(&releases, &source, "0.1.0", "windows-x86_64")
+            .unwrap()
+            .unwrap();
         assert_eq!(
-            Offer::of(&Some(whole), "0.1.0", "windows-x86_64")
-                .unwrap()
-                .map(|offer| offer.version),
-            Some("99.0.0".to_owned())
+            offer,
+            Offer {
+                version: "0.3.0".into(),
+                file: "pane-0.3.0-windows-x86_64.zip".into(),
+                url: "https://github.com/pane-app/pane/releases/download/v0.3.0/\
+                      pane-0.3.0-windows-x86_64.zip"
+                    .into(),
+                checksum: "https://github.com/pane-app/pane/releases/download/v0.3.0/\
+                           pane-0.3.0-windows-x86_64.zip.sha256"
+                    .into(),
+                size: 12,
+            }
         );
-        // Another system's package is not this Pane's business: like an
-        // equal or older version, it offers nothing and says nothing (a
-        // broken entry for THIS system is the one that explains itself).
-        let elsewhere = entry(
-            "99.0.0".into(),
-            "pane-99.0.0.zip".into(),
-            integrity.as_str().into(),
-            "linux-aarch64".into(),
-        );
+        // Linux's package is the tarball, macOS's the zip.
+        let linux = Offer::of(&releases, &source, "0.1.0", "linux-x86_64")
+            .unwrap()
+            .unwrap();
         assert_eq!(
-            Offer::of(&Some(elsewhere), "0.1.0", "windows-x86_64").unwrap(),
+            (linux.version.as_str(), linux.file.as_str()),
+            ("0.4.0", "pane-0.4.0-linux-x86_64.tar.gz")
+        );
+        let macos = Offer::of(&releases, &source, "0.1.0", "macos-aarch64")
+            .unwrap()
+            .unwrap();
+        assert_eq!(macos.file, "pane-0.3.0-macos-aarch64.zip");
+        // No newer version, no package for this system, no release at all:
+        // no offer, and no error.
+        assert_eq!(
+            Offer::of(&releases, &source, "0.3.0", "windows-x86_64").unwrap(),
             None
         );
-        // No newer version: no offer, and no error.
-        let older = entry(
-            "0.0.1".into(),
-            "pane-0.0.1.zip".into(),
-            integrity.as_str().into(),
-            "windows-x86_64".into(),
-        );
         assert_eq!(
-            Offer::of(&Some(older), "0.1.0", "windows-x86_64").unwrap(),
+            Offer::of(&releases, &source, "0.1.0", "linux-aarch64").unwrap(),
             None
         );
-        assert_eq!(Offer::of(&None, "0.1.0", "windows-x86_64").unwrap(), None);
-        // A file name that is not one plain name, an integrity without a
-        // sha512, a version that is not dotted numbers and a missing size
-        // are explained.
-        let escaping = entry(
-            "99.0.0".into(),
-            "../pane.zip".into(),
-            integrity.as_str().into(),
-            "windows-x86_64".into(),
+        assert_eq!(
+            Offer::of(&[], &source, "0.1.0", "windows-x86_64").unwrap(),
+            None
         );
-        let wrong = Offer::of(&Some(escaping), "0.1.0", "windows-x86_64").unwrap_err();
-        assert!(wrong.contains("whose name holds `/`"), "{wrong}");
-        let unmeasured = entry(
-            "99.0.0".into(),
-            "pane.zip".into(),
-            integrity.as_str().into(),
-            "windows-x86_64".into(),
+        // A development package (`-dev`) is never a release's package.
+        let dev = [release(
+            "0.5.0",
+            &["pane-0.5.0-windows-x86_64-dev.zip"],
+            true,
+        )];
+        assert_eq!(
+            Offer::of(&dev, &source, "0.1.0", "windows-x86_64").unwrap(),
+            None
         );
-        let unmeasured: serde_json::Value = {
-            let mut value = unmeasured;
-            value.as_object_mut().unwrap().remove("size");
-            value
-        };
-        let wrong = Offer::of(&Some(unmeasured), "0.1.0", "windows-x86_64").unwrap_err();
-        assert!(wrong.contains("names no size"), "{wrong}");
-        let unsigned = entry(
-            "99.0.0".into(),
-            "pane.zip".into(),
-            "sha1-abc".into(),
-            "windows-x86_64".into(),
+    }
+
+    #[test]
+    fn an_offer_that_cannot_be_checked_is_explained() {
+        let source = ReleaseSource::published();
+        // A newer package with no `.sha256` beside it.
+        let unchecked = [release("0.2.0", &["pane-0.2.0-windows-x86_64.zip"], false)];
+        let wrong = Offer::of(&unchecked, &source, "0.1.0", "windows-x86_64").unwrap_err();
+        assert!(
+            wrong.contains("no `pane-0.2.0-windows-x86_64.zip.sha256` to check it against"),
+            "{wrong}"
         );
-        let wrong = Offer::of(&Some(unsigned), "0.1.0", "windows-x86_64").unwrap_err();
-        assert!(wrong.contains("no sha512 integrity"), "{wrong}");
-        let strange = entry(
-            "99x".into(),
-            "pane.zip".into(),
-            integrity.as_str().into(),
-            "windows-x86_64".into(),
+        // A package downloaded from somewhere other than Pane's releases.
+        let mut elsewhere = release("0.2.0", &["pane-0.2.0-windows-x86_64.zip"], true);
+        elsewhere.assets[0].url = "https://example.com/pane-0.2.0-windows-x86_64.zip".into();
+        let wrong = Offer::of(&[elsewhere], &source, "0.1.0", "windows-x86_64").unwrap_err();
+        assert!(
+            wrong.contains("not where Pane's releases are downloaded from"),
+            "{wrong}"
         );
-        let wrong = Offer::of(&Some(strange), "0.1.0", "windows-x86_64").unwrap_err();
+        // The version this Pane runs that is not dotted numbers.
+        let fine = [release("0.2.0", &["pane-0.2.0-windows-x86_64.zip"], true)];
+        let wrong = Offer::of(&fine, &source, "0.1.0-beta", "windows-x86_64").unwrap_err();
         assert!(wrong.contains("not dotted numbers"), "{wrong}");
+    }
+
+    /// The `Info.plist` the macOS package carries for `version`, as
+    /// `xtask`'s `app_plist` writes it.
+    fn app_plist(version: &str) -> String {
+        format!(
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n\
+<plist version=\"1.0\">\n\
+<dict>\n\
+\t<key>CFBundleExecutable</key><string>pane</string>\n\
+\t<key>CFBundleIdentifier</key><string>dev.pane.launcher</string>\n\
+\t<key>CFBundleName</key><string>Pane</string>\n\
+\t<key>CFBundlePackageType</key><string>APPL</string>\n\
+\t<key>CFBundleShortVersionString</key><string>{version}</string>\n\
+\t<key>CFBundleVersion</key><string>{version}</string>\n\
+</dict>\n\
+</plist>\n"
+        )
+    }
+
+    #[test]
+    fn a_program_in_an_app_bundle_names_the_bundle_s_info_plist() {
+        let program = Program::at(PathBuf::from(
+            "/Users/u/Applications/Pane.app/Contents/MacOS/pane",
+        ))
+        .unwrap();
+        assert_eq!(
+            program.bundle_info(),
+            Some(PathBuf::from(
+                "/Users/u/Applications/Pane.app/Contents/Info.plist"
+            ))
+        );
+        // Windows' and Linux's programs, and a folder that only looks like
+        // a bundle's, are in no bundle.
+        for path in [
+            "/opt/pane/pane.exe",
+            "/home/u/.local/bin/pane",
+            "/Users/u/Pane/Contents/MacOS/pane",
+            "/Users/u/Pane.app/MacOS/pane",
+            "pane",
+        ] {
+            let program = Program::at(PathBuf::from(path)).unwrap();
+            assert_eq!(program.bundle_info(), None, "{path}");
+        }
+    }
+
+    #[test]
+    fn the_bundle_s_version_keys_are_given_the_new_version() {
+        assert_eq!(
+            with_bundle_version(&app_plist("0.1.0"), "0.2.0"),
+            Some(app_plist("0.2.0"))
+        );
+        // A key's string may follow it on the next line, as a plist Xcode
+        // writes has it.
+        let spread = "<dict>\n\t<key>CFBundleVersion</key>\n\t<string>7</string>\n\
+                      \t<key>CFBundleName</key>\n\t<string>Pane</string>\n</dict>\n";
+        assert_eq!(
+            with_bundle_version(spread, "0.2.0").as_deref(),
+            Some(
+                "<dict>\n\t<key>CFBundleVersion</key>\n\t<string>0.2.0</string>\n\
+                 \t<key>CFBundleName</key>\n\t<string>Pane</string>\n</dict>\n"
+            )
+        );
+        // A version is written as XML text.
+        assert_eq!(
+            with_bundle_version(&app_plist("0.1.0"), "1<&>"),
+            Some(app_plist("1&lt;&amp;&gt;"))
+        );
+        // Nothing to change: the version already named, no version keys,
+        // a key with no string after it, or a binary plist.
+        assert_eq!(with_bundle_version(&app_plist("0.2.0"), "0.2.0"), None);
+        assert_eq!(
+            with_bundle_version(
+                "<dict><key>CFBundleName</key><string>Pane</string></dict>",
+                "1"
+            ),
+            None
+        );
+        assert_eq!(
+            with_bundle_version("<key>CFBundleVersion</key><integer>1</integer>", "2"),
+            None
+        );
+        assert_eq!(with_bundle_version("bplist00\u{1}", "2"), None);
+    }
+
+    #[test]
+    fn an_update_inside_an_app_bundle_gives_its_info_plist_the_new_version() {
+        let folder = tempfile::tempdir().unwrap();
+        let contents = folder.path().join("Pane.app/Contents");
+        fs::create_dir_all(contents.join("MacOS")).unwrap();
+        fs::write(contents.join("MacOS/pane"), b"the 0.1.0 program").unwrap();
+        fs::write(contents.join("Info.plist"), app_plist("0.1.0")).unwrap();
+        let program = Program::at(contents.join("MacOS/pane")).unwrap();
+        // The macOS package is a zip, but the swap after unpacking is the
+        // same for every package: a tarball, which the tar writer makes,
+        // stands in for it.
+        let mut package = tar::Builder::new(flate2::write::GzEncoder::new(
+            Vec::new(),
+            flate2::Compression::default(),
+        ));
+        let new_program = b"the 0.2.0 program";
+        let mut header = tar::Header::new_gnu();
+        header.set_entry_type(tar::EntryType::Regular);
+        header.set_size(new_program.len() as u64);
+        header.set_mode(0o755);
+        header.set_cksum();
+        package
+            .append_data(&mut header, "pane/pane", &new_program[..])
+            .unwrap();
+        let package = package.into_inner().unwrap().finish().unwrap();
+        let offer = Offer {
+            version: "0.2.0".to_owned(),
+            file: "pane-0.2.0.tar.gz".to_owned(),
+            url: String::new(),
+            checksum: String::new(),
+            size: package.len() as u64,
+        };
+        swap(&package, &offer, &program).unwrap();
+        assert_eq!(fs::read(program.path()).unwrap(), new_program);
+        assert_eq!(
+            fs::read_to_string(contents.join("Info.plist")).unwrap(),
+            app_plist("0.2.0")
+        );
+        // The plist was renamed into place: nothing else is left in the
+        // bundle but the old program, which a later start removes.
+        let mut left: Vec<_> = fs::read_dir(&contents)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+            .collect();
+        left.sort();
+        assert_eq!(left, ["Info.plist", "MacOS"]);
+        assert!(program.old().is_file());
+        // A failed update leaves the plist naming the version installed.
+        let broken = Offer {
+            version: "0.3.0".to_owned(),
+            file: "pane-0.3.0.tar.gz".to_owned(),
+            ..offer
+        };
+        assert!(swap(b"not a tarball", &broken, &program).is_err());
+        assert_eq!(
+            fs::read_to_string(contents.join("Info.plist")).unwrap(),
+            app_plist("0.2.0")
+        );
+    }
+
+    #[test]
+    fn a_checksum_file_gives_its_digest() {
+        let digest = "a".repeat(64);
+        assert_eq!(
+            sha256_of(format!("{digest}  pane-0.1.0-windows-x86_64.zip\n").as_bytes()),
+            Some(digest.clone())
+        );
+        // Upper case, as some tools write it, and the digest alone.
+        assert_eq!(sha256_of("A".repeat(64).as_bytes()), Some(digest));
+        for text in ["", "abc  pane.zip", &"g".repeat(64), &"a".repeat(65)] {
+            assert_eq!(sha256_of(text.as_bytes()), None, "{text}");
+        }
     }
 }

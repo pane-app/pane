@@ -603,7 +603,7 @@ fn system_tls_config() -> Result<Arc<rustls::ClientConfig>, String> {
 
 /// `(scheme, authority, rest)` of an `http://` or `https://` URL without
 /// user information: how Pane reads the addresses of its own requests,
-/// the npm registry's and the artifact source's.
+/// the npm registry's and Pane's releases'.
 pub(crate) fn split_url(url: &str) -> Option<(&str, &str, &str)> {
     let (scheme, rest) = url.split_once("://")?;
     if scheme != "http" && scheme != "https" {
@@ -622,7 +622,7 @@ pub(crate) fn split_url(url: &str) -> Option<(&str, &str, &str)> {
 /// `https://` on a loopback address written as one (`127.0.0.1`, any
 /// `127.x.y.z`, or `[::1]`), with an optional port and path. `refusal`
 /// names the source when it is not, so each source that can be replaced
-/// (the npm registry, Pane's artifact source) says what it is. Any other
+/// (the npm registry, Pane's releases) says what it is. Any other
 /// address is refused, `localhost` included (a name could resolve
 /// elsewhere), so that nothing but the real source is ever reached over
 /// the network.
@@ -674,8 +674,8 @@ pub(crate) fn https_only(loopback: bool, url: &str) -> Result<(), String> {
 }
 
 /// A source Pane downloads from for itself and that tests and development
-/// builds can replace with one on this computer: the npm registry, Pane's
-/// artifact source. It is reached only over HTTPS unless it is on this
+/// builds can replace with one on this computer: the npm registry. It is
+/// reached only over HTTPS unless it is on this
 /// computer, within [`OWN_LIMITS`].
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Origin {
@@ -711,12 +711,6 @@ impl Origin {
         &self.base
     }
 
-    /// Whether it is on this computer.
-    #[cfg(test)]
-    pub(crate) fn is_loopback(&self) -> bool {
-        self.loopback
-    }
-
     /// Asks for `url`, with `headers`, a body of at most `most` bytes
     /// ([`get_blocking`]): only over HTTPS unless the source is on this
     /// computer.
@@ -728,19 +722,6 @@ impl Origin {
     ) -> Result<Answer, GetError> {
         https_only(self.loopback, url).map_err(GetError::Failed)?;
         get_blocking(url, headers, most, OWN_LIMITS)
-    }
-
-    /// Like [`Origin::get`], telling `progress` of the bytes of the body so
-    /// far ([`get_blocking_progressing`]).
-    pub(crate) fn get_progressing(
-        &self,
-        url: &str,
-        headers: &[(&str, &str)],
-        most: u64,
-        progress: &(dyn Fn(u64) + Send + Sync),
-    ) -> Result<Answer, GetError> {
-        https_only(self.loopback, url).map_err(GetError::Failed)?;
-        get_blocking_progressing(url, headers, most, OWN_LIMITS, progress)
     }
 }
 
@@ -758,7 +739,7 @@ pub(crate) struct OwnLimits {
 }
 
 /// The ceilings of every request Pane sends for itself: to the npm
-/// registry, the artifact source and Git hosts alike.
+/// registry, Pane's releases and Git hosts alike.
 pub(crate) const OWN_LIMITS: OwnLimits = OwnLimits {
     connect: Duration::from_secs(30),
     first_byte: Duration::from_secs(60),
@@ -769,6 +750,10 @@ pub(crate) const OWN_LIMITS: OwnLimits = OwnLimits {
 /// The answer to a request Pane sent for itself.
 pub(crate) struct Answer {
     pub status: u16,
+    /// The answer's headers: where a redirect points (`Location`), and
+    /// what GitHub says of its rate limit, for the requests that read
+    /// them ([`crate::releases`]).
+    pub headers: http::HeaderMap,
     pub body: Vec<u8>,
 }
 
@@ -799,8 +784,8 @@ pub(crate) fn get_blocking(
 }
 
 /// Like [`get_blocking`], telling `progress` of the bytes of the answer's
-/// body so far (acquiring a default extension's payload, whose size the
-/// artifact index gives, so the window can say how far it has come).
+/// body so far (downloading Pane's own application package, whose size
+/// its release gives, so the window can say how far it has come).
 pub(crate) fn get_blocking_progressing(
     url: &str,
     headers: &[(&str, &str)],
@@ -963,6 +948,7 @@ async fn own_request(
             .map_err(|_| failed(Error::ConnectionReadTimeout))?
             .map_err(|error| failed(Error::from(error)))?;
         let status = response.status().as_u16();
+        let answered_headers = response.headers().clone();
         let announced = response
             .headers()
             .get(http::header::CONTENT_LENGTH)
@@ -991,6 +977,7 @@ async fn own_request(
         }
         Ok(Answer {
             status,
+            headers: answered_headers,
             body: received,
         })
     }

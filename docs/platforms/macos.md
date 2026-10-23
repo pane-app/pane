@@ -757,7 +757,7 @@ by the same fixed-bytes writer. It holds:
 - a README;
 - the bundle's `Info.plist` (the development profile, so its program
   takes its pins from `PANE_DEFAULTS`);
-- the application-update artifacts.
+- the release assets (the package under the name a release gives it, and its `.sha256`).
 
 No default-extension payload is written. First setup fetches the five
 defaults from the commits this release pins.
@@ -769,7 +769,7 @@ real addresses on GitHub (its own setup, on the runner). It serves the
 clones on 127.0.0.1 over Git's smart HTTP protocol
 (`scripts/repository_server.py`), named by the pins file the development
 build reads through `PANE_DEFAULTS`. Nothing the Pane under test does
-reaches the network or Pane's published downloads.
+reaches the network or Pane's published releases.
 
 1. The package is unzipped into a folder of its own. Its install script
    runs with a clean machine's environment: a fresh home folder and
@@ -782,8 +782,8 @@ reaches the network or Pane's published downloads.
 3. The installed Pane starts (the bundle's `Contents/MacOS/pane`) with a
    PATH that holds nothing at all: an empty folder, checked with
    `command -v` of cargo, rustc, node, npm, git, cc, clang and make. It
-   takes its pins from the override, and its artifact source from the
-   local server the smoke serves the update index on.
+   takes its pins from the override, and its releases from the
+   local stand-in the smoke serves them on.
 4. Pane fetches the five default extensions by itself, with its own Git
    client. `installed.json` must record each under `"default"`, with the
    repository, release tag, commit and pinned state of its pin (checked by
@@ -859,31 +859,31 @@ proved on Windows.
 
 The same `cargo xtask package-macos --dev` builds a second package with
 `--package-version 99.0.0`: a program that reports 99.0.0, a package
-named by it, and an index whose `application` entry names that package
-for `macos-aarch64`. Those are the two runnable builds an update goes
-between.
+named by it for `macos-aarch64`, and the release assets naming that
+package as a release does, with its `.sha256`. Those are the two runnable
+builds an update goes between.
 
 The 0.1.0 package the installer phase built is installed on another clean
 home, with its install script, its empty PATH and its own data under
 `~/Library/Application Support/Pane`. The smoke serves the 99.0.0
-artifacts from 127.0.0.1 with `scripts/artifact_server.py`. Nothing
-reaches the network or Pane's published downloads.
+release from 127.0.0.1 with `scripts/release_server.py`. Nothing
+reaches the network or Pane's published releases.
 
 ### What the phase checks
 
-1. The installed 0.1.0 Pane is started with `PANE_ARTIFACTS` and the same
+1. The installed 0.1.0 Pane is started with `PANE_RELEASES` and the same
    pinned repositories. It fetches its default extensions and, in the
-   same background, checks the index for a newer version of itself. The
+   same background, lists its releases for a newer version of itself. The
    offer appears as Update Pane to 99.0.0 in root search (frame 601),
    and the status line tells what was found (frame 600).
-2. The artifact server's log must hold no request for the package until
+2. The release server's log must hold no request for the package until
    the row is chosen. Nothing is downloaded, installed or restarted
    automatically.
 3. Clipboard History is disabled first (the Helper sample was, until #162
    took it out of the default set), so an extension the user disabled
    before the update must stay disabled after it.
 4. Choosing the row with a damaged package is explained: its bytes do not
-   match the sha512 its entry gives (frame 602). The program, the data and
+   match the sha256 its `.sha256` gives (frame 602). The program, the data and
    the bundle stay untouched, and the row is ready to try again.
 5. The real choice downloads the package, checks it, unpacks it and swaps
    the running binary inside the bundle. The old `Contents/MacOS/pane` is
@@ -898,9 +898,11 @@ reaches the network or Pane's published downloads.
    data was never touched.
 
 The bundle itself is never replaced: the same `Pane.app` keeps its
-identity. What the swap does not update (the `Info.plist` version keys)
-is a provisional limit recorded in the
-[installer](../installer.md#updating-pane-itself).
+identity. Since [#455](https://github.com/pane-app/pane/issues/455) the
+swap also writes the new version into the bundle's `Info.plist`, and the
+smoke checks that the plist is then the new package's own and that
+`plutil` reads `99.0.0` from it (see the
+[installer](../installer.md#updating-pane-itself)).
 
 Pane itself was never restarted by the update. The smoke stops the old
 process and starts the new program itself, exactly as the user would.

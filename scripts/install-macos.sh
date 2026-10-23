@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
 # Installs Pane for one user: the Pane.app bundle in ~/Applications, built
-# around the pane program and this package's Info.plist. The default is the
-# user's own Applications folder, so no administrator rights are needed;
-# name another folder with --app-dir.
+# around the pane program and this package's Info.plist and icon. The
+# default is the user's own Applications folder, so no administrator rights
+# are needed; name another folder with --app-dir.
 #
 # Run from the folder the package unpacked (pane/), or from anywhere: the
 # folder is the one this script is in, or the one given as an argument. The
-# install copies the program and the bundle's Info.plist into
-# <app-dir>/Pane.app/Contents and runs `pane --version` to check what it
-# installed — the one check macOS has to offer, since a missing library the
-# program needs only shows when it runs.
+# install copies the program, the bundle's Info.plist and the icon it names
+# into <app-dir>/Pane.app/Contents and runs `pane --version` to check what
+# it installed — the one check macOS has to offer, since a missing library
+# the program needs only shows when it runs.
 #
 # The package holds none of Pane's default extensions: Pane downloads them
 # itself at first setup (see the README beside this script).
@@ -57,14 +57,16 @@ done
 
 program=$folder/pane
 plist=$folder/Info.plist
-for file in "$program" "$plist" "$folder/README.txt"; do
+icon=$folder/pane.icns
+for file in "$program" "$plist" "$icon" "$folder/README.txt"; do
   [ -f "$file" ] || { echo "install.sh: $file is missing; run this in the folder the package unpacked"; exit 1; }
 done
 
 bundle=$app_dir/Pane.app
-mkdir -p "$bundle/Contents/MacOS"
+mkdir -p "$bundle/Contents/MacOS" "$bundle/Contents/Resources"
 install -m 0755 "$program" "$bundle/Contents/MacOS/pane"
 install -m 0644 "$plist" "$bundle/Contents/Info.plist"
+install -m 0644 "$icon" "$bundle/Contents/Resources/pane.icns"
 
 echo "Installed Pane to $bundle (remove it to uninstall; Pane keeps its"
 echo "own data in ~/Library/Application Support/Pane)."

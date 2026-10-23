@@ -631,7 +631,7 @@ fn diagnostics(
 /// report that says it.
 fn update_line(update: &ApplicationUpdate) -> String {
     match update {
-        ApplicationUpdate::Unconfigured => "no artifact source is configured".into(),
+        ApplicationUpdate::Unconfigured => "no release source is configured".into(),
         ApplicationUpdate::Unchecked => "not run yet".into(),
         ApplicationUpdate::Checking => "running".into(),
         ApplicationUpdate::Current => "Pane is up to date".into(),

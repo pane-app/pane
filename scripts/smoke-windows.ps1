@@ -4,8 +4,8 @@
 # Press-Named). The phases that set the default extensions up serve the
 # repositories `clone-defaults` cloned at the pinned commits on 127.0.0.1,
 # so they run after the #51 phase that clones them. The update phases
-# serve the artifacts the #51 phase's package build leaves in
-# target\dist\artifacts, so they run after it too.
+# serve the release assets the #51 phase's package build leaves in
+# target\dist\release, so they run after it too.
 # Usage: scripts/smoke-windows.ps1 -OutDir <output-dir>
 param([string]$OutDir = "smoke")
 $ErrorActionPreference = "Stop"
@@ -2316,11 +2316,11 @@ $cleanProfile = Join-Path $OutDir "clean-profile"
 $unpack = Join-Path $OutDir "package-unpacked"
 foreach ($folder in $cleanProfile, $unpack) { if (Test-Path $folder) { Remove-Item -Recurse -Force $folder } }
 New-Item -ItemType Directory -Force -Path $cleanProfile, $unpack | Out-Null
-$portFile = Join-Path $OutDir "artifact-server.port"
+$portFile = Join-Path $OutDir "release-server.port"
 if (Test-Path $portFile) { Remove-Item -Force $portFile }
 $server = Start-Process python -PassThru -NoNewWindow `
-    -ArgumentList @("`"$PSScriptRoot/artifact_server.py`"", "target/dist/artifacts", "`"$portFile`"") `
-    -RedirectStandardError (Join-Path $OutDir "artifact-server.log")
+    -ArgumentList @("`"$PSScriptRoot/release_server.py`"", "target/dist/release", "`"$portFile`"") `
+    -RedirectStandardError (Join-Path $OutDir "release-server.log")
 # What a clean machine's environment is: saved, put back in the finally
 # below. PANE_DATA_DIR comes off, so the installed Pane keeps its data
 # where a real one does, in the fresh profile's LOCALAPPDATA.
@@ -2329,7 +2329,7 @@ Remove-Item Env:PANE_DATA_DIR -ErrorAction SilentlyContinue
 try {
     # Generous: a slow runner may take seconds to start Python.
     for ($i = 0; $i -lt 600 -and -not (Test-Path $portFile) -and -not $server.HasExited; $i++) { Start-Sleep -Milliseconds 100 }
-    if (-not (Test-Path $portFile)) { throw "the local artifact source did not start (see artifact-server.log)" }
+    if (-not (Test-Path $portFile)) { throw "the stand-in for Pane's releases did not start (see release-server.log)" }
     for ($i = 0; $i -lt 600 -and -not (Test-Path $defaultsPortFile) -and -not $defaultsServer.HasExited; $i++) { Start-Sleep -Milliseconds 100 }
     if (-not (Test-Path $defaultsPortFile)) { throw "the default extensions' repository server did not start (see default-repository-server.log)" }
     python "$PSScriptRoot/repository_server.py" clone-defaults "crates/pane/defaults.json" "$DefaultRepositories" "$DefaultPins" "http://127.0.0.1:$((Get-Content $defaultsPortFile).Trim())/"
@@ -2358,7 +2358,7 @@ try {
     $env:PATH = $cleanBin
     $tools = Get-Command cargo, rustc, node, npm, git, cc, clang, make -ErrorAction SilentlyContinue
     if ($tools) { throw "the clean machine still reaches a development tool" }
-    $env:PANE_ARTIFACTS = "http://127.0.0.1:$((Get-Content $portFile).Trim())/"
+    $env:PANE_RELEASES = "http://127.0.0.1:$((Get-Content $portFile).Trim())/"
     $env:PANE_DEFAULTS = $DefaultPins
     $process = Start-Pane "stderr-installed.log" @() $installed
     $env:PATH = $realPath
@@ -2421,7 +2421,7 @@ try {
     # The default extensions' repository server keeps serving: the
     # Switch Windows, clipboard and update phases below set their Panes
     # up from the same repositories, and the last of them stops it.
-    Remove-Item Env:PANE_ARTIFACTS -ErrorAction SilentlyContinue
+    Remove-Item Env:PANE_RELEASES -ErrorAction SilentlyContinue
     Remove-Item Env:PANE_DEFAULTS -ErrorAction SilentlyContinue
     $env:PANE_DEFAULTS = $NoDefaultPins
     $env:PATH = $realPath
@@ -2855,7 +2855,7 @@ try {
     # phase below; this phase's Pane is the last one started with its
     # pins, but the update phase's installs the same defaults.
     Stop-Process -Id $server.Id -ErrorAction SilentlyContinue
-    Remove-Item Env:PANE_ARTIFACTS -ErrorAction SilentlyContinue
+    Remove-Item Env:PANE_RELEASES -ErrorAction SilentlyContinue
     Remove-Item Env:PANE_TEST_FILE_INDEX_HOME -ErrorAction SilentlyContinue
     # The update phase's installed Pane keeps its data where a real one
     # does, as the #51 phase's.
@@ -2864,15 +2864,15 @@ try {
 
 # Installing a Pane application update by the user's choice (#54): a
 # second package is built with --package-version 99.0.0, whose program
-# reports 99.0.0 and whose index entry names it (the two runnable builds
+# reports 99.0.0 and whose release names it (the two runnable builds
 # the update goes between); the 0.1.0 package the #51 phase built is
 # installed on another clean profile, and its Pane, running from
 # %LOCALAPPDATA%\Pane\pane.exe, is told by the check it makes at start
 # that 99.0.0 exists: a row in root search with the version, and a word on
 # the status line. Nothing is downloaded until that row is chosen; the
-# choice is proven by the artifact server's log, which must hold no
+# choice is proven by the release server's log, which must hold no
 # request for the package until then. A corrupted package is explained
-# first (its bytes do not match the sha512 its index gives), everything
+# first (its bytes do not match the sha256 its .sha256 gives), everything
 # untouched and the row ready to try again; then the real install
 # downloads the package, checks it, and swaps the running pane.exe — the
 # old one renamed pane.exe.old, removed on a later start — so the new
@@ -2895,16 +2895,16 @@ foreach ($folder in $cleanProfile, $unpackOld, $unpackNew) {
 New-Item -ItemType Directory -Force -Path $cleanProfile, $unpackOld, $unpackNew | Out-Null
 Expand-Archive -Path $older.FullName -DestinationPath $unpackOld
 Expand-Archive -Path $newer.FullName -DestinationPath $unpackNew
-$portFile = Join-Path $OutDir "update-artifact-server.port"
+$portFile = Join-Path $OutDir "update-release-server.port"
 if (Test-Path $portFile) { Remove-Item -Force $portFile }
-$serverLog = Join-Path $OutDir "update-artifact-server.log"
+$serverLog = Join-Path $OutDir "update-release-server.log"
 $server = Start-Process python -PassThru -NoNewWindow `
-    -ArgumentList @("`"$PSScriptRoot/artifact_server.py`"", "target/dist/artifacts", "`"$portFile`"") `
+    -ArgumentList @("`"$PSScriptRoot/release_server.py`"", "target/dist/release", "`"$portFile`"") `
     -RedirectStandardError $serverLog
 $realAppData = $env:APPDATA; $realLocal = $env:LOCALAPPDATA; $realPath = $env:PATH
 try {
     for ($i = 0; $i -lt 600 -and -not (Test-Path $portFile) -and -not $server.HasExited; $i++) { Start-Sleep -Milliseconds 100 }
-    if (-not (Test-Path $portFile)) { throw "the update artifact source did not start (see update-artifact-server.log)" }
+    if (-not (Test-Path $portFile)) { throw "the update's stand-in for Pane's releases did not start (see update-release-server.log)" }
     # The 0.1.0 package installed on another clean profile, as the #51
     # phase installed it (nothing is signed, so the policy is bypassed for
     # the one script).
@@ -2920,18 +2920,18 @@ try {
     $registry = Join-Path $extensions "installed.json"
     # First setup's choice made, as the #51 phase makes it (#283).
     Choose-First-Setup $extensions
-    # A PATH that holds nothing, and the controlled artifact source.
+    # A PATH that holds nothing, and the stand-in for Pane's releases.
     $cleanBin = Join-Path $OutDir "update-clean-bin"
     if (Test-Path $cleanBin) { Remove-Item -Recurse -Force $cleanBin }
     New-Item -ItemType Directory -Force -Path $cleanBin | Out-Null
     $env:PATH = $cleanBin
-    $env:PANE_ARTIFACTS = "http://127.0.0.1:$((Get-Content $portFile).Trim())/"
+    $env:PANE_RELEASES = "http://127.0.0.1:$((Get-Content $portFile).Trim())/"
     $env:PANE_DEFAULTS = $DefaultPins
     $process = Start-Pane "update-stderr-0.1.0.log" @() $installed
     $env:PATH = $realPath
     # First setup fetches the pinned commits from the repositories (no
-    # request reaches the artifact source for them), and Pane's own check
-    # reads the index once — its request is the first.
+    # request reaches the release server for them), and Pane's own check
+    # lists the releases once — its request is the first.
     if ($process.HasExited) { throw "the installed Pane exited during setup" }
     # The default extensions: on Windows all eight -- the five of #60
     # plus Run, System Commands and Switch Windows (ADR 0040), pinned
@@ -2940,13 +2940,13 @@ try {
     foreach ($default in "calculator", "applications", "quicklinks", "files", "clipboard-history", "run", "system-commands", "switch-windows") {
         Wait-For $registry ('"default": "' + $default + '"') $true 1200
     }
-    # The check has read the index: the offer is in root search. The
+    # The check has listed the releases: the offer is in root search. The
     # status line tells what it found; nothing has been downloaded.
     for ($i = 0; $i -lt 100; $i++) {
-        if ((Select-String -SimpleMatch "pane-defaults.json" $serverLog).Count -ge 1) { break }
+        if ((Select-String -SimpleMatch "/repos/pane-app/pane/releases" $serverLog).Count -ge 1) { break }
         Start-Sleep -Milliseconds 100
     }
-    if ((Select-String -SimpleMatch "pane-defaults.json" $serverLog).Count -lt 1) { throw "Pane never checked for its own update" }
+    if ((Select-String -SimpleMatch "/repos/pane-app/pane/releases" $serverLog).Count -lt 1) { throw "Pane never checked for its own update" }
     Start-Sleep -Seconds 2
     Capture "600-notification.png"   # evidence only: the toast ("Pane 99.0.0 is available", or the setup's own outcome) leaves after 3 s, and may have left while the defaults were waited for; 601's offer row is what says the check found the update
     Send "^a"; Send "update"; Start-Sleep -Seconds 1
@@ -2964,17 +2964,18 @@ try {
     Wait-For $registry '"disabled": true' $true
     Close-Settings
 
-    # A package that does not match the integrity its index gives is
+    # A package that does not match the sha256 its release gives is
     # explained and not installed: the bytes of the served package are
     # damaged, and the program keeps running the one it was.
-    $served = Join-Path "target/dist/artifacts" $newer.Name
+    # The release assets name the package as a release does, without -dev.
+    $served = Join-Path "target/dist/release" ($newer.Name -replace '-dev\.', '.')
     $bytes = [IO.File]::ReadAllBytes($served)
     $at = [int]($bytes.Length / 2)
     $bytes[$at] = $bytes[$at] -bxor 1
     [IO.File]::WriteAllBytes($served, $bytes)
     Send "^a"; Send "update pane"; Start-Sleep -Seconds 1
     Send "{ENTER}"
-    Capture-Until "602-corrupt-package.png" "error" 60   # "Could not update Pane to 99.0.0: ... does not match the sha512 integrity"
+    Capture-Until "602-corrupt-package.png" "error" 60   # "Could not update Pane to 99.0.0: ... does not match the sha256"
     if (Test-Path (Join-Path $install "pane.exe.old")) { throw "a failed install replaced the program" }
     if ((Get-FileHash $installed).Hash -ne (Get-FileHash (Join-Path $unpackOld "pane\pane.exe")).Hash) {
         throw "a failed install changed the program"
@@ -3003,7 +3004,7 @@ try {
     if (Test-Path (Join-Path $install "update")) { throw "the install left its staging behind" }
     # The package was downloaded once for each attempt: the damaged one
     # and the one that installed.
-    if ((Select-String -SimpleMatch ".zip" $serverLog).Count -ne 2) { throw "the package was not downloaded exactly twice" }
+    if ((Select-String -SimpleMatch ".zip HTTP" $serverLog).Count -ne 2) { throw "the package was not downloaded exactly twice" }
     Stop-Pane $process
 
     # The next start runs the new version: it reports 99.0.0, removes what
@@ -3033,7 +3034,7 @@ try {
 } finally {
     Stop-Process -Id $server.Id -ErrorAction SilentlyContinue
     Stop-Process -Id $defaultsServer.Id -ErrorAction SilentlyContinue
-    Remove-Item Env:PANE_ARTIFACTS -ErrorAction SilentlyContinue
+    Remove-Item Env:PANE_RELEASES -ErrorAction SilentlyContinue
     Remove-Item Env:PANE_DEFAULTS -ErrorAction SilentlyContinue
     $env:PANE_DEFAULTS = $NoDefaultPins
     $env:PATH = $realPath

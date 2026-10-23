@@ -1222,7 +1222,7 @@ A final phase, after the clipboard-expiry one, proves the whole outcome of
 
 `cargo xtask package-linux --dev` builds the Linux package (the development
 profile, so its program takes its pins from `PANE_DEFAULTS`) and the
-application-update artifacts. No default-extension payload is written:
+release assets (the package under the name a release gives it, and its `.sha256`). No default-extension payload is written:
 first setup fetches the five defaults from the commits this release pins.
 
 The smoke clones their repositories at those commits from their real
@@ -1230,7 +1230,7 @@ addresses on GitHub (its own setup, on the runner). It serves the clones on
 127.0.0.1 over Git's smart HTTP protocol (`scripts/repository_server.py`),
 named by the pins file the development build reads through `PANE_DEFAULTS`.
 Nothing the Pane under test does reaches the network or Pane's published
-downloads.
+releases.
 
 #### Installing on a clean machine
 
@@ -1243,8 +1243,7 @@ The installed Pane (`~/.local/bin/pane` of that home) then starts with a
 PATH that holds nothing at all. That is an empty folder, checked by
 `command -v` of cargo, rustc, node, npm, git, cc, clang and make, and by
 reading the running process's `PATH`. Pane takes its pins from the override
-and its artifact source from the local server the smoke serves the update
-index on.
+and its releases from the local stand-in the smoke serves them on.
 
 #### What the phase checks
 
@@ -1304,30 +1303,31 @@ goes between. The second build has:
 - a program that reports 99.0.0;
 - a package named by it (the gzipped tarball the Linux package is, holding
   `pane/`);
-- an index whose `application` entry names that package for this system.
+- release assets naming that package as a release does, with its
+  `.sha256`.
 
 The 0.1.0 package the installer phase built is installed on another clean
 home (its install script, its empty PATH, its own data under
-`~/.local/share/pane`). The smoke serves the 99.0.0 artifacts from
-127.0.0.1 with `scripts/artifact_server.py`; nothing reaches the network or
-Pane's published downloads.
+`~/.local/share/pane`). The smoke serves the 99.0.0 release from
+127.0.0.1 with `scripts/release_server.py`, as GitHub would; nothing reaches
+the network or Pane's published releases.
 
 #### What the phase checks
 
-The installed 0.1.0 Pane is started with `PANE_ARTIFACTS` and the same
+The installed 0.1.0 Pane is started with `PANE_RELEASES` and the same
 pinned repositories. It fetches its default extensions and, in the same
-background, checks the index for a newer version of itself. Clipboard
+background, lists its releases for a newer version of itself. Clipboard
 History is disabled first (the Helper sample was, until #162 took it out of
 the default set), so an extension the user disabled before the update must
 stay disabled after it.
 
 - The offer appears as **Update Pane to 99.0.0** in root search (frame
   601); the status line tells what was found (frame 600).
-- The artifact server's log must hold **no request for the package** until
+- The release server's log must hold **no request for the package** until
   the row is chosen. Nothing is downloaded, installed or restarted
   automatically.
 - Choosing the row with a **damaged package** is explained (its bytes do
-  not match the sha512 its entry gives, frame 602). The program, the data
+  not match the sha256 its `.sha256` gives, frame 602). The program, the data
   and the bin folder are untouched and the row is ready to try again.
 - The real choice downloads the tarball, checks it, unpacks it (the same
   tar reader npm tarballs are read by, with the application package's own

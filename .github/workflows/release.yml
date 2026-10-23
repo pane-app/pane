@@ -1,0 +1,88 @@
+name: Release
+
+# Drafts a prerelease of Pane when a version tag (`v*`) is pushed: the
+# three packages the Package jobs build (windows-x86_64, macos-aarch64,
+# linux-x86_64), each with its .sha256, named as Pane's updater looks for
+# them (ADR 0048); the source archive (the tag's tree and every crate its
+# Cargo.lock pins, scripts/release-source.sh) with its .sha256; and the
+# release notes from .github/release-notes.md. The release is created as
+# a draft and a prerelease and never published here: a person reviews the
+# draft and publishes it by hand.
+#
+# A manual run is a dry run, on any branch: `gh workflow run release.yml
+# --ref <branch>` builds the same packages and assembles the same assets
+# and notes, uploads them as the run's `release-draft` artifact, and
+# creates no release and no tag. docs/agents/ci.md describes it.
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# One run per ref, and a draft is never cancelled halfway.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  package:
+    name: Package
+    uses: ./.github/workflows/package.yml
+
+  draft:
+    name: Draft the prerelease
+    needs: package
+    runs-on: ubuntu-24.04
+    permissions:
+      # Creating the draft release; nothing else is written.
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      # The pinned toolchain, for `cargo vendor` and the source archive's
+      # check.
+      - uses: ./.github/actions/setup
+      - name: Download the packages
+        uses: actions/download-artifact@v4
+        with:
+          pattern: "*-package"
+          path: packages
+      # A pushed tag must name the version the packages report.
+      - name: Assemble the package assets and the notes
+        env:
+          TAG: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
+        run: bash scripts/release-draft.sh packages draft "$TAG"
+      - name: Write the source archive
+        run: bash scripts/release-source.sh "$(cat draft/version)" draft/assets
+      - name: Upload the draft's assets and notes
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-draft
+          path: draft
+          if-no-files-found: error
+      - name: Create the draft prerelease
+        if: github.event_name == 'push' && github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "A release for $TAG exists already; it is left as it is."
+            exit 1
+          fi
+          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" \
+            --draft --prerelease --verify-tag \
+            --title "Pane $(cat draft/version)" \
+            --notes-file draft/notes.md \
+            draft/assets/*
+      - name: Say what a dry run did
+        if: github.ref_type != 'tag'
+        run: |
+          {
+            echo "Dry run: no release was created."
+            echo "The assets and notes a tag would draft are this run's \`release-draft\` artifact:"
+            echo
+            ls -l draft/assets | sed 's/^/    /'
+          } >>"$GITHUB_STEP_SUMMARY"

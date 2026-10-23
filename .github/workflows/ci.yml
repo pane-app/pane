@@ -332,37 +332,13 @@ jobs:
           if-no-files-found: ignore
 
   # Each system's release package, in a job of its own beside the smoke
-  # rather than after it (it was 17 minutes of the Windows smoke job). The
-  # package is assembled from the guest packages `cargo xtask guests`
-  # builds.
+  # rather than after it (it was 17 minutes of the Windows smoke job): the
+  # same jobs the release workflow drafts a prerelease from
+  # (package.yml, shared by both).
   package:
-    name: Package (${{ matrix.os }})
+    name: Package
     if: ${{ !inputs.only || contains(format(',{0},', inputs.only), ',package,') }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: ubuntu-24.04
-            system: linux
-          - os: windows-2025
-            system: windows
-          - os: macos-15
-            system: macos
-    runs-on: ${{ matrix.os }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: ./.github/actions/setup
-      - name: Build the guests
-        run: cargo xtask guests
-      # Release, x86_64 on Linux and Windows, aarch64 on macOS.
-      - name: Build the package
-        run: cargo xtask package-${{ matrix.system }}
-      - name: Upload the package and its artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.system }}-package
-          path: target/dist/
-          if-no-files-found: error
+    uses: ./.github/workflows/package.yml
 
   # Rebuilds the JS/TS sample components from source with the pinned
   # toolchain, then runs the same tests on them (below). The rebuilt files
