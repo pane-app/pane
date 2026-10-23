@@ -56,6 +56,7 @@ mod settings;
 mod settings_search;
 mod shortcuts;
 mod submenus;
+mod switch_windows;
 mod system;
 mod taskbar_presence;
 mod tray;
