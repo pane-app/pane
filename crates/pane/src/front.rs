@@ -62,6 +62,18 @@ pub(crate) fn bring_forward<V: gpui::Render>(
     cx.activate(true);
 }
 
+/// Whether `window` is the one in front with the keyboard: on Windows the
+/// system's foreground window, which is what the user sees in front
+/// whatever this thread's own active window says after an attached call
+/// (#467); elsewhere GPUI's activation.
+pub(crate) fn in_front(window: &Window) -> bool {
+    #[cfg(target_os = "windows")]
+    if let Some(hwnd) = windows::hwnd(window) {
+        return windows::in_front(hwnd.0);
+    }
+    window.is_window_active()
+}
+
 /// Keeps Windows' system menu off `window`, the launcher's (see the
 /// module's notes). Called once, as the window opens; on GPUI's test
 /// platform and on the other systems it does nothing.
@@ -80,6 +92,7 @@ mod windows {
     use raw_window_handle::{HasWindowHandle, RawWindowHandle};
     use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
     use windows::Win32::System::Threading::{AttachThreadInput, GetCurrentThreadId};
+    use windows::Win32::UI::Input::KeyboardAndMouse::{SetActiveWindow, SetFocus};
     use windows::Win32::UI::Shell::{DefSubclassProc, SetWindowSubclass};
     use windows::Win32::UI::WindowsAndMessaging::{
         BringWindowToTop, GetForegroundWindow, GetWindowThreadProcessId, IsHungAppWindow, IsIconic,
@@ -119,26 +132,59 @@ mod windows {
             if IsIconic(hwnd).as_bool() {
                 let _ = ShowWindow(hwnd, SW_RESTORE);
             }
-            if GetForegroundWindow() == hwnd || SetForegroundWindow(hwnd).as_bool() {
-                return GetForegroundWindow() == hwnd;
+            let started = std::time::Instant::now();
+            let path = if GetForegroundWindow() == hwnd {
+                "already"
+            } else if SetForegroundWindow(hwnd).as_bool() {
+                "plain"
+            } else {
+                attached(hwnd)
+            };
+            let front = GetForegroundWindow() == hwnd;
+            if front {
+                // This thread's own idea of its active window and focus,
+                // which GPUI reads, follows: after an attached call the
+                // thread in front may still hold them.
+                let _ = SetActiveWindow(hwnd);
+                let _ = SetFocus(Some(hwnd));
             }
+            eprintln!(
+                "[467 trace] take_foreground: {path}, in front {front}, {:?}",
+                started.elapsed()
+            );
+            front
+        }
+    }
+
+    /// The same call, with this thread attached to the input of the
+    /// thread in front, unless that thread is not responding.
+    unsafe fn attached(hwnd: HWND) -> &'static str {
+        // SAFETY: as in `take_foreground`; the attachment is undone before
+        // return.
+        unsafe {
             let front = GetForegroundWindow();
             if front.is_invalid() || IsHungAppWindow(front).as_bool() {
-                return false;
+                return "refused (hung or none in front)";
             }
             let theirs = GetWindowThreadProcessId(front, None);
             let ours = GetCurrentThreadId();
             if theirs == 0 || theirs == ours {
-                return false;
+                return "refused (own thread)";
             }
             if !AttachThreadInput(ours, theirs, true).as_bool() {
-                return false;
+                return "refused (attach)";
             }
             let _ = BringWindowToTop(hwnd);
             let _ = SetForegroundWindow(hwnd);
             let _ = AttachThreadInput(ours, theirs, false);
-            GetForegroundWindow() == hwnd
+            "attached"
         }
+    }
+
+    /// Whether `hwnd` is the window in front.
+    pub(super) fn in_front(hwnd: HWND) -> bool {
+        // SAFETY: no arguments; the handle is only compared.
+        unsafe { GetForegroundWindow() == hwnd }
     }
 
     /// The subclass's identifier on the launcher's window.

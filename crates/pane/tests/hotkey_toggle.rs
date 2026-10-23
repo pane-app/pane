@@ -46,7 +46,7 @@ mod windows {
         CW_USEDEFAULT, CreateWindowExW, DefWindowProcW, DispatchMessageW, EnumWindows,
         GUI_INMENUMODE, GUI_POPUPMENUMODE, GUI_SYSTEMMENUMODE, GUITHREADINFO, GetClassNameW,
         GetForegroundWindow, GetGUIThreadInfo, GetMessageW, GetWindowThreadProcessId,
-        IsWindowVisible, MSG, PostQuitMessage, RegisterClassW, SC_KEYMENU, SW_SHOW,
+        IsWindowVisible, MSG, PostMessageW, PostQuitMessage, RegisterClassW, SC_KEYMENU, SW_SHOW,
         SetForegroundWindow, ShowWindow, TranslateMessage, WINDOW_EX_STYLE, WM_DESTROY,
         WM_SYSCOMMAND, WNDCLASSW, WS_OVERLAPPEDWINDOW,
     };
@@ -472,6 +472,45 @@ mod windows {
         }
         if !in_front(launcher) {
             report.fail("the launcher lost the front during the arrows".into());
+        }
+        // The keyboard's menu command itself, as Windows sends it for
+        // Alt+Space (the system menu) and for a lone Alt (the menu mode
+        // an arrow then opens the system menu from): the launcher takes
+        // neither, however its keys reached it, and Down still moves the
+        // list.
+        for (command, character) in [("Alt+Space's", ' ' as isize), ("a lone Alt's", 0)] {
+            let before = selected.load(Ordering::SeqCst);
+            let mut seen = None;
+            // SAFETY: a plain message to the launcher's live window.
+            let _ = unsafe {
+                PostMessageW(
+                    Some(launcher),
+                    WM_SYSCOMMAND,
+                    WPARAM(SC_KEYMENU as usize),
+                    LPARAM(character),
+                )
+            };
+            std::thread::sleep(Duration::from_millis(300));
+            look("after the menu command", &mut seen);
+            send(&[key(VK_DOWN, false), key(VK_DOWN, true)]);
+            std::thread::sleep(Duration::from_millis(300));
+            look("after Down", &mut seen);
+            let after = selected.load(Ordering::SeqCst);
+            report.log(format!(
+                "{command} menu command, then Down: selection {before} -> {after}; menu: {}",
+                seen.as_deref().unwrap_or("none")
+            ));
+            if let Some(menu) = seen {
+                report.fail(format!("{command} menu command opened {menu}"));
+                for _ in 0..2 {
+                    send(&[key(VK_ESCAPE, false), key(VK_ESCAPE, true)]);
+                    std::thread::sleep(Duration::from_millis(50));
+                }
+            } else if after != before + 1 {
+                report.fail(format!(
+                    "after {command} menu command, Down moved the selection from {before} to {after}"
+                ));
+            }
         }
     }
 
