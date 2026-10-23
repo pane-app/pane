@@ -120,8 +120,10 @@ does. The row shows its title whichever matched.
 
 ### Opening
 
-Enter opens the application, off the window's thread, and the status
-says "Opened Firefox". A failure stays visible as the status error:
+Enter opens the application, off the window's thread. Once it opened,
+the launcher closes, as Raycast's does, and root search shows next time
+with its query empty (#468). A failure keeps the launcher open and stays
+visible as the status error:
 
 - "Could not open Firefox: cannot find the program firefox"
 - "... not allowed to run ..."
@@ -865,8 +867,8 @@ adapter differs. An extension receives `application` records and returns
     not exist yet is reported when it appears.
 - Native GUI smokes, one identical phase on all three systems
   (screenshots 44 and 45): install the package, type "pane smoke", check
-  the selected row, Enter, check "Opened Pane Smoke App", and check that
-  the application the smoke added wrote its marker file. The smoke adds it
+  the selected row, Enter, and check that the application the smoke added
+  wrote its marker file and that the launcher closed. The smoke adds it
   in a data folder, HOME or APPDATA of Pane's own, so the system's are
   searched too. See the
   [Linux](platforms/linux.md#applications-24-25-26),

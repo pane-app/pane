@@ -15,6 +15,7 @@ use futures::executor::block_on;
 use pane_core::{
     CallError, Canvas, CanvasOp, CanvasRole, CommandRegistration, DesignedEvent, DesignedHandler,
     FormValue, GUEST_MEMORY, Launcher, Node, NodeKind, Paint, Runtime, Screen, Status, Unavailable,
+    WindowPresence,
 };
 use wasmtime::component::Component;
 use wasmtime::{Config, Engine};
@@ -929,17 +930,29 @@ fn reverse_typed_into_root_search_lists_the_reversed_text_to_copy(sample: &Sampl
         launcher.view().status,
         Status::Result("Copied 1 énaP to the clipboard".into())
     );
+    // A copy stays in Pane: the window stays, and so does the query
+    // (#468, as an open does not).
+    assert_eq!(launcher.window_presence(), WindowPresence::Shown);
+    assert_eq!(launcher.view().query(), Some("reverse Pané 1"));
     // Nothing to reverse is no result, not an error.
     block_on(launcher.set_query("reverse   "));
     assert_eq!(launcher.view().rows, []);
 }
 
-/// Records the links it is asked to open, so that no browser opens.
+/// Records the links it is asked to open, so that no browser opens; while
+/// it holds a refusal, it answers that instead, as a system with nothing
+/// to open them with would.
 #[derive(Default)]
-struct RecordedLinks(std::sync::Mutex<Vec<String>>);
+struct RecordedLinks(
+    std::sync::Mutex<Vec<String>>,
+    std::sync::Mutex<Option<String>>,
+);
 
 impl pane_core::LinkOpener for RecordedLinks {
     fn open(&self, url: &str) -> Result<(), String> {
+        if let Some(refused) = self.1.lock().unwrap().clone() {
+            return Err(refused);
+        }
         self.0.lock().unwrap().push(url.into());
         Ok(())
     }
@@ -968,15 +981,29 @@ fn a_root_result_opens_a_web_link(sample: &Sample) {
         Some(format!("Opened by the {} guest", sample.language))
     );
     assert_eq!(launcher.selected_copy(), None, "it copies nothing");
+
+    // A link that does not open says why, and the launcher stays as it
+    // was (#468).
+    *links.1.lock().unwrap() = Some("no browser is set".into());
+    block_on(launcher.activate_selected());
+    assert_eq!(
+        launcher.view().status,
+        Status::Error("Could not open https://github.com/hoangvu12/pane: no browser is set".into())
+    );
+    assert_eq!(launcher.window_presence(), WindowPresence::Shown);
+    assert_eq!(launcher.view().query(), Some("pane website"));
+
+    // One that opens closes the launcher, back on root search with its
+    // query empty, as Raycast pops to root (#468).
+    *links.1.lock().unwrap() = None;
     block_on(launcher.activate_selected());
     assert_eq!(
         *links.0.lock().unwrap(),
         ["https://github.com/hoangvu12/pane"]
     );
-    assert_eq!(
-        launcher.view().status,
-        Status::Result("Opened https://github.com/hoangvu12/pane".into())
-    );
+    assert_eq!(launcher.view().status, Status::Idle);
+    assert_eq!(launcher.window_presence(), WindowPresence::Hidden);
+    assert_eq!(launcher.view().query(), Some(""));
 }
 
 /// The commands, forms, views and root results of the sample, one after

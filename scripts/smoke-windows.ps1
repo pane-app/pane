@@ -784,13 +784,13 @@ Send "{ENTER}"; Start-Sleep -Seconds 2   # Install
 Send "pane smoke"; Start-Sleep -Seconds 3
 Capture "44-application.png"
 Check "44-application.png" "selected" 3000   # the selected application row
-# The answer is a toast, which leaves the footer 3 seconds after it shows
-# (#249): it is captured as it shows, not after a fixed wait that outlasts it.
-Send "{ENTER}"
-Focus-Pane $process
-Capture-Until "45-opened.png" "success" 10   # "Opened Launch Pane Smoke App"
+# Opening it hands the user off to it: the launcher closes, as Raycast's
+# does (#468), and says nothing more.
+Send "{ENTER}"; Start-Sleep -Seconds 3
+Capture "45-opened.png"   # evidence only: the window is hidden
 for ($i = 0; $i -lt 50 -and -not (Test-Path $launched); $i++) { Start-Sleep -Milliseconds 200 }
 if (-not (Test-Path $launched)) { throw "the application did not run" }
+if ([Win]::GetForegroundWindow() -eq $process.MainWindowHandle) { throw "opening the application left Pane's window in front" }
 $shots = "44-application", "45-opened" | ForEach-Object { Join-Path $OutDir "$_.png" }
 python "$PSScriptRoot/check_screenshot.py" --distinct @shots
 if ($LASTEXITCODE -ne 0) { throw "screenshot check failed: opening the application changed nothing" }

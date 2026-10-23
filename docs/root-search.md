@@ -453,8 +453,10 @@ Enter invokes the selected result:
 - it opens Pane's own screen;
 - it copies a computed result's text to the clipboard ("Copied 42 to the
   clipboard"), and root search stays as it was;
-- it opens an application ("Opened Firefox"), and root search stays as it
-  was;
+- it opens an application, a file, a folder or a link, and the launcher
+  closes, as Raycast's does: root search is shown next time, its query
+  empty (#468). An open that fails says why ("Could not open Firefox:
+  …"), and the launcher stays as it was;
 - it sends the text to a command that takes a query, through its alias or
   as a fallback, and shows its answer, and root search stays as it was.
   With nothing else listed, the first fallback is the selected result
@@ -1021,7 +1023,9 @@ Pane performs without calling the extension again:
   system the `system` host functions act on, as
   [quicklinks](quicklinks.md#in-root-search) do.
 
-Pane says "Opened …" or "Could not open …: <why>".
+Once the target opens, the launcher closes and root search shows next
+time with its query empty (#468); if it does not, Pane says "Could not
+open …: <why>".
 
 An error or crash of the extension is listed as a row titled with the
 command and "Could not list: …" for every query that is not blank; Enter

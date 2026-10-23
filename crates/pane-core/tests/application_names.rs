@@ -177,10 +177,10 @@ fn a_localized_title_is_listed_and_the_untranslated_name_still_finds_it() {
 
     block_on(launcher.activate_selected());
     assert_eq!(system.opened(), [paint.path]);
-    assert_eq!(
-        launcher.view().status,
-        Status::Result("Opened Launch Ứng dụng Vẽ".into())
-    );
+    // Opened, the launcher closed, back on root search with its query
+    // empty, as Raycast pops to root (#468).
+    assert_eq!(launcher.view().status, Status::Idle);
+    assert_eq!(launcher.view().query(), Some(""));
 }
 
 #[test]

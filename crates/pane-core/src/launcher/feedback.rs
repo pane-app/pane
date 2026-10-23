@@ -639,6 +639,27 @@ impl Launcher {
         self.changed();
     }
 
+    /// Closes the window once Pane itself opened what the user chose — an
+    /// application, a file or folder, a link — handing the user off to it
+    /// (#468), and returns to root search with its query empty, as
+    /// Raycast pops to root after such an action: what `window.close` does
+    /// with the root search cleared and an immediate pop, whatever the
+    /// Launcher page's reopening choice says (that choice is about a
+    /// launcher the user dismissed, not one an open handed off from). The
+    /// window hides as the dismiss key hides it. An open made while the
+    /// window is hidden (a hotkey's) leaves the screen the user left as it
+    /// is. The caller holds `state`, and tells the window the launcher
+    /// changed once it lets it go.
+    pub(super) fn close_after_opening(&self, state: &mut State) {
+        state.view.status = Status::Idle;
+        if state.feedback.presence == WindowPresence::Hidden {
+            return;
+        }
+        state.feedback.next_showing = NextShowing::BySetting;
+        self.show_root(state, None);
+        hide_window(state);
+    }
+
     /// `feedback.show-hud`: closes the window, if it is shown, and shows
     /// `hud` in its own. Pane's own actions say what they did with it too.
     pub(super) fn show_hud(&self, hud: Hud) {

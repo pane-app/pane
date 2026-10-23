@@ -607,8 +607,8 @@ fn an_application_is_pinned_by_its_identity_and_a_cold_home_resolves_and_opens_i
     let second = launcher.activate_quick_slot(0);
     block_on(futures::future::join(first, second));
     assert_eq!(*system.opened.lock().unwrap(), ["/apps/Firefox.app"]);
-    assert_eq!(
-        launcher.view().status,
-        Status::Result("Opened Launch Firefox".into())
-    );
+    // Opened, the launcher closed, back on root search with its query
+    // empty, as Raycast pops to root (#468).
+    assert_eq!(launcher.view().status, Status::Idle);
+    assert_eq!(launcher.view().query(), Some(""));
 }
