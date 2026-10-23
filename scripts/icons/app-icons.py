@@ -15,6 +15,12 @@ the mark as the launcher itself shows it, on the launcher's own surface.
   It holds every size Finder and the Dock ask for, 16 to 1024 pixels, as
   PNGs. The tile follows the macOS icon grid: 824 of 1024 pixels, centred,
   so the system's own shadow and spacing fit around it.
+- crates/pane/assets/app/hicolor/<size>x<size>/apps/pane.png: the icon of
+  Pane's Linux desktop entry (`Icon=pane`), laid out as the hicolor icon
+  theme is, where a desktop looks the name up; the Linux package's install
+  script and the AppImage install them (#464). It holds the sizes desktops ask
+  for, 16 to 512 pixels, with the macOS tile's margin, as GNOME's and KDE's
+  own application icons leave one.
 
 The images are drawn here, with only the standard library, from the mark's
 SVGs (read as the tray's script reads them): each pixel's coverage of each
@@ -60,10 +66,12 @@ FRONT_ALPHA = 0xEB / 255
 # macOS's grid puts an 824-pixel tile in a 1024-pixel image.
 WINDOWS_TILE = (1 / 32, 0.22)
 MACOS_TILE = (100 / 1024, 0.225)
+LINUX_TILE = MACOS_TILE
 # The mark's width, as a fraction of the tile's side.
 MARK = 0.62
 
 WINDOWS_SIZES = [16, 20, 24, 32, 40, 48, 64]
+LINUX_SIZES = [16, 24, 32, 48, 64, 128, 256, 512]
 WINDOWS_PNG = 256
 # Each ICNS entry: its type and the pixels it holds (the @2x types hold
 # twice the points they are named for).
@@ -185,7 +193,9 @@ def icns(entries):
 
 
 def write(name, data):
-    with open(os.path.join(OUT, name), "wb") as file:
+    path = os.path.join(OUT, name)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "wb") as file:
         file.write(data)
     print(f"{name}: {len(data)} bytes")
 
@@ -200,6 +210,8 @@ def main():
         if size not in pngs:
             pngs[size] = png(draw(size, MACOS_TILE))
     write("pane.icns", icns([(kind, pngs[size]) for kind, size in ICNS]))
+    for size in LINUX_SIZES:
+        write(f"hicolor/{size}x{size}/apps/pane.png", png(draw(size, LINUX_TILE)))
 
 
 if __name__ == "__main__":

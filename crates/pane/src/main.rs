@@ -114,6 +114,11 @@ fn main() {
     {
         pane_core::system::selected::serve();
     }
+    // Whether Pane runs from a Linux AppImage (#464), read before any
+    // thread starts: the AppImage runtime's variables are then taken out
+    // of the environment, so the programs Pane starts do not inherit them.
+    // SAFETY: nothing but this thread runs yet.
+    unsafe { pane_core::appimage::adopt() };
     let preview = package_to_preview();
     let launch_at_login = launch_at_login_asked();
     // Pane's own log and crash record (#133), before anything else can
@@ -270,7 +275,9 @@ fn main() {
         // Pane's published releases; a development build only where
         // PANE_RELEASES names a stand-in on this computer (the tests' and
         // smokes' own), so that a development checkout checks nothing over
-        // the network by itself.
+        // the network by itself. A Pane running from a Linux AppImage
+        // replaces the AppImage file with the release's AppImage instead
+        // (#464, ADR 0049): the program inside it is in a read-only mount.
         #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
         let launcher = {
             #[cfg(debug_assertions)]
@@ -278,11 +285,20 @@ fn main() {
             #[cfg(not(debug_assertions))]
             let release_source: Option<Result<pane_core::ReleaseSource, String>> =
                 Some(Ok(pane_core::ReleaseSource::published()));
-            match (std::env::current_exe(), release_source.as_ref()) {
-                (Ok(exe), Some(Ok(source))) => {
+            match (
+                pane_core::appimage::running(),
+                std::env::current_exe(),
+                release_source.as_ref(),
+            ) {
+                (Some(appimage), _, Some(Ok(source))) => launcher.with_appimage_update(
+                    pane::APP_VERSION,
+                    source.clone(),
+                    appimage.to_path_buf(),
+                ),
+                (None, Ok(exe), Some(Ok(source))) => {
                     launcher.with_application_update(pane::APP_VERSION, source.clone(), exe)
                 }
-                (Err(why), _) => {
+                (None, Err(why), _) => {
                     pane_core::diagnostic!(
                         "Pane's own program could not be found, so it checks for no update: {why}"
                     );

@@ -17,11 +17,37 @@ internet-first setup the specification chose
 Each system has its own package: a `.tar.gz` for Linux and a `.zip` for
 Windows and macOS. Windows also has a setup, `Pane-Setup-<version>.exe`,
 which installs Pane as other Windows apps install; the zip stays as the
-portable download. Every install is for one user and needs no root or
-administrator rights. Nothing is signed yet, so Windows and macOS may warn
-or block at first; each section below says how to answer that.
+portable download. macOS and Linux have an installer that works like any
+other app's too ([#464](https://github.com/pane-app/pane/issues/464)): a
+disk image (`Pane-<version>.dmg`) to drag Pane from, and an AppImage
+(`Pane-<version>-<arch>.AppImage`) to run as it is. Every install is for
+one user and needs no root or administrator rights. Nothing is signed yet,
+so Windows and macOS may warn or block at first; each section below says
+how to answer that.
 
 ### Installing on Linux
+
+The AppImage is one file holding the `pane` program, its desktop entry
+and its icons. Nothing is installed:
+
+```sh
+chmod +x Pane-<version>-x86_64.AppImage
+./Pane-<version>-x86_64.AppImage
+```
+
+It runs where it is saved. An AppImage integration tool (Gear Lever,
+AppImageLauncher, appimaged) adds it to the applications menu with its
+icon, from the desktop entry and icons the AppImage carries. Pane itself
+writes no menu entry for it. The AppImage's runtime is the static type 2
+one, so the system needs no `libfuse2`. It does need FUSE to mount the
+image; without FUSE, `--appimage-extract-and-run` runs it extracted
+instead. The libraries the tarball's prerequisites below name are needed
+the same way: the AppImage bundles none of them. Launch at login names the
+AppImage file, and an update replaces that file
+([below](#on-each-system)). To uninstall, delete the file. Pane's own data
+stays in `~/.local/share/pane`.
+
+The tarball installs the same program the traditional way:
 
 ```sh
 tar -xzf pane-<version>-linux-<arch>.tar.gz
@@ -34,6 +60,10 @@ The script installs for one user, and no root is needed:
 
 - `pane` goes to `<prefix>/bin`.
 - The desktop entry goes to `<prefix>/share/applications`.
+- Its icon goes to `<prefix>/share/icons/hicolor/<size>/apps/pane.png`,
+  in every size from 16 to 512 pixels. The entry names it (`Icon=pane`),
+  and its `StartupWMClass=pane` matches the class Pane's windows carry,
+  so the desktop shows the icon for them.
 
 It checks the program's libraries with `ldd`. If one is missing, it names
 it and the Ubuntu package that provides it, rather than installing
@@ -48,8 +78,8 @@ libxkbcommon0 libxkbcommon-x11-0 libwayland-client0 libxcb1
 libfontconfig1 libfreetype6 libvulkan1
 ```
 
-To uninstall, remove the two files. Pane's own data stays in
-`~/.local/share/pane`.
+To uninstall, remove the program, the entry and the icons. Pane's own
+data stays in `~/.local/share/pane`.
 
 ### Installing on Windows with the setup
 
@@ -150,6 +180,26 @@ That is what absent Authenticode credentials mean, recorded plainly
 
 ### Installing on macOS
 
+Open `Pane-<version>.dmg` and drag Pane onto the Applications folder
+beside it. The disk image holds the whole `Pane.app`: the program, its
+`Info.plist` and icon, and the licence and notices in
+`Contents/Resources`. Dragging it to `~/Applications` instead needs no
+administrator rights. Pane is an accessory app
+([#458](https://github.com/pane-app/pane/issues/458)): it shows no Dock
+icon and no Cmd+Tab entry. It lives in the menu bar and opens with its
+hotkey. Eject the disk image once Pane is copied. Pane run straight from
+the image works, but cannot update itself, since the image is read only.
+
+The first open of a downloaded Pane.app is blocked, as
+[below](#limits-and-prerequisites) explains. macOS says it cannot check
+the app for malicious software. Choose **Done**, then open **System
+Settings → Privacy & Security**, find the message about Pane near the
+bottom, and choose **Open Anyway**. macOS asks once more, then opens it,
+and never asks again for that copy. `xattr -dr com.apple.quarantine
+/Applications/Pane.app` in Terminal does the same.
+
+The zip installs the same bundle with a script:
+
 ```sh
 unzip pane-<version>-macos-<arch>.zip        # or double-click it in Finder
 cd pane
@@ -214,8 +264,17 @@ runs on, and the assets a release of Pane carries for it:
 
 - `pane-<version>-linux-<arch>.tar.gz` is the Linux package, built by
   `cargo xtask package-linux`. Under `pane/` it holds the `pane` program
-  (release profile), the install script, a `README.txt` and a
-  `pane.desktop` entry.
+  (release profile), the install script, a `README.txt`, a
+  `pane.desktop` entry and its icons (`icons/hicolor/<size>/apps/pane.png`).
+- `Pane-<version>-<arch>.AppImage` is the Linux installer, built by the
+  same task from the same staged files when `APPIMAGETOOL` and
+  `APPIMAGE_RUNTIME` name an `appimagetool` and the AppImage type 2
+  runtime to build it with. Without them the task says it built none.
+  CI's Package job downloads both, pinned to a release and checked against
+  their digests (`appimagetool` 1.9.1, runtime 20251108). Its AppDir holds
+  `AppRun` (a link to `usr/bin/pane`), the desktop entry and the 256-pixel
+  icon at the top (with `.DirIcon`), the entry and every icon size under
+  `usr/share`, and the licence and notices in `usr/share/doc/pane`.
 - `pane-<version>-windows-<arch>.zip` is the Windows package, built by
   `cargo xtask package-windows`. Under `pane/` it holds the `pane.exe`
   program (release profile), the PowerShell install script and a
@@ -228,18 +287,22 @@ runs on, and the assets a release of Pane carries for it:
   (release profile), the install script, a `README.txt`, and the
   `Info.plist` and icon (`pane.icns`) of the `Pane.app` bundle the script
   builds.
+- `Pane-<version>.dmg` is the macOS installer, built by the same task with
+  `hdiutil`, which every Mac has. It is a compressed (UDZO) HFS+ image of
+  a volume named Pane, holding that same bundle, already built, beside a
+  link to `/Applications`.
 - Every package also holds Pane's licence (`LICENSE.txt`) and the
   third-party notices (`THIRD-PARTY-NOTICES.txt`), and its README says
   where the source of its version is ([licensing](licensing.md)). The
   icons are drawn from Pane's mark by `scripts/icons/app-icons.py` and
   committed (`crates/pane/assets/app/`).
-- `pane-<version>-<os>-<arch>.<zip|tar.gz>.sha256` is each package's
-  digest.
+- `<file>.sha256` is each package's and each installer's digest.
 - `release/` holds the assets a GitHub release of Pane carries for this
   system ([below](#the-release-source)): the package, named
   `pane-<version>-<os>-<arch>.<zip|tar.gz>` (a development package takes
-  that name here too, standing in for a release's), and its `.sha256`.
-  These names are what Pane's updater looks for in a release. The release
+  that name here too, standing in for a release's), and its `.sha256`,
+  and the installer with its own. These names are what Pane's updater
+  looks for in a release. The release
   workflow uploads this folder; the smokes serve it from this computer
   instead. Each system's run of its own task builds its own.
 - On Windows, `release/` also holds the setup, `Pane-Setup-<version>.exe`,
@@ -278,8 +341,9 @@ explains so and stops. The macOS task does the same for macOS.
 
 Each package is the same bytes wherever it is built: a fixed time, owner
 and mode in the Linux tar, and a fixed time, entry order and deflate in
-the Windows and macOS zips. Its program is built for the system the task
-ran on:
+the Windows and macOS zips. The installers are not: `hdiutil` and
+`mksquashfs` write times of their own, so their `.sha256` says what one
+build wrote. Each program is built for the system the task ran on:
 
 | Where the task runs | Builds |
 | --- | --- |
@@ -523,8 +587,14 @@ A release `v<version>` serves every system. Its assets are one package
 per system, named `pane-<version>-<target>.zip` or `.tar.gz` (the target
 is written as a [helper target](../CONTEXT.md) is: `windows-x86_64`,
 `macos-aarch64`, `linux-x86_64`), each with a `<package>.sha256` beside
-it. `cargo xtask package-windows`, `-macos` and `-linux` write exactly
-those assets into `target/dist/release/`.
+it, and the two installers, `Pane-<version>.dmg` and
+`Pane-<version>-<arch>.AppImage`, with theirs. `cargo xtask
+package-windows`, `-macos` and `-linux` write exactly those assets into
+`target/dist/release/`. A Pane updates from its system's package, except a
+Pane running from an AppImage, which updates from the AppImage
+([ADR 0049](adr/0049-an-appimage-updates-from-the-releases-appimage.md)).
+A `Pane.app` dragged out of the disk image is the bundle the zip's script
+builds, so it updates from the zip.
 
 The releases are read only where an update is checked, so a release one
 Pane cannot take changes nothing else: a default extension is set up from
@@ -585,11 +655,15 @@ Choosing the row:
      central directory and the file's own header and CRC32;
    - the gzipped tarball the Linux package is, read with the npm
      tarball's own strictness: only files and folders, extension headers
-     read raw, an ambiguous size refused.
-3. Stages it in the install folder's `update` folder.
+     read raw, an ambiguous size refused;
+   - an AppImage is not unpacked: it must be an ELF file with the
+     AppImage type 2 mark, or it is refused.
+3. Stages it in the install folder's `update` folder, or for an AppImage
+   in a hidden `.<name>.update` folder beside it: an AppImage often sits
+   in a folder of the user's own, where an `update` folder may be theirs.
 4. Swaps. The running program is renamed out of its way: `pane.exe` to
    `pane.exe.old` on Windows, the bundle's `pane` to `pane.old` on macOS,
-   `pane` to `pane.old` on Linux. Every system allows renaming a running
+   `pane` to `pane.old` on Linux, and an AppImage to `<name>.old`. Every system allows renaming a running
    program; only overwriting one is refused. The staged program takes its
    name and place, and the staging folder goes.
 
@@ -671,8 +745,31 @@ program's own path.
   else). The tarball the Linux package is unpacks with the tar reader npm
   tarballs are read by, and Pane's data stays in `~/.local/share/pane`,
   which the install folder does not even hold.
+- Linux from an AppImage ([#464](https://github.com/pane-app/pane/issues/464),
+  [ADR 0049](adr/0049-an-appimage-updates-from-the-releases-appimage.md)):
+  the program the system reports is inside the AppImage's read-only
+  mount, so `main.rs` gives the AppImage file instead. As it starts,
+  Pane reads the runtime's `APPIMAGE` and `APPDIR` (`pane_core::appimage`).
+  It counts as an AppImage only when its own program is inside `APPDIR`.
+  It then takes those variables, and the runtime's `ARGV0` and `OWD`, out
+  of its environment, so the programs it starts do not think they run
+  from Pane's AppImage. The update downloads the release's
+  `Pane-<version>-<arch>.AppImage` and puts it at the same path, so the
+  menu entry an integration tool made, the autostart entry (which names
+  the AppImage too) and any shortcut keep starting it. The file keeps its
+  name, even though the name says the old version. The AppImage's folder
+  must be writable by the user. An AppImage in a folder only root can
+  write fails to update, and the failure is explained.
 - macOS ([#55](https://github.com/pane-app/pane/issues/55)): the program
-  is at `~/Applications/Pane.app/Contents/MacOS/pane`. See below.
+  is at `Pane.app/Contents/MacOS/pane`, in `/Applications` or
+  `~/Applications` (wherever the disk image's bundle was dragged, or the
+  install script put it). See below. The bundle needs to be writable by
+  the user. A copy the user dragged into `/Applications` is theirs, so it
+  is. A Pane run from the mounted disk image, or from a quarantined
+  download that macOS runs from a randomized read-only path (App
+  Translocation), cannot replace itself. Its update fails and says the
+  file system is read only, until the bundle is moved into an
+  Applications folder.
 
 On macOS the swap replaces **the binary inside the bundle**, and the
 bundle itself stays. Replacing a whole `Pane.app` under a running Pane
@@ -927,6 +1024,32 @@ with `&`).
   `cargo xtask package-macos [--dev]` the zip, its sha256 and the same
   assets. The release-profile package is built the same way as the
   development-profile one the smoke installs.
+- The Package job (`.github/workflows/package.yml`, which the release
+  matrix and the release workflow both run) checks each installer the way
+  a user meets it, right after building it
+  (`scripts/check-installer.sh`):
+  - On `macos-15`, the disk image's digest is checked, and the image is
+    mounted read-only. It must hold the link to `/Applications` and a
+    whole `Pane.app`, whose `Info.plist` lints and names the version and
+    `pane`. The bundle is copied with `ditto` into an Applications folder
+    of the check's own, as a drag in Finder copies it, and must answer
+    `--version` with the version.
+  - On `ubuntu-24.04`, the AppImage's digest and its type 2 mark are
+    checked. It must answer `--version` run extracted
+    (`--appimage-extract-and-run`, since a runner may have no FUSE), and
+    mounted too where FUSE is there. Extracted, it must hold `AppRun`
+    linking its program, the desktop entry (`Exec=pane`, `Icon=pane`,
+    `StartupWMClass=pane`, passing `desktop-file-validate`), `.DirIcon`,
+    every icon size, and the licence and notices.
+- `pane-core`'s unit tests check the AppImage's own choice of release:
+  the AppImage asset, passing over a release that carries only the
+  tarball. They check the swap that puts the new AppImage at the old
+  one's path, refusing a download that is not an AppImage and leaving the
+  user's own `update` folder alone, and the runtime variables that make a
+  Pane count as running from an AppImage.
+  `crates/pane-core/tests/application_update.rs` installs an AppImage
+  update through the launcher on Linux, with the tarball beside it never
+  downloaded.
 - `xtask/src/zip.rs` has a unit test that pins the zip's bytes, first
   decoded with Python's `zipfile`. The Linux machine that writes most of
   this repository cannot build `pane.exe` or the macOS `pane` program, so
@@ -962,8 +1085,9 @@ with `&`).
   their repositories. Publishing a release is an execution step, like
   the signing credentials below: pushing a `v<version>` tag runs the
   release workflow (`.github/workflows/release.yml`), which drafts a
-  prerelease with the three packages, their `.sha256` files, the source
-  archive and the notes, and a person publishes the draft.
+  prerelease with the three packages, the disk image and the AppImage,
+  their `.sha256` files, the source archive and the notes, and a person
+  publishes the draft.
 - Nothing is signed. No signing credentials exist, so the package is not
   signed: its `.sha256` says only what was packed, and the application
   package an update downloads is checked only against the sha256 of the
@@ -981,8 +1105,10 @@ with `&`).
   that for this one script). Acquiring a certificate, and signing the
   program and the script with it, are execution prerequisites like the
   others here.
-- On macOS there is no Apple Developer ID certificate either, so `pane`
-  and `install.sh` are unsigned and nothing is notarized. Gatekeeper
+- On macOS there is no Apple Developer ID certificate either, so `pane`,
+  `install.sh` and the disk image are unsigned and nothing is notarized
+  (the program carries only the ad-hoc signature the linker gives every
+  Apple silicon program). Gatekeeper
   blocks the first launch of a Pane.app a browser downloaded (the README
   and the [macOS section](#installing-on-macos) above say how the user
   answers that), while a package built on the machine runs at once.
@@ -1079,4 +1205,6 @@ fetched from their own repositories since
 [#278](https://github.com/pane-app/pane/issues/278). Pane's own updates
 are [#54](https://github.com/pane-app/pane/issues/54),
 [#55](https://github.com/pane-app/pane/issues/55) (macOS) and
-[#56](https://github.com/pane-app/pane/issues/56) (Linux).
+[#56](https://github.com/pane-app/pane/issues/56) (Linux). The disk image
+and the AppImage, and the AppImage's own updates, are
+[#464](https://github.com/pane-app/pane/issues/464).

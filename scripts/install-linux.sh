@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
-# Installs Pane for one user: the pane program in <prefix>/bin and its
-# desktop entry in <prefix>/share/applications. The default prefix is
+# Installs Pane for one user: the pane program in <prefix>/bin, its
+# desktop entry in <prefix>/share/applications and the entry's icon, in
+# each size, in <prefix>/share/icons/hicolor. The default prefix is
 # $HOME/.local, so no root is needed; name another with --prefix.
 #
 # Run from the folder the package unpacked (pane/), or from anywhere: the
 # folder is the one this script is in, or the one given as an argument.
 # The install checks that the program's libraries are there, copies the
-# two files and runs `pane --version` to check what it installed.
+# files and runs `pane --version` to check what it installed.
 #
 # The package holds none of Pane's default extensions: Pane downloads them
 # itself at first setup (see the README beside this script).
@@ -45,7 +46,8 @@ done
 
 program=$folder/pane
 entry=$folder/pane.desktop
-for file in "$program" "$entry" "$folder/README.txt"; do
+icons=$folder/icons/hicolor
+for file in "$program" "$entry" "$folder/README.txt" "$icons/256x256/apps/pane.png"; do
   [ -f "$file" ] || { echo "install.sh: $file is missing; run this in the folder the package unpacked"; exit 1; }
 done
 
@@ -79,7 +81,15 @@ fi
 mkdir -p "$prefix/bin" "$prefix/share/applications"
 install -m 0755 "$program" "$prefix/bin/pane"
 install -m 0644 "$entry" "$prefix/share/applications/pane.desktop"
+# The icon the entry names (Icon=pane), in every size the package holds.
+for icon in "$icons"/*/apps/pane.png; do
+  size=${icon#"$icons"/}
+  size=${size%%/*}
+  mkdir -p "$prefix/share/icons/hicolor/$size/apps"
+  install -m 0644 "$icon" "$prefix/share/icons/hicolor/$size/apps/pane.png"
+done
 
-echo "Installed Pane to $prefix (remove $prefix/bin/pane and"
-echo "$prefix/share/applications/pane.desktop to uninstall)."
+echo "Installed Pane to $prefix (remove $prefix/bin/pane,"
+echo "$prefix/share/applications/pane.desktop and"
+echo "$prefix/share/icons/hicolor/*/apps/pane.png to uninstall)."
 "$prefix/bin/pane" --version

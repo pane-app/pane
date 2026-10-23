@@ -921,6 +921,9 @@ pub(crate) fn open(launcher: &Launcher, cx: &mut App) -> WindowHandle<SettingsWi
             appears_transparent: true,
             ..Default::default()
         }),
+        // On Linux the taskbar shows Pane's icon for the window, from the
+        // desktop entry this names.
+        app_id: Some(crate::APP_ID.into()),
         ..Default::default()
     };
     cx.open_window(options, |window, cx| {
