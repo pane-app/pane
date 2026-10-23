@@ -14,7 +14,9 @@
 //!
 //! The entry's `Exec` line is the program's own path, quoted the way the
 //! desktop-entry specification quotes an executable with spaces in its
-//! path, so a path with spaces stays one command and not several.
+//! path, so a path with spaces stays one command and not several. A Pane
+//! running from an AppImage names the AppImage file (`crate::appimage`):
+//! the program inside it is in a mount that is gone once Pane exits.
 
 use std::path::{Path, PathBuf};
 
@@ -35,8 +37,11 @@ impl XdgAutostart {
     /// configuration folder. `Err` with the problem when either cannot
     /// be found — there is then no entry to write and no command for it.
     pub fn new() -> Result<XdgAutostart, String> {
-        let exe = std::env::current_exe()
-            .map_err(|why| format!("Pane's own program could not be found: {why}"))?;
+        let exe = match crate::appimage::running() {
+            Some(appimage) => appimage.to_path_buf(),
+            None => std::env::current_exe()
+                .map_err(|why| format!("Pane's own program could not be found: {why}"))?,
+        };
         let config = std::env::var_os("XDG_CONFIG_HOME")
             .filter(|value| !value.is_empty())
             .map(PathBuf::from)

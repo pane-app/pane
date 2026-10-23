@@ -112,6 +112,12 @@ pub const APP_VERSION: &str = match option_env!("PANE_PACKAGE_VERSION") {
     None => env!("CARGO_PKG_VERSION"),
 };
 
+/// The application id Pane's windows carry on Linux (X11's `WM_CLASS`,
+/// Wayland's app id): the name of the desktop entry the Linux package and
+/// the AppImage install (`pane.desktop`, `StartupWMClass=pane`), so a
+/// desktop matches the windows to it and shows its icon for them (#464).
+pub const APP_ID: &str = "pane";
+
 /// The pins this build of Pane sets its default extensions up from:
 /// `defaults.json`, committed beside the crate, naming each default
 /// extension's id, title, repository, release tag, that tag's commit and,
@@ -217,6 +223,7 @@ pub fn open_launcher_window<V: 'static + gpui::Render>(
             ..Default::default()
         }),
         show: !cfg!(target_os = "windows"),
+        app_id: Some(APP_ID.into()),
         ..Default::default()
     };
     let window = cx.open_window(options, |window, cx| {

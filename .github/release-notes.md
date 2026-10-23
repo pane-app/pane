@@ -10,18 +10,18 @@
 | System | Package |
 | --- | --- |
 | Windows x86_64 | `Pane-Setup-{version}.exe` (the setup), or `pane-{version}-windows-x86_64.zip` (portable) |
-| macOS Apple silicon | `pane-{version}-macos-aarch64.zip` |
-| Linux x86_64 | `pane-{version}-linux-x86_64.tar.gz` |
+| macOS Apple silicon | `Pane-{version}.dmg` (open it and drag Pane onto Applications), or `pane-{version}-macos-aarch64.zip` |
+| Linux x86_64 | `Pane-{version}-x86_64.AppImage` (make it executable and run it), or `pane-{version}-linux-x86_64.tar.gz` |
 
-Each package, and the Windows setup, has a `.sha256` file beside it. To check a download, compare the digest it names with `Get-FileHash <package>` (Windows), `shasum -a 256 <package>` (macOS) or `sha256sum -c <package>.sha256` (Linux). Each package's `README.txt` says how to install and uninstall it.
+Each download has a `.sha256` file beside it. To check a download, compare the digest it names with `Get-FileHash <package>` (Windows), `shasum -a 256 <package>` (macOS) or `sha256sum -c <package>.sha256` (Linux). Each package's `README.txt` says how to install and uninstall it.
 
 ## Getting past the unsigned-app warnings
 
 Nothing in this release is signed: there is no Authenticode certificate for Windows and no Apple Developer ID for macOS yet.
 
 - **Windows.** Run `Pane-Setup-{version}.exe`. It installs Pane for you alone, with no administrator rights, into `%LOCALAPPDATA%\Pane`: a Start menu entry, an entry in **Settings → Apps** to uninstall it from, and a choice to start Pane when you sign in. If SmartScreen says "Windows protected your PC", choose **More info**, then **Run anyway**. Installing it over an earlier Pane keeps your extensions and settings. For the portable zip instead, unzip the package, then run `powershell -ExecutionPolicy Bypass -File install.ps1` in the `pane` folder it unpacked; `-ExecutionPolicy Bypass` answers PowerShell's refusal of a script that came from the internet (or run `Unblock-File install.ps1` once), and SmartScreen's warning when Pane starts is answered the same way.
-- **macOS.** Run `bash install.sh` in the unpacked `pane` folder. The first time you open Pane, macOS says it cannot check it for malicious software. Open **System Settings → Privacy & Security**, find the message about Pane near the bottom, choose **Open Anyway**, and confirm. (Or, in Terminal: `xattr -dr com.apple.quarantine ~/Applications/Pane.app`.)
-- **Linux.** No warning: run `bash install.sh` in the unpacked `pane` folder.
+- **macOS.** Open `Pane-{version}.dmg` and drag Pane onto Applications (or, from the zip, run `bash install.sh` in the unpacked `pane` folder, which installs to `~/Applications`). The first time you open Pane, macOS says it cannot check it for malicious software. Choose **Done**, open **System Settings → Privacy & Security**, find the message about Pane near the bottom, choose **Open Anyway**, and confirm. (Or, in Terminal: `xattr -dr com.apple.quarantine /Applications/Pane.app`.) Pane has no Dock icon: it lives in the menu bar and opens with its hotkey.
+- **Linux.** No warning. Run the AppImage with `chmod +x Pane-{version}-x86_64.AppImage && ./Pane-{version}-x86_64.AppImage`. To have it in your applications menu, open it with an AppImage integration tool such as Gear Lever or AppImageLauncher. Or run `bash install.sh` in the folder the tarball unpacked, which adds Pane to the menu itself.
 
 ## Source
 
@@ -29,4 +29,4 @@ Pane is free software under GPL-3.0-or-later. `pane-{version}-source.tar.gz` (wi
 
 ## Updates
 
-Pane checks this repository's releases when it starts and tells you when a newer version is out. It never downloads or installs one unless you choose to, and it checks each download against its `.sha256`. On Windows, an update installed from inside Pane also gives its entry in Settings → Apps the new version.
+Pane checks this repository's releases when it starts and tells you when a newer version is out. It never downloads or installs one unless you choose to, and it checks each download against its `.sha256`. On Windows, an update installed from inside Pane also gives its entry in Settings → Apps the new version. On macOS, the update replaces the program inside Pane.app wherever you put it. On Linux, an AppImage is replaced by the new AppImage at the same path.

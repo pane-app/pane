@@ -62,11 +62,13 @@
 //! - `package-linux`: build Pane's Linux package and its `.sha256`,
 //!   under `target/dist/`, and the assets a release of Pane carries for
 //!   it, under `target/dist/release/` (with `--dev`, the package's
-//!   program is the development profile; see `package.rs`).
+//!   program is the development profile; see `package.rs`), and the
+//!   AppImage beside it when `APPIMAGETOOL` and `APPIMAGE_RUNTIME` name the
+//!   tools to build it with.
 //! - `package-windows`: the same for Windows (`--dev` as for
 //!   `package-linux`; only on Windows).
-//! - `package-macos`: the same for macOS (`--dev` as for
-//!   `package-linux`; only on macOS).
+//! - `package-macos`: the same for macOS, and the disk image beside it
+//!   (`--dev` as for `package-linux`; only on macOS).
 //! - `file-index-bench`: build the file index's benchmark in release and
 //!   run it with the options that follow (#174; by default a generated
 //!   tree of 450,000 entries; `--home` indexes the real home folder, read

@@ -1,6 +1,7 @@
 //! Pane's core: the launcher model, extension packages and the extension
 //! runtime the launcher drives.
 
+pub mod appimage;
 mod application_update;
 pub mod applications;
 mod archive;

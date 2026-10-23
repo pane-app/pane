@@ -236,7 +236,30 @@ impl Launcher {
         source: ReleaseSource,
         program: PathBuf,
     ) -> Self {
-        let application = Program::at(program).ok().map(|program| {
+        self.with_program_update(version, source, Program::at(program))
+    }
+
+    /// This launcher checking for Pane application updates as
+    /// [`Launcher::with_application_update`] does, for a Pane that runs
+    /// from the Linux AppImage at `appimage` (`pane_core::appimage`): an
+    /// update installs the release's AppImage in that file's place, rather
+    /// than the program the tarball holds (ADR 0049).
+    pub fn with_appimage_update(
+        self,
+        version: &str,
+        source: ReleaseSource,
+        appimage: PathBuf,
+    ) -> Self {
+        self.with_program_update(version, source, Program::appimage(appimage))
+    }
+
+    fn with_program_update(
+        self,
+        version: &str,
+        source: ReleaseSource,
+        program: Result<Program, String>,
+    ) -> Self {
+        let application = program.ok().map(|program| {
             program.clean_install_folder();
             Application {
                 version: version.to_owned(),
@@ -296,8 +319,10 @@ impl Launcher {
         }
         let source = application.source.clone();
         let version = application.version.clone();
+        let install = application.program.install();
         let checked =
-            off_thread(move || application_update::check(&source, &version, &target)).await;
+            off_thread(move || application_update::check(&source, &version, &target, install))
+                .await;
         let mut state = self.lock();
         state.updates.end_check();
         // Whatever the check found replaces what the last one did, and an

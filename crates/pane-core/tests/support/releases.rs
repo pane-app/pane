@@ -143,6 +143,33 @@ impl Releases {
         self.publish(version, format!("pane-{version}-{target}.tar.gz"), tarball);
     }
 
+    /// Adds `package` to the release `v<version>` (published already, or
+    /// made now) as the asset `name`, with its `.sha256` beside it: the
+    /// AppImage a Linux release carries beside its tarball, say.
+    pub fn add_asset(&self, version: &str, name: &str, package: &[u8]) {
+        let checksum = format!("{}  {name}\n", sha256(package));
+        let mut served = self.served();
+        if !served
+            .releases
+            .iter()
+            .any(|release| release.version == version)
+        {
+            served.releases.push(Published {
+                version: version.to_owned(),
+                assets: Vec::new(),
+            });
+        }
+        let release = served
+            .releases
+            .iter_mut()
+            .find(|release| release.version == version)
+            .expect("the release was published");
+        release
+            .assets
+            .push((format!("{name}.sha256"), checksum.into_bytes()));
+        release.assets.push((name.to_owned(), package.to_vec()));
+    }
+
     fn publish(&self, version: &str, name: String, package: &[u8]) {
         let checksum = format!("{}  {name}\n", sha256(package));
         let mut served = self.served();
