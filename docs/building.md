@@ -1,6 +1,6 @@
 # Building and running Pane
 
-Pane has no published installer yet: no release is out, and the artifact source that would serve Pane's own updates is not deployed. So you build it from source. The same commands work on Windows, macOS and Linux.
+Pane has no published installer yet: no release is out on GitHub. So you build it from source. The same commands work on Windows, macOS and Linux.
 
 ## Prerequisites
 
@@ -30,7 +30,7 @@ You don't need a JavaScript toolchain for any of these, because the JS and TS sa
 
 On its first start, Pane lists the official extensions with the defaults ticked. Once you've chosen, it fetches them with its own Git client, from the commits this release pins. A development build takes its pins from `PANE_DEFAULTS` when that names a pins file of its own; the tests and smokes do this, pointing at repositories served on the same computer. Otherwise it uses the committed pins ([trying a first setup by hand](installer.md#trying-a-first-setup-by-hand)). A release build always uses the committed pins.
 
-Pane checks for its own updates when it starts. A development build checks only where `PANE_ARTIFACTS` names an artifact source on this computer, and otherwise doesn't check at all. A release build reads Pane's published downloads.
+Pane checks for its own updates when it starts. A development build checks only where `PANE_RELEASES` names a stand-in for Pane's GitHub releases on this computer, and otherwise doesn't check at all. A release build reads Pane's releases on GitHub.
 
 ## Using the window
 

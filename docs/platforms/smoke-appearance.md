@@ -15,7 +15,7 @@ remain separate native acceptance work for
 The macOS/Linux installed and updated GUI launches explicitly supply both
 appearance variables after `env -i`. Exporting them at script startup does
 not survive that environment reset. The clean HOME, empty tool PATH and
-local artifact source remain isolated.
+local stand-in for Pane's releases remain isolated.
 
 In [CI run 36952982441](https://github.com/pane-app/pane/actions/runs/36952982441),
 the missing variables caused macOS's installed launch to use default glass.

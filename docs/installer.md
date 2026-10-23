@@ -155,7 +155,7 @@ proves the whole outcome there.
 ## Building the packages
 
 Each task builds, under `target/dist/`, one package for the system it
-runs on, and the artifacts an artifact source serves:
+runs on, and the assets a release of Pane carries for it:
 
 - `pane-<version>-linux-<arch>.tar.gz` is the Linux package, built by
   `cargo xtask package-linux`. Under `pane/` it holds the `pane` program
@@ -178,38 +178,34 @@ runs on, and the artifacts an artifact source serves:
   where the source of its version is ([licensing](licensing.md)). The
   icons are drawn from Pane's mark by `scripts/icons/app-icons.py` and
   committed (`crates/pane/assets/app/`).
-- `artifacts/` is what an artifact source serves
-  ([below](#the-artifact-source)): the index `pane-defaults.json`, naming
-  the application package a Pane application update downloads, and the
-  package itself. A real deployment serves this folder at Pane's
-  published downloads; the tests and smokes serve it from this computer
-  instead. The package is built for the system the task ran on, and its
-  index entry names that target, so each system's run of its own task
-  serves its own. Since #278 no default-extension payload is written here:
-  the default extensions are fetched from their own repositories, and this
-  folder serves Pane's own updates alone.
 - `pane-<version>-<os>-<arch>.<zip|tar.gz>.sha256` is each package's
   digest.
+- `release/` holds the assets a GitHub release of Pane carries for this
+  system ([below](#the-release-source)): the package, named
+  `pane-<version>-<os>-<arch>.<zip|tar.gz>` (a development package takes
+  that name here too, standing in for a release's), and its `.sha256`.
+  These names are what Pane's updater looks for in a release. The release
+  workflow uploads this folder; the smokes serve it from this computer
+  instead. Each system's run of its own task builds its own.
 
 ### Build options
 
 - `--dev` builds the development profile, and the package name ends
   `-dev` (on Windows too). The native smokes install that one, because
   only a development build takes its default extensions' pins from
-  `PANE_DEFAULTS` and its artifact source from `PANE_ARTIFACTS`. A release
-  build uses the committed pins and Pane's published downloads, which no
+  `PANE_DEFAULTS` and its releases from `PANE_RELEASES`. A release build
+  uses the committed pins and Pane's published releases, which no
   controlled source may replace.
-- `--package-version <version>` (Windows) builds the program reporting
-  that version and names the package and its index entry by it. It is a
+- `--package-version <version>` builds the program reporting that
+  version and names the package and its release assets by it. It is a
   build-tool option for the smokes, which need a newer version than the
   one installed to offer. A release build simply builds the workspace's
   own version. Nothing gates the option: it names the package, and anyone
   building one can name it.
 
-The Windows task assembles the artifacts anywhere, but builds the package
-only on Windows. `pane.exe` needs a Windows checkout (no cross toolchain
-is set up), so anywhere else the task explains so and stops. The package
-is the one thing a Windows build alone provides.
+The Windows task builds the package only on Windows. `pane.exe` needs a
+Windows checkout (no cross toolchain is set up), so anywhere else the task
+explains so and stops. The macOS task does the same for macOS.
 
 ### Same bytes everywhere, nothing signed
 
@@ -229,8 +225,8 @@ A release for several systems builds one package per system.
 
 Nothing is signed. No signing credentials exist (on Windows, no
 Authenticode certificate), and the `.sha256` file says only what was
-packed. Signing the package, and deploying the artifact source, are
-execution prerequisites recorded [below](#limits-and-prerequisites).
+packed. Signing the package is an execution prerequisite recorded
+[below](#limits-and-prerequisites).
 
 The package holds no default extension. First setup fetches them from
 their repositories' pinned commits, so the installer stays small, and
@@ -286,8 +282,8 @@ the default's id, title, repository, release tag, that tag's commit and,
 for the Windows-only three, the platform they are set up on. A newer Pane
 release moves the pins forward, as for the five. Before #278 the defaults
 came from Pane's artifact source; that machinery is gone (ADR 0045 records
-why), and the artifact source remains for Pane's own application updates
-alone.
+why), and Pane's own application updates come from its GitHub releases
+(ADR 0048).
 
 A development build can replace the pins with a file of its own through
 `PANE_DEFAULTS`. Its repositories must be reachable as a Git address is:
@@ -442,7 +438,7 @@ failed.
 
 ## Updating Pane itself
 
-Pane checks the artifact source for a newer version of itself when it
+Pane checks its GitHub releases for a newer version of itself when it
 starts and tells the user, who alone chooses whether to download and
 install it. Pane never downloads, installs or restarts itself unprompted
 ([decision 17](https://github.com/pane-app/pane/issues/1),
@@ -453,38 +449,45 @@ The check, the download, the verification and the swap are
 platform-independent and live in `pane-core`, ready for another system's
 updater to wire to its own program.
 
-An application update ([glossary](../CONTEXT.md)) is the artifact
-source's own half. The index holds an `application` entry: the Pane
-package for one target, named by its version, file, sha512 integrity,
-size and `target` (`windows-x86_64`, `macos-aarch64`, written as a
-[helper target](../CONTEXT.md) is). The source serves the package the
-entry names.
+An application update ([glossary](../CONTEXT.md)) comes from the
+[release source](#the-release-source): the GitHub releases of
+`pane-app/pane` ([ADR 0048](adr/0048-pane-updates-itself-from-github-releases.md)).
+A release `v<version>` serves every system. Its assets are one package
+per system, named `pane-<version>-<target>.zip` or `.tar.gz` (the target
+is written as a [helper target](../CONTEXT.md) is: `windows-x86_64`,
+`macos-aarch64`, `linux-x86_64`), each with a `<package>.sha256` beside
+it. `cargo xtask package-windows`, `-macos` and `-linux` write exactly
+those assets into `target/dist/release/`.
 
-`cargo xtask package-windows`, `-macos` (and `-linux`) put the package
-they built into the artifacts folder beside its index entry, so one
-deployment serves everything from one place. The index names nothing else
-(no default-extension payload since #278). The entry is parsed only where
-an update is checked, so an application entry one Pane cannot take
-changes nothing else: a default extension is set up from its repository
-whether the index is readable or not.
+The releases are read only where an update is checked, so a release one
+Pane cannot take changes nothing else: a default extension is set up from
+its repository whether the releases can be read or not.
 
 ### The check
 
-Once, when Pane starts, Pane reads the index in the background and
-compares the entry's version with the version it runs: dotted numbers,
-compared by number. That cadence is provisional; no interval is checked
-meanwhile.
+Once, when Pane starts, Pane lists the newest releases in the background
+through GitHub's API (`api.github.com/repos/pane-app/pane/releases`, ten
+at a time), drafts left out and prereleases kept while every release of
+Pane is a preview. It takes the newest release, by version, that carries
+this system's package, and compares that version with the version it
+runs: dotted numbers, compared by number. A release whose tag is not
+`v` and dotted numbers is not one of Pane's versions, and is passed over.
+That cadence is provisional; no interval is checked meanwhile.
 
-The check reads only the index. **Nothing is downloaded until the user
-chooses**, and Pane does nothing else: no download, no install, no
+The check reads only the list of releases, one API request. **Nothing is
+downloaded until the user chooses**, and Pane does nothing else: no download, no install, no
 restart (US76,
 [Q38](https://github.com/pane-app/pane/blob/archive/docs-history-2026-10-23/docs/current-decisions.md)).
 An equal or older version says nothing: no downgrades are offered or
 picked.
 
-An entry for another target, a version Pane cannot read, or an entry
-missing what it needs is explained. So is a source that cannot be reached
-(tried three times, like an interrupted acquisition).
+A release that carries only other systems' packages is passed over
+silently. A newer package with no `.sha256` beside it, a listing Pane
+cannot read, or a package whose address is not one of Pane's releases is
+explained. So is a source that cannot be reached (tried three times, like
+an interrupted acquisition). GitHub allows an address that does not sign
+in 60 API requests an hour; when they are used up, the check says so and
+when the limit lifts, and does not try again at once.
 
 When there is a newer version, the status line says what was found
 ("Pane 99.0.0 is available"), and root search lists the offer after the
@@ -498,10 +501,16 @@ again.
 
 Choosing the row:
 
-1. Downloads the package with progress ("Downloading Pane 99.0.0: 34% of
-   186 MiB") and the same retries an interrupted acquisition gets (three
-   attempts). A package that is not there, or whose bytes do not match
-   the sha512 its entry gives, is explained and never retried.
+1. Downloads the package's `.sha256`, then the package with progress
+   ("Downloading Pane 99.0.0: 34% of 186 MiB"), with the same retries an
+   interrupted acquisition gets (three attempts). Both come from
+   `github.com`, which redirects to the host it serves release assets
+   from; Pane follows that redirect only to GitHub's own hosts
+   (`github.com`, `release-assets.githubusercontent.com`,
+   `objects.githubusercontent.com`), only over HTTPS and at most five
+   times. A redirect anywhere else, a package that is not there, or one
+   whose bytes do not match the sha256 its `.sha256` gives, is explained
+   and never retried.
 2. Checks it and unpacks it, in the format the package's system packs:
    - the zip a Windows or macOS package is, read as strictly as an npm
      package's tarball: only files and folders inside the package, one
@@ -563,8 +572,8 @@ run.
 The page also says the states the rows stay quiet about:
 
 - that Pane is up to date (after a check the user asked for);
-- that no artifact source is configured at all (a development build
-  without `PANE_ARTIFACTS`, whose page explains the state rather than
+- that no release source is configured at all (a development build
+  without `PANE_RELEASES`, whose page explains the state rather than
   promising a release);
 - why installing the offer last failed, since the offer stays, ready to
   be chosen again.
@@ -626,29 +635,34 @@ renamed over it. If it cannot be written, the update still counts (the
 program is already replaced), and the plist keeps the old version until
 the bundle is reinstalled from a package.
 
-## The artifact source
+## The release source
 
-The artifact source serves Pane's own application updates alone. Since
-#278 nothing about a default extension comes from it: the defaults are
+The release source serves Pane's own application updates alone: the
+GitHub releases of `pane-app/pane`
+([ADR 0048](adr/0048-pane-updates-itself-from-github-releases.md)).
+Nothing about a default extension comes from it: the defaults are
 fetched from their repositories.
 
-Release builds read it at `https://downloads.pane.sh/` only. **A release
-build has no way to replace the published source.**
+Release builds read `https://api.github.com/repos/pane-app/pane/releases`
+and download from `https://github.com/pane-app/pane/releases/download/`
+only. **A release build has no way to replace the published releases.**
 
-Tests and development builds can name a source on this computer instead,
-through `PANE_ARTIFACTS`, so no check ever reaches the network. It is read
-as [`Registry::local` in npm](npm.md#the-registry) is: an `http://` or
-`https://` address on a literal loopback address (`127.0.0.1`, any
-`127.x.y.z`, `[::1]`) with an optional port and path. `localhost` and
-anything else is refused.
+Tests and development builds can name a stand-in on this computer
+instead, through `PANE_RELEASES`, so no check ever reaches the network.
+It is read as [`Registry::local` in npm](npm.md#the-registry) is: an
+`http://` or `https://` address on a literal loopback address
+(`127.0.0.1`, any `127.x.y.z`, `[::1]`) with an optional port and path.
+`localhost` and anything else is refused. The stand-in answers the same
+API path and serves the downloads under the same paths, and a redirect
+from it is followed only to itself.
 
-- The smokes serve `target/dist/artifacts` with
-  [scripts/artifact_server.py](../scripts/artifact_server.py) on
+- The smokes serve `target/dist/release` with
+  [scripts/release_server.py](../scripts/release_server.py) on
   127.0.0.1.
-- The tests serve their own index and application package in process
-  (`crates/pane-core/tests/support/artifacts.rs`).
+- The tests serve their own releases in process, each download behind a
+  redirect as GitHub's are (`crates/pane-core/tests/support/releases.rs`).
 
-A development build with no `PANE_ARTIFACTS` checks for no application
+A development build with no `PANE_RELEASES` checks for no application
 update, so a checkout runs nothing over the network by itself.
 
 ## Trying a first setup by hand
@@ -674,7 +688,7 @@ and then the calculator's answer to "6*7".
 
 The clone step reaches GitHub once, as the smokes' own setup does; the
 Pane under test fetches only from 127.0.0.1. A development build with no
-`PANE_ARTIFACTS` checks for no application update.
+`PANE_RELEASES` checks for no application update.
 
 On Windows, do the same with `python` instead of `python3`, with the
 server in another terminal or started in the background:
@@ -694,8 +708,8 @@ with `&`).
 ## Checks
 
 - `crates/pane-core/tests/application_update.rs` runs the application
-  update through the launcher's public interface, against the loopback
-  artifact source:
+  update through the launcher's public interface, against a loopback
+  stand-in for Pane's releases:
   - a newer version offered as a row in root search, with nothing
     downloaded until the user chooses it and nothing changed when they do
     not;
@@ -710,16 +724,22 @@ with `&`).
     error and a replacement that cannot be made, each explained with
     everything untouched and the row ready to try again, and the retry
     that installs once the source works;
-  - an index whose application entry names another system, or an older
-    version, and one whose format version Pane does not read, explained
-    without stopping a default extension being set up from its
-    repository;
+  - every download going through a redirect, as GitHub's do, and a
+    redirect away from the releases refused and not retried;
+  - a used-up rate limit explained with when it lifts, and not retried at
+    once; a release without its `.sha256` explained and not offered;
+  - a release that carries another system's package, or an older
+    version, and a listing Pane cannot read, explained without stopping a
+    default extension being set up from its repository;
   - progress on the status line while the core stays usable;
   - Pane's data (an extension set up at first setup, its record and
     cache) untouched by an install, the extension still installed and
     answering after the update.
-- `pane-core`'s own unit tests check the zip Pane unpacks (both storage
-  methods, and every refusal). The npm tarball reader's own unit tests
+- `pane-core`'s own unit tests check the choice of release (the newest
+  that carries this system's package, by version, a `-dev` package never
+  taken), the hosts a download may be redirected to, the listing as
+  GitHub's API writes it, and the rate limit's explanation; and the zip
+  Pane unpacks (both storage methods, and every refusal). The npm tarball reader's own unit tests
   check the tarball the Linux package is.
 - `crates/pane-core/tests/installer.rs` runs the acquisition through the
   launcher's public interface, over repositories served on 127.0.0.1 by
@@ -813,35 +833,35 @@ with `&`).
   one. What is checked, and how, is each platform page's own record.
 - `xtask`'s packaging is checked by building it. `cargo xtask
   package-linux [--dev]` must produce the tarball, its sha256 and the
-  artifact tree; `cargo xtask package-windows [--dev]` and
+  release assets; `cargo xtask package-windows [--dev]` and
   `cargo xtask package-macos [--dev]` the zip, its sha256 and the same
-  tree. The release-profile package is built the same way as the
+  assets. The release-profile package is built the same way as the
   development-profile one the smoke installs.
 - `xtask/src/zip.rs` has a unit test that pins the zip's bytes, first
   decoded with Python's `zipfile`. The Linux machine that writes most of
   this repository cannot build `pane.exe` or the macOS `pane` program, so
-  there the Windows and macOS tasks assemble the artifacts and explain
-  that only a checkout of their own system builds the package.
+  there the Windows and macOS tasks explain that only a checkout of their
+  own system builds the package.
 
 ## Limits and prerequisites
 
-### Not deployed and not signed
+### Not released yet, and not signed
 
-- The artifact source is not deployed. `downloads.pane.sh` does not
-  exist, so a Pane installed from today's package is told its check for
-  an update of its own failed and is offered the row that tries again. A
-  development build checks only where `PANE_ARTIFACTS` names a source.
-  First setup is unaffected: it fetches the default extensions' pinned
-  commits from their repositories. Deploying the source (serving
-  `artifacts/` above) is an execution prerequisite, like the signing
+- No release of Pane is published yet, so a Pane installed from today's
+  package finds no newer version and offers none. A development build
+  checks only where `PANE_RELEASES` names a stand-in. First setup is
+  unaffected: it fetches the default extensions' pinned commits from
+  their repositories. Publishing a release (the release workflow drafts
+  one; a person publishes it) is an execution step, like the signing
   credentials below.
 - Nothing is signed. No signing credentials exist, so the package is not
   signed: its `.sha256` says only what was packed, and the application
-  package an update downloads is checked only against the sha512 its
-  index entry gives, over HTTPS. (The connection trusts the system's
-  certificates.) Signing the package, and serving the index over an
-  authenticated channel a release trusts, are prerequisites for a
-  release.
+  package an update downloads is checked only against the sha256 of the
+  `.sha256` from the same release, over HTTPS from GitHub. (The
+  connection trusts the system's certificates.) That guards against a
+  damaged download, not against a release someone who controls the
+  repository published. Signing the package is a prerequisite for a
+  stable release.
 - On Windows no Authenticode certificate exists either, so `pane.exe` and
   `install.ps1` are unsigned. Windows may warn about an unknown publisher
   when the program runs, and PowerShell may refuse the install script as
@@ -860,13 +880,11 @@ with `&`).
 
 ### Builds and baselines
 
-- The artifact this build serves is built for the system it ran on. Its
-  `application` entry names the one target the task built for
+- The release assets this build writes are for the system it ran on
   (`linux-x86_64`, `windows-x86_64` and `macos-aarch64` on CI,
-  `linux-aarch64` on an arm64 checkout). A Pane takes only the entry for
-  its own target, and the index writer names one entry. A real deployment
-  must build every supported target and serve one package per target, an
-  index holding one entry for each.
+  `linux-aarch64` on an arm64 checkout). A Pane takes only the package for
+  its own target. A release must carry one package per supported target,
+  each built on its own system, as the release workflow does.
 - One package per system, built where it runs. Cross-building, and
   packaging for a system this task cannot build on, are out of scope (the
   evidence for each is per-system, as the specification requires). On
@@ -910,9 +928,8 @@ with `&`).
   Linux smokes prove their own when they run (pending their CI, as their
   [platform pages](platforms/macos.md#installing-a-pane-application-update-by-the-users-choice-55)
   record).
-- Nothing about an update is signed either, and the source it comes from
-  is the same not-yet-deployed one: a package is checked only against the
-  sha512 its index gives, over HTTPS. An application package is at most
+- Nothing about an update is signed either: a package is checked only
+  against the sha256 its release's `.sha256` gives, over HTTPS. An application package is at most
   512 MiB packed and 2 GiB unpacked (the program is large; a development
   build of it much more). It is not cached between attempts: an
   interrupted download starts over, and only the retries within one

@@ -17,8 +17,8 @@ pane-build = { path = "../crates/pane-build", features = ["componentizer"] }
 # Packing the npm sample as `npm pack` does, without npm.
 tar.workspace = true
 flate2.workspace = true
-# The sha512 integrity of the default extensions' payloads in the artifact
-# index, and the package's sha256 (#53); already in the workspace's tree.
+# The package's sha256 (#53), which a release carries beside it;
+# already in the workspace's tree.
 sha2.workspace = true
 # Reading and rewriting a payload's pane.json as the artifacts are
 # assembled (#53); already in the workspace's tree.

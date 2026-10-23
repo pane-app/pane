@@ -7,8 +7,9 @@
 # Settings is driven through its accessibility tree too (see `a11y`). The
 # phases that set the default extensions up serve their repositories
 # (made from the packages `cargo xtask guests` assembles) on 127.0.0.1, so
-# they run after it. The update phases serve the artifacts the #52 phase's
-# package build leaves in target/dist/artifacts, so they run after it too.
+# they run after it. The update phases serve the release assets the #52
+# phase's package build leaves in target/dist/release, so they run after
+# it too.
 # Usage: scripts/smoke-macos.sh <output-dir> [pane-binary]
 
 set -euo pipefail
@@ -1970,12 +1971,12 @@ stop_service
 # quarantine mark (nothing is signed). (The program files are removed
 # again at the end of the phase: the uploaded evidence is the
 # screenshots and records, not the program.)
-artifact_server_pid=
+release_server_pid=
 defaults_server_pid=
 # The whole smoke's cleanup in one place: this supersedes the traps the
 # earlier phases set (each had replaced the one before), keeping every
 # server's arm so nothing is lost whatever order the phases run in.
-trap '[ -n "$pid" ] && kill "$pid" 2>/dev/null; [ -n "$npm_registry_pid" ] && kill "$npm_registry_pid" 2>/dev/null; [ -n "$repository_server_pid" ] && kill "$repository_server_pid" 2>/dev/null; [ -n "$defaults_server_pid" ] && kill "$defaults_server_pid" 2>/dev/null; [ -n "$service_pid" ] && kill "$service_pid" 2>/dev/null; [ -n "$artifact_server_pid" ] && kill "$artifact_server_pid" 2>/dev/null || true' EXIT
+trap '[ -n "$pid" ] && kill "$pid" 2>/dev/null; [ -n "$npm_registry_pid" ] && kill "$npm_registry_pid" 2>/dev/null; [ -n "$repository_server_pid" ] && kill "$repository_server_pid" 2>/dev/null; [ -n "$defaults_server_pid" ] && kill "$defaults_server_pid" 2>/dev/null; [ -n "$service_pid" ] && kill "$service_pid" 2>/dev/null; [ -n "$release_server_pid" ] && kill "$release_server_pid" 2>/dev/null || true' EXIT
 cargo xtask package-macos --dev >/dev/null
 package=$(ls target/dist/pane-*-macos-*-dev.zip | head -1)
 [ -n "$package" ] || { echo "the package was not built"; exit 1; }
@@ -2001,11 +2002,11 @@ home=$out/clean-home
 unpack=$out/package-unpacked
 rm -rf "$home" "$unpack"
 mkdir -p "$home" "$unpack"
-rm -f "$out/artifact-server.port"
-python3 "$(dirname "$0")/artifact_server.py" target/dist/artifacts "$out/artifact-server.port" 2>>"$out/artifact-server.log" &
-artifact_server_pid=$!
-for _ in $(seq 600); do [ -s "$out/artifact-server.port" ] && break; kill -0 "$artifact_server_pid" 2>/dev/null || break; sleep 0.1; done
-[ -s "$out/artifact-server.port" ] || { echo "the local artifact source did not start (see $out/artifact-server.log)"; exit 1; }
+rm -f "$out/release-server.port"
+python3 "$(dirname "$0")/release_server.py" target/dist/release "$out/release-server.port" 2>>"$out/release-server.log" &
+release_server_pid=$!
+for _ in $(seq 600); do [ -s "$out/release-server.port" ] && break; kill -0 "$release_server_pid" 2>/dev/null || break; sleep 0.1; done
+[ -s "$out/release-server.port" ] || { echo "the stand-in for Pane's releases did not start (see $out/release-server.log)"; exit 1; }
 unzip -q "$package" -d "$unpack"
 clean_bin=$out/clean-bin
 rm -rf "$clean_bin"; mkdir -p "$clean_bin"
@@ -2019,7 +2020,7 @@ env -i HOME="$home" PATH="/usr/bin:/bin" bash "$unpack/pane/install.sh" >>"$out/
 start_installed() {
   env -i HOME="$home" PATH="$clean_bin" \
     PANE_THEME=dark PANE_MATERIAL=opaque \
-    PANE_ARTIFACTS="http://127.0.0.1:$(cat "$out/artifact-server.port")/" \
+    PANE_RELEASES="http://127.0.0.1:$(cat "$out/release-server.port")/" \
     PANE_DEFAULTS="$default_pins" \
     "$home/Applications/Pane.app/Contents/MacOS/pane" "$@" 2>>"$out/installed-stderr.log" &
   pid=$!
@@ -2039,7 +2040,7 @@ record_setup_state() {
   cp -f "$installed/installed.json" "$out/clean-home-records/" 2>/dev/null || true
   cp -r "$installed/downloads" "$out/clean-home-records/" 2>/dev/null || true
   cp -f "$out/installed-stderr.log" "$out/clean-home-records/" 2>/dev/null || true
-  cp -f "$out/artifact-server.log" "$out/clean-home-records/" 2>/dev/null || true
+  cp -f "$out/release-server.log" "$out/clean-home-records/" 2>/dev/null || true
   cp -f "$out/default-repository-server.log" "$out/clean-home-records/" 2>/dev/null || true
 }
 record_setup_problem() {
@@ -2095,7 +2096,7 @@ python3 "$(dirname "$0")/check_git_record.py" --defaults "$default_pins" "$insta
 [ -z "$(ls -A "$installed/downloads" 2>/dev/null)" ] || { echo "downloads were left behind"; exit 1; }
 python3 "$(dirname "$0")/check_screenshot.py" --distinct "$out"/{500-installed-root,501-calculator-answer}.png
 stop_pane
-kill "$artifact_server_pid"; wait "$artifact_server_pid" 2>/dev/null || true; artifact_server_pid=
+kill "$release_server_pid"; wait "$release_server_pid" 2>/dev/null || true; release_server_pid=
 # The program files go again: the evidence is the screenshots, the
 # installed.json record and the logs.
 record_setup_state
@@ -2307,7 +2308,7 @@ export PANE_DEFAULTS=$no_default_pins
 
 # Installing a Pane application update by the user's choice (#55, the
 # macOS half of #54): a second package is built with --package-version
-# 99.0.0, whose program reports 99.0.0 and whose index entry names it for
+# 99.0.0, whose program reports 99.0.0 and whose release names it for
 # macos-aarch64 (the two runnable builds the update goes between); the
 # 0.1.0 package the #52 phase built is installed on another clean home,
 # and its Pane, running from the Pane.app bundle's own binary
@@ -2316,9 +2317,9 @@ export PANE_DEFAULTS=$no_default_pins
 # told by the check it makes at start that 99.0.0 exists: a row in root
 # search with the version, and a word on the status line. Nothing is
 # downloaded until that row is chosen; the choice is proven by the
-# artifact server's log, which must hold no request for the package
+# release server's log, which must hold no request for the package
 # until then. A corrupted package is explained first (its bytes do not
-# match the sha512 its index gives), everything untouched and the row
+# match the sha256 its .sha256 gives), everything untouched and the row
 # ready to try again; then the real install downloads the package,
 # checks it, and swaps the running binary — the old one renamed pane.old
 # beside it in Contents/MacOS, removed on a later start — so the new
@@ -2330,7 +2331,7 @@ export PANE_DEFAULTS=$no_default_pins
 update_server_pid=
 # Every server's arm again, plus this phase's own: nothing is lost
 # whatever order the phases run in.
-trap '[ -n "$pid" ] && kill "$pid" 2>/dev/null; [ -n "$npm_registry_pid" ] && kill "$npm_registry_pid" 2>/dev/null; [ -n "$repository_server_pid" ] && kill "$repository_server_pid" 2>/dev/null; [ -n "$service_pid" ] && kill "$service_pid" 2>/dev/null; [ -n "$artifact_server_pid" ] && kill "$artifact_server_pid" 2>/dev/null; [ -n "$update_server_pid" ] && kill "$update_server_pid" 2>/dev/null || true' EXIT
+trap '[ -n "$pid" ] && kill "$pid" 2>/dev/null; [ -n "$npm_registry_pid" ] && kill "$npm_registry_pid" 2>/dev/null; [ -n "$repository_server_pid" ] && kill "$repository_server_pid" 2>/dev/null; [ -n "$service_pid" ] && kill "$service_pid" 2>/dev/null; [ -n "$release_server_pid" ] && kill "$release_server_pid" 2>/dev/null; [ -n "$update_server_pid" ] && kill "$update_server_pid" 2>/dev/null || true' EXIT
 cargo xtask package-macos --dev --package-version 99.0.0
 older=$(ls target/dist/pane-0.1.0-macos-*-dev.zip | head -1)
 newer=$(ls target/dist/pane-99.0.0-macos-*-dev.zip | head -1)
@@ -2342,11 +2343,11 @@ rm -rf "$update_home" "$unpack_old" "$unpack_new"
 mkdir -p "$update_home" "$unpack_old" "$unpack_new"
 unzip -q "$older" -d "$unpack_old"
 unzip -q "$newer" -d "$unpack_new"
-rm -f "$out/update-artifact-server.port"
-python3 "$(dirname "$0")/artifact_server.py" target/dist/artifacts "$out/update-artifact-server.port" 2>>"$out/update-artifact-server.log" &
+rm -f "$out/update-release-server.port"
+python3 "$(dirname "$0")/release_server.py" target/dist/release "$out/update-release-server.port" 2>>"$out/update-release-server.log" &
 update_server_pid=$!
-for _ in $(seq 600); do [ -s "$out/update-artifact-server.port" ] && break; kill -0 "$update_server_pid" 2>/dev/null || break; sleep 0.1; done
-[ -s "$out/update-artifact-server.port" ] || { echo "the update artifact source did not start (see $out/update-artifact-server.log)"; exit 1; }
+for _ in $(seq 600); do [ -s "$out/update-release-server.port" ] && break; kill -0 "$update_server_pid" 2>/dev/null || break; sleep 0.1; done
+[ -s "$out/update-release-server.port" ] || { echo "the update's stand-in for Pane's releases did not start (see $out/update-release-server.log)"; exit 1; }
 # The 0.1.0 package installed on another clean home, as the #52 phase
 # installed it.
 env -i HOME="$update_home" PATH="/usr/bin:/bin" bash "$unpack_old/pane/install.sh" >>"$out/update-install.log" 2>&1 \
@@ -2364,7 +2365,7 @@ choose_first_setup "$update_installed"
 start_updated() {
   env -i HOME="$update_home" PATH="$update_clean_bin" \
     PANE_THEME=dark PANE_MATERIAL=opaque \
-    PANE_ARTIFACTS="http://127.0.0.1:$(cat "$out/update-artifact-server.port")/" \
+    PANE_RELEASES="http://127.0.0.1:$(cat "$out/update-release-server.port")/" \
     PANE_DEFAULTS="$default_pins" \
     "$binary" "$@" 2>>"$out/update-stderr.log" &
   pid=$!
@@ -2377,7 +2378,7 @@ record_update_state() {
   rm -rf "$out/update-home-records"
   mkdir -p "$out/update-home-records"
   cp -f "$update_registry" "$out/update-home-records/" 2>/dev/null || true
-  cp -f "$out/update-artifact-server.log" "$out/update-home-records/" 2>/dev/null || true
+  cp -f "$out/update-release-server.log" "$out/update-home-records/" 2>/dev/null || true
   cp -f "$out/update-stderr.log" "$out/update-home-records/" 2>/dev/null || true
 }
 update_recorded() {
@@ -2394,15 +2395,15 @@ start_updated
 kill -0 "$pid" 2>/dev/null || { echo "the installed Pane exited during setup"; exit 1; }
 update_recorded '"default": "calculator"'
 update_recorded '"default": "clipboard-history"'
-# The check has read the index (first setup fetches the pinned commits
-# from the repositories, so no request reaches the artifact source for
+# The check has listed the releases (first setup fetches the pinned commits
+# from the repositories, so no request reaches the release server for
 # them): the offer is in root search. The status line tells what
 # it found; nothing has been downloaded.
 for _ in $(seq 100); do
-  [ "$(grep -c pane-defaults.json "$out/update-artifact-server.log")" -ge 1 ] && break
+  [ "$(grep -c /repos/pane-app/pane/releases "$out/update-release-server.log")" -ge 1 ] && break
   sleep 0.1
 done
-[ "$(grep -c pane-defaults.json "$out/update-artifact-server.log")" -ge 1 ] \
+[ "$(grep -c /repos/pane-app/pane/releases "$out/update-release-server.log")" -ge 1 ] \
   || { echo "Pane never checked for its own update"; exit 1; }
 sleep 2
 capture 600-notification.png   # evidence only: the toast ("Pane 99.0.0 is available", or the setup's own outcome) leaves after 3 s, and may have left while the defaults were waited for; 601's offer row is what says the check found the update
@@ -2411,7 +2412,7 @@ capture 601-offered.png
 check 601-offered.png subtitle   # the offer row: "Your extensions and settings are kept; ..."
 check 601-offered.png selected 3000   # the row, selected
 # Taking no action downloads nothing: no package was asked for.
-[ -z "$(grep "\.zip" "$out/update-artifact-server.log")" ] \
+[ -z "$(grep "\.zip" "$out/update-release-server.log")" ] \
   || { echo "a package was downloaded without the user choosing it"; exit 1; }
 
 # Disable Clipboard History first: an extension the user disabled before
@@ -2423,10 +2424,11 @@ for _ in $(seq 100); do grep -q '"disabled": true' "$update_registry" 2>/dev/nul
 grep -q '"disabled": true' "$update_registry" || { echo "Clipboard History was not disabled"; exit 1; }
 close_settings
 
-# A package that does not match the integrity its index gives is
+# A package that does not match the sha256 its release gives is
 # explained and not installed: the bytes of the served package are
 # damaged, and the program keeps running the one it was.
-served=target/dist/artifacts/$(basename "$newer")
+# The release assets name the package as a release does, without -dev.
+served=target/dist/release/$(basename "$newer" | sed 's/-dev\././')
 python3 - "$served" <<'PY'
 import sys
 with open(sys.argv[1], "rb") as f:
@@ -2437,7 +2439,7 @@ with open(sys.argv[1], "wb") as f:
 PY
 command_key a; type_text "update pane"; sleep 1
 key 36   # the offer, tried: the damaged package is explained
-capture_until 602-corrupt-package.png error 60   # "Could not update Pane to 99.0.0: ... does not match the sha512 integrity"
+capture_until 602-corrupt-package.png error 60   # "Could not update Pane to 99.0.0: ... does not match the sha256"
 [ -e "$binary.old" ] && { echo "a failed install replaced the program"; exit 1; }
 cmp -s "$binary" "$unpack_old/pane/pane" || { echo "a failed install changed the program"; exit 1; }
 [ -e "$binary/../update" ] && { echo "a failed install left its staging behind"; exit 1; }
@@ -2472,7 +2474,7 @@ cmp -s "$bundle_plist" "$unpack_new/pane/Info.plist" || { echo "the bundle's Inf
 [ -e "$bundle_plist.update" ] && { echo "the Info.plist rewrite left its file behind"; exit 1; }
 # The package was downloaded once for each attempt: the damaged one and
 # the one that installed.
-[ "$(grep -c "\.zip" "$out/update-artifact-server.log")" = 2 ] \
+[ "$(grep -c "\.zip HTTP" "$out/update-release-server.log")" = 2 ] \
   || { echo "the package was not downloaded exactly twice"; exit 1; }
 stop_pane
 

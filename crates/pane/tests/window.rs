@@ -29,8 +29,6 @@ mod samples;
 #[path = "support/paint.rs"]
 mod paint;
 
-#[path = "../../pane-core/tests/support/artifacts.rs"]
-mod artifacts;
 #[path = "support/packages.rs"]
 mod packages;
 

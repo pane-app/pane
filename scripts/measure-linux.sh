@@ -469,9 +469,9 @@ stop_pane
 # PANE_MEASURE_SETTLE_SECONDS. Whatever
 # still runs then (the applications' icons, say) is part of the phase, and
 # the per-thread wake-ups and CPU in summary.json say whose it is. No
-# application update source is named, so no update of Pane's own is
-# offered (the smoke leaves a newer Pane package in the artifacts it
-# serves): an update offered would be no part of idling. Skipped
+# release source is named, so no update of Pane's own is offered (the
+# smoke leaves a newer Pane package in the release assets it serves): an
+# update offered would be no part of idling. Skipped
 # without the guests (see above); its lines are left unindented.
 if [ -z "$skipped" ]; then
 set_phase hidden-setup

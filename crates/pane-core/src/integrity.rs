@@ -1,6 +1,5 @@
 //! Checking downloads against the sha512 integrity their source gives
-//! (`sha512-<base64>`, as npm writes it): an npm package's tarball, Pane's
-//! own application package.
+//! (`sha512-<base64>`, as npm writes it): an npm package's tarball.
 
 use sha2::{Digest, Sha512};
 
@@ -11,13 +10,6 @@ pub(crate) fn sha512_values(integrity: &str) -> impl Iterator<Item = &str> {
         let value = hash.strip_prefix("sha512-")?;
         Some(value.split('?').next().unwrap_or(value))
     })
-}
-
-/// Whether `integrity` names a sha512 hash at all (used by the index of
-/// Pane's own application package, which Pane checks before it downloads
-/// anything).
-pub(crate) fn has_sha512(integrity: &str) -> bool {
-    sha512_values(integrity).next().is_some()
 }
 
 /// Checks `bytes` against the sha512 hashes of `integrity`: they match when
@@ -56,9 +48,8 @@ pub(crate) fn base64(bytes: &[u8]) -> String {
     text
 }
 
-/// `bytes` as lowercase hexadecimal digits, two to a byte: the tests'
-/// object ids.
-#[cfg(test)]
+/// `bytes` as lowercase hexadecimal digits, two to a byte: the sha256 a
+/// release's `.sha256` file gives, and the tests' object ids.
 pub(crate) fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
@@ -66,20 +57,6 @@ pub(crate) fn hex(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn a_sha512_hash_is_named() {
-        let digest = Sha512::digest(b"the payload");
-        let named = format!("sha512-{}", base64(&digest));
-        assert!(has_sha512(&named));
-        // Neither another algorithm nor an integrity without any hash
-        // names one.
-        assert!(!has_sha512("sha1-abc"));
-        assert!(!has_sha512(""));
-        // A second hash after the first does not hide it.
-        let two = format!("{named} sha512-{}", base64(&Sha512::digest(b"other")));
-        assert!(has_sha512(&two));
-    }
 
     #[test]
     fn integrity_is_checked_against_sha512() {
