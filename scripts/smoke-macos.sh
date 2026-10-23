@@ -761,7 +761,13 @@ if grep -q '"retained"' "$out/data/extensions/installed.json"; then echo "retain
 # after a restart; once the extension is disabled, pressing it does
 # nothing. Carbon hot keys need no permission of Pane's own. A data folder
 # of its own. (Screenshot 48 is the Linux smoke's opened quicklink.)
-frontmost() { osascript -e 'tell application "System Events" to get unix id of first process whose frontmost is true'; }
+# The active application's process id, as NSWorkspace names it. Pane is an
+# accessory application (#458), and System Events reports no accessory
+# process as frontmost, even while it is active and its window has the keys.
+frontmost() {
+  osascript -l JavaScript \
+    -e 'ObjC.import("AppKit"); $.NSWorkspace.sharedWorkspace.frontmostApplication.processIdentifier'
+}
 unfocus_pane() {   # another application in front
   osascript -e 'tell application "Finder" to activate'; sleep 2
   [ "$(frontmost)" != "$pid" ] || { echo "Pane is still in front"; exit 1; }

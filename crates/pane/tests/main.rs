@@ -57,6 +57,7 @@ mod settings_search;
 mod shortcuts;
 mod submenus;
 mod system;
+mod taskbar_presence;
 mod tray;
 mod unresponsive;
 mod update;

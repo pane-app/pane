@@ -29,7 +29,11 @@
 //! (`pane-<version>-<target>.zip` or `.tar.gz`): a zip holding `pane.exe`
 //! under `pane/` on Windows, a gzipped tarball holding `pane` under
 //! `pane/` on Linux — each read as strictly as an npm package's tarball
-//! is ([`crate::zip`], [`crate::archive::unpack_within`]).
+//! is ([`crate::zip`], [`crate::archive::unpack_within`]). A Pane that
+//! runs from a Linux AppImage installs the release's AppImage instead
+//! (`Pane-<version>-<arch>.AppImage`), which replaces the AppImage file
+//! itself (ADR 0049, #464); a macOS `Pane.app`, wherever it was dragged,
+//! keeps taking its program from the zip.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -58,18 +62,63 @@ const ARCHIVES: [&str; 2] = ["zip", "tar.gz"];
 /// is renamed to.
 const STAGING: &str = "update";
 
+/// How the program an update replaces was installed, which decides the
+/// release asset that replaces it and how the swap stages it (ADR 0049).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Install {
+    /// A program unpacked from one of the release's packages (the zip or
+    /// the tarball), as the install scripts put it and as a macOS
+    /// `Pane.app` holds it: an update unpacks the package for this system
+    /// and takes its program.
+    Unpacked,
+    /// A Linux AppImage, one file holding the program and its desktop
+    /// entry and icons: an update downloads the release's AppImage and puts
+    /// it in that file's place, as it is.
+    AppImage,
+}
+
+impl Install {
+    /// The names a release of `version` gives this install's asset for
+    /// `target` (such as `linux-x86_64`), as `cargo xtask package-*` names
+    /// them: the zip or the tarball an unpacked program comes from, or the
+    /// AppImage (`Pane-<version>-<arch>.AppImage`, which only Linux has).
+    fn assets(self, version: &str, target: &str) -> Vec<String> {
+        match self {
+            Install::Unpacked => ARCHIVES
+                .iter()
+                .map(|archive| format!("pane-{version}-{target}.{archive}"))
+                .collect(),
+            Install::AppImage => target
+                .strip_prefix("linux-")
+                .map(|arch| vec![format!("Pane-{version}-{arch}.AppImage")])
+                .unwrap_or_default(),
+        }
+    }
+}
+
 /// The program Pane runs from, and where an update replaces it: the folder
 /// it is installed in and its file name (`%LOCALAPPDATA%\Pane` holding
-/// `pane.exe` on Windows, `~/.local/bin` holding `pane` on Linux).
+/// `pane.exe` on Windows, `~/.local/bin` holding `pane` on Linux, or the
+/// folder an AppImage was saved in holding it).
 #[derive(Clone, Debug)]
 pub(crate) struct Program {
     folder: PathBuf,
     name: String,
+    install: Install,
 }
 
 impl Program {
     /// The program `path`, in the folder it is installed in.
     pub(crate) fn at(path: PathBuf) -> Result<Program, String> {
+        Program::installed(path, Install::Unpacked)
+    }
+
+    /// The AppImage at `path`, which an update replaces as a whole.
+    pub(crate) fn appimage(path: PathBuf) -> Result<Program, String> {
+        Program::installed(path, Install::AppImage)
+    }
+
+    fn installed(path: PathBuf, install: Install) -> Result<Program, String> {
         let name = path
             .file_name()
             .and_then(|name| name.to_str())
@@ -79,7 +128,16 @@ impl Program {
             .parent()
             .ok_or_else(|| format!("{} names no folder", path.display()))?
             .to_path_buf();
-        Ok(Program { folder, name })
+        Ok(Program {
+            folder,
+            name,
+            install,
+        })
+    }
+
+    /// How this program was installed.
+    pub(crate) fn install(&self) -> Install {
+        self.install
     }
 
     /// The program file, in the install folder.
@@ -95,9 +153,16 @@ impl Program {
         self.folder.join(name)
     }
 
-    /// Where a chosen package's files are staged until the swap ends.
+    /// Where a chosen package's files are staged until the swap ends. An
+    /// AppImage is usually kept in a folder of the user's own (Downloads,
+    /// `~/Applications`), where a folder named `update` may well be the
+    /// user's, which a start of Pane would remove: its staging folder is
+    /// named for the AppImage, and hidden.
     fn staging(&self) -> PathBuf {
-        self.folder.join(STAGING)
+        match self.install {
+            Install::Unpacked => self.folder.join(STAGING),
+            Install::AppImage => self.folder.join(format!(".{}.{STAGING}", self.name)),
+        }
     }
 
     /// The `Info.plist` of the macOS application bundle the program runs
@@ -154,7 +219,8 @@ pub(crate) struct Offer {
 impl Offer {
     /// The offer `releases` make this Pane: the newest release that
     /// carries the package for `target` (`pane-<version>-<target>.zip` or
-    /// `.tar.gz`), if its version is newer than `current`. `None` when no
+    /// `.tar.gz`, or for an AppImage `Pane-<version>-<arch>.AppImage`, as
+    /// `install` says), if its version is newer than `current`. `None` when no
     /// release carries this system's package or none is newer: neither is
     /// this Pane's business, so each stays silent (a release that carries
     /// only other systems' packages is passed over). A newer release whose
@@ -166,10 +232,11 @@ impl Offer {
         source: &ReleaseSource,
         current: &str,
         target: &str,
+        install: Install,
     ) -> Result<Option<Offer>, String> {
         let mut newest: Option<(&Release, &Asset)> = None;
         for release in releases {
-            let Some(package) = package_of(release, target) else {
+            let Some(package) = package_of(release, target, install) else {
                 continue;
             };
             // Both versions are dotted numbers (the listing keeps only
@@ -215,27 +282,37 @@ impl Offer {
     }
 }
 
-/// The package `release` carries for `target`, named as
+/// The package `release` carries for `target` and `install`, named as
 /// `cargo xtask package-*` names it.
-fn package_of<'a>(release: &'a Release, target: &str) -> Option<&'a Asset> {
-    ARCHIVES.iter().find_map(|archive| {
-        let name = format!("pane-{}-{target}.{archive}", release.version);
-        release.assets.iter().find(|asset| asset.name == name)
-    })
+fn package_of<'a>(release: &'a Release, target: &str, install: Install) -> Option<&'a Asset> {
+    install
+        .assets(&release.version, target)
+        .into_iter()
+        .find_map(|name| release.assets.iter().find(|asset| asset.name == name))
 }
 
 /// Lists the releases of `source` and finds what they say of a newer Pane
-/// for `target` than `current`. Blocks on the network, and tries an
-/// unreachable source again up to [`crate::defaults::ATTEMPTS`] times
-/// before explaining, exactly as acquiring a default extension does.
-pub(crate) fn check(source: &ReleaseSource, current: &str, target: &str) -> Result<Found, String> {
-    with_retries(|| list_and_find(source, current, target))
+/// for `target` and `install` than `current`. Blocks on the network, and
+/// tries an unreachable source again up to [`crate::defaults::ATTEMPTS`]
+/// times before explaining, exactly as acquiring a default extension does.
+pub(crate) fn check(
+    source: &ReleaseSource,
+    current: &str,
+    target: &str,
+    install: Install,
+) -> Result<Found, String> {
+    with_retries(|| list_and_find(source, current, target, install))
 }
 
 /// One attempt: list the releases, then take the newest for this system.
-fn list_and_find(source: &ReleaseSource, current: &str, target: &str) -> Result<Found, Failure> {
+fn list_and_find(
+    source: &ReleaseSource,
+    current: &str,
+    target: &str,
+    install: Install,
+) -> Result<Found, Failure> {
     let releases = source.list()?;
-    let offer = Offer::of(&releases, source, current, target).map_err(failed)?;
+    let offer = Offer::of(&releases, source, current, target, install).map_err(failed)?;
     Ok(match offer {
         Some(offer) => Found::Offered(offer),
         None => Found::UpToDate,
@@ -315,12 +392,14 @@ fn sha256_of(text: &[u8]) -> Option<String> {
         .then(|| digest.to_ascii_lowercase())
 }
 
-/// Unpacks the downloaded `package` into the staging folder and swaps the
+/// Unpacks the downloaded `package` into the staging folder (an AppImage
+/// is staged as it came) and swaps the
 /// running program for the new one: the old program is renamed out of its
 /// way, the new one takes its name, and the staging folder goes. The new
 /// version is used the next time Pane starts; nothing of Pane's data is
 /// touched. For a program inside a macOS `Pane.app`, the bundle's
-/// `Info.plist` is then given the new version. On failure nothing is left
+/// `Info.plist` is then given the new version, and for a Windows program
+/// Pane's setup installed, its entry in Settings > Apps. On failure nothing is left
 /// behind: the staging folder goes, the running program is the one it
 /// was, and the user can try again.
 pub(crate) fn swap(package: &[u8], offer: &Offer, program: &Program) -> Result<(), String> {
@@ -328,6 +407,7 @@ pub(crate) fn swap(package: &[u8], offer: &Offer, program: &Program) -> Result<(
     // A staging folder a stopped Pane left, or another Pane holds, goes:
     // what it holds is unpacked again below.
     let _ = fs::remove_dir_all(&staging);
+    let staged = staging.join(&program.name);
     // The package comes in the format the system it is for packs: the zip
     // a Windows or macOS package is, or the gzipped tarball a Linux one
     // is. Each is read with the same strictness (only files and folders
@@ -335,8 +415,12 @@ pub(crate) fn swap(package: &[u8], offer: &Offer, program: &Program) -> Result<(
     // application package's bounds), and each unpacks without the
     // package's top folder (`pane/`), so the program the package holds
     // lands in the staging folder by its own name, which the swap below
-    // takes.
-    let unpacked = if offer.file.ends_with(".zip") {
+    // takes. An AppImage is the program itself: it is staged as it came,
+    // under the name of the AppImage it replaces, once it is checked to be
+    // one.
+    let unpacked = if program.install == Install::AppImage {
+        stage_appimage(package, &staged)
+    } else if offer.file.ends_with(".zip") {
         crate::zip::unpack(package, &staging)
     } else if offer.file.ends_with(".tar.gz") || offer.file.ends_with(".tgz") {
         crate::archive::unpack_within(package, &staging, crate::zip::MAX_UNPACKED)
@@ -346,18 +430,18 @@ pub(crate) fn swap(package: &[u8], offer: &Offer, program: &Program) -> Result<(
             offer.file
         ))
     };
-    let unpacked = unpacked.map_err(|why| {
-        format!(
+    let unpacked = unpacked.map_err(|why| match program.install {
+        Install::AppImage => format!("the AppImage `{}` cannot be installed: {why}", offer.file),
+        Install::Unpacked => format!(
             "the package `{}` cannot be unpacked safely: {why}; Pane installs only the files \
              and folders inside the package",
             offer.file
-        )
+        ),
     });
     if let Err(why) = unpacked {
         let _ = fs::remove_dir_all(&staging);
         return Err(why);
     }
-    let staged = staging.join(&program.name);
     let swap = || -> Result<(), String> {
         if !staged.is_file() {
             return Err(format!(
@@ -413,7 +497,56 @@ pub(crate) fn swap(package: &[u8], offer: &Offer, program: &Program) -> Result<(
     {
         let _ = set_bundle_version(&info, &offer.version);
     }
+    // On Windows, a Pane the setup installed has an entry in Settings >
+    // Apps naming the version the setup installed (#463): it is given the
+    // new version too, when the entry is this program's (a zip copy
+    // elsewhere leaves the setup's entry alone), so Apps names the version
+    // that runs. As with the plist, an entry that cannot be rewritten does
+    // not undo the update.
+    #[cfg(windows)]
+    if swapped.is_ok() {
+        let _ = apps_entry::set_version(apps_entry::KEY, &program.folder, &offer.version);
+    }
     swapped
+}
+
+/// Whether an Apps entry whose `InstallLocation` is `location` is the one
+/// of the program in `folder`: the same folder, compared as Windows compares
+/// paths (letter case aside) and with or without the trailing separator
+/// Inno Setup writes.
+#[cfg(any(windows, test))]
+fn installed_in(location: &str, folder: &Path) -> bool {
+    let trimmed = |path: &str| path.trim_end_matches(['\\', '/']).to_lowercase();
+    !location.trim().is_empty() && trimmed(location) == trimmed(&folder.to_string_lossy())
+}
+
+/// The major and minor numbers of `version`, as Inno Setup writes them in
+/// an Apps entry (`MajorVersion`, `MinorVersion`); `None` when the version
+/// does not begin with two numbers.
+#[cfg(any(windows, test))]
+fn major_minor(version: &str) -> Option<(u32, u32)> {
+    let mut numbers = version.split('.').map(|part| part.parse::<u32>().ok());
+    Some((numbers.next()??, numbers.next()??))
+}
+
+#[cfg(windows)]
+mod apps_entry;
+
+/// Writes the downloaded `appimage` to `staged`, once it is checked to be
+/// an AppImage: an ELF program carrying the AppImage type 2 mark (`AI`
+/// and the type, 2, at byte 8 of the ELF header, where the AppImage
+/// specification puts it), which every AppImage `appimagetool` writes
+/// carries. A release asset that is anything else would leave the user
+/// with a file that does not start, so it is refused before anything is
+/// replaced.
+fn stage_appimage(appimage: &[u8], staged: &Path) -> Result<(), String> {
+    if appimage.get(..4) != Some(b"\x7fELF") || appimage.get(8..11) != Some(b"AI\x02") {
+        return Err("it is not an AppImage (no ELF header with the AppImage type 2 mark)".into());
+    }
+    let folder = staged.parent().expect("the staging folder");
+    fs::create_dir_all(folder)
+        .and_then(|()| fs::write(staged, appimage))
+        .map_err(|error| format!("it could not be staged: {error}"))
 }
 
 /// Why a file could not be changed, in the wording the failure explains
@@ -612,9 +745,15 @@ mod tests {
             // the order.
             release("0.2.0", &["pane-0.2.0-windows-x86_64.zip"], true),
         ];
-        let offer = Offer::of(&releases, &source, "0.1.0", "windows-x86_64")
-            .unwrap()
-            .unwrap();
+        let offer = Offer::of(
+            &releases,
+            &source,
+            "0.1.0",
+            "windows-x86_64",
+            Install::Unpacked,
+        )
+        .unwrap()
+        .unwrap();
         assert_eq!(
             offer,
             Offer {
@@ -630,29 +769,55 @@ mod tests {
             }
         );
         // Linux's package is the tarball, macOS's the zip.
-        let linux = Offer::of(&releases, &source, "0.1.0", "linux-x86_64")
-            .unwrap()
-            .unwrap();
+        let linux = Offer::of(
+            &releases,
+            &source,
+            "0.1.0",
+            "linux-x86_64",
+            Install::Unpacked,
+        )
+        .unwrap()
+        .unwrap();
         assert_eq!(
             (linux.version.as_str(), linux.file.as_str()),
             ("0.4.0", "pane-0.4.0-linux-x86_64.tar.gz")
         );
-        let macos = Offer::of(&releases, &source, "0.1.0", "macos-aarch64")
-            .unwrap()
-            .unwrap();
+        let macos = Offer::of(
+            &releases,
+            &source,
+            "0.1.0",
+            "macos-aarch64",
+            Install::Unpacked,
+        )
+        .unwrap()
+        .unwrap();
         assert_eq!(macos.file, "pane-0.3.0-macos-aarch64.zip");
         // No newer version, no package for this system, no release at all:
         // no offer, and no error.
         assert_eq!(
-            Offer::of(&releases, &source, "0.3.0", "windows-x86_64").unwrap(),
+            Offer::of(
+                &releases,
+                &source,
+                "0.3.0",
+                "windows-x86_64",
+                Install::Unpacked
+            )
+            .unwrap(),
             None
         );
         assert_eq!(
-            Offer::of(&releases, &source, "0.1.0", "linux-aarch64").unwrap(),
+            Offer::of(
+                &releases,
+                &source,
+                "0.1.0",
+                "linux-aarch64",
+                Install::Unpacked
+            )
+            .unwrap(),
             None
         );
         assert_eq!(
-            Offer::of(&[], &source, "0.1.0", "windows-x86_64").unwrap(),
+            Offer::of(&[], &source, "0.1.0", "windows-x86_64", Install::Unpacked).unwrap(),
             None
         );
         // A development package (`-dev`) is never a release's package.
@@ -662,8 +827,138 @@ mod tests {
             true,
         )];
         assert_eq!(
-            Offer::of(&dev, &source, "0.1.0", "windows-x86_64").unwrap(),
+            Offer::of(&dev, &source, "0.1.0", "windows-x86_64", Install::Unpacked).unwrap(),
             None
+        );
+    }
+
+    #[test]
+    fn an_appimage_is_offered_the_newest_release_s_appimage() {
+        let source = ReleaseSource::published();
+        let releases = [
+            // The newest release carries the tarball only: an AppImage
+            // passes it over, as a release with another system's package.
+            release("0.3.0", &["pane-0.3.0-linux-x86_64.tar.gz"], true),
+            release(
+                "0.2.0",
+                &[
+                    "pane-0.2.0-linux-x86_64.tar.gz",
+                    "Pane-0.2.0-x86_64.AppImage",
+                    "pane-0.2.0-macos-aarch64.zip",
+                    "Pane-0.2.0.dmg",
+                ],
+                true,
+            ),
+        ];
+        let appimage = Offer::of(
+            &releases,
+            &source,
+            "0.1.0",
+            "linux-x86_64",
+            Install::AppImage,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            (appimage.version.as_str(), appimage.file.as_str()),
+            ("0.2.0", "Pane-0.2.0-x86_64.AppImage")
+        );
+        assert!(
+            appimage
+                .checksum
+                .ends_with("/Pane-0.2.0-x86_64.AppImage.sha256")
+        );
+        // A program the tarball installed keeps taking the tarball, and a
+        // macOS Pane.app the zip, beside the release's dmg.
+        let tarball = Offer::of(
+            &releases,
+            &source,
+            "0.1.0",
+            "linux-x86_64",
+            Install::Unpacked,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(tarball.file, "pane-0.3.0-linux-x86_64.tar.gz");
+        let macos = Offer::of(
+            &releases,
+            &source,
+            "0.1.0",
+            "macos-aarch64",
+            Install::Unpacked,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(macos.file, "pane-0.2.0-macos-aarch64.zip");
+        // No other system has an AppImage, nor another architecture's.
+        for target in ["windows-x86_64", "macos-aarch64", "linux-aarch64"] {
+            assert_eq!(
+                Offer::of(&releases, &source, "0.1.0", target, Install::AppImage).unwrap(),
+                None,
+                "{target}"
+            );
+        }
+    }
+
+    /// An AppImage's first bytes, as `appimagetool` writes them: an ELF
+    /// header carrying the AppImage type 2 mark at byte 8, then `body`.
+    fn appimage(body: &[u8]) -> Vec<u8> {
+        let mut bytes = b"\x7fELF\x02\x01\x01\x00AI\x02\x00\x00\x00\x00\x00".to_vec();
+        bytes.extend_from_slice(body);
+        bytes
+    }
+
+    #[test]
+    fn an_update_puts_the_new_appimage_in_the_old_one_s_place() {
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join("Pane-0.1.0-x86_64.AppImage");
+        fs::write(&path, appimage(b"the 0.1.0 AppImage")).unwrap();
+        // The user's own folder named `update`, beside the AppImage in
+        // their Downloads: an AppImage's staging is not it.
+        fs::create_dir_all(folder.path().join("update")).unwrap();
+        fs::write(folder.path().join("update/notes.txt"), b"the user's").unwrap();
+        let program = Program::appimage(path.clone()).unwrap();
+        assert_eq!(
+            program.staging(),
+            folder.path().join(".Pane-0.1.0-x86_64.AppImage.update")
+        );
+        let offer = Offer {
+            version: "0.2.0".to_owned(),
+            file: "Pane-0.2.0-x86_64.AppImage".to_owned(),
+            url: String::new(),
+            checksum: String::new(),
+            size: 0,
+        };
+        // A download that is not an AppImage replaces nothing.
+        let wrong = swap(b"a tarball, say", &offer, &program).unwrap_err();
+        assert!(wrong.contains("is not an AppImage"), "{wrong}");
+        assert_eq!(fs::read(&path).unwrap(), appimage(b"the 0.1.0 AppImage"));
+        assert!(!program.old().exists());
+        assert!(!program.staging().exists());
+
+        swap(&appimage(b"the 0.2.0 AppImage"), &offer, &program).unwrap();
+        // The new AppImage took the old one's name and place (the path a
+        // desktop entry or an autostart entry names), runnable; the old
+        // one is renamed beside it, and the staging folder is gone.
+        assert_eq!(fs::read(&path).unwrap(), appimage(b"the 0.2.0 AppImage"));
+        assert_eq!(
+            fs::read(program.old()).unwrap(),
+            appimage(b"the 0.1.0 AppImage")
+        );
+        assert!(!program.staging().exists());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = fs::metadata(&path).unwrap().permissions().mode();
+            assert_eq!(mode & 0o111, 0o111, "{mode:o}");
+        }
+        // A later start removes the old AppImage, and never the user's
+        // folder.
+        program.clean_install_folder();
+        assert!(!program.old().exists());
+        assert_eq!(
+            fs::read(folder.path().join("update/notes.txt")).unwrap(),
+            b"the user's"
         );
     }
 
@@ -672,7 +967,14 @@ mod tests {
         let source = ReleaseSource::published();
         // A newer package with no `.sha256` beside it.
         let unchecked = [release("0.2.0", &["pane-0.2.0-windows-x86_64.zip"], false)];
-        let wrong = Offer::of(&unchecked, &source, "0.1.0", "windows-x86_64").unwrap_err();
+        let wrong = Offer::of(
+            &unchecked,
+            &source,
+            "0.1.0",
+            "windows-x86_64",
+            Install::Unpacked,
+        )
+        .unwrap_err();
         assert!(
             wrong.contains("no `pane-0.2.0-windows-x86_64.zip.sha256` to check it against"),
             "{wrong}"
@@ -680,14 +982,28 @@ mod tests {
         // A package downloaded from somewhere other than Pane's releases.
         let mut elsewhere = release("0.2.0", &["pane-0.2.0-windows-x86_64.zip"], true);
         elsewhere.assets[0].url = "https://example.com/pane-0.2.0-windows-x86_64.zip".into();
-        let wrong = Offer::of(&[elsewhere], &source, "0.1.0", "windows-x86_64").unwrap_err();
+        let wrong = Offer::of(
+            &[elsewhere],
+            &source,
+            "0.1.0",
+            "windows-x86_64",
+            Install::Unpacked,
+        )
+        .unwrap_err();
         assert!(
             wrong.contains("not where Pane's releases are downloaded from"),
             "{wrong}"
         );
         // The version this Pane runs that is not dotted numbers.
         let fine = [release("0.2.0", &["pane-0.2.0-windows-x86_64.zip"], true)];
-        let wrong = Offer::of(&fine, &source, "0.1.0-beta", "windows-x86_64").unwrap_err();
+        let wrong = Offer::of(
+            &fine,
+            &source,
+            "0.1.0-beta",
+            "windows-x86_64",
+            Install::Unpacked,
+        )
+        .unwrap_err();
         assert!(wrong.contains("not dotted numbers"), "{wrong}");
     }
 
@@ -833,6 +1149,32 @@ mod tests {
             fs::read_to_string(contents.join("Info.plist")).unwrap(),
             app_plist("0.2.0")
         );
+    }
+
+    #[test]
+    fn an_apps_entry_is_this_program_s_when_it_names_its_folder() {
+        let folder = Path::new(r"C:\Users\u\AppData\Local\Pane");
+        // As Inno Setup writes it, with its trailing separator, and in any
+        // letter case.
+        assert!(installed_in(r"C:\Users\u\AppData\Local\Pane\", folder));
+        assert!(installed_in(r"c:\users\u\appdata\local\pane", folder));
+        // Another folder, one inside it, or none at all.
+        assert!(!installed_in(r"C:\Users\u\Downloads\pane\", folder));
+        assert!(!installed_in(
+            r"C:\Users\u\AppData\Local\Pane\data\",
+            folder
+        ));
+        assert!(!installed_in("", folder));
+        assert!(!installed_in("  ", Path::new("")));
+    }
+
+    #[test]
+    fn an_apps_entry_s_major_and_minor_are_the_version_s_first_numbers() {
+        assert_eq!(major_minor("0.2.0"), Some((0, 2)));
+        assert_eq!(major_minor("12.3"), Some((12, 3)));
+        assert_eq!(major_minor("99.0.0.1"), Some((99, 0)));
+        assert_eq!(major_minor("1"), None);
+        assert_eq!(major_minor("1.x"), None);
     }
 
     #[test]

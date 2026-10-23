@@ -322,6 +322,74 @@ fn choosing_to_install_the_linux_packages_tarball_swaps_the_program() {
     assert_eq!(launcher.view().status, Status::Idle);
 }
 
+/// An AppImage's bytes, as `appimagetool` begins one: an ELF header with
+/// the AppImage type 2 mark at byte 8, then `body`.
+#[cfg(target_os = "linux")]
+fn appimage(body: &[u8]) -> Vec<u8> {
+    let mut bytes = b"\x7fELF\x02\x01\x01\x00AI\x02\x00\x00\x00\x00\x00".to_vec();
+    bytes.extend_from_slice(body);
+    bytes
+}
+
+/// A Pane running from an AppImage (#464, ADR 0049) installs the
+/// release's AppImage in that file's place, not the program the tarball
+/// beside it holds. Only Linux has AppImages, so only its target names
+/// one in a release.
+#[cfg(target_os = "linux")]
+#[test]
+fn choosing_to_install_from_an_appimage_replaces_the_appimage() {
+    let dirs = Dirs::new();
+    let arch = Target::current()
+        .unwrap()
+        .id()
+        .strip_prefix("linux-")
+        .unwrap()
+        .to_owned();
+    dirs.publish_update_tgz("99.0.0", b"the 99.0.0 program");
+    let file = format!("Pane-99.0.0-{arch}.AppImage");
+    dirs.releases
+        .add_asset("99.0.0", &file, &appimage(b"the 99.0.0 AppImage"));
+    let path = dirs
+        .install
+        .path()
+        .join(format!("Pane-0.1.0-{arch}.AppImage"));
+    fs::write(&path, appimage(b"the 0.1.0 AppImage")).unwrap();
+    let launcher = Launcher::with_packages(Ok(dirs.runtime.clone()), vec![], dirs.packages_dir())
+        .with_appimage_update(
+            "0.1.0",
+            ReleaseSource::local(dirs.releases.url()).unwrap(),
+            path.clone(),
+        );
+    block_on(launcher.check_application_update());
+    select_title(&launcher, "Update Pane to 99.0.0");
+
+    block_on(launcher.activate_selected());
+
+    assert_eq!(
+        launcher.view().status,
+        Status::Result(
+            "Installed Pane 99.0.0; the new version is used the next time Pane starts".into()
+        )
+    );
+    // The AppImage file keeps its path, which the menu's and the autostart
+    // entries name, and holds the new AppImage; the old one is beside it
+    // until the next start, and nothing else is left.
+    assert_eq!(fs::read(&path).unwrap(), appimage(b"the 99.0.0 AppImage"));
+    let old = format!("Pane-0.1.0-{arch}.AppImage.old");
+    assert_eq!(
+        fs::read(dirs.install.path().join(&old)).unwrap(),
+        appimage(b"the 0.1.0 AppImage")
+    );
+    assert_eq!(
+        dirs.installed(),
+        [format!("Pane-0.1.0-{arch}.AppImage"), old]
+    );
+    // The AppImage and its `.sha256` were downloaded, the tarball never.
+    assert_eq!(dirs.releases.downloaded(".AppImage"), 1);
+    assert_eq!(dirs.releases.downloaded(".AppImage.sha256"), 1);
+    assert_eq!(dirs.releases.downloaded(".tar.gz"), 0);
+}
+
 #[test]
 fn a_newer_version_is_notified_and_nothing_is_downloaded() {
     let dirs = Dirs::new();

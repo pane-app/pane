@@ -136,6 +136,33 @@ The reference's 18-pixel panel radius shows differently on each system:
   (`pane::prefer_rounded_window_corners`). Neither the acrylic frost nor
   the opaque surface shows as a plate behind the corners.
 
+### Taskbar, Dock and window switchers
+
+The launcher window is never on the taskbar or in the window switcher, as
+Raycast's is not ([#458](https://github.com/pane-app/pane/issues/458)).
+Pane is reached by its hotkey and its tray or menu-bar entry. There is no
+setting for it. The Settings window is an ordinary window and keeps its
+taskbar button. HUDs are pop-ups, which no system lists.
+
+- On Windows the launcher is a tool window (`WS_EX_TOOLWINDOW`, without
+  `WS_EX_APPWINDOW`): no taskbar button and no Alt+Tab entry. It opens
+  hidden and gets the style before its first show, since Windows decides
+  on the button as a window is shown (`pane::open_launcher_window`). A
+  test reads the style back on CI's Windows runner, first shown, after a
+  dismiss and after the tray summons it again.
+- On macOS Pane is an accessory application: no Dock icon, no Cmd+Tab
+  entry and no menu bar of its own. `main.rs` sets the activation policy
+  before launching finishes, not `LSUIElement` in the bundle's
+  Info.plist, so a development build behaves as the installed app does.
+  Settings brings Pane to the front as it opens.
+- On Linux under X11 the launcher asks the window manager to skip the
+  taskbar and the pager (EWMH's `_NET_WM_STATE_SKIP_TASKBAR` and
+  `_NET_WM_STATE_SKIP_PAGER`), again before every show, since a window
+  manager may forget the state of a window it withdrew. A window manager
+  without EWMH ignores it.
+- On Wayland there is no protocol for it: whether the launcher is listed
+  is up to the compositor.
+
 ### What the launcher shows
 
 The actual query, command rows, selection, invocation and extension views

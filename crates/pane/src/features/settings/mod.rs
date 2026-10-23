@@ -889,6 +889,10 @@ pub(crate) fn open(launcher: &Launcher, cx: &mut App) -> WindowHandle<SettingsWi
         if open
             .update(cx, |_, window, cx| {
                 window.activate_window();
+                // Pane comes to the front with it: on macOS, where Pane is
+                // an accessory application (#458), the menu-bar entry's
+                // Settings is chosen while another application is active.
+                cx.activate(true);
                 cx.notify();
             })
             .is_ok()
@@ -917,6 +921,9 @@ pub(crate) fn open(launcher: &Launcher, cx: &mut App) -> WindowHandle<SettingsWi
             appears_transparent: true,
             ..Default::default()
         }),
+        // On Linux the taskbar shows Pane's icon for the window, from the
+        // desktop entry this names.
+        app_id: Some(crate::APP_ID.into()),
         ..Default::default()
     };
     cx.open_window(options, |window, cx| {
@@ -929,9 +936,11 @@ pub(crate) fn open(launcher: &Launcher, cx: &mut App) -> WindowHandle<SettingsWi
     })
     .and_then(|window| {
         // The new window comes to the front and takes focus, as focusing
-        // an open one does.
+        // an open one does. It is an ordinary application window, with its
+        // taskbar button, unlike the launcher's (#458).
         window.update(cx, |_, window, cx| {
             window.activate_window();
+            cx.activate(true);
             cx.notify();
         })?;
         Ok(window)

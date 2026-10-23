@@ -10,19 +10,34 @@
 //!   installs from: the `pane` program, the install script, a README, Pane's
 //!   licence (`LICENSE.txt`) and the third-party notices
 //!   (`THIRD-PARTY-NOTICES.txt`, see `notices.rs`) (and, on Linux, a
-//!   desktop entry, on macOS the `Info.plist` and icon of the `Pane.app`
-//!   bundle the install script makes), and none of the default
+//!   desktop entry and its icons, on macOS the `Info.plist` and icon of
+//!   the `Pane.app` bundle the install script makes), and none of the default
 //!   extensions (internet-first: Pane fetches them at first setup, from
 //!   the commits this release pins). A `.sha256` file beside it names its
 //!   digest; nothing is signed, since no signing credentials exist yet.
+//! - the system's installer, for a user who installs as they install any
+//!   other application (#464): on macOS `Pane-<version>[-dev].dmg`, a disk
+//!   image holding the whole `Pane.app` and a link to `/Applications` to
+//!   drag it onto (`hdiutil`, which every Mac has); on Linux
+//!   `Pane-<version>-<arch>[-dev].AppImage`, the program with its desktop
+//!   entry and icons in one runnable file, when `APPIMAGETOOL` and
+//!   `APPIMAGE_RUNTIME` name the `appimagetool` and the AppImage runtime to
+//!   build it with (CI's Package job downloads both, pinned and checked;
+//!   without them the task says it built none). Each has a `.sha256`
+//!   beside it.
 //! - `release/` — the assets a release of Pane on GitHub carries for this
 //!   system (ADR 0048): the package, named
 //!   `pane-<version>-<os>-<arch>.tar.gz` or `.zip` — the name Pane's
 //!   updater looks for in a release, which a development package takes
-//!   here too, standing in for a release's — and its `.sha256`. The
+//!   here too, standing in for a release's — and its `.sha256`, and the
+//!   installer above under its release name, with its own. The
 //!   release workflow uploads this folder's files to a draft release; the
 //!   smokes serve it from this computer as a stand-in for GitHub
 //!   (`scripts/release_server.py`), so no check reaches the network.
+//!   On Windows it also holds the setup a release carries beside the zip,
+//!   `Pane-Setup-<version>.exe` and its `.sha256` (#463): Inno Setup's
+//!   compiler builds it from `scripts/setup-windows.iss` and the files the
+//!   zip holds. Only a release-profile build makes it.
 //!
 //! `--dev` builds the package's program in the development profile: the
 //! native smokes install that one, because only a development build takes
@@ -54,6 +69,8 @@ use super::PACKED_MTIME;
 use sha2::{Digest, Sha256};
 
 use crate::zip;
+
+mod bundles;
 
 /// The pane program's version, as the package names it: this workspace's
 /// version, which every crate of it shares.
@@ -100,26 +117,30 @@ impl System {
     }
 
     /// The files this system's package holds besides the program, the
-    /// install script, the README and the notices: Linux's desktop entry,
+    /// install script, the README and the notices, by their paths in it:
+    /// Linux's desktop entry and the icons it names (`icons/hicolor/…`,
+    /// laid out as the icon theme the install script copies them into),
     /// which Windows' install script replaces with a Start-menu shortcut
     /// (pane.exe carries its own icon, from the pane crate's build script),
     /// and macOS's `Info.plist` and the icon it names, which its script
     /// builds the `Pane.app` bundle around (the `Info.plist` naming the
     /// package's `version`).
-    fn extra_files(
-        self,
-        root: &Path,
-        version: &str,
-    ) -> Result<Vec<(&'static str, Vec<u8>)>, String> {
+    fn extra_files(self, root: &Path, version: &str) -> Result<Vec<(String, Vec<u8>)>, String> {
         Ok(match self {
-            System::Linux => vec![("pane.desktop", desktop_entry().into_bytes())],
+            System::Linux => {
+                let mut files = vec![("pane.desktop".to_owned(), desktop_entry().into_bytes())];
+                for (path, icon) in linux_icons(root)? {
+                    files.push((format!("icons/{path}"), icon));
+                }
+                files
+            }
             System::Windows => Vec::new(),
             System::Macos => {
                 let icon = root.join("crates/pane/assets/app/pane.icns");
                 vec![
-                    ("Info.plist", app_plist(version).into_bytes()),
+                    ("Info.plist".to_owned(), app_plist(version).into_bytes()),
                     (
-                        "pane.icns",
+                        "pane.icns".to_owned(),
                         fs::read(&icon)
                             .map_err(|error| format!("read {} failed: {error}", icon.display()))?,
                     ),
@@ -129,7 +150,21 @@ impl System {
     }
 }
 
-/// Builds the Linux package and the release assets beside it.
+/// The Linux desktop entry's icons, as `scripts/icons/app-icons.py` draws
+/// and commits them: each one's path in the hicolor theme
+/// (`hicolor/<size>x<size>/apps/pane.png`) and its bytes, in name order.
+fn linux_icons(root: &Path) -> Result<Vec<(String, Vec<u8>)>, String> {
+    let icons = read_files(&root.join("crates/pane/assets/app/hicolor"), "hicolor")?;
+    if icons.is_empty() {
+        return Err(
+            "crates/pane/assets/app/hicolor holds no icons; run scripts/icons/app-icons.py".into(),
+        );
+    }
+    Ok(icons)
+}
+
+/// Builds the Linux package, the AppImage when the tools for it are named,
+/// and the release assets beside them.
 pub fn linux(dev: bool, version: Option<String>) -> Result<(), String> {
     let root = root();
     let out = root.join("target/dist");
@@ -139,6 +174,13 @@ pub fn linux(dev: bool, version: Option<String>) -> Result<(), String> {
     let (package, packed) = assemble_package(&root, &out, dev, System::Linux, version.as_deref())?;
     write_release(&release, System::Linux, version.as_deref(), &packed)?;
     println!("package built into {}", package.display());
+    match bundles::appimage(&out, &release, dev, version.as_deref())? {
+        Some(appimage) => println!("AppImage built into {}", appimage.display()),
+        None => println!(
+            "no AppImage built: APPIMAGETOOL and APPIMAGE_RUNTIME name no appimagetool and \
+             AppImage runtime to build one with"
+        ),
+    }
     println!("release assets built into {}", release.display());
     Ok(())
 }
@@ -169,8 +211,84 @@ pub fn windows(dev: bool, version: Option<String>) -> Result<(), String> {
         assemble_package(&root, &out, dev, System::Windows, version.as_deref())?;
     write_release(&release, System::Windows, version.as_deref(), &packed)?;
     println!("package built into {}", package.display());
+    // The setup is a release's: a development package is the smokes', which
+    // install the zip, and its program is far too large to compress for
+    // nothing.
+    if !dev {
+        let setup = build_setup(
+            &root,
+            &out.join("stage/pane"),
+            &release,
+            version.as_deref().unwrap_or(VERSION),
+        )?;
+        println!("setup built into {}", setup.display());
+    }
     println!("release assets built into {}", release.display());
     Ok(())
+}
+
+/// Builds Pane's Windows setup (#463), `Pane-Setup-<version>.exe`, into
+/// `release` with its `.sha256`: Inno Setup's compiler run over
+/// `scripts/setup-windows.iss` and the files `stage` holds for the zip
+/// package, the setup stamped with `version`.
+fn build_setup(
+    root: &Path,
+    stage: &Path,
+    release: &Path,
+    version: &str,
+) -> Result<PathBuf, String> {
+    let compiler = inno_compiler()?;
+    run(Command::new(&compiler)
+        .current_dir(root)
+        .arg("/Q")
+        .arg(format!("/DAppVersion={version}"))
+        .arg(format!("/DStageDir={}", stage.display()))
+        .arg(format!("/O{}", release.display()))
+        .arg(root.join("scripts/setup-windows.iss")))?;
+    let name = setup_name(version);
+    let setup = release.join(&name);
+    let built =
+        fs::read(&setup).map_err(|error| format!("read {} failed: {error}", setup.display()))?;
+    write_sha256(release, &name, &built)?;
+    Ok(setup)
+}
+
+/// The setup's file name, as a release carries it.
+fn setup_name(version: &str) -> String {
+    format!("Pane-Setup-{version}.exe")
+}
+
+/// Inno Setup's command-line compiler: the one `ISCC` names (the release
+/// jobs install a pinned version and name it there), else `ISCC.exe` on
+/// the PATH, else where Inno Setup 6 installs itself, for all users or for
+/// one.
+fn inno_compiler() -> Result<PathBuf, String> {
+    if let Some(named) = std::env::var_os("ISCC").filter(|named| !named.is_empty()) {
+        return Ok(PathBuf::from(named));
+    }
+    let on_path = std::env::var_os("PATH")
+        .map(|path| std::env::split_paths(&path).collect::<Vec<_>>())
+        .unwrap_or_default()
+        .into_iter()
+        .map(|folder| folder.join("ISCC.exe"));
+    let installed = ["ProgramFiles(x86)", "ProgramFiles"]
+        .into_iter()
+        .filter_map(std::env::var_os)
+        .map(|folder| PathBuf::from(folder).join("Inno Setup 6"))
+        .chain(
+            std::env::var_os("LOCALAPPDATA")
+                .map(|folder| PathBuf::from(folder).join("Programs/Inno Setup 6")),
+        )
+        .map(|folder| folder.join("ISCC.exe"));
+    on_path
+        .chain(installed)
+        .find(|compiler| compiler.is_file())
+        .ok_or_else(|| {
+            "package-windows builds Pane's setup with Inno Setup 6, whose compiler (ISCC.exe) is \
+             not on the PATH or where Inno Setup installs itself; install it (`winget install \
+             JRSoftware.InnoSetup`) or name the compiler in ISCC"
+                .to_owned()
+        })
 }
 
 /// Builds the macOS package and the release assets beside it.
@@ -198,6 +316,8 @@ pub fn macos(dev: bool, version: Option<String>) -> Result<(), String> {
     let (package, packed) = assemble_package(&root, &out, dev, System::Macos, version.as_deref())?;
     write_release(&release, System::Macos, version.as_deref(), &packed)?;
     println!("package built into {}", package.display());
+    let dmg = bundles::dmg(&out, &release, dev, version.as_deref())?;
+    println!("disk image built into {}", dmg.display());
     println!("release assets built into {}", release.display());
     Ok(())
 }
@@ -385,7 +505,7 @@ fn assemble_package(
     system: System,
     version: Option<&str>,
 ) -> Result<(PathBuf, Vec<u8>), String> {
-    let stage = out.join("stage/pane");
+    let stage = stage_folder(out);
     let _ = fs::remove_dir_all(stage.parent().expect("the stage folder"));
     fs::create_dir_all(&stage).map_err(|error| error.to_string())?;
     let name = package_name(system, version, dev)?;
@@ -409,7 +529,10 @@ fn assemble_package(
     let notices = crate::notices::third_party_notices(root, version.unwrap_or(VERSION))?;
     fs::write(stage.join("THIRD-PARTY-NOTICES.txt"), notices).map_err(|error| error.to_string())?;
     for (file, contents) in system.extra_files(root, version.unwrap_or(VERSION))? {
-        fs::write(stage.join(file), contents).map_err(|error| error.to_string())?;
+        let path = stage.join(file);
+        fs::create_dir_all(path.parent().expect("a file in the stage folder"))
+            .and_then(|()| fs::write(&path, contents))
+            .map_err(|error| error.to_string())?;
     }
     let files = read_files(&stage, "")?;
     let packed = match system {
@@ -421,6 +544,12 @@ fn assemble_package(
         .map_err(|error| format!("write {} failed: {error}", package.display()))?;
     write_sha256(out, &name, &packed)?;
     Ok((package, packed))
+}
+
+/// Where [`assemble_package`] stages the package's files under `out`
+/// (`stage/pane`), which the installers are built from once it has.
+fn stage_folder(out: &Path) -> PathBuf {
+    out.join("stage/pane")
 }
 
 /// The architecture of the system this ran on, as the package name says
@@ -496,15 +625,21 @@ INSTALL
   bash install.sh            # installs to ~/.local
   bash install.sh --prefix X # installs to X instead
 
-  It copies the pane program to <prefix>/bin and a desktop entry to
-  <prefix>/share/applications, and runs `pane --version` to check what it
+  It copies the pane program to <prefix>/bin, a desktop entry to
+  <prefix>/share/applications and its icon to
+  <prefix>/share/icons/hicolor, and runs `pane --version` to check what it
   installed. No root is needed.
+
+  The same release also carries Pane-{version}-<arch>.AppImage, the
+  program with its desktop entry and icon in one file: make it
+  executable and run it, without installing anything.
 
 UNINSTALL
 
-  Remove <prefix>/bin/pane and <prefix>/share/applications/pane.desktop.
-  Pane keeps its own data in ~/.local/share/pane (its installed
-  extensions and their settings); remove that folder to remove them too.
+  Remove <prefix>/bin/pane, <prefix>/share/applications/pane.desktop and
+  <prefix>/share/icons/hicolor/*/apps/pane.png. Pane keeps its own data
+  in ~/.local/share/pane (its installed extensions and their settings);
+  remove that folder to remove them too.
 
 FIRST RUN
 
@@ -546,6 +681,11 @@ PREREQUISITES
 
 INSTALL
 
+  The easier way is the release's setup, Pane-Setup-{version}.exe, which
+  installs Pane like any other app: a Start menu entry, an entry in
+  Settings > Apps to uninstall it from, and a choice to start Pane when
+  you sign in. This zip is the portable download, installed by its script.
+
   Unzip this package (Explorer unzips it, or Expand-Archive in
   PowerShell), then, in the pane folder it unpacked:
 
@@ -566,7 +706,8 @@ INSTALL
 UNINSTALL
 
   Remove %LOCALAPPDATA%\Pane\pane.exe and the Pane shortcut in your Start
-  menu (close Pane first). Pane keeps its own data in
+  menu (close Pane first), or, if the setup installed Pane, uninstall it
+  in Settings > Apps. Pane keeps its own data in
   %LOCALAPPDATA%\Pane\data (its installed extensions and their settings);
   remove that folder to remove them too.
 
@@ -624,6 +765,9 @@ INSTALL
 
     open ~/Applications/Pane.app
 
+  The same release also carries Pane-{version}.dmg, a disk image holding
+  the whole Pane.app: open it and drag Pane onto Applications.
+
   Nothing is signed (no Apple Developer credentials exist). macOS only
   checks Gatekeeper on files that carry its quarantine mark, which the
   web browser or mail program that downloaded this package set: its
@@ -659,7 +803,12 @@ FIRST RUN
     )
 }
 
-/// The desktop entry in the package.
+/// The desktop entry in the package and in the AppImage: the icon is the
+/// one the package's `icons/hicolor` holds, installed into the user's icon
+/// theme, and `StartupWMClass` the class Pane's windows carry (the pane
+/// crate's `APP_ID`), so a desktop shows that icon for them. An AppImage
+/// integration tool (AppImageLauncher, Gear Lever) rewrites `Exec` to name
+/// the AppImage file.
 fn desktop_entry() -> String {
     "[Desktop Entry]\n\
 Type=Application\n\
@@ -667,8 +816,10 @@ Name=Pane\n\
 GenericName=Launcher\n\
 Comment=Launch applications, calculate and run extension commands\n\
 Exec=pane\n\
+Icon=pane\n\
 Terminal=false\n\
-Categories=Utility;\n"
+Categories=Utility;\n\
+StartupWMClass=pane\n"
         .to_owned()
 }
 
