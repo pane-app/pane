@@ -1,5 +1,11 @@
 **Pane {version} is an unsigned preview.** Expect rough edges, and expect your system to warn you before it runs Pane (see below).
 
+## What's new
+
+- **Currencies in the calculator** (#475): the calculator converts between currencies, as Raycast's does.
+- **A back button on every pushed view** (#482): forms, detail views and canvases, which have no search bar, get a top bar with a back button.
+- **Updating from 0.1.0**: Pane 0.1.0 finds this release by itself. Choose **Update Pane to {version}** in the launcher, and the new version is used the next time Pane starts (see Updates below).
+
 ## What was checked
 
 - **Windows (x86_64):** checked by hand: installed and used on a Windows PC, beside the automated checks CI runs on every change.
