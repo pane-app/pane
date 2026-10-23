@@ -344,6 +344,10 @@ struct Served {
     /// Answer the next fetch (`command=fetch`) by closing the connection
     /// partway through its answer: a fetch interrupted.
     drop_next: bool,
+    /// Hold every answer, once its request is recorded, until the test
+    /// releases them: a fetch kept in flight for as long as the test
+    /// needs (#466: Set Up chosen while first setup's list is fetching).
+    held: bool,
 }
 
 /// A smart HTTP server for the repositories a test adds, on a free port of
@@ -367,6 +371,7 @@ impl Server {
             fetches: Vec::new(),
             mode: Mode::Normal,
             drop_next: false,
+            held: false,
         }));
         let stop = Arc::new(AtomicBool::new(false));
         let thread = {
@@ -427,6 +432,17 @@ impl Server {
         self.served.lock().unwrap().drop_next = true;
     }
 
+    /// Holds every answer from now on, each request recorded as it comes,
+    /// until [`Server::release`].
+    pub fn hold(&self) {
+        self.served.lock().unwrap().held = true;
+    }
+
+    /// Answers what was held, and holds nothing more.
+    pub fn release(&self) {
+        self.served.lock().unwrap().held = false;
+    }
+
     /// Every request received, as `METHOD /path?query`.
     pub fn requests(&self) -> Vec<String> {
         self.served.lock().unwrap().requests.clone()
@@ -444,6 +460,9 @@ impl Server {
 
 impl Drop for Server {
     fn drop(&mut self) {
+        if let Ok(mut served) = self.served.lock() {
+            served.held = false;
+        }
         self.stop.store(true, Ordering::SeqCst);
         let _ = TcpStream::connect(self.url.trim_start_matches("http://").trim_end_matches('/'));
         if let Some(thread) = self.thread.take() {
@@ -501,6 +520,9 @@ fn answer(stream: TcpStream, served: &Mutex<Served>, home: &Path) {
             is_fetch && std::mem::take(&mut served.drop_next),
         )
     };
+    while served.lock().unwrap().held {
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
     if let Mode::Slow(wait) = mode {
         std::thread::sleep(wait);
     }

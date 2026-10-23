@@ -2,7 +2,12 @@
 //! on a data folder whose first setup has not chosen yet, Pane lists the
 //! official extensions this system sets up — each pin's title and
 //! description, before anything is fetched — with the default extensions
-//! ticked, and the Set Up row selected. Unticking one and choosing Set Up
+//! ticked, and the Set Up row selected. As the list opens, each pinned
+//! revision is fetched in the background, and its row draws the icon its
+//! own manifest names once it lands (#466): a fetch that fails leaves the
+//! letter tile and says nothing, and Set Up installs what the list
+//! fetched, or waits for the fetch in flight, never fetching twice.
+//! Unticking one and choosing Set Up
 //! records the choice in `installed.json`: an unticked default is
 //! declined, as an uninstall declines one, and is never set up by
 //! itself; the ticked ones are set up in the background as first setup
@@ -17,10 +22,14 @@
 
 use std::fs;
 use std::path::PathBuf;
+use std::time::{Duration, Instant};
 
 use futures::executor::block_on;
 use pane_core::defaults::DefaultExtension;
-use pane_core::{Launcher, OperationKind, PackageIdentity, Runtime, SavedData, Screen, Status};
+use pane_core::{
+    ChoiceView, IconSource, Launcher, OperationKind, PackageIdentity, Runtime, SavedData, Screen,
+    Status,
+};
 use serde_json::Value;
 use tempfile::TempDir;
 
@@ -107,6 +116,18 @@ impl Dirs {
         serde_json::from_str(&text).unwrap()
     }
 
+    /// What Pane's downloads folder holds: nothing, once every revision
+    /// fetched was installed or dropped.
+    fn downloads(&self) -> Vec<String> {
+        fs::read_dir(self.packages_dir().join("downloads"))
+            .map(|entries| {
+                entries
+                    .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
     /// How many times the repository of the default `id` was asked for.
     fn fetches(&self, id: &str) -> usize {
         let wanted = format!("GET /{id}.git/info/refs");
@@ -121,6 +142,37 @@ impl Dirs {
 /// The installed packages' titles, in installed order.
 fn installed(launcher: &Launcher) -> Vec<String> {
     launcher.packages().iter().map(|p| p.title()).collect()
+}
+
+/// The choice on screen; panics if it is not.
+fn choice(launcher: &Launcher) -> ChoiceView {
+    match launcher.view().screen {
+        Screen::Choice(choice) => choice,
+        screen => panic!("not first setup's choice: {screen:#?}"),
+    }
+}
+
+/// What each row of the choice draws: its own icon (`Some(image)` for a
+/// packaged image) or its first-letter tile (`None`).
+fn icons(launcher: &Launcher) -> Vec<Option<PathBuf>> {
+    choice(launcher)
+        .extensions
+        .into_iter()
+        .map(|extension| match extension.icon.source {
+            IconSource::Image { light, .. } => Some(light),
+            IconSource::Letter(_) => None,
+            source => panic!("{} draws {source:?}", extension.id),
+        })
+        .collect()
+}
+
+/// Waits, up to a minute, for `done`.
+fn wait_for(what: &str, mut done: impl FnMut() -> bool) {
+    let deadline = Instant::now() + Duration::from_secs(60);
+    while !done() {
+        assert!(Instant::now() < deadline, "{what} did not happen");
+        std::thread::sleep(Duration::from_millis(20));
+    }
 }
 
 /// Selects the Set Up row and chooses it, awaiting the setting up it
@@ -164,10 +216,152 @@ fn first_setup_lists_the_official_extensions_with_the_defaults_ticked() {
         view.rows[2].subtitle.as_deref(),
         Some("Set up the 2 ticked extensions")
     );
-    // Nothing is fetched before the user chooses, and nothing is
+    // Nothing is set up before the user chooses, and nothing is
     // recorded.
-    assert!(dirs.server.requests().is_empty());
     assert!(launcher.packages().is_empty());
+    assert!(!dirs.packages_dir().join("installed.json").exists());
+}
+
+#[test]
+fn each_row_draws_its_own_icon_as_its_revision_lands_and_set_up_fetches_nothing_again() {
+    let dirs = Dirs::new();
+    // The repositories answer only once the test lets them: the list is
+    // used while its fetches are in flight.
+    dirs.server.hold();
+    let launcher = dirs.launcher();
+    block_on(launcher.first_setup());
+
+    // Until a revision lands, each row draws its first-letter tile, and
+    // the list is used as ever: the greet sample unticked and ticked
+    // again, its row selected.
+    assert_eq!(icons(&launcher), [None, None]);
+    assert!(launcher.toggle_choice_tick("sample-greet"));
+    assert!(launcher.toggle_choice_tick("sample-greet"));
+    assert_eq!(launcher.view().selected, Some(1));
+
+    // The revisions land: the icons sample's row draws the icon its own
+    // manifest names, from the revision fetched; the greet sample names
+    // none, so its row keeps its tile. The rows keep their order, their
+    // ticks and the selection, and nothing is said of the fetches.
+    dirs.server.release();
+    wait_for("the icons sample's icon", || icons(&launcher)[0].is_some());
+    let icon = icons(&launcher)[0].clone().unwrap();
+    assert_eq!(icon.file_name().unwrap(), "icon.png");
+    assert!(icon.is_file(), "{} is not drawn", icon.display());
+    assert!(
+        icon.starts_with(dirs.packages_dir().join("downloads")),
+        "{}",
+        icon.display()
+    );
+    assert_eq!(icons(&launcher)[1], None);
+    assert_eq!(titles(&launcher), ["Icons sample", "Greet sample", SET_UP]);
+    assert_eq!(choice(&launcher).ticked, [true, true]);
+    assert_eq!(launcher.view().selected, Some(1));
+    assert_eq!(launcher.view().status, Status::Idle);
+    // The list opened again draws the icon at once, and fetches nothing
+    // more.
+    launcher.back();
+    select_title(&launcher, FIRST_SETUP_ROW);
+    block_on(launcher.activate_selected());
+    assert!(icons(&launcher)[0].is_some());
+
+    // Set Up installs what the list fetched: each repository was asked
+    // for once, and no download is left behind.
+    wait_for("the greet sample's fetch", || {
+        dirs.fetches("sample-greet") == 1
+    });
+    set_up(&launcher);
+    assert_eq!(
+        installed(&launcher),
+        ["Icons sample", "Rust greet provider sample"]
+    );
+    assert_eq!(dirs.fetches("sample-icons"), 1);
+    assert_eq!(dirs.fetches("sample-greet"), 1);
+    assert_eq!(dirs.downloads(), Vec::<String>::new());
+}
+
+#[test]
+fn set_up_chosen_before_the_icons_arrive_waits_for_the_fetches_in_flight() {
+    let dirs = Dirs::new();
+    dirs.server.hold();
+    let launcher = dirs.launcher();
+    block_on(launcher.first_setup());
+    // Both repositories are being fetched for the list, and are held.
+    wait_for("both fetches", || {
+        dirs.fetches("sample-icons") == 1 && dirs.fetches("sample-greet") == 1
+    });
+    assert_eq!(icons(&launcher), [None, None]);
+
+    // Set Up, at once: root search, the setting up waiting for the
+    // list's fetches rather than starting its own.
+    let setting_up = {
+        let launcher = launcher.clone();
+        std::thread::spawn(move || set_up(&launcher))
+    };
+    wait_for("the setting up", || {
+        matches!(launcher.view().screen, Screen::Root { .. })
+            && matches!(
+                &launcher.view().status,
+                Status::Progress(what) if what.contains("Icons sample")
+            )
+    });
+    dirs.server.release();
+    setting_up.join().unwrap();
+
+    // Both set up, each from the one fetch the list began.
+    assert_eq!(
+        installed(&launcher),
+        ["Icons sample", "Rust greet provider sample"]
+    );
+    assert_eq!(dirs.fetches("sample-icons"), 1);
+    assert_eq!(dirs.fetches("sample-greet"), 1);
+    assert_eq!(
+        launcher.view().status,
+        Status::Result("Set up Pane's default extensions".into())
+    );
+    assert_eq!(dirs.downloads(), Vec::<String>::new());
+}
+
+#[test]
+fn a_revision_that_cannot_be_fetched_keeps_its_letter_tile_and_says_nothing() {
+    let dirs = Dirs::new();
+    // The greet sample's repository is not there.
+    let mut pins = dirs.pins.clone();
+    pins[1].repository = format!("{}missing.git", dirs.server.url());
+    let launcher = Launcher::with_packages(Ok(dirs.runtime.clone()), vec![], dirs.packages_dir())
+        .with_defaults(pins);
+    block_on(launcher.first_setup());
+
+    // The icons sample's icon lands; the greet sample's fetch fails, and
+    // its row keeps its tile, with no word of the failure.
+    wait_for("the icons sample's icon", || icons(&launcher)[0].is_some());
+    let missing = |dirs: &Dirs| {
+        dirs.server
+            .requests()
+            .iter()
+            .filter(|request| request.starts_with("GET /missing.git/info/refs"))
+            .count()
+    };
+    wait_for("the missing repository's fetch", || missing(&dirs) >= 1);
+    std::thread::sleep(Duration::from_millis(500));
+    assert_eq!(icons(&launcher)[1], None);
+    assert_eq!(launcher.view().status, Status::Idle);
+    assert_eq!(choice(&launcher).ticked, [true, true]);
+
+    // Set Up behaves as it always did: the icons sample is set up from the
+    // revision the list fetched, and the greet sample's failure is
+    // explained, with the row that tries it again.
+    set_up(&launcher);
+    assert_eq!(installed(&launcher), ["Icons sample"]);
+    assert_eq!(dirs.fetches("sample-icons"), 1);
+    let Status::Error(error) = launcher.view().status else {
+        panic!("no failure explained: {:?}", launcher.view().status);
+    };
+    assert!(
+        error.starts_with("Could not set up the Greet sample: "),
+        "{error}"
+    );
+    assert!(titles(&launcher).contains(&"Set up Greet sample".to_owned()));
 }
 
 #[test]
@@ -185,14 +379,17 @@ fn an_unticked_default_is_not_acquired_and_the_choice_is_recorded_as_an_uninstal
     set_up(&launcher);
 
     // Back at root search, the ticked default set up and the unticked one
-    // not even fetched.
+    // not: fetched at most once, for its icon, and its download dropped.
     assert!(matches!(launcher.view().screen, Screen::Root { .. }));
     assert_eq!(installed(&launcher), ["Icons sample"]);
     assert_eq!(
         launcher.view().status,
         Status::Result("Set up the Icons sample".into())
     );
-    assert_eq!(dirs.fetches("sample-greet"), 0);
+    assert!(dirs.fetches("sample-greet") <= 1);
+    wait_for("the greet sample's download to go", || {
+        dirs.downloads().is_empty()
+    });
     // The choice is recorded with the packages: made, and the greet
     // sample declined — the record an uninstall writes too.
     let registry = dirs.registry();
@@ -206,10 +403,11 @@ fn an_unticked_default_is_not_acquired_and_the_choice_is_recorded_as_an_uninstal
     // more: the declined default stays out.
     drop(launcher);
     let launcher = dirs.launcher();
+    let fetched = dirs.fetches("sample-greet");
     block_on(launcher.first_setup());
     assert!(matches!(launcher.view().screen, Screen::Root { .. }));
     assert_eq!(installed(&launcher), ["Icons sample"]);
-    assert_eq!(dirs.fetches("sample-greet"), 0);
+    assert_eq!(dirs.fetches("sample-greet"), fetched);
     assert!(!titles(&launcher).contains(&FIRST_SETUP_ROW.to_owned()));
 }
 
@@ -383,7 +581,6 @@ fn leaving_first_setup_chooses_nothing_and_root_search_offers_it_again() {
     launcher.back();
     assert!(matches!(launcher.view().screen, Screen::Root { .. }));
     assert!(launcher.packages().is_empty());
-    assert!(dirs.server.requests().is_empty());
     assert!(!dirs.packages_dir().join("installed.json").exists());
     select_title(&launcher, FIRST_SETUP_ROW);
     block_on(launcher.activate_selected());
@@ -413,7 +610,9 @@ fn unticking_every_default_sets_up_none_and_declines_them_all() {
 
     assert!(matches!(launcher.view().screen, Screen::Root { .. }));
     assert!(launcher.packages().is_empty());
-    assert!(dirs.server.requests().is_empty());
+    // What the list fetched for the icons goes with the choice.
+    assert!(dirs.fetches("sample-icons") <= 1 && dirs.fetches("sample-greet") <= 1);
+    wait_for("the list's downloads to go", || dirs.downloads().is_empty());
     assert_eq!(
         dirs.registry()["declinedDefaults"],
         serde_json::json!(["sample-icons", "sample-greet"])
