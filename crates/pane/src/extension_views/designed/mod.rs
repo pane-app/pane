@@ -256,21 +256,9 @@ impl LauncherWindow {
             .on_action(cx.listener(Self::field_right))
             .on_action(cx.listener(Self::field_home))
             .on_action(cx.listener(Self::field_end))
-            .child(
-                div()
-                    .window_control_area(gpui::WindowControlArea::Drag)
-                    .flex_none()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .size(px(44.))
-                    .mx(px(-12.))
-                    .child(crate::ui::icon::glyph(
-                        crate::ui::icon::Glyph::Search,
-                        geometry.search_glyph_size,
-                        theme.text_muted,
-                    )),
-            )
+            // A designed List is a pushed view: the back button in the
+            // magnifier's place (#469).
+            .child(crate::features::root_search::back_button(&theme, cx))
             // The query input under the query field's own context, as root
             // search's is: the selection keys bound there take Up and Down
             // ahead of the text element's own, which would move the caret

@@ -184,6 +184,16 @@ focus and accessibility wiring. The magnifier's surrounding chrome and
 non-search headings provide drag regions. Decorative surfaces register
 no input handlers.
 
+On a pushed view (a command's search, a designed List such as Switch
+Windows, the update results) the search bar shows a back button in the
+magnifier's place, as Raycast's does (#469). It is the split views' back
+button (Clipboard History's, Search Files'): a 32px rounded square with
+the left arrow, its fill washing on hover, centred in the magnifier's
+44px hit target so the field's text does not move. Its tooltip names the
+back key ("Back (Escape)"). A click goes back one level, whatever the
+field holds, and the keyboard stays in the search field. Root search
+shows the magnifier.
+
 ### Status lines, forms and extension drawing
 
 Unavailable reasons wrap and stay visible and non-invokable. Host forms
