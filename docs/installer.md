@@ -602,14 +602,16 @@ bundle's signature would not survive a binary replaced inside it, which
 is one more reason signing is a release prerequisite (recorded
 [below](#limits-and-prerequisites)).
 
-What the swap does **not** update, as a provisional limit: the bundle's
-`Info.plist` stays the file the install script wrote. Its
-`CFBundleShortVersionString` and `CFBundleVersion` still name the
-installed version while the program itself reports the new one (`pane
---version`), and Finder's "Get Info" shows the plist's version, so the
-two disagree until the bundle is reinstalled from a package. Writing the
-new version's keys into the plist with the swap is an open choice
-recorded for the user.
+Once the new binary is in place, the swap also writes the new version
+into the bundle's `Info.plist`
+([#455](https://github.com/pane-app/pane/issues/455)): its
+`CFBundleShortVersionString` and `CFBundleVersion` name the version the
+program reports (`pane --version`), which is the one Finder's "Get Info"
+shows. Only those two values change; the rest of the plist stays as the
+install script wrote it. The new plist is written beside the old one and
+renamed over it. If it cannot be written, the update still counts (the
+program is already replaced), and the plist keeps the old version until
+the bundle is reinstalled from a package.
 
 ## The artifact source
 

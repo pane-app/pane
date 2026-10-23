@@ -898,9 +898,11 @@ reaches the network or Pane's published downloads.
    data was never touched.
 
 The bundle itself is never replaced: the same `Pane.app` keeps its
-identity. What the swap does not update (the `Info.plist` version keys)
-is a provisional limit recorded in the
-[installer](../installer.md#updating-pane-itself).
+identity. Since [#455](https://github.com/pane-app/pane/issues/455) the
+swap also writes the new version into the bundle's `Info.plist`, and the
+smoke checks that the plist is then the new package's own and that
+`plutil` reads `99.0.0` from it (see the
+[installer](../installer.md#updating-pane-itself)).
 
 Pane itself was never restarted by the update. The smoke stops the old
 process and starts the new program itself, exactly as the user would.

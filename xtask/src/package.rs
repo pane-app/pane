@@ -103,12 +103,13 @@ impl System {
     /// The one file this system's package holds besides the program, the
     /// install script and the README: Linux's desktop entry, which Windows'
     /// install script replaces with a Start-menu shortcut and macOS's
-    /// `Info.plist`, which its script builds the `Pane.app` bundle around.
-    fn extra_file(self) -> Option<(&'static str, String)> {
+    /// `Info.plist`, which its script builds the `Pane.app` bundle around and
+    /// which names the package's `version`.
+    fn extra_file(self, version: &str) -> Option<(&'static str, String)> {
         match self {
             System::Linux => Some(("pane.desktop", desktop_entry())),
             System::Windows => None,
-            System::Macos => Some(("Info.plist", app_plist())),
+            System::Macos => Some(("Info.plist", app_plist(version))),
         }
     }
 }
@@ -426,7 +427,7 @@ fn assemble_package(
     }
     fs::write(stage.join("README.txt"), readme(system, dev, version))
         .map_err(|error| error.to_string())?;
-    if let Some((file, contents)) = system.extra_file() {
+    if let Some((file, contents)) = system.extra_file(version.unwrap_or(VERSION)) {
         fs::write(stage.join(file), contents).map_err(|error| error.to_string())?;
     }
     let files = read_files(&stage, "")?;
@@ -677,11 +678,14 @@ Categories=Utility;\n"
 
 /// The `Info.plist` of the `Pane.app` bundle the install script builds:
 /// the minimum Launch Services reads — the executable to run, the bundle's
-/// identity and name, and its version. Nothing more is declared, because
-/// nothing more is honestly known: the bundle declares no document types,
-/// no services and no minimum system version this package has been checked
-/// against, and it is not signed.
-fn app_plist() -> String {
+/// identity and name, and its version: the package's, which the program
+/// reports too. Nothing more is declared, because nothing more is honestly
+/// known: the bundle declares no document types, no services and no
+/// minimum system version this package has been checked against, and it is
+/// not signed. An application update writes the new version into the
+/// installed bundle's copy (pane-core's `application_update`), so its
+/// layout is the one that code expects.
+fn app_plist(version: &str) -> String {
     format!(
         "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
 <!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n\
@@ -691,8 +695,8 @@ fn app_plist() -> String {
 \t<key>CFBundleIdentifier</key><string>dev.pane.launcher</string>\n\
 \t<key>CFBundleName</key><string>Pane</string>\n\
 \t<key>CFBundlePackageType</key><string>APPL</string>\n\
-\t<key>CFBundleShortVersionString</key><string>{VERSION}</string>\n\
-\t<key>CFBundleVersion</key><string>{VERSION}</string>\n\
+\t<key>CFBundleShortVersionString</key><string>{version}</string>\n\
+\t<key>CFBundleVersion</key><string>{version}</string>\n\
 </dict>\n\
 </plist>\n"
     )
