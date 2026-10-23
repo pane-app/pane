@@ -2441,6 +2441,8 @@ capture_until 602-corrupt-package.png error 60   # "Could not update Pane to 99.
 [ -e "$binary.old" ] && { echo "a failed install replaced the program"; exit 1; }
 cmp -s "$binary" "$unpack_old/pane/pane" || { echo "a failed install changed the program"; exit 1; }
 [ -e "$binary/../update" ] && { echo "a failed install left its staging behind"; exit 1; }
+bundle_plist=$update_home/Applications/Pane.app/Contents/Info.plist
+cmp -s "$bundle_plist" "$unpack_old/pane/Info.plist" || { echo "a failed install changed the bundle's Info.plist"; exit 1; }
 
 # The source works again; the row that stays tries again, and the update
 # is installed: the new binary takes the old one's name and place inside
@@ -2461,6 +2463,13 @@ check 603-installed.png success   # "Installed Pane 99.0.0; the new version is u
 cmp -s "$binary" "$unpack_new/pane/pane" || { echo "the new program was not installed"; exit 1; }
 cmp -s "$binary.old" "$unpack_old/pane/pane" || { echo "the old program was not kept out of the new one's way"; exit 1; }
 [ -e "$binary/../update" ] && { echo "the install left its staging behind"; exit 1; }
+# The bundle's Info.plist names the new version too (#455): only its
+# version keys changed, so it is now the new package's own plist, and
+# macOS reads the new version from it.
+cmp -s "$bundle_plist" "$unpack_new/pane/Info.plist" || { echo "the bundle's Info.plist does not name the new version"; exit 1; }
+[ "$(plutil -extract CFBundleShortVersionString raw -o - "$bundle_plist")" = "99.0.0" ] \
+  || { echo "macOS does not read 99.0.0 from the bundle's Info.plist"; exit 1; }
+[ -e "$bundle_plist.update" ] && { echo "the Info.plist rewrite left its file behind"; exit 1; }
 # The package was downloaded once for each attempt: the damaged one and
 # the one that installed.
 [ "$(grep -c "\.zip" "$out/update-artifact-server.log")" = 2 ] \

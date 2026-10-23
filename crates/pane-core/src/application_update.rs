@@ -31,7 +31,7 @@
 //! ([`crate::zip`], [`crate::archive::unpack_within`]).
 
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::defaults::{ArtifactSource, Failure, answer, failed, interrupted, with_retries};
 
@@ -86,6 +86,18 @@ impl Program {
     /// Where a chosen package's files are staged until the swap ends.
     fn staging(&self) -> PathBuf {
         self.folder.join(STAGING)
+    }
+
+    /// The `Info.plist` of the macOS application bundle the program runs
+    /// from, when it runs from one: the install script puts the program at
+    /// `Pane.app/Contents/MacOS/pane`, beside `Pane.app/Contents/Info.plist`.
+    /// A program anywhere else (Windows', Linux's) is in no bundle.
+    fn bundle_info(&self) -> Option<PathBuf> {
+        let contents = self.folder.parent()?;
+        let in_bundle = self.folder.file_name()? == "MacOS"
+            && contents.file_name()? == "Contents"
+            && contents.parent()?.extension()? == "app";
+        in_bundle.then(|| contents.join("Info.plist"))
     }
 
     /// Removes what earlier updates left in the install folder, as Pane
@@ -259,8 +271,10 @@ fn download(
 /// running program for the new one: the old program is renamed out of its
 /// way, the new one takes its name, and the staging folder goes. The new
 /// version is used the next time Pane starts; nothing of Pane's data is
-/// touched. On failure nothing is left behind: the staging folder goes,
-/// the running program is the one it was, and the user can try again.
+/// touched. For a program inside a macOS `Pane.app`, the bundle's
+/// `Info.plist` is then given the new version. On failure nothing is left
+/// behind: the staging folder goes, the running program is the one it
+/// was, and the user can try again.
 pub(crate) fn swap(package: &[u8], offer: &Offer, program: &Program) -> Result<(), String> {
     let staging = program.staging();
     // A staging folder a stopped Pane left, or another Pane holds, goes:
@@ -340,6 +354,17 @@ pub(crate) fn swap(package: &[u8], offer: &Offer, program: &Program) -> Result<(
     };
     let swapped = swap();
     let _ = fs::remove_dir_all(&staging);
+    // On macOS the program is replaced inside its `Pane.app`, whose
+    // `Info.plist` names the version Finder's "Get Info" shows: it is given
+    // the new version too, so the bundle and its program agree. The new
+    // program is already in place, so a plist that cannot be rewritten
+    // does not undo the update; it keeps naming the old version until the
+    // bundle is reinstalled from a package.
+    if swapped.is_ok()
+        && let Some(info) = program.bundle_info()
+    {
+        let _ = set_bundle_version(&info, &offer.version);
+    }
     swapped
 }
 
@@ -347,6 +372,58 @@ pub(crate) fn swap(package: &[u8], offer: &Offer, program: &Program) -> Result<(
 /// itself with.
 fn why_files(what: &str, error: std::io::Error) -> String {
     format!("{what} could not be replaced: {error}")
+}
+
+/// The `Info.plist` keys that name a bundle's version: the version Finder
+/// shows and the build's, both of which Pane's bundle sets to Pane's
+/// version (`xtask`'s `app_plist`).
+const BUNDLE_VERSION_KEYS: [&str; 2] = ["CFBundleShortVersionString", "CFBundleVersion"];
+
+/// Writes `version` into the bundle's `Info.plist` at `info`. The new plist
+/// is written beside it and renamed over it, so nothing ever reads half a
+/// plist; a plist that names no version is left as it is.
+fn set_bundle_version(info: &Path, version: &str) -> std::io::Result<()> {
+    let plist = fs::read_to_string(info)?;
+    let Some(rewritten) = with_bundle_version(&plist, version) else {
+        return Ok(());
+    };
+    let written = info.with_file_name("Info.plist.update");
+    let result = fs::write(&written, rewritten).and_then(|()| fs::rename(&written, info));
+    if result.is_err() {
+        let _ = fs::remove_file(&written);
+    }
+    result
+}
+
+/// `plist`, an XML property list, with the string each of
+/// [`BUNDLE_VERSION_KEYS`] it gives replaced by `version`; `None` when that
+/// changes nothing (a plist that gives neither key a string, or already
+/// names `version`). Only the values change, so the rest of the plist, its
+/// layout included, stays as the install script wrote it.
+fn with_bundle_version(plist: &str, version: &str) -> Option<String> {
+    let version = version
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;");
+    let mut rewritten = plist.to_owned();
+    for key in BUNDLE_VERSION_KEYS {
+        let tag = format!("<key>{key}</key>");
+        let Some(at) = rewritten.find(&tag) else {
+            continue;
+        };
+        let Some(value) = rewritten[at + tag.len()..]
+            .trim_start()
+            .strip_prefix("<string>")
+        else {
+            continue;
+        };
+        let Some(length) = value.find("</string>") else {
+            continue;
+        };
+        let start = rewritten.len() - value.len();
+        rewritten.replace_range(start..start + length, &version);
+    }
+    (rewritten != plist).then_some(rewritten)
 }
 
 /// Whether `asked` is a newer version than `current`: versions are dotted
@@ -553,5 +630,148 @@ mod tests {
         );
         let wrong = Offer::of(&Some(strange), "0.1.0", "windows-x86_64").unwrap_err();
         assert!(wrong.contains("not dotted numbers"), "{wrong}");
+    }
+
+    /// The `Info.plist` the macOS package carries for `version`, as
+    /// `xtask`'s `app_plist` writes it.
+    fn app_plist(version: &str) -> String {
+        format!(
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n\
+<plist version=\"1.0\">\n\
+<dict>\n\
+\t<key>CFBundleExecutable</key><string>pane</string>\n\
+\t<key>CFBundleIdentifier</key><string>dev.pane.launcher</string>\n\
+\t<key>CFBundleName</key><string>Pane</string>\n\
+\t<key>CFBundlePackageType</key><string>APPL</string>\n\
+\t<key>CFBundleShortVersionString</key><string>{version}</string>\n\
+\t<key>CFBundleVersion</key><string>{version}</string>\n\
+</dict>\n\
+</plist>\n"
+        )
+    }
+
+    #[test]
+    fn a_program_in_an_app_bundle_names_the_bundle_s_info_plist() {
+        let program = Program::at(PathBuf::from(
+            "/Users/u/Applications/Pane.app/Contents/MacOS/pane",
+        ))
+        .unwrap();
+        assert_eq!(
+            program.bundle_info(),
+            Some(PathBuf::from(
+                "/Users/u/Applications/Pane.app/Contents/Info.plist"
+            ))
+        );
+        // Windows' and Linux's programs, and a folder that only looks like
+        // a bundle's, are in no bundle.
+        for path in [
+            "/opt/pane/pane.exe",
+            "/home/u/.local/bin/pane",
+            "/Users/u/Pane/Contents/MacOS/pane",
+            "/Users/u/Pane.app/MacOS/pane",
+            "pane",
+        ] {
+            let program = Program::at(PathBuf::from(path)).unwrap();
+            assert_eq!(program.bundle_info(), None, "{path}");
+        }
+    }
+
+    #[test]
+    fn the_bundle_s_version_keys_are_given_the_new_version() {
+        assert_eq!(
+            with_bundle_version(&app_plist("0.1.0"), "0.2.0"),
+            Some(app_plist("0.2.0"))
+        );
+        // A key's string may follow it on the next line, as a plist Xcode
+        // writes has it.
+        let spread = "<dict>\n\t<key>CFBundleVersion</key>\n\t<string>7</string>\n\
+                      \t<key>CFBundleName</key>\n\t<string>Pane</string>\n</dict>\n";
+        assert_eq!(
+            with_bundle_version(spread, "0.2.0").as_deref(),
+            Some(
+                "<dict>\n\t<key>CFBundleVersion</key>\n\t<string>0.2.0</string>\n\
+                 \t<key>CFBundleName</key>\n\t<string>Pane</string>\n</dict>\n"
+            )
+        );
+        // A version is written as XML text.
+        assert_eq!(
+            with_bundle_version(&app_plist("0.1.0"), "1<&>"),
+            Some(app_plist("1&lt;&amp;&gt;"))
+        );
+        // Nothing to change: the version already named, no version keys,
+        // a key with no string after it, or a binary plist.
+        assert_eq!(with_bundle_version(&app_plist("0.2.0"), "0.2.0"), None);
+        assert_eq!(
+            with_bundle_version(
+                "<dict><key>CFBundleName</key><string>Pane</string></dict>",
+                "1"
+            ),
+            None
+        );
+        assert_eq!(
+            with_bundle_version("<key>CFBundleVersion</key><integer>1</integer>", "2"),
+            None
+        );
+        assert_eq!(with_bundle_version("bplist00\u{1}", "2"), None);
+    }
+
+    #[test]
+    fn an_update_inside_an_app_bundle_gives_its_info_plist_the_new_version() {
+        let folder = tempfile::tempdir().unwrap();
+        let contents = folder.path().join("Pane.app/Contents");
+        fs::create_dir_all(contents.join("MacOS")).unwrap();
+        fs::write(contents.join("MacOS/pane"), b"the 0.1.0 program").unwrap();
+        fs::write(contents.join("Info.plist"), app_plist("0.1.0")).unwrap();
+        let program = Program::at(contents.join("MacOS/pane")).unwrap();
+        // The macOS package is a zip, but the swap after unpacking is the
+        // same for every package: a tarball, which the tar writer makes,
+        // stands in for it.
+        let mut package = tar::Builder::new(flate2::write::GzEncoder::new(
+            Vec::new(),
+            flate2::Compression::default(),
+        ));
+        let new_program = b"the 0.2.0 program";
+        let mut header = tar::Header::new_gnu();
+        header.set_entry_type(tar::EntryType::Regular);
+        header.set_size(new_program.len() as u64);
+        header.set_mode(0o755);
+        header.set_cksum();
+        package
+            .append_data(&mut header, "pane/pane", &new_program[..])
+            .unwrap();
+        let package = package.into_inner().unwrap().finish().unwrap();
+        let offer = Offer {
+            version: "0.2.0".to_owned(),
+            file: "pane-0.2.0.tar.gz".to_owned(),
+            integrity: String::new(),
+            size: package.len() as u64,
+        };
+        swap(&package, &offer, &program).unwrap();
+        assert_eq!(fs::read(program.path()).unwrap(), new_program);
+        assert_eq!(
+            fs::read_to_string(contents.join("Info.plist")).unwrap(),
+            app_plist("0.2.0")
+        );
+        // The plist was renamed into place: nothing else is left in the
+        // bundle but the old program, which a later start removes.
+        let mut left: Vec<_> = fs::read_dir(&contents)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+            .collect();
+        left.sort();
+        assert_eq!(left, ["Info.plist", "MacOS"]);
+        assert!(program.old().is_file());
+        // A failed update leaves the plist naming the version installed.
+        let broken = Offer {
+            version: "0.3.0".to_owned(),
+            file: "pane-0.3.0.tar.gz".to_owned(),
+            ..offer
+        };
+        assert!(swap(b"not a tarball", &broken, &program).is_err());
+        assert_eq!(
+            fs::read_to_string(contents.join("Info.plist")).unwrap(),
+            app_plist("0.2.0")
+        );
     }
 }
