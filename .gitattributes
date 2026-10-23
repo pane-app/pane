@@ -9,3 +9,6 @@ crates/pane-core/assets/reicon/index.tsv text eol=lf
 # The tray's icons (crates/pane-core/assets/tray), embedded in the program
 # byte for byte.
 crates/pane-core/assets/tray/* binary
+# The application's icons (crates/pane/assets/app), embedded in pane.exe and
+# packed into Pane.app byte for byte.
+crates/pane/assets/app/* binary

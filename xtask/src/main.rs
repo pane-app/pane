@@ -86,6 +86,7 @@
 mod api_versions;
 mod cli_packages;
 mod js_guests;
+mod notices;
 mod package;
 mod release_notes;
 mod wit_guard;
