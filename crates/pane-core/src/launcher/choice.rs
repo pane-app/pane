@@ -24,8 +24,11 @@
 //!
 //! First setup's choice of the official extensions (#283, ADR 0045) is
 //! the same screen over the default extensions' pins: each listed with
-//! the title and description its pin gives (nothing is fetched to list
-//! them), all of them ticked — they are the defaults — and the Set Up
+//! the title and description its pin gives (the list waits for no
+//! fetch), and with its own icon once its pinned revision, fetched in the
+//! background as the list opens, lands (#466, `prefetch`; a first-letter
+//! tile until then, and where it cannot be fetched), all of them
+//! ticked — they are the defaults — and the Set Up
 //! row after them, selected, so Enter sets the defaults up. Activating an
 //! extension's row ticks or unticks it, as Space does; Set Up records the
 //! choice (what was unticked is declined) and returns to root search,
@@ -238,8 +241,12 @@ impl Listed {
     /// First setup's choice of the official extensions `pins` names, the
     /// default extensions this system sets up (#283): each listed by what
     /// its pin says — its title, its description and the release it sets
-    /// up — before anything is fetched, with a first-letter tile.
-    pub(in crate::launcher) fn first_setup(pins: &[crate::defaults::DefaultExtension]) -> Listed {
+    /// up — before anything is fetched, with the icon its fetched revision
+    /// names (`icon`, #466) or, until it lands, a first-letter tile.
+    pub(in crate::launcher) fn first_setup(
+        pins: &[crate::defaults::DefaultExtension],
+        icon: impl Fn(&str) -> Option<Icon>,
+    ) -> Listed {
         Listed {
             of: Of::FirstSetup,
             title: FIRST_SETUP_TITLE.into(),
@@ -254,7 +261,7 @@ impl Listed {
                     title: pin.title.clone(),
                     description: pin.description.clone(),
                     version: Some(pin.tag.trim_start_matches('v').to_owned()),
-                    icon: Icon::letter_of(&pin.title),
+                    icon: icon(&pin.id).unwrap_or_else(|| Icon::letter_of(&pin.title)),
                 })
                 .collect(),
         }
@@ -545,9 +552,45 @@ impl Launcher {
             .map(|(extension, _)| extension.id.clone())
             .collect();
         state.first_setup.choose(&declined);
+        // What the list fetched of a declined default goes (#466).
+        state.prefetches.decline(&declined);
         state.view.status = Status::Idle;
         self.show_root(state, None);
         Pending::FirstSetup(declined)
+    }
+
+    /// Draws `icon`, the one its fetched revision names, on the row of the
+    /// default `id` of first setup's choice (#466), while the choice is
+    /// on screen: in place, the rows in their order, their ticks and the
+    /// selection kept. Whether the screen changed.
+    pub(in crate::launcher) fn show_first_setup_icon(
+        &self,
+        state: &mut State,
+        id: &str,
+        icon: Icon,
+    ) -> bool {
+        if !matches!(state.view.screen, Screen::Choice(_)) {
+            return false;
+        }
+        let Some(extension) = state
+            .choice
+            .as_mut()
+            .filter(|choice| choice.is_first_setup())
+            .and_then(|choice| {
+                choice
+                    .extensions
+                    .iter_mut()
+                    .find(|extension| extension.id == id)
+            })
+        else {
+            return false;
+        };
+        if extension.icon == icon {
+            return false;
+        }
+        extension.icon = icon;
+        self.choice_view(state);
+        true
     }
 
     /// The id of the extension of the open choice whose row is selected,

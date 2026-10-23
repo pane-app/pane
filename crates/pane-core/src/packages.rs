@@ -3041,7 +3041,14 @@ impl ListedExtension {
     /// The extension `entry` of the collection at `root`: its own
     /// manifest's title, description, version and icon, read leniently.
     pub(crate) fn of(root: &Path, entry: &crate::collections::Extension) -> ListedExtension {
-        let subfolder = root.join(&entry.path);
+        ListedExtension::at(&root.join(&entry.path))
+    }
+
+    /// The extension whose package is the folder `subfolder` — one of a
+    /// collection's, or a repository holding one extension at its root,
+    /// as a default extension's does (#466): its own manifest's title,
+    /// description, version and icon, read leniently.
+    pub(crate) fn at(subfolder: &Path) -> ListedExtension {
         let manifest: Option<serde_json::Value> = fs::read_to_string(subfolder.join(MANIFEST_FILE))
             .ok()
             .and_then(|text| serde_json::from_str(&text).ok());
@@ -3060,7 +3067,7 @@ impl ListedExtension {
                 .as_ref()
                 .and_then(|manifest| manifest.get("icon"))
                 .and_then(crate::icons::read)
-                .and_then(|icon| icon.resolved(&subfolder)),
+                .and_then(|icon| icon.resolved(subfolder)),
         }
     }
 }

@@ -66,6 +66,7 @@ mod launching;
 mod network;
 mod own_actions;
 mod pane_form;
+mod prefetch;
 mod presentation;
 mod programs;
 mod providers;
@@ -980,6 +981,9 @@ struct State {
     /// is made, which defaults the user declined, and whether it was asked
     /// this session (see `acquire`).
     first_setup: acquire::FirstSetup,
+    /// The official extensions' revisions first setup's list fetched as
+    /// it opened (#466), for its icons and for Set Up (see `prefetch`).
+    prefetches: prefetch::Prefetches,
     /// Pane's own update: what the last check found, and what is running
     /// now (see `application_update`).
     updates: Updates,
@@ -1892,6 +1896,7 @@ impl Launcher {
             quick_slots: quick_slots::Kept::default(),
             acquisitions: Acquisitions::default(),
             first_setup,
+            prefetches: prefetch::Prefetches::default(),
             updates: Updates::default(),
             crash: crash_notice::Notice::default(),
             clipboard_records: clipboard_view::Projected::default(),

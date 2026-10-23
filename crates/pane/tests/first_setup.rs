@@ -2,7 +2,9 @@
 //! window, on GPUI's test platform, with real key events: on a fresh data
 //! folder Pane opens on the official extensions this system sets up, each
 //! row drawn with its title, its description and its check mark, every
-//! default ticked and the Set Up row selected; Space and the check mark
+//! default ticked and the Set Up row selected, and an extension's own
+//! icon drawn once its revision, fetched as the list opens, lands
+//! (#466); Space and the check mark
 //! untick one, the row's own Enter ticks it back, and Enter on Set Up
 //! sets up what stays ticked, back at root search, the unticked one
 //! declined. The defaults' repositories are made from the samples and
@@ -166,6 +168,18 @@ fn first_setup_lists_the_official_extensions_ticked_and_sets_up_what_stays_ticke
         view.rows[2].subtitle.as_deref(),
         Some("Set up the 2 ticked extensions")
     );
+    // Each pinned revision is fetched as the list opens (#466): the window
+    // draws the icon the icons sample's own manifest names once it lands,
+    // in place, the selection kept.
+    let view = until(&window, cx, |view| match &view.screen {
+        Screen::Choice(choice) => matches!(
+            choice.extensions[0].icon.source,
+            pane_core::IconSource::Image { .. }
+        ),
+        _ => false,
+    });
+    assert_eq!(view.selected, Some(2));
+    assert!(cx.debug_bounds("row-Icons sample").is_some());
 
     // Space unticks the extension selected; the row's own Enter ticks it
     // again, and the check mark unticks it once more.
