@@ -362,6 +362,7 @@ mod windows {
         for presses in [5, 4] {
             let before = in_front(launcher);
             let started = Instant::now();
+            let wall = std::time::SystemTime::now();
             for _ in 0..presses {
                 press(binding);
                 std::thread::sleep(Duration::from_millis(30));
@@ -371,7 +372,7 @@ mod windows {
             let after = in_front(launcher);
             let hidden_now = !visible(launcher);
             report.log(format!(
-                "burst of {presses} from {} ({} presses reached the window): {}",
+                "burst of {presses} at {wall:?} from {} ({} presses reached the window): {}",
                 if before { "shown" } else { "hidden" },
                 arrived(started).0,
                 if after {

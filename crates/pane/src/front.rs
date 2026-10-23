@@ -140,6 +140,7 @@ mod windows {
             } else {
                 attached(hwnd)
             };
+            let switched = started.elapsed();
             let front = GetForegroundWindow() == hwnd;
             if front {
                 // This thread's own idea of its active window and focus,
@@ -149,7 +150,8 @@ mod windows {
                 let _ = SetFocus(Some(hwnd));
             }
             eprintln!(
-                "[467 trace] take_foreground: {path}, in front {front}, {:?}",
+                "[467 trace] {:?} take_foreground: {path}, in front {front}, {switched:?} then {:?}",
+                std::time::SystemTime::now(),
                 started.elapsed()
             );
             front
