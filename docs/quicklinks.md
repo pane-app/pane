@@ -185,8 +185,10 @@ further ranking belongs to "Root search like Raycast" (#122).
 The action is **open** (`wit/applications.wit`, `indexed-action.open`).
 Pane, not the extension, opens the target with the system's `open` (the
 same one the `system.open` host function uses), with the quicklink's
-application if it has one. The status reads "Opened Docs" or "Could not
-open Docs: <reason>", and root search keeps its query.
+application if it has one. Once it opens, the launcher closes, and root
+search is shown next time with its query empty (#468). If it does not
+open, the status reads "Could not open Docs: <reason>", and root search
+keeps its query.
 
 A quick slot holds a quicklink by its id under Search Quicklinks
 (`{"command": "<key>#quicklinks", "result": "3"}`), so it survives a

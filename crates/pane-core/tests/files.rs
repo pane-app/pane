@@ -553,7 +553,9 @@ fn a_granted_folder_is_searched_and_a_found_file_opened() {
     let opened = pane.opener.files();
     assert_eq!(opened.len(), 1);
     assert!(same_file(&opened[0], &fixture.file("Résumé plan ü.txt")));
-    assert_eq!(launcher.view().query(), Some("plan"), "root search stays");
+    // The launcher closed, back on root search with its query empty, as
+    // Raycast pops to root after an open (#468).
+    assert_eq!(launcher.view().query(), Some(""), "root search is reset");
 
     // Words may be in the folders below the granted one; case is ignored.
     search(&launcher, "NOTES todo");

@@ -424,8 +424,8 @@ The applications phase:
    applications to root search as the [Applications](../applications.md)
    default extension does.
 3. Types "pane smoke" with real X11 key events and checks the selected row.
-4. Presses Return and checks "Opened Launch Pane Smoke App" and that the
-   marker was written.
+4. Presses Return and checks that the marker was written; the launcher
+   closed (#468), which the screenshot shows.
 
 Run locally on 2026-09-28 on the tested combination: all checks of the
 whole smoke passed. The adapter tests also run a desktop entry's program

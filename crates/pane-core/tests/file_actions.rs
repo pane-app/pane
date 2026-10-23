@@ -349,6 +349,12 @@ impl Pane {
         self.window.hides() > 0
     }
 
+    /// Whether the launcher is back on root search with its query empty,
+    /// as an open that handed the user off leaves it (#468).
+    fn popped_to_root(&self) -> bool {
+        self.launcher.view().query() == Some("")
+    }
+
     /// What the HUDs shown since the row was selected said.
     fn huds(&self) -> Vec<String> {
         self.window
@@ -394,8 +400,11 @@ fn a_documents_actions_act_through_the_system_and_close_the_window(fixture: &'st
         "not the status line"
     );
     assert!(pane.closed());
+    assert!(pane.popped_to_root(), "{:?}", pane.launcher.view().screen);
 
     // Ctrl+Enter shows it in the file manager.
+    pane.open();
+    pane.search("todo");
     pane.select("todo.txt");
     block_on(pane.launcher.run_selected_action(1));
     match pane.system.take().as_slice() {
@@ -404,8 +413,12 @@ fn a_documents_actions_act_through_the_system_and_close_the_window(fixture: &'st
     }
     assert_eq!(pane.huds(), [format!("Showed todo.txt in {}", manager())]);
     assert!(pane.closed());
+    assert!(pane.popped_to_root());
 
-    // Copy Path and Copy File copy, close the window and say so.
+    // Copy Path and Copy File copy, close the window and say so, leaving
+    // the screen as it was.
+    pane.open();
+    pane.search("todo");
     pane.select("todo.txt");
     pane.run("Copy Path");
     match pane.system.take().as_slice() {
@@ -425,6 +438,7 @@ fn a_documents_actions_act_through_the_system_and_close_the_window(fixture: &'st
         .collect();
     assert_eq!(huds, ["Copied to Clipboard"]);
     assert!(pane.closed());
+    assert!(!pane.popped_to_root(), "a copy stays on the screen");
     // Copy Name copies the name alone (#177).
     pane.select("todo.txt");
     pane.run("Copy Name");
@@ -480,6 +494,7 @@ fn a_documents_actions_act_through_the_system_and_close_the_window(fixture: &'st
     }
     assert_eq!(pane.huds(), ["Opened todo.txt with Notepad"]);
     assert!(pane.closed());
+    assert!(pane.popped_to_root());
     assert!(pane.opener.take().is_empty());
 }
 
@@ -544,8 +559,9 @@ fn move_to_recycle_bin_is_confirmed_first(fixture: &'static Package) {
 
 /// Checks that the selected row, the program or script named `name` at
 /// `path`, is revealed by Enter, offers Open With… on Ctrl+Enter and runs
-/// only through Run.
-fn a_program_runs_only_through_run(pane: &Pane, name: &str, path: &Path) {
+/// only through Run. Revealing it returns to root search (#468):
+/// `again` lists the row again.
+fn a_program_runs_only_through_run(pane: &Pane, name: &str, path: &Path, again: &dyn Fn()) {
     pane.select(name);
     assert_eq!(
         pane.actions(),
@@ -569,9 +585,11 @@ fn a_program_runs_only_through_run(pane: &Pane, name: &str, path: &Path) {
     }
     assert!(pane.opener.take().is_empty(), "Enter ran nothing");
     assert!(pane.closed());
+    assert!(pane.popped_to_root());
 
     // Ctrl+Enter is Open With…, a submenu the window opens: the launcher
     // runs nothing.
+    again();
     pane.select(name);
     assert!(pane.launcher.item_actions().unwrap().actions[1].submenu);
     block_on(pane.launcher.run_selected_action(1));
@@ -586,6 +604,7 @@ fn a_program_runs_only_through_run(pane: &Pane, name: &str, path: &Path) {
     assert!(same_file(&ran[0], path));
     assert_eq!(pane.huds(), [format!("Ran {name}")]);
     assert!(pane.closed());
+    assert!(pane.popped_to_root());
 }
 
 fn enter_never_runs_a_program_in_search_files(fixture: &'static Package) {
@@ -593,7 +612,10 @@ fn enter_never_runs_a_program_in_search_files(fixture: &'static Package) {
     pane.open();
     pane.search("run plan");
     let path = pane.folder.file("notes/run plan.bat");
-    a_program_runs_only_through_run(&pane, "run plan.bat", &path);
+    a_program_runs_only_through_run(&pane, "run plan.bat", &path, &|| {
+        pane.open();
+        pane.search("run plan");
+    });
     // A script known by its executable bit alone: its row, told from its
     // name, has a document's actions (the index reads no file to list
     // it), but the check before Enter acts finds the bit, so Enter shows
@@ -637,9 +659,13 @@ fn root_searchs_file_results_have_the_same_actions(fixture: &'static Package) {
     // A program: Enter reveals it.
     pane.search("run plan");
     let path = pane.folder.file("notes/run plan.bat");
-    a_program_runs_only_through_run(&pane, "run plan.bat", &path);
+    a_program_runs_only_through_run(&pane, "run plan.bat", &path, &|| {
+        pane.launcher.show_root_search();
+        pane.search("run plan");
+    });
 
-    // A document: Enter opens it, root search keeping its query. The
+    // A document: Enter opens it, and root search's query is emptied
+    // (#468). The
     // files come after the commands, under "Files", with the row opening
     // the command with the query typed.
     pane.launcher.show_root_search();
@@ -669,7 +695,7 @@ fn root_searchs_file_results_have_the_same_actions(fixture: &'static Package) {
     let opened = pane.opener.take();
     assert_eq!(opened.len(), 1);
     assert!(same_file(&opened[0], &pane.folder.file("notes/todo.txt")));
-    assert_eq!(pane.launcher.view().query(), Some("todo"));
+    assert!(pane.popped_to_root());
     assert!(pane.closed());
 }
 

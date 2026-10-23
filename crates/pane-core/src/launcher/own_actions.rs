@@ -345,6 +345,10 @@ enum Ended {
     /// It acted: the window closes and a HUD says `.0`, as the standard
     /// actions' do.
     Hud(String),
+    /// It opened the file or folder, or showed it in the file manager,
+    /// handing the user off to it: as [`Ended::Hud`], and root search
+    /// returns with its query empty (#468, see `close_after_opening`).
+    Opened(String),
     /// It did nothing (the user did not confirm, or the paste closed the
     /// window itself): nothing more is said.
     Quiet,
@@ -375,8 +379,8 @@ impl Launcher {
                     })
                     .await;
                 match opened {
-                    Ok(false) => Ended::Hud(format!("Opened {name}")),
-                    Ok(true) => Ended::Hud(format!("Showed {name} in {manager}")),
+                    Ok(false) => Ended::Opened(format!("Opened {name}")),
+                    Ok(true) => Ended::Opened(format!("Showed {name} in {manager}")),
                     Err(why) => Ended::Failed(format!("Could not open {name}: {why}")),
                 }
             }
@@ -387,7 +391,7 @@ impl Launcher {
                     .on_file(&file, false, move |path| links.open_file(&path))
                     .await
                 {
-                    Ok(()) => Ended::Hud(format!("Opened {name}")),
+                    Ok(()) => Ended::Opened(format!("Opened {name}")),
                     Err(why) => Ended::Failed(format!("Could not open {name}: {why}")),
                 }
             }
@@ -398,7 +402,7 @@ impl Launcher {
                     .on_file(&file, true, move |path| links.open_file(&path))
                     .await
                 {
-                    Ok(()) => Ended::Hud(format!("Ran {name}")),
+                    Ok(()) => Ended::Opened(format!("Ran {name}")),
                     Err(why) => Ended::Failed(format!("Could not run {name}: {why}")),
                 }
             }
@@ -410,7 +414,7 @@ impl Launcher {
                     .on_file(&file, true, move |path| system.reveal(&path))
                     .await
                 {
-                    Ok(()) => Ended::Hud(format!("Showed {name} in {manager}")),
+                    Ok(()) => Ended::Opened(format!("Showed {name} in {manager}")),
                     Err(why) => Ended::Failed(format!("Could not show {name} in {manager}: {why}")),
                 }
             }
@@ -435,7 +439,7 @@ impl Launcher {
                     })
                     .await;
                 match opened {
-                    Ok(()) => Ended::Hud(format!("Opened {name} with {app}")),
+                    Ok(()) => Ended::Opened(format!("Opened {name} with {app}")),
                     Err(why) => Ended::Failed(format!("Could not open {name} with {app}: {why}")),
                 }
             }
@@ -609,17 +613,21 @@ impl Launcher {
     }
 
     /// Says how one of Pane's own actions ended: after one that acted, the
-    /// window closes and a HUD says what it did; what failed is said on the
+    /// window closes and a HUD says what it did, and after one that opened
+    /// something root search returns too; what failed is said on the
     /// screen of `epoch` if it is still on display.
     fn end_own(&self, epoch: u64, ended: Ended) {
         if let Some(mut state) = self.lock_if_current(epoch) {
-            state.view.status = match &ended {
-                Ended::Failed(why) => Status::Error(why.clone()),
-                Ended::Hud(_) | Ended::Quiet => Status::Idle,
-            };
+            match &ended {
+                Ended::Opened(_) => self.close_after_opening(&mut state),
+                Ended::Failed(why) => state.view.status = Status::Error(why.clone()),
+                Ended::Hud(_) | Ended::Quiet => state.view.status = Status::Idle,
+            }
         }
         match ended {
-            Ended::Hud(title) => self.show_hud(Hud::new(ToastStyle::Success, title)),
+            Ended::Hud(title) | Ended::Opened(title) => {
+                self.show_hud(Hud::new(ToastStyle::Success, title))
+            }
             Ended::Quiet | Ended::Failed(_) => self.changed(),
         }
     }

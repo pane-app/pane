@@ -814,13 +814,12 @@ focus_launcher
 "$xdotool" type --delay 50 'pane smoke'; sleep 3
 capture 44-application.png
 check 44-application.png selected 3000   # the selected application row
-# The answer is a toast, which leaves the footer 3 seconds after it shows
-# (#249): it is captured as it shows, not after a fixed wait that outlasts it.
-"$xdotool" key Return
-capture_until 45-opened.png success 10   # "Opened Launch Pane Smoke App"
+# Opening it hands the user off to it: the launcher closes, as Raycast's
+# does (#468), and says nothing more.
+"$xdotool" key Return; sleep 3
+capture 45-opened.png   # evidence only: the window is hidden
 for _ in $(seq 50); do [ -f "$apps/launched" ] && break; sleep 0.2; done
 [ -f "$apps/launched" ] || { echo "the application did not run"; exit 1; }
-python3 "$(dirname "$0")/check_screenshot.py" --distinct "$out"/{44-application,45-opened}.png
 stop_pane
 
 # A web address an extension opens reaches the system's link handler:

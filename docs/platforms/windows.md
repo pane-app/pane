@@ -239,7 +239,8 @@ The smoke's last phase (screenshots 44 and 45):
    applications to root search as the [Applications](../applications.md)
    default extension does.
 3. Types "pane smoke", checks the selected row and presses Enter.
-4. Checks "Opened Launch Pane Smoke App" and the marker.
+4. Checks the marker, and that the launcher closed (#468): Pane's window
+   is no longer in front.
 
 The adapter tests open such a shortcut too.
 
