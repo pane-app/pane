@@ -31,6 +31,8 @@ enum ToPreview {
 /// repository holding a collection opens the choice of its extensions
 /// (#308). `pane --version` prints Pane's version and exits without opening
 /// a window, so an installation can check what it installed.
+/// `pane --launch-at-login` turns on Settings' "Launch Pane at login" as Pane
+/// starts (see [`launch_at_login_asked`]).
 fn package_to_preview() -> Option<ToPreview> {
     let mut args = std::env::args_os().skip(1);
     while let Some(arg) = args.next() {
@@ -57,6 +59,18 @@ fn package_to_preview() -> Option<ToPreview> {
         }
     }
     None
+}
+
+/// Whether Pane was started with `--launch-at-login`: Pane's Windows setup
+/// starts it so when the user ticks "Start Pane when I sign in" (#463), and
+/// Pane then takes that choice as the General page's switch takes it — the
+/// login registration and the settings record together — rather than the
+/// setup registering Pane behind the setting's back, which the start-time
+/// reconciliation would undo.
+fn launch_at_login_asked() -> bool {
+    std::env::args_os()
+        .skip(1)
+        .any(|arg| arg == "--launch-at-login")
 }
 
 /// For the native smoke of the system functions: reveals the file
@@ -101,6 +115,7 @@ fn main() {
         pane_core::system::selected::serve();
     }
     let preview = package_to_preview();
+    let launch_at_login = launch_at_login_asked();
     // Pane's own log and crash record (#133), before anything else can
     // write a diagnostic or panic: the log keeps what standard error says,
     // and the record tells whether the run before ended unexpectedly.
@@ -367,6 +382,13 @@ fn main() {
             })
         })
         .expect("failed to open the Pane window");
+        // The setup's "Start Pane when I sign in" (`--launch-at-login`),
+        // taken once the window exists: its constructor attached the
+        // launcher to the settings, resolving a fresh data folder's Open
+        // Pane hotkey, which the choice's save then records.
+        if launch_at_login {
+            pane::settings::choose_launch_at_login(cx);
+        }
         // The opt-in native smoke of the HUD (scripts/smoke-windows-hud.ps1)
         // has a development build show one at once, over the application
         // in front.

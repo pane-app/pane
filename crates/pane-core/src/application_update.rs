@@ -320,7 +320,8 @@ fn sha256_of(text: &[u8]) -> Option<String> {
 /// way, the new one takes its name, and the staging folder goes. The new
 /// version is used the next time Pane starts; nothing of Pane's data is
 /// touched. For a program inside a macOS `Pane.app`, the bundle's
-/// `Info.plist` is then given the new version. On failure nothing is left
+/// `Info.plist` is then given the new version, and for a Windows program
+/// Pane's setup installed, its entry in Settings > Apps. On failure nothing is left
 /// behind: the staging folder goes, the running program is the one it
 /// was, and the user can try again.
 pub(crate) fn swap(package: &[u8], offer: &Offer, program: &Program) -> Result<(), String> {
@@ -413,8 +414,40 @@ pub(crate) fn swap(package: &[u8], offer: &Offer, program: &Program) -> Result<(
     {
         let _ = set_bundle_version(&info, &offer.version);
     }
+    // On Windows, a Pane the setup installed has an entry in Settings >
+    // Apps naming the version the setup installed (#463): it is given the
+    // new version too, when the entry is this program's (a zip copy
+    // elsewhere leaves the setup's entry alone), so Apps names the version
+    // that runs. As with the plist, an entry that cannot be rewritten does
+    // not undo the update.
+    #[cfg(windows)]
+    if swapped.is_ok() {
+        let _ = apps_entry::set_version(apps_entry::KEY, &program.folder, &offer.version);
+    }
     swapped
 }
+
+/// Whether an Apps entry whose `InstallLocation` is `location` is the one
+/// of the program in `folder`: the same folder, compared as Windows compares
+/// paths (letter case aside) and with or without the trailing separator
+/// Inno Setup writes.
+#[cfg(any(windows, test))]
+fn installed_in(location: &str, folder: &Path) -> bool {
+    let trimmed = |path: &str| path.trim_end_matches(['\\', '/']).to_lowercase();
+    !location.trim().is_empty() && trimmed(location) == trimmed(&folder.to_string_lossy())
+}
+
+/// The major and minor numbers of `version`, as Inno Setup writes them in
+/// an Apps entry (`MajorVersion`, `MinorVersion`); `None` when the version
+/// does not begin with two numbers.
+#[cfg(any(windows, test))]
+fn major_minor(version: &str) -> Option<(u32, u32)> {
+    let mut numbers = version.split('.').map(|part| part.parse::<u32>().ok());
+    Some((numbers.next()??, numbers.next()??))
+}
+
+#[cfg(windows)]
+mod apps_entry;
 
 /// Why a file could not be changed, in the wording the failure explains
 /// itself with.
@@ -833,6 +866,32 @@ mod tests {
             fs::read_to_string(contents.join("Info.plist")).unwrap(),
             app_plist("0.2.0")
         );
+    }
+
+    #[test]
+    fn an_apps_entry_is_this_program_s_when_it_names_its_folder() {
+        let folder = Path::new(r"C:\Users\u\AppData\Local\Pane");
+        // As Inno Setup writes it, with its trailing separator, and in any
+        // letter case.
+        assert!(installed_in(r"C:\Users\u\AppData\Local\Pane\", folder));
+        assert!(installed_in(r"c:\users\u\appdata\local\pane", folder));
+        // Another folder, one inside it, or none at all.
+        assert!(!installed_in(r"C:\Users\u\Downloads\pane\", folder));
+        assert!(!installed_in(
+            r"C:\Users\u\AppData\Local\Pane\data\",
+            folder
+        ));
+        assert!(!installed_in("", folder));
+        assert!(!installed_in("  ", Path::new("")));
+    }
+
+    #[test]
+    fn an_apps_entry_s_major_and_minor_are_the_version_s_first_numbers() {
+        assert_eq!(major_minor("0.2.0"), Some((0, 2)));
+        assert_eq!(major_minor("12.3"), Some((12, 3)));
+        assert_eq!(major_minor("99.0.0.1"), Some((99, 0)));
+        assert_eq!(major_minor("1"), None);
+        assert_eq!(major_minor("1.x"), None);
     }
 
     #[test]

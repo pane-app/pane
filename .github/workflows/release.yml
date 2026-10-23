@@ -3,7 +3,8 @@ name: Release
 # Drafts a prerelease of Pane when a version tag (`v*`) is pushed: the
 # three packages the Package jobs build (windows-x86_64, macos-aarch64,
 # linux-x86_64), each with its .sha256, named as Pane's updater looks for
-# them (ADR 0048); the source archive (the tag's tree and every crate its
+# them (ADR 0048); the Windows setup, Pane-Setup-<version>.exe, with its
+# .sha256 (#463); the source archive (the tag's tree and every crate its
 # Cargo.lock pins, scripts/release-source.sh) with its .sha256; and the
 # release notes from .github/release-notes.md. The release is created as
 # a draft and a prerelease and never published here: a person reviews the

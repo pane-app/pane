@@ -15,7 +15,9 @@ internet-first setup the specification chose
 ## Installing Pane
 
 Each system has its own package: a `.tar.gz` for Linux and a `.zip` for
-Windows and macOS. Every install is for one user and needs no root or
+Windows and macOS. Windows also has a setup, `Pane-Setup-<version>.exe`,
+which installs Pane as other Windows apps install; the zip stays as the
+portable download. Every install is for one user and needs no root or
 administrator rights. Nothing is signed yet, so Windows and macOS may warn
 or block at first; each section below says how to answer that.
 
@@ -49,7 +51,60 @@ libfontconfig1 libfreetype6 libvulkan1
 To uninstall, remove the two files. Pane's own data stays in
 `~/.local/share/pane`.
 
-### Installing on Windows
+### Installing on Windows with the setup
+
+Run `Pane-Setup-<version>.exe` from the release
+([#463](https://github.com/pane-app/pane/issues/463)). It is an Inno Setup
+installer (`scripts/setup-windows.iss`) and installs for the user who runs
+it, with no administrator prompt (`PrivilegesRequired=lowest`):
+
+- `pane.exe`, `LICENSE.txt` and `THIRD-PARTY-NOTICES.txt` go to
+  `%LOCALAPPDATA%\Pane`, the folder `install.ps1` has always installed to,
+  so a setup run over an install the script made replaces it in place. The
+  first install lets the user choose another folder; an upgrade keeps the
+  folder of the install it upgrades.
+- A `Pane` shortcut goes to the user's Start menu, the same
+  `Pane.lnk` the script makes.
+- An entry in Settings → Apps: Pane, by pane-app, with its version and
+  Pane's icon, from which Pane is uninstalled. It is the current user's
+  `Uninstall` key for the setup's AppId,
+  `{0737054E-4FDB-4FAD-8AD1-20C980B0C16E}_is1`. The AppId never changes:
+  every version's setup finds an earlier install by it.
+- An optional task, **Start Pane when I sign in**, unticked by default.
+  Ticked, the setup starts Pane with `--launch-at-login`, which turns on
+  Settings' **Launch Pane at login** exactly as its switch does: Pane
+  records the choice and registers itself in the `Run` key (see
+  [autostart](../crates/pane-core/src/autostart.rs)). The setup writes no
+  registration of its own, which Pane's start-time reconciliation would
+  remove as one the user did not choose. The task is never carried over
+  from an earlier install, since the choice is Pane's setting from then on.
+- When it finishes, the setup starts Pane (a checkbox on its last page).
+
+A setup run over a running Pane closes it first, through Windows' Restart
+Manager: Pane takes the end of its session as a clean quit, and one that
+does not end is ended (`CloseApplications=force`). That includes a Pane
+still running as `pane.exe.old` after an in-app update. Pane's data is in
+`%LOCALAPPDATA%\Pane\data` whichever folder the program is in, and the
+setup never writes there, so an upgrade keeps the extensions, their
+settings and Pane's own settings.
+
+Uninstalling (Settings → Apps, or `unins000.exe` in the install folder)
+closes a Pane running from the install, removes the program, the shortcut,
+the Apps entry and Pane's sign-in registration when it starts this
+install, and then asks whether to remove Pane's data too
+(`%LOCALAPPDATA%\Pane\data`, `cache` and `logs`). No is the default, and a
+silent uninstall's answer, so the data is kept for a later install.
+
+For a silent install, as an administrator's script would run it:
+
+```powershell
+Pane-Setup-<version>.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART [/DIR="<folder>"] [/TASKS=startatsignin]
+"%LOCALAPPDATA%\Pane\unins000.exe" /VERYSILENT /SUPPRESSMSGBOXES /NORESTART
+```
+
+A silent install starts Pane only with the sign-in task.
+
+### Installing on Windows from the zip
 
 ```powershell
 Expand-Archive pane-<version>-windows-<arch>.zip        # or unzip in Explorer
@@ -187,6 +242,18 @@ runs on, and the assets a release of Pane carries for it:
   These names are what Pane's updater looks for in a release. The release
   workflow uploads this folder; the smokes serve it from this computer
   instead. Each system's run of its own task builds its own.
+- On Windows, `release/` also holds the setup, `Pane-Setup-<version>.exe`,
+  and its `.sha256`. `package-windows` runs Inno Setup 6's compiler
+  (`ISCC.exe`: the one the `ISCC` variable names, else the one on the
+  PATH or where Inno Setup installs itself) over
+  `scripts/setup-windows.iss` and the program, licence and notices staged
+  for the zip, stamping the setup with the package's version. Without the
+  compiler the task stops and says how to get it (`winget install
+  JRSoftware.InnoSetup`). CI installs Inno Setup 6.7.1, pinned by its
+  digest. A `--dev` package has no setup: the smokes install the zip, and
+  a development program is too large to compress for nothing. The setup
+  is not the same bytes from build to build (the compiler stamps it), so
+  its `.sha256` is for checking a download, not for reproducing one.
 
 ### Build options
 
@@ -552,7 +619,8 @@ the install failed, so Enter tries again
 The old version's data is never touched. Pane's data and caches live
 where each system keeps them:
 
-- Windows: `data\` and `cache\` under the install folder.
+- Windows: `%LOCALAPPDATA%\Pane\data` and `%LOCALAPPDATA%\Pane\cache`,
+  which is the install folder too unless another was chosen.
 - macOS: `~/Library/Application Support/Pane` and `~/Library/Caches/Pane`.
 - Linux: `~/.local/share/pane`, which the install folder does not even
   hold.
@@ -592,10 +660,10 @@ and the diagnostics the page copies name the log's folder.
 On every system the install is one call in `pane`'s `main.rs` giving the
 program's own path.
 
-- Windows: the program is at `%LOCALAPPDATA%\Pane\pane.exe`, the install
-  script's target and the shortcut's, which the swap keeps pointing at
-  the right file. The zip package its entry names is unpacked by the zip
-  reader.
+- Windows: the program is at `%LOCALAPPDATA%\Pane\pane.exe`, the setup's
+  and the install script's target and the shortcut's, which the swap keeps
+  pointing at the right file. The zip package its entry names is unpacked
+  by the zip reader. See below for the setup's Apps entry.
 - Linux ([#56](https://github.com/pane-app/pane/issues/56)): the program
   is at `~/.local/bin/pane`, the install script's target. The desktop
   entry the script put in `~/.local/share/applications` keeps naming it
@@ -634,6 +702,28 @@ install script wrote it. The new plist is written beside the old one and
 renamed over it. If it cannot be written, the update still counts (the
 program is already replaced), and the plist keeps the old version until
 the bundle is reinstalled from a package.
+
+On Windows, a Pane the setup installed is updated by the same swap of
+`pane.exe` from the release's zip, not by running the new setup
+([#463](https://github.com/pane-app/pane/issues/463)). Once the new
+program is in place, the swap gives the setup's Apps entry the new version,
+as macOS's plist is given it: `DisplayVersion`, which Settings → Apps
+shows, and the `MajorVersion` and `MinorVersion` Inno Setup writes beside
+it. Only an entry whose `InstallLocation` is the folder of the program
+being replaced is changed, so a zip copy elsewhere leaves the setup's
+entry alone, and a Pane installed from the zip or by `install.ps1` has no
+entry and changes none. If the entry cannot be written, the update still
+counts, and the entry keeps the old version until the next setup runs.
+Everything else in the entry (where Pane is, how it is uninstalled) stays
+true across a swap. The uninstaller also removes the `pane.exe.old` and
+`update\` a swap may have left.
+
+The setup is not what an update runs because running it would mean
+quitting Pane and starting it again, which Pane never does by itself (the
+new version is used the next time the user starts Pane), and would give
+Windows a second update path that installs made from the zip could not
+take. The swap already works for every install, and the entry's version is
+all that the setup knows and the swap would otherwise leave stale.
 
 ## The release source
 
@@ -842,6 +932,24 @@ with `&`).
   this repository cannot build `pane.exe` or the macOS `pane` program, so
   there the Windows and macOS tasks explain that only a checkout of their
   own system builds the package.
+- The Windows setup is checked on CI's `windows-2025` runner, in the
+  Package job that builds it (`package.yml`, which the release matrix and
+  the release workflow both run), by `scripts/check-windows-setup.ps1`:
+  a silent install into a scratch folder with the sign-in task ticked,
+  then `pane.exe --version`, the Start menu shortcut's target, the Apps
+  entry's name, publisher, version, icon and install folder, and the
+  launch-at-login registration and choice the started Pane makes; a
+  second silent install over that running Pane, which must close it and
+  keep the data, the choice and the registration; and a silent uninstall
+  from under a Pane started again, after which the program, the shortcut,
+  the entry and the registration must be gone and a file in
+  `%LOCALAPPDATA%\Pane\data` kept. It changes the user's Start menu, Apps
+  list and sign-in list, so it runs on CI only. pane-core's
+  `application_update` tests check, on Windows, that an update gives a
+  scratch stand-in for the entry the new version only when it names the
+  program's folder, and that the key it names is the one the setup's
+  AppId makes; `pane`'s settings tests check that `--launch-at-login`'s
+  choice is the General page switch's.
 
 ## Limits and prerequisites
 
@@ -864,11 +972,12 @@ with `&`).
   damaged download, not against a release someone who controls the
   repository published. Signing the package is a prerequisite for a
   stable release.
-- On Windows no Authenticode certificate exists either, so `pane.exe` and
-  `install.ps1` are unsigned. Windows may warn about an unknown publisher
-  when the program runs, and PowerShell may refuse the install script as
+- On Windows no Authenticode certificate exists either, so `pane.exe`, the
+  setup and `install.ps1` are unsigned. Windows may warn about an unknown
+  publisher when the setup or the program runs (SmartScreen's "More info",
+  then "Run anyway"), and PowerShell may refuse the install script as
   one that came over the internet (the README and the
-  [Windows section](#installing-on-windows) above say how a user answers
+  [Windows section](#installing-on-windows-from-the-zip) above say how a user answers
   that for this one script). Acquiring a certificate, and signing the
   program and the script with it, are execution prerequisites like the
   others here.

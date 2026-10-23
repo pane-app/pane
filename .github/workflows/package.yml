@@ -5,9 +5,11 @@ name: Package
 # run's `<system>-package` artifact: `target/dist/`, whose `release/`
 # folder holds the assets a GitHub release carries for that system (the
 # package and its .sha256, named as Pane's updater looks for them, ADR
-# 0048). Called by the release matrix (ci.yml), where it runs beside the
-# smoke, and by the release workflow (release.yml), which drafts a
-# prerelease from what it builds.
+# 0048), and on Windows the setup, Pane-Setup-<version>.exe, with its
+# .sha256 (#463), checked by installing and uninstalling it. Called by the
+# release matrix (ci.yml), where it runs beside the smoke, and by the
+# release workflow (release.yml), which drafts a prerelease from what it
+# builds.
 on:
   workflow_call:
 
@@ -33,9 +35,43 @@ jobs:
       - uses: ./.github/actions/setup
       - name: Build the guests
         run: cargo xtask guests
+      # The Windows package task also builds the setup (#463) with Inno
+      # Setup's compiler. The runner image carries Inno Setup too (6.7.1 on
+      # windows-2025 in October 2026), but the pinned version is installed
+      # here, checked against its digest, so an image update cannot change
+      # the setup; it installs into the job's temporary folder, registering
+      # nothing, and the package task finds it through ISCC.
+      - name: Install Inno Setup
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          INNO_SETUP: https://github.com/jrsoftware/issrc/releases/download/is-6_7_1/innosetup-6.7.1.exe
+          INNO_SETUP_SHA256: 4d11e8050b6185e0d49bd9e8cc661a7a59f44959a621d31d11033124c4e8a7b0
+        run: |
+          $installer = Join-Path $env:RUNNER_TEMP "innosetup.exe"
+          Invoke-WebRequest -Uri $env:INNO_SETUP -OutFile $installer
+          $digest = (Get-FileHash -Algorithm SHA256 $installer).Hash.ToLower()
+          if ($digest -ne $env:INNO_SETUP_SHA256) { throw "Inno Setup's installer has the digest $digest" }
+          $dir = Join-Path $env:RUNNER_TEMP "innosetup"
+          $process = Start-Process -FilePath $installer -PassThru -Wait -ArgumentList `
+            "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/SP-", "/CURRENTUSER", "/PORTABLE=1", "/DIR=`"$dir`""
+          if ($process.ExitCode -ne 0) { throw "Inno Setup's installer exited with $($process.ExitCode)" }
+          $iscc = Join-Path $dir "ISCC.exe"
+          if (-not (Test-Path $iscc)) { throw "Inno Setup installed no $iscc" }
+          "ISCC=$iscc" >> $env:GITHUB_ENV
       # Release, x86_64 on Linux and Windows, aarch64 on macOS.
       - name: Build the package
         run: cargo xtask package-${{ matrix.system }}
+      # The setup installed, started, installed again over the running Pane
+      # and uninstalled, silently, for the runner's user
+      # (scripts/check-windows-setup.ps1).
+      - name: Check the setup
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $version = (Select-String -Path crates/pane/Cargo.toml -Pattern '^version = "(.*)"$').Matches[0].Groups[1].Value
+          $setup = (Resolve-Path "target/dist/release/Pane-Setup-$version.exe").Path
+          ./scripts/check-windows-setup.ps1 -Setup $setup -Version $version
       - name: Upload the package and its release assets
         uses: actions/upload-artifact@v4
         with:

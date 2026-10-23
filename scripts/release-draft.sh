@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 # Assembles a draft release of Pane from the packages the Package jobs
-# built (.github/workflows/release.yml): the six package assets a release
+# built (.github/workflows/release.yml): the package assets a release
 # carries (each system's package and its .sha256, named as Pane's updater looks
-# for them, ADR 0048) and the release notes, into <out-dir>:
+# for them, ADR 0048, and the Windows setup and its .sha256) and the release
+# notes, into <out-dir>:
 #
-#   <out-dir>/assets/   the six assets, each package checked against its
+#   <out-dir>/assets/   the eight assets, each package checked against its
 #                       .sha256 (the release workflow adds the source
 #                       archive, scripts/release-source.sh, beside them)
 #   <out-dir>/notes.md  .github/release-notes.md with the version filled in
@@ -29,9 +30,11 @@ fi
 
 rm -rf "$out"
 mkdir -p "$out/assets"
-# The three packages a release carries: the systems CI's runners build.
+# The three packages a release carries: the systems CI's runners build;
+# and the Windows setup (#463), which the updater never looks for.
 for package in \
   "pane-$version-windows-x86_64.zip" \
+  "Pane-Setup-$version.exe" \
   "pane-$version-macos-aarch64.zip" \
   "pane-$version-linux-x86_64.tar.gz"; do
   for asset in "$package" "$package.sha256"; do

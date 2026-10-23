@@ -5231,6 +5231,41 @@ fn the_launch_at_login_toggle_takes_the_choice_and_saves_it(cx: &mut TestAppCont
     assert!(record_of(data.path()).contains("\"launchAtLogin\": true"));
 }
 
+// `pane --launch-at-login`, as Pane's Windows setup starts it (#463): the
+// same choice the switch takes, registered and recorded together, on a
+// fresh data folder too, and asked again it changes nothing.
+#[gpui::test]
+fn the_setup_s_sign_in_choice_is_the_switch_s(cx: &mut TestAppContext) {
+    let data = tempfile::tempdir().unwrap();
+    let login = Arc::new(FakeLogin::default());
+    cx.update(|cx| {
+        pane::settings::init_with_login(
+            Some(data.path().to_owned()),
+            pane::settings::Overrides::default(),
+            login.clone(),
+            cx,
+        )
+    });
+    let (_launcher, _links, cx) = open_launcher(cx);
+    assert!(
+        !data.path().join("settings.json").exists(),
+        "a fresh folder"
+    );
+
+    cx.update(|_, cx| pane::settings::choose_launch_at_login(cx));
+    until_record_holds(cx, data.path(), "\"launchAtLogin\": true");
+    assert_eq!(login.registration(), Registration::Enabled);
+    cx.update(|_, cx| pane::settings::choose_launch_at_login(cx));
+    cx.run_until_parked();
+    assert_eq!(login.registration(), Registration::Enabled);
+
+    let mut settings_cx = open_settings(cx);
+    assert!(
+        login_chosen(&mut settings_cx),
+        "the switch shows the choice"
+    );
+}
+
 #[gpui::test]
 fn a_fresh_application_reconciles_a_registration_the_platform_lost(cx: &mut TestAppContext) {
     let data = tempfile::tempdir().unwrap();

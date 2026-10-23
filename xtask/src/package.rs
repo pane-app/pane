@@ -23,6 +23,10 @@
 //!   release workflow uploads this folder's files to a draft release; the
 //!   smokes serve it from this computer as a stand-in for GitHub
 //!   (`scripts/release_server.py`), so no check reaches the network.
+//!   On Windows it also holds the setup a release carries beside the zip,
+//!   `Pane-Setup-<version>.exe` and its `.sha256` (#463): Inno Setup's
+//!   compiler builds it from `scripts/setup-windows.iss` and the files the
+//!   zip holds. Only a release-profile build makes it.
 //!
 //! `--dev` builds the package's program in the development profile: the
 //! native smokes install that one, because only a development build takes
@@ -169,8 +173,84 @@ pub fn windows(dev: bool, version: Option<String>) -> Result<(), String> {
         assemble_package(&root, &out, dev, System::Windows, version.as_deref())?;
     write_release(&release, System::Windows, version.as_deref(), &packed)?;
     println!("package built into {}", package.display());
+    // The setup is a release's: a development package is the smokes', which
+    // install the zip, and its program is far too large to compress for
+    // nothing.
+    if !dev {
+        let setup = build_setup(
+            &root,
+            &out.join("stage/pane"),
+            &release,
+            version.as_deref().unwrap_or(VERSION),
+        )?;
+        println!("setup built into {}", setup.display());
+    }
     println!("release assets built into {}", release.display());
     Ok(())
+}
+
+/// Builds Pane's Windows setup (#463), `Pane-Setup-<version>.exe`, into
+/// `release` with its `.sha256`: Inno Setup's compiler run over
+/// `scripts/setup-windows.iss` and the files `stage` holds for the zip
+/// package, the setup stamped with `version`.
+fn build_setup(
+    root: &Path,
+    stage: &Path,
+    release: &Path,
+    version: &str,
+) -> Result<PathBuf, String> {
+    let compiler = inno_compiler()?;
+    run(Command::new(&compiler)
+        .current_dir(root)
+        .arg("/Q")
+        .arg(format!("/DAppVersion={version}"))
+        .arg(format!("/DStageDir={}", stage.display()))
+        .arg(format!("/O{}", release.display()))
+        .arg(root.join("scripts/setup-windows.iss")))?;
+    let name = setup_name(version);
+    let setup = release.join(&name);
+    let built =
+        fs::read(&setup).map_err(|error| format!("read {} failed: {error}", setup.display()))?;
+    write_sha256(release, &name, &built)?;
+    Ok(setup)
+}
+
+/// The setup's file name, as a release carries it.
+fn setup_name(version: &str) -> String {
+    format!("Pane-Setup-{version}.exe")
+}
+
+/// Inno Setup's command-line compiler: the one `ISCC` names (the release
+/// jobs install a pinned version and name it there), else `ISCC.exe` on
+/// the PATH, else where Inno Setup 6 installs itself, for all users or for
+/// one.
+fn inno_compiler() -> Result<PathBuf, String> {
+    if let Some(named) = std::env::var_os("ISCC").filter(|named| !named.is_empty()) {
+        return Ok(PathBuf::from(named));
+    }
+    let on_path = std::env::var_os("PATH")
+        .map(|path| std::env::split_paths(&path).collect::<Vec<_>>())
+        .unwrap_or_default()
+        .into_iter()
+        .map(|folder| folder.join("ISCC.exe"));
+    let installed = ["ProgramFiles(x86)", "ProgramFiles"]
+        .into_iter()
+        .filter_map(std::env::var_os)
+        .map(|folder| PathBuf::from(folder).join("Inno Setup 6"))
+        .chain(
+            std::env::var_os("LOCALAPPDATA")
+                .map(|folder| PathBuf::from(folder).join("Programs/Inno Setup 6")),
+        )
+        .map(|folder| folder.join("ISCC.exe"));
+    on_path
+        .chain(installed)
+        .find(|compiler| compiler.is_file())
+        .ok_or_else(|| {
+            "package-windows builds Pane's setup with Inno Setup 6, whose compiler (ISCC.exe) is \
+             not on the PATH or where Inno Setup installs itself; install it (`winget install \
+             JRSoftware.InnoSetup`) or name the compiler in ISCC"
+                .to_owned()
+        })
 }
 
 /// Builds the macOS package and the release assets beside it.
@@ -546,6 +626,11 @@ PREREQUISITES
 
 INSTALL
 
+  The easier way is the release's setup, Pane-Setup-{version}.exe, which
+  installs Pane like any other app: a Start menu entry, an entry in
+  Settings > Apps to uninstall it from, and a choice to start Pane when
+  you sign in. This zip is the portable download, installed by its script.
+
   Unzip this package (Explorer unzips it, or Expand-Archive in
   PowerShell), then, in the pane folder it unpacked:
 
@@ -566,7 +651,8 @@ INSTALL
 UNINSTALL
 
   Remove %LOCALAPPDATA%\Pane\pane.exe and the Pane shortcut in your Start
-  menu (close Pane first). Pane keeps its own data in
+  menu (close Pane first), or, if the setup installed Pane, uninstall it
+  in Settings > Apps. Pane keeps its own data in
   %LOCALAPPDATA%\Pane\data (its installed extensions and their settings);
   remove that folder to remove them too.
 
