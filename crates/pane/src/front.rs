@@ -30,11 +30,14 @@ use gpui::{App, Window};
 /// with the system's own calls, from a task of its own so the window's
 /// activation messages reach GPUI outside this update, and only if
 /// `wanted` still says so when the task runs (a press that hid the
-/// launcher meanwhile wins); elsewhere through GPUI, at once.
+/// launcher meanwhile wins), then `done`, the calls made; elsewhere
+/// through GPUI, at once, and `done` is not called — the window's
+/// activation, when it comes, says the same there.
 pub(crate) fn bring_forward<V: gpui::Render>(
     window: &mut Window,
     cx: &mut App,
-    wanted: impl FnOnce(&V, &App) -> bool + 'static,
+    wanted: impl FnOnce(&V) -> bool + 'static,
+    done: impl FnOnce(&mut V) + 'static,
 ) {
     #[cfg(target_os = "windows")]
     if let Some(hwnd) = windows::hwnd(window)
@@ -42,18 +45,19 @@ pub(crate) fn bring_forward<V: gpui::Render>(
     {
         cx.spawn(async move |cx: &mut gpui::AsyncApp| {
             let wanted = handle
-                .read_with(cx, |view, cx| wanted(view, cx))
+                .read_with(cx, |view, _| wanted(view))
                 .unwrap_or(false);
             if wanted && !windows::take_foreground(hwnd.0) {
                 // The system's calls were refused (an elevated window in
                 // front, say): GPUI's own way is the last resort.
                 let _ = handle.update(cx, |_, window, _| window.activate_window());
             }
+            let _ = handle.update(cx, |view, _, _| done(view));
         })
         .detach();
         return;
     }
-    let _ = wanted;
+    let _ = (wanted, done);
     window.activate_window();
     cx.activate(true);
 }

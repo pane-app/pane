@@ -56,6 +56,19 @@ mod windows {
     /// missed.
     const PATIENCE: Duration = Duration::from_millis(1500);
 
+    /// When each press reached the launcher's window, as the GPUI side
+    /// forwarded it: the key event's way through the system and the
+    /// adapter, told apart from the window's own work.
+    static ARRIVED: Mutex<Vec<Instant>> = Mutex::new(Vec::new());
+
+    /// How many presses reached the window from `since` on, and when the
+    /// first of them did.
+    fn arrived(since: Instant) -> (usize, Option<Instant>) {
+        let arrived = ARRIVED.lock().unwrap();
+        let after: Vec<Instant> = arrived.iter().copied().filter(|at| *at >= since).collect();
+        (after.len(), after.first().copied())
+    }
+
     /// The environment variable that makes the test binary the tests'
     /// other program (see [`other_program`]).
     const OTHER: &str = "PANE_TOGGLE_OTHER";
@@ -215,6 +228,7 @@ mod windows {
         ));
         cx.spawn(async move |cx| {
             while let Some(shortcut) = presses.next().await {
+                ARRIVED.lock().unwrap().push(Instant::now());
                 let pressed = window.update(cx, |launcher, window, cx| {
                     launcher.hotkey_pressed(&shortcut, window, cx)
                 });
@@ -347,6 +361,7 @@ mod windows {
         // even number from shown leaves it shown.
         for presses in [5, 4] {
             let before = in_front(launcher);
+            let started = Instant::now();
             for _ in 0..presses {
                 press(binding);
                 std::thread::sleep(Duration::from_millis(30));
@@ -356,8 +371,9 @@ mod windows {
             let after = in_front(launcher);
             let hidden_now = !visible(launcher);
             report.log(format!(
-                "burst of {presses} from {}: {}",
+                "burst of {presses} from {} ({} presses reached the window): {}",
                 if before { "shown" } else { "hidden" },
+                arrived(started).0,
                 if after {
                     "shown"
                 } else if hidden_now {
@@ -373,11 +389,13 @@ mod windows {
                 ));
             }
         }
-        // Hidden, for the arrows' check.
+        // Hidden, for the arrows' check, and left a moment as a person
+        // would before pressing again.
         if in_front(launcher) && !toggle(launcher, binding, false, "hidden for the arrows", report)
         {
             return;
         }
+        std::thread::sleep(Duration::from_millis(700));
         menu_and_arrows(launcher, binding, selected, report);
     }
 
@@ -478,8 +496,15 @@ mod windows {
         });
         let took = started.elapsed();
         let wanted = if shown { "shown" } else { "hidden" };
+        let (count, first) = arrived(started);
+        let reached_pane = match first {
+            Some(at) => format!("{:?}", at.duration_since(started)),
+            None => "never".into(),
+        };
         if reached {
-            report.log(format!("{name}: {wanted} after {took:?}"));
+            report.log(format!(
+                "{name}: {wanted} after {took:?} (the press reached the window after {reached_pane})"
+            ));
             if shown {
                 report.shows.push(took);
             } else {
@@ -494,7 +519,8 @@ mod windows {
                 "hidden"
             };
             report.fail(format!(
-                "{name}: the launcher was to be {wanted}, and was {state} {took:?} after the press"
+                "{name}: the launcher was to be {wanted}, and was {state} {took:?} after the \
+                 press ({count} presses reached the window, the first after {reached_pane})"
             ));
         }
         reached

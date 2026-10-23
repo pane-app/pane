@@ -53,13 +53,14 @@ pub(crate) struct Fit {
 /// The launcher window's presence (see the module docs).
 #[derive(Default)]
 pub(crate) struct Presence {
-    /// Whether the launcher was summoned and no change of its activation
-    /// has been seen since: the system brings a window forward on its
-    /// own time, so a press that comes before it reports the launcher
-    /// active — a quick second press, a press while it opens — hides the
-    /// launcher the first one summoned rather than summoning it again
-    /// (#467).
-    summoning: bool,
+    /// The summon still bringing the launcher forward, by its number: the
+    /// system brings a window forward on its own time, so a press that
+    /// comes before the window is active — a quick second press, a press
+    /// while it opens — hides the launcher the first one summoned rather
+    /// than summoning it again (#467).
+    summoning: Option<u64>,
+    /// The number the last summon was given.
+    summons: u64,
     /// Whether the launcher window is hidden by the Open Pane hotkey —
     /// hidden, not closed: Pane keeps running, and the next press shows
     /// the same window and the same launcher again. Drives the toggle's
@@ -90,29 +91,39 @@ impl Presence {
     /// Carbon hot key's release on macOS), so a press here is always the
     /// user's (#467).
     pub(crate) fn press(&mut self, active: bool) -> Press {
-        if !self.hidden && (active || self.summoning) {
+        if !self.hidden && (active || self.summoning.is_some()) {
             Press::Hide
         } else {
             Press::Summon
         }
     }
 
-    /// The launcher was summoned: until its activation is seen to change
-    /// ([`Presence::activation_changed`]), the next press hides it.
-    pub(crate) fn summoned(&mut self) {
-        self.summoning = true;
+    /// The launcher is being summoned: until the summon this answers is
+    /// over ([`Presence::brought_forward`]), a press hides it.
+    pub(crate) fn summoned(&mut self) -> u64 {
+        self.summons += 1;
+        self.summoning = Some(self.summons);
+        self.summons
     }
 
-    /// The window's activation changed: from now on the window's own
-    /// focus decides what a press does.
-    pub(crate) fn activation_changed(&mut self) {
-        self.summoning = false;
+    /// The summon `summon` has brought the launcher forward, or tried to:
+    /// from now on the window's own focus decides what a press does. A
+    /// later summon's is not ended by an earlier one's.
+    pub(crate) fn brought_forward(&mut self, summon: u64) {
+        if self.summoning == Some(summon) {
+            self.summoning = None;
+        }
+    }
+
+    /// The window became active: whatever summon brought it, it is over.
+    pub(crate) fn activated(&mut self) {
+        self.summoning = None;
     }
 
     /// The launcher was hidden at `now`.
     pub(crate) fn hide(&mut self, now: Instant) {
         self.hidden = true;
-        self.summoning = false;
+        self.summoning = None;
         self.hidden_at = Some(now);
     }
 
@@ -246,6 +257,13 @@ mod tests {
             assert_eq!(presence.press(false), Press::Hide);
             presence.hide(Instant::now());
         }
+        // A summon over before the next press: the window's focus
+        // decides again.
+        assert_eq!(presence.press(false), Press::Summon);
+        presence.show();
+        let summon = presence.summoned();
+        presence.brought_forward(summon);
+        assert_eq!(presence.press(true), Press::Hide);
     }
 
     #[test]
@@ -255,13 +273,18 @@ mod tests {
         assert_eq!(presence.press(false), Press::Summon);
         presence.show();
         presence.summoned();
+        // An earlier summon's end does not end a later one's.
+        let first = presence.summoned();
+        let second = presence.summoned();
+        presence.brought_forward(first);
+        assert_eq!(presence.press(false), Press::Hide, "the second still runs");
         // It came forward, then another window took the focus: a press
         // brings it forward rather than hiding it.
-        presence.activation_changed();
-        presence.activation_changed();
+        presence.brought_forward(second);
         assert_eq!(presence.press(false), Press::Summon);
         presence.summoned();
-        assert_eq!(presence.press(false), Press::Hide);
+        presence.activated();
+        assert_eq!(presence.press(false), Press::Summon, "active, then not");
     }
 
     #[test]
