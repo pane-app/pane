@@ -397,6 +397,9 @@ impl LauncherWindow {
         .detach();
         cx.observe_window_activation(window, |this, window, cx| {
             let active = window.is_window_active();
+            // The Open Pane hotkey's next press reads the window's own
+            // focus again (#467).
+            this.presence.activation_changed();
             // A pending HUD's work is done once the launcher is active
             // again (#250).
             if active {
@@ -545,8 +548,9 @@ impl LauncherWindow {
                 let shown = this.update_in(cx, |this, window, cx| {
                     if this.launcher.take_window_request() {
                         this.show(window, cx);
-                        window.activate_window();
-                        cx.activate(true);
+                        crate::front::bring_forward(window, cx, |this: &Self, _| {
+                            !this.presence.hidden()
+                        });
                     }
                     // Game mode paused or resumed Pane's hotkeys for a
                     // game in front (#125): the tray icon's tooltip
@@ -628,8 +632,7 @@ impl LauncherWindow {
             return false;
         }
         self.show(window, cx);
-        window.activate_window();
-        cx.activate(true);
+        crate::front::bring_forward(window, cx, |this: &Self, _| !this.presence.hidden());
         self.motion.land_at_once();
         true
     }
@@ -1564,8 +1567,7 @@ impl LauncherWindow {
         };
         if shows_window {
             self.show(window, cx);
-            window.activate_window();
-            cx.activate(true);
+            crate::front::bring_forward(window, cx, |this: &Self, _| !this.presence.hidden());
             // A hotkey is a keyboard open: the command's view lands at once.
             self.motion.land_at_once();
         }
@@ -1744,12 +1746,12 @@ impl LauncherWindow {
     /// Pane keeps running in the background, the Settings window stays
     /// open and the next press reuses the same live launcher.
     fn open_pane_pressed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let now = cx.background_executor().now();
-        match self.presence.press(now, window.is_window_active()) {
-            // The repeat of a key still held, not a new press.
-            Press::Repeat => {}
+        match self.presence.press(window.is_window_active()) {
             Press::Hide => self.hide(window, cx),
-            Press::Summon => self.summon(window, cx),
+            Press::Summon => {
+                self.summon(window, cx);
+                self.presence.summoned();
+            }
         }
     }
 
@@ -1781,8 +1783,9 @@ impl LauncherWindow {
             NextShowing::Restore => false,
         };
         self.show(window, cx);
-        window.activate_window();
-        cx.activate(true);
+        // Forward with the focus, without the injected Alt GPUI's own
+        // activation uses on Windows (#467, see `front`).
+        crate::front::bring_forward(window, cx, |this: &Self, _| !this.presence.hidden());
         if pops || !self.launcher.restorable_view() {
             self.launcher.show_root_search();
             // Popping to root search leaves the open views, as

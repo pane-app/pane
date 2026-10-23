@@ -16,6 +16,7 @@ mod app;
 mod background;
 mod extension_views;
 mod features;
+mod front;
 mod keyboard;
 mod links;
 mod off_taskbar;
@@ -236,6 +237,9 @@ pub fn open_launcher_window<V: 'static + gpui::Render>(
         #[cfg(target_os = "macos")]
         hide_window_buttons(window);
         off_taskbar::keep_off_taskbar(window);
+        // Alt+Space, or a lone Alt, never opens Windows' system menu on
+        // the launcher (#467).
+        front::keep_system_menu_closed(window);
         build(window, cx)
     })?;
     // Shown as GPUI shows a window it opens visible, taking the focus.
