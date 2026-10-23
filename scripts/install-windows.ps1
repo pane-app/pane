@@ -60,4 +60,6 @@ if (Test-Path $version) {
 
 Write-Output "Installed Pane to $InstallDir"
 Write-Output "(remove `"$(Join-Path $InstallDir 'pane.exe')`" and `"$link`" to uninstall;"
-Write-Output " Pane keeps its own data in `"$(Join-Path $InstallDir 'data')`".)"
+# Pane keeps its data in %LOCALAPPDATA%\Pane\data whichever folder the
+# program is installed in (pane's data_dir).
+Write-Output " Pane keeps its own data in `"$(Join-Path $env:LOCALAPPDATA 'Pane\data')`".)"

@@ -1603,6 +1603,21 @@ pub(crate) fn attach_launcher(launcher: &Launcher, cx: &mut App) {
     let _ = launcher.sync_open_pane(recorded);
 }
 
+/// Takes the launch-at-login choice for a user who made it outside Pane:
+/// `pane --launch-at-login`, which Pane's Windows setup runs when its
+/// "Start Pane when I sign in" task is ticked (#463). It is the General
+/// page's switch turned on, through the same path — the platform's
+/// registration first, then the record — so the setup adds no
+/// registration of its own for the start-time reconciliation to remove. A
+/// choice already taken, or a record that cannot be read, changes nothing,
+/// as with the switch. Called once the launcher window exists, so a fresh
+/// data folder's Open Pane hotkey is resolved before the record is first
+/// written.
+pub fn choose_launch_at_login(cx: &mut App) {
+    let settings = ensure(cx);
+    settings.update(cx, |settings, cx| settings.set_launch_at_login(true, cx));
+}
+
 /// Attaches the adapter that shows the taskbar while the launcher window
 /// is open (#268), for the "Show the taskbar when Pane opens" choice the
 /// General page records. `None` on a platform with no taskbar of the kind
