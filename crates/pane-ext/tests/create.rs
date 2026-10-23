@@ -1,14 +1,15 @@
 //! `@pane-app/create` (`packages/create`), the package `npm create
 //! @pane-app` runs (#221, ADR 0047): its bin starts `pane-ext new` with
 //! the arguments npm passed, so an author starts a Pane extension with
-//! Node.js and npm alone. What is testable before the packages are
-//! published (#281, a person's step): the package packs (`npm pack`, the
-//! same tarball npm would publish), and its bin, run from where npm
+//! Node.js and npm alone. What is testable without the registry: the
+//! package packs (`npm pack`, the same tarball npm would publish), and
+//! its bin, run from where npm
 //! installs it with the `pane-ext` binary in the `@pane-app/cli` platform
 //! package's folder — the layout `@pane-app/cli`'s dependency puts it in,
 //! the same one Pane's own build looks for the componentizer in —
 //! scaffolds the project. The one-step `npm create @pane-app` itself
-//! needs the published packages, so it is the README's, not CI's, story.
+//! fetches the published packages from the registry, so it is the
+//! README's, not CI's, story.
 
 use std::fs;
 use std::io::Read;

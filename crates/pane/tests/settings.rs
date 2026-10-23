@@ -704,7 +704,8 @@ fn closing_settings_reopens_a_new_window_without_ending_the_launcher(cx: &mut Te
     // alive is what closing Settings must leave observable: the launcher
     // window stays and still works. (Closing the launcher itself quits
     // Pane in the binary, whose close hook compares the window ids; the
-    // same behavior is checked natively in docs/evidence/settings-72/.)
+    // same behavior is checked natively in
+    // https://github.com/pane-app/pane/tree/archive/docs-history-2026-10-23/docs/evidence/settings-72.)
     let mut settings_cx = settings_context(&settings, cx);
     settings_cx.update(|window, _| window.remove_window());
     cx.run_until_parked();
@@ -4822,7 +4823,8 @@ fn the_system_choice_renders_the_appearance_the_system_reports(cx: &mut TestAppC
     // this harness: GPUI's test window hides its simulation behind a
     // crate-private API. The entity's half is covered by the unit tests
     // in `pane::settings`; the notification itself is native validation,
-    // recorded in docs/evidence/settings-73/.)
+    // recorded in
+    // https://github.com/pane-app/pane/tree/archive/docs-history-2026-10-23/docs/evidence/settings-73.)
     assert!(
         paints_panel(cx, &light_panel()),
         "the system's light is followed"

@@ -1,6 +1,6 @@
 # Run Rust extensions as managed native executables
 
-**Historical; superseded as the current baseline:** the post-Q32 WIT/Wasmtime reevaluation and subsequent WASI3 requirement replace this execution choice as the direction under evaluation. Optional native helpers remain accepted under Q33; final JS engine, helper topology and crash boundaries still need validation. Preserve the original rationale below; use [current decisions](../current-decisions.md#runtime-direction-and-evidence) for current status.
+**Historical; superseded as the current baseline:** the post-Q32 WIT/Wasmtime reevaluation and subsequent WASI3 requirement replace this execution choice as the direction under evaluation. Optional native helpers remain accepted under Q33; final JS engine, helper topology and crash boundaries still need validation. Preserve the original rationale below; use [current decisions](https://github.com/pane-app/pane/blob/archive/docs-history-2026-10-23/docs/current-decisions.md#runtime-direction-and-evidence) for current status.
 
 Accepted 2026-09-27 after the Rust execution comparison: provide a first-class Rust SDK with native executable extensions, launched on demand and communicating directly with the launcher independently of the JS runtime. This preserves ordinary Rust libraries and native integrations under the capability-first trust model, while giving reload and disable an explicit process boundary; mandatory Wasm and in-host dynamic libraries are not the initial Rust route.
 

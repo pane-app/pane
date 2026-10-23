@@ -1,6 +1,6 @@
 # Extension-to-extension composition
 
-Researched 2026-09-27 for Q25. The user asks whether other products support extensions using one another. Q25 was subsequently accepted; see [ADR 0011](../adr/0011-extension-call-and-result-api.md). Documentation/source review only; no interoperability prototype was run. Pi is investigated separately in [its source audit](pi-extension-composition.md).
+Researched 2026-09-27 for Q25. The user asks whether other products support extensions using one another. Q25 was subsequently accepted; see [ADR 0011](../adr/0011-extension-call-and-result-api.md). Documentation/source review only; no interoperability prototype was run. Pi is investigated separately in [its source audit](https://github.com/pane-app/pane/blob/archive/docs-history-2026-10-23/docs/research/pi-extension-composition.md).
 
 ## Raycast: launch another command
 
@@ -18,9 +18,9 @@ For extensions running on different sides of VS Code's remote architecture, its 
 
 ## Pi: shared events and command dispatch
 
-Conventional Pi exposes a shared `pi.events` bus across loaded extensions. Authors subscribe with `on` and publish with `emit`; `on` returns an unsubscribe function. `emit` returns void rather than waiting for handlers or collecting results. This supports extension coordination, while request/reply conventions would be authored on top. Listeners are cleaned up when the extension runtime is invalidated. See [pinned source audit](pi-extension-composition.md).
+Conventional Pi exposes a shared `pi.events` bus across loaded extensions. Authors subscribe with `on` and publish with `emit`; `on` returns an unsubscribe function. `emit` returns void rather than waiting for handlers or collecting results. This supports extension coordination, while request/reply conventions would be authored on top. Listeners are cleaned up when the extension runtime is invalidated. See [pinned source audit](https://github.com/pane-app/pane/blob/archive/docs-history-2026-10-23/docs/research/pi-extension-composition.md).
 
-Pi also allows an explicitly configured `sendUserMessage` call to pass through extension slash-command handling. That path uses prompt/command semantics rather than a structured result-returning operation API; a missing command can proceed as a normal prompt. The inspected conventional ExtensionAPI does not expose a generic `executeCommand`/`invokeTool` result primitive, and tool discovery metadata is not a callable implementation. These are scoped findings, not a claim that full-trust extensions cannot construct their own integration. See [API and dispatch evidence](pi-extension-composition.md).
+Pi also allows an explicitly configured `sendUserMessage` call to pass through extension slash-command handling. That path uses prompt/command semantics rather than a structured result-returning operation API; a missing command can proceed as a normal prompt. The inspected conventional ExtensionAPI does not expose a generic `executeCommand`/`invokeTool` result primitive, and tool discovery metadata is not a callable implementation. These are scoped findings, not a claim that full-trust extensions cannot construct their own integration. See [API and dispatch evidence](https://github.com/pane-app/pane/blob/archive/docs-history-2026-10-23/docs/research/pi-extension-composition.md).
 
 ## Implications for the launcher
 

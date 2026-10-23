@@ -11,8 +11,9 @@
 //! own, the seam the templates' tests opened (`tests/templates.rs`).
 //!
 //! The workflow names the registry packages an author installs
-//! (`@pane-app/cli`, `@pane-app/extension`), which are not published yet
-//! (#281), so the tests stand them in as the templates' tests do: the SDK
+//! (`@pane-app/cli`, `@pane-app/extension`). The tests stand them in as
+//! the templates' tests do, so the content is checked against this
+//! checkout's SDK and CLI, not the last ones published: the SDK
 //! devDependency points at a copy of `guests/js` beside the package,
 //! `@pane-app/cli` is dropped — its `pane-ext` is the binary these tests
 //! run — and the build componentizes with the componentizer pane-ext
@@ -60,12 +61,12 @@ fn content() -> PathBuf {
 
 /// A scratch copy of the content, prepared as an author's clone of the
 /// template repository is: copied out of this repository (so `npm install`
-/// writes nothing in it), its unpublished `@pane-app` devDependencies
-/// bridged — the SDK to a copy of `guests/js` beside it, `@pane-app/cli`
-/// dropped, its `pane-ext` the binary these tests run — and the
-/// dependencies installed, the author's step. Each `name` gets a folder of
-/// its own, so the tests that run at once cannot rewrite one another's
-/// SDK copy. Answers the copy's folder.
+/// writes nothing in it), its `@pane-app` devDependencies bridged to
+/// this checkout's — the SDK to a copy of `guests/js` beside it,
+/// `@pane-app/cli` dropped, its `pane-ext` the binary these tests run —
+/// and the dependencies installed, the author's step. Each `name` gets a
+/// folder of its own, so the tests that run at once cannot rewrite one
+/// another's SDK copy. Answers the copy's folder.
 fn prepared(name: &str) -> PathBuf {
     let parent = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
         .join("template-repository")

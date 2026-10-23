@@ -9,9 +9,9 @@ license = "Apache-2.0 OR MIT"
 crate-type = ["cdylib"]
 
 [dependencies]
-# Pane's Rust SDK; outside this repository, depend on the crate on
-# crates.io once it is published (`pane-extension = "0.2"`), or until then
-# point `path` at guests/pane-extension in a Pane checkout.
+# Pane's Rust SDK. Outside this repository, depend on the crate on
+# crates.io (`pane-extension = "0.2"`); here the sample builds against this
+# checkout's own copy, so it follows the SDK as it changes.
 pane-extension = { path = "../pane-extension" }
 
 # A package of its own, built in its own folder with the documented command

@@ -9,7 +9,7 @@
 //! and menu hints, and the record on disk. The native side — what the
 //! keys do on each operating system, IME composition through a real
 //! input method — is recorded natively in
-//! `docs/evidence/settings-77/`.
+//! <https://github.com/pane-app/pane/tree/archive/docs-history-2026-10-23/docs/evidence/settings-77>.
 //!
 //! The page also holds the state of Pane's own keyboard hook (#259):
 //! while a hotkey of yours is dispatched through it — the fake system

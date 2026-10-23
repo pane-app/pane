@@ -9,7 +9,8 @@
 //! Rebuilds are not byte-identical: the QuickJS snapshot the componentizer
 //! takes holds build-time state. `inputs_sha256` covers the sources and the
 //! toolchain, so a rebuild is asked for whenever what a component contains
-//! changed; the tests compare behaviour, not bytes.
+//! changed; the tests compare behaviour, not bytes. It leaves out Markdown
+//! files: no component bundles one, so editing a README asks for nothing.
 
 use std::path::{Path, PathBuf};
 
@@ -188,7 +189,8 @@ pub(crate) fn rebuild() -> Result<(), String> {
     let manifest = json!({
         "about": "JS/TS sample components used by tests and `cargo run -p pane`; rebuild with \
                   `cargo xtask js-guests`. Rebuilds are not byte-identical: the QuickJS snapshot \
-                  holds build-time state. inputs_sha256 covers the sources and toolchain pins.",
+                  holds build-time state. inputs_sha256 covers the sources and toolchain pins, \
+                  not their Markdown.",
         "toolchain": toolchain(&root),
         "components": components,
     });
@@ -366,7 +368,8 @@ fn package_lock(root: &Path, source: &str) -> serde_json::Value {
 }
 
 /// The digest of everything a component contains: the tool inputs, Pane's
-/// WIT and WASI's, the SDK, and the sample's own sources.
+/// WIT and WASI's, the SDK, and the sample's own sources — their Markdown
+/// left out (see [`inputs_digest`]).
 fn component_inputs(root: &Path, source: &str) -> String {
     let mut paths: Vec<PathBuf> = TOOL_INPUTS.iter().map(|input| root.join(input)).collect();
     for name in PANE_WIT {
@@ -392,20 +395,26 @@ fn wasi_wit(root: &Path) -> Vec<PathBuf> {
     paths
 }
 
-/// The digest of the files under `paths`, by repository-relative path, with
-/// line endings normalized (a checkout on Windows has CRLF where one on
-/// Linux has LF) and files ordered by their parts, which compare
-/// case-sensitively everywhere. A file is digested as its path (POSIX
-/// spelling), a NUL, its contents, a NUL.
+/// The digest of the files under `paths` but Markdown (`*.md`, in any case),
+/// by repository-relative path, with line endings normalized (a checkout on
+/// Windows has CRLF where one on Linux has LF) and files ordered by their
+/// parts, which compare case-sensitively everywhere. A file is digested as
+/// its path (POSIX spelling), a NUL, its contents, a NUL.
+///
+/// Markdown is documentation: the build stages the SDK's README beside a
+/// package (`pane-build`'s `js_assets`), but no source imports it, so the
+/// bundle and the component never hold it. Digesting it would call every
+/// prebuilt sample stale whenever a README changed.
 fn inputs_digest(root: &Path, paths: &[PathBuf]) -> String {
     use sha2::{Digest, Sha256};
     let mut digest = Sha256::new();
     // By their parts, which compare case-sensitively everywhere: Windows
-    // paths compare ignoring case, which would order `README.md` and
+    // paths compare ignoring case, which would order `View.js` and
     // `adapt.js` otherwise than Linux does, and so digest them differently.
     let mut files: Vec<(Vec<String>, PathBuf)> = paths
         .iter()
         .flat_map(|path| tree_files(path))
+        .filter(|path| !is_markdown(path))
         .map(|path| (path_parts(&path), path))
         .collect();
     files.sort();
@@ -450,6 +459,13 @@ fn tree_files(root: &Path) -> Vec<PathBuf> {
         }
     }
     files
+}
+
+/// Whether `path` is a Markdown file (`.md`, in any case), which no
+/// component holds.
+fn is_markdown(path: &Path) -> bool {
+    path.extension()
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("md"))
 }
 
 /// A path's parts, for the case-sensitive order.

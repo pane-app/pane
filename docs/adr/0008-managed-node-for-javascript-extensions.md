@@ -1,6 +1,6 @@
 # Use managed Node for JavaScript and TypeScript extensions
 
-**Historical; superseded as the current baseline:** the post-Q32 WIT/Wasmtime reevaluation and subsequent WASI3 requirement replace this execution choice as the direction under evaluation. Optional native helpers remain accepted under Q33; final JS engine, helper topology and crash boundaries still need validation. Preserve the original rationale below; use [current decisions](../current-decisions.md#runtime-direction-and-evidence) for current status.
+**Historical; superseded as the current baseline:** the post-Q32 WIT/Wasmtime reevaluation and subsequent WASI3 requirement replace this execution choice as the direction under evaluation. Optional native helpers remain accepted under Q33; final JS engine, helper topology and crash boundaries still need validation. Preserve the original rationale below; use [current decisions](https://github.com/pane-app/pane/blob/archive/docs-history-2026-10-23/docs/current-decisions.md#runtime-direction-and-evidence) for current status.
 
 Accepted 2026-09-27 in Q18: use real Node managed by the launcher for JS/TS extensions, preserving broad access to ordinary Node APIs and npm libraries under the capability-first extension model. This trades runtime download/disk and active-memory costs for compatibility and lower maintenance than an embedded engine with partial Node shims; GPUI CE remains the renderer.
 

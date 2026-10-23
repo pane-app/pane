@@ -1,7 +1,6 @@
 # __TITLE__'s package: a WebAssembly component Pane runs, built with
 # `cargo build --release --target wasm32-wasip2`, which `pane-ext dev` runs
-# for you. Outside a published SDK, point `pane-extension` at the
-# repository's copy instead (`path = "../../guests/pane-extension"`).
+# for you.
 [package]
 name = "__NAME__"
 version = "0.1.0"
