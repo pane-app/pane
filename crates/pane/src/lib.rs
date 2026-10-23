@@ -139,10 +139,11 @@ pub const APP_VERSION: &str = match option_env!("PANE_PACKAGE_VERSION") {
 ///
 /// The committed pins name the eight repositories under
 /// `https://github.com/pane-app/<id>`, each at the commit of its
-/// repository's release for extension API 0.2 (ADR 0046) — v0.6.0 for
-/// the calculator, applications and quicklinks, v0.9.0 for files, v0.7.0
-/// for the clipboard history (#279, #282), v0.3.0 for Run and v0.2.0 for
-/// System Commands and Switch Windows (#301). A release's pins are what a fresh
+/// repository's release for extension API 0.2 (ADR 0046), built from the
+/// published `pane-extension` crate (#287) — v0.6.1 for the calculator,
+/// applications and quicklinks, v0.9.1 for files, v0.7.1 for the clipboard
+/// history (#279, #282), v0.3.1 for Run and v0.2.1 for System Commands and
+/// Switch Windows (#301). A release's pins are what a fresh
 /// install acquires, so they are moved with the release that tested
 /// them, not between releases. A development build can replace them
 /// with a file of its own through `PANE_DEFAULTS` (see
