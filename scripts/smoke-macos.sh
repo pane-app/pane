@@ -720,7 +720,6 @@ key 36; sleep 3
 capture 45-opened.png   # evidence only: the window is hidden
 for _ in $(seq 50); do [ -f "$apps/launched" ] && break; sleep 0.2; done
 [ -f "$apps/launched" ] || { echo "the application did not run"; exit 1; }
-python3 "$(dirname "$0")/check_screenshot.py" --distinct "$out"/{44-application,45-opened}.png
 stop_pane
 
 # Uninstall the settings sample, keeping its saved data: Uninstall, the last

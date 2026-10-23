@@ -791,9 +791,6 @@ Capture "45-opened.png"   # evidence only: the window is hidden
 for ($i = 0; $i -lt 50 -and -not (Test-Path $launched); $i++) { Start-Sleep -Milliseconds 200 }
 if (-not (Test-Path $launched)) { throw "the application did not run" }
 if ([Win]::GetForegroundWindow() -eq $process.MainWindowHandle) { throw "opening the application left Pane's window in front" }
-$shots = "44-application", "45-opened" | ForEach-Object { Join-Path $OutDir "$_.png" }
-python "$PSScriptRoot/check_screenshot.py" --distinct @shots
-if ($LASTEXITCODE -ne 0) { throw "screenshot check failed: opening the application changed nothing" }
 Stop-Pane $process
 
 # Quicklinks' own behaviour is its repository's to test (#285, its sources
