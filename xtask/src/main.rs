@@ -59,18 +59,14 @@
 //!   after `ci-tests` (or `ci`) go to `cargo nextest run` as they are: CI
 //!   passes `--partition hash:1/3` to run one shard of the tests, `-E
 //!   <filter>` to run only some, `--no-run` to build them only.
-//! - `package-linux`: build Pane's Linux package and the artifacts its
-//!   own application updates are downloaded from, under `target/dist/`
-//!   (with `--dev`, the package's program is the development profile; see
-//!   `package.rs`).
-//! - `package-windows`: build Pane's Windows package and the same
-//!   artifacts, under `target/dist/` (`--dev` as for `package-linux`;
-//!   `package.rs` assembles the artifacts everywhere and builds the
-//!   package itself only on Windows).
-//! - `package-macos`: build Pane's macOS package and the same artifacts,
-//!   under `target/dist/` (`--dev` as for `package-linux`; `package.rs`
-//!   assembles the artifacts everywhere and builds the package itself
-//!   only on macOS).
+//! - `package-linux`: build Pane's Linux package and its `.sha256`,
+//!   under `target/dist/`, and the assets a release of Pane carries for
+//!   it, under `target/dist/release/` (with `--dev`, the package's
+//!   program is the development profile; see `package.rs`).
+//! - `package-windows`: the same for Windows (`--dev` as for
+//!   `package-linux`; only on Windows).
+//! - `package-macos`: the same for macOS (`--dev` as for
+//!   `package-linux`; only on macOS).
 //! - `file-index-bench`: build the file index's benchmark in release and
 //!   run it with the options that follow (#174; by default a generated
 //!   tree of 450,000 entries; `--home` indexes the real home folder, read

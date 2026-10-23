@@ -82,11 +82,11 @@ tokio = { workspace = true, features = ["net"] }
 tar.workspace = true
 flate2.workspace = true
 # The zip packer of that same test support, which the Settings tests now
-# reuse for the local artifact source's application packages; already in the
-# tree through `pane-core`'s zip reader.
+# reuse for the local releases' application packages; already in the tree
+# through `pane-core`'s zip reader.
 crc32fast.workspace = true
 # The tests' settings records and accessibility trees, and the npm and
-# artifact test support's integrity hashes.
+# release test support's digests.
 serde_json.workspace = true
 sha2.workspace = true
 gpui ={ package = "gpui-ce", git = "https://github.com/hoangvu12/gpui-ce", rev = "beb5a6dada242a4aad9f972546021a6fb6c869ba", default-features = false, features = ["test-support"] }

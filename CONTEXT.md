@@ -24,12 +24,12 @@ _Avoid_: Mandatory feature, core feature
 An extension Pane's maintainers publish, each from a repository of its own that anyone may contribute to, and which Settings marks as Pane's own wherever it lists extensions, by its default identity or its repository in the pane-app organization. The default extensions are official extensions.
 _Avoid_: Built-in extension, core extension, first-party plugin
 
-**Artifact source**:
-Where Pane reads the index of its own application updates: Pane's own downloads, distinct from npm and the Git hosts. Nothing about a default extension is acquired from it — a default is fetched from the commit of its repository's release tag that the Pane release pins. A development build can name an artifact source on this computer instead, for tests and smokes; a release build cannot.
-_Avoid_: Registry (npm's), repository (Git's)
+**Release source**:
+Where Pane reads its own application updates: the GitHub releases of `pane-app/pane`, listed through GitHub's API (ADR 0048), distinct from npm and the Git hosts an extension comes from. Nothing about a default extension is acquired from it — a default is fetched from the commit of its repository's release tag that the Pane release pins. A development build can name a stand-in on this computer instead (`PANE_RELEASES`), for tests and smokes; a release build cannot.
+_Avoid_: Artifact source (Pane's own downloads host, never deployed and replaced by GitHub Releases), registry (npm's), repository (Git's)
 
 **Acquired artifact**:
-Pane's own application-update package, downloaded only when the user chooses the update: the zip or tarball the artifact source's index names by version, file, size, target and sha512 integrity, checked against that integrity and unpacked by the same strict readers an npm package's tarball is, then swapped for the running program, so the new version is used the next start. It is not cached between attempts.
+Pane's own application-update package, downloaded only when the user chooses the update: the release asset named for this system (`pane-<version>-<os>-<arch>.zip` or `.tar.gz`), checked against the sha256 of the `.sha256` asset beside it and unpacked by the same strict readers an npm package's tarball is, then swapped for the running program, so the new version is used the next start. It is not cached between attempts.
 _Avoid_: Installer payload (the installer carries none), bundled feature, default extension's payload (a default is fetched from its pinned commit)
 
 **Disabled extension**:
@@ -369,7 +369,7 @@ Pane's own copy of an installed package's manifest and components, kept in Pane'
 _Avoid_: Cache (it is not disposable)
 
 **Application update**:
-A newer version of Pane itself, which Pane finds out about from its artifact source's index when it starts and tells the user of, as a row in root search; Pane downloads and installs it only when the user chooses, replacing the program in the install folder (the running one renamed aside) so the new version is used on the next start — which the user does, since Pane never restarts itself. Pane's data, and the extensions it installed, are untouched by one.
+A newer version of Pane itself, which Pane finds out about from its release source when it starts and tells the user of, as a row in root search; Pane downloads and installs it only when the user chooses, replacing the program in the install folder (the running one renamed aside) so the new version is used on the next start — which the user does, since Pane never restarts itself. Pane's data, and the extensions it installed, are untouched by one.
 _Avoid_: Self-update, auto-update (nothing is automatic), app update
 
 **Update**:

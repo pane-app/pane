@@ -236,24 +236,24 @@ fn main() {
         // one, #56 the Linux one): the program this Pane runs from is the
         // one an update replaces - pane.exe in the install folder on
         // Windows, the Pane.app bundle's own binary (Contents/MacOS/pane)
-        // on macOS, pane in ~/.local/bin on Linux - and the artifact
-        // source names the newer package in its index, the package built
-        // for this system (a zip on Windows and macOS, a gzipped tarball
-        // on Linux), unpacked by the same platform-independent machinery.
-        // Pane checks once, at start, and only the user's choice downloads
-        // and installs anything. A release build reads Pane's published
-        // downloads; a development build only where PANE_ARTIFACTS names a
-        // source on this computer (the tests' and smokes' own), so that a
-        // development checkout checks nothing over the network by itself.
+        // on macOS, pane in ~/.local/bin on Linux - and the newest of
+        // Pane's releases on GitHub carries the newer package, the package
+        // built for this system (a zip on Windows and macOS, a gzipped
+        // tarball on Linux), unpacked by the same platform-independent
+        // machinery. Pane checks once, at start, and only the user's
+        // choice downloads and installs anything. A release build reads
+        // Pane's published releases; a development build only where
+        // PANE_RELEASES names a stand-in on this computer (the tests' and
+        // smokes' own), so that a development checkout checks nothing over
+        // the network by itself.
         #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
         let launcher = {
             #[cfg(debug_assertions)]
-            let artifact_source = pane_core::defaults::ArtifactSource::from_dev_env();
+            let release_source = pane_core::ReleaseSource::from_dev_env();
             #[cfg(not(debug_assertions))]
-            let artifact_source: Option<
-                Result<pane_core::defaults::ArtifactSource, String>,
-            > = Some(Ok(pane_core::defaults::ArtifactSource::published()));
-            match (std::env::current_exe(), artifact_source.as_ref()) {
+            let release_source: Option<Result<pane_core::ReleaseSource, String>> =
+                Some(Ok(pane_core::ReleaseSource::published()));
+            match (std::env::current_exe(), release_source.as_ref()) {
                 (Ok(exe), Some(Ok(source))) => {
                     launcher.with_application_update(pane::APP_VERSION, source.clone(), exe)
                 }
@@ -483,7 +483,7 @@ fn main() {
         })
         .detach();
         // Checking for a Pane application update does too: it reads only
-        // the artifact source's index, and what it finds is offered as a
+        // the list of Pane's releases, and what it finds is offered as a
         // row in root search the user chooses. (A Pane that wires no
         // updater checks for nothing.)
         cx.spawn(async move |_| {

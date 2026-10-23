@@ -38,14 +38,11 @@
 //! its Git source recorded (repository, tag, commit, pinned) beside the
 //! version its manifest declares — the record a later release's updater
 //! reads. An install that acquired its defaults another way (an older
-//! Pane, from the artifact source) keeps them: their identity and saved
+//! Pane, from its own downloads) keeps them: their identity and saved
 //! data are unchanged, and they are not acquired again.
 //!
-//! What remains of Pane's own artifact source (`https://downloads.pane.sh/`)
-//! serves the index of Pane's *application* updates alone
-//! ([`crate::application_update`]); it no longer serves any default
-//! extension, and a development build can name one on this computer for
-//! those updates alone (`PANE_ARTIFACTS`).
+//! Pane's *application* updates come from somewhere else again: the
+//! releases of Pane's own repository on GitHub ([`crate::releases`]).
 
 use std::path::Path;
 use std::thread;
@@ -55,22 +52,7 @@ use serde::Deserialize;
 
 use crate::downloads::Download;
 use crate::git::{GitRef, GitRevision};
-use crate::http::{Answer, GetError, Origin};
 use crate::platform::Platform;
-
-/// Where Pane's own application updates are published: the index a Pane
-/// installed from its package reads at start for a newer version of
-/// itself. Not deployed yet (see the [module](self) documentation); tests
-/// and development builds use a source on this computer instead.
-pub const PUBLISHED: &str = "https://downloads.pane.sh/";
-
-/// The largest index document Pane reads from an artifact source: it
-/// names Pane's own application package, so a larger one is a broken
-/// source.
-pub const MAX_INDEX: u64 = 1 << 20;
-
-/// The name of the index document at an artifact source.
-const INDEX_FILE: &str = "pane-defaults.json";
 
 /// The largest pins file Pane reads: it names a handful of default
 /// extensions, so a larger one is a broken file.
@@ -82,90 +64,6 @@ pub(crate) const ATTEMPTS: usize = 3;
 
 /// How long Pane waits before trying an interrupted acquisition again.
 pub(crate) const RETRY_AFTER: [Duration; 2] = [Duration::from_millis(500), Duration::from_secs(1)];
-
-/// Where Pane reads the index of its own application updates. Release
-/// builds use only [`ArtifactSource::published`]; tests and development
-/// builds can use a source on this computer ([`ArtifactSource::local`]).
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ArtifactSource {
-    /// Its address, and whether it is on this computer.
-    origin: Origin,
-}
-
-impl Default for ArtifactSource {
-    fn default() -> ArtifactSource {
-        ArtifactSource::published()
-    }
-}
-
-impl ArtifactSource {
-    /// Pane's published downloads, over HTTPS.
-    pub fn published() -> ArtifactSource {
-        ArtifactSource {
-            origin: Origin::public(PUBLISHED),
-        }
-    }
-
-    /// A source on this computer, for tests and development builds only:
-    /// `url` must be `http://` or `https://` on a loopback address written
-    /// as one (`127.0.0.1`, any `127.x.y.z`, or `[::1]`), with an optional
-    /// port and path. Any other address is refused, `localhost` included
-    /// (a name could resolve elsewhere), so that nothing but Pane's
-    /// published downloads is ever reached over the network. Release
-    /// builds have no way to replace them.
-    #[cfg(any(test, debug_assertions))]
-    pub fn local(url: &str) -> Result<ArtifactSource, String> {
-        let refused = || {
-            format!(
-                "the artifact source `{url}` is not on this computer: Pane reads its own \
-                 application updates from {PUBLISHED}, and only a source on a loopback address \
-                 such as 127.0.0.1 or [::1] can replace it, for tests and development"
-            )
-        };
-        let origin = Origin::local(url, refused)?;
-        Ok(ArtifactSource { origin })
-    }
-
-    /// The artifact source named by `PANE_ARTIFACTS`, in development builds
-    /// only (see [`ArtifactSource::local`]); `None` when it is not set, in
-    /// which case this development build checks for no application update.
-    #[cfg(any(test, debug_assertions))]
-    pub fn from_dev_env() -> Option<Result<ArtifactSource, String>> {
-        crate::http::dev_env("PANE_ARTIFACTS").map(|url| ArtifactSource::local(&url))
-    }
-
-    /// Its address, ending with `/`.
-    pub fn url(&self) -> &str {
-        self.origin.url()
-    }
-
-    /// The address of the index document.
-    fn index_url(&self) -> String {
-        format!("{}{INDEX_FILE}", self.url())
-    }
-
-    /// The address of the package file `file` of an index entry: `file` is
-    /// one plain name (checked when the index was read), so the address
-    /// stays on this source.
-    pub(crate) fn payload_url(&self, file: &str) -> String {
-        format!("{}{file}", self.url())
-    }
-
-    /// Asks the source for `url`, with `headers`, a body of at most `most`
-    /// bytes, telling `progress` of the bytes of the body so far, through
-    /// the connections Pane's own requests use
-    /// ([`crate::http::get_blocking_progressing`]): only over HTTPS unless
-    /// the source is on this computer.
-    pub(crate) fn get(
-        &self,
-        url: &str,
-        headers: &[(&str, &str)],
-        most: u64,
-        progress: &(dyn Fn(u64) + Send + Sync),
-    ) -> Result<Answer, GetError> {
-        self.origin.get_progressing(url, headers, most, progress)
-    }
-}
 
 /// One default extension this build of Pane sets up at first setup: its
 /// `id` names it everywhere (the identity of the package installed,
@@ -339,7 +237,7 @@ fn is_extension_id(id: &str) -> bool {
 
 /// `true` for a release tag as ADR 0044 writes one: `v` followed by
 /// dotted numbers, such as `v0.5.0`.
-fn is_release_tag(tag: &str) -> bool {
+pub(crate) fn is_release_tag(tag: &str) -> bool {
     let Some(version) = tag.strip_prefix('v') else {
         return false;
     };
@@ -500,86 +398,15 @@ fn acquire(pin: &DefaultExtension, downloads: &Path) -> Result<Fetched, Failure>
     })
 }
 
-/// The index document an artifact source serves, as Pane read and checked
-/// it.
-pub(crate) struct Index {
-    /// What the index says of Pane's own application package, whose
-    /// updates Pane offers the user ([`crate::application_update`]): read
-    /// but neither parsed nor validated here, so that an application entry
-    /// this Pane cannot take never keeps it from doing anything else.
-    pub(crate) application: Option<serde_json::Value>,
-}
-
-/// Reads and checks the index document of `source`.
-pub(crate) fn read_index(source: &ArtifactSource) -> Result<Index, Failure> {
-    let index_url = source.index_url();
-    let read = source
-        .get(&index_url, &[], MAX_INDEX, &|_| {})
-        .map_err(|error| match error {
-            GetError::TooLarge => failed(format!(
-                "Pane's downloads at {} gave an index larger than the {} KiB Pane reads",
-                source.url(),
-                MAX_INDEX >> 10
-            )),
-            GetError::Failed(why) => interrupted(format!(
-                "Pane's downloads at {} could not be reached: {why}",
-                source.url()
-            )),
-        })?;
-    if read.status != 200 {
-        return Err(answer(
-            read.status,
-            format!(
-                "Pane's downloads at {} answered {} for its index {}",
-                source.url(),
-                read.status,
-                index_url
-            ),
-        ));
-    }
-    let index: IndexJson = serde_json::from_slice(&read.body).map_err(|error| {
-        failed(format!(
-            "Pane's downloads at {} gave an index that cannot be read: {error}",
-            source.url()
-        ))
-    })?;
-    if index.format_version != INDEX_FORMAT {
-        return Err(failed(format!(
-            "Pane's downloads at {} gave an index with format version {}, this Pane reads {}",
-            source.url(),
-            index.format_version,
-            INDEX_FORMAT
-        )));
-    }
-    Ok(Index {
-        application: index.application,
-    })
-}
-
-/// Why a status other than 200 was answered for the index or a package:
-/// trying again may fix a server that failed, never a package that is
-/// simply not there.
+/// Why a status other than 200 was answered for Pane's releases or a
+/// package: trying again may fix a server that failed, never a package
+/// that is simply not there.
 pub(crate) fn answer(status: u16, why: String) -> Failure {
     if matches!(status, 403 | 500 | 502 | 503 | 504) {
         interrupted(why)
     } else {
         failed(why)
     }
-}
-
-/// The index document as it is served: `formatVersion` and, optionally,
-/// the `application` entry naming Pane's own package.
-#[derive(Deserialize)]
-struct IndexJson {
-    #[serde(rename = "formatVersion")]
-    format_version: u64,
-    /// Pane's own application package (see [`crate::application_update`]),
-    /// read as it is written: parsed where it is used, so a broken entry
-    /// is explained there rather than making the whole index unreadable.
-    /// Optional, because a source that serves none (one built before the
-    /// application entry existed) still serves the index.
-    #[serde(default)]
-    application: Option<serde_json::Value>,
 }
 
 /// One pin of the pins file, as it is written.
@@ -594,46 +421,9 @@ struct PinJson {
     platform: Option<String>,
 }
 
-/// The index format this Pane reads.
-const INDEX_FORMAT: u64 = 1;
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn a_source_on_this_computer_is_a_loopback_address_only() {
-        let source = ArtifactSource::local("http://127.0.0.1:43127/").unwrap();
-        assert_eq!(source.url(), "http://127.0.0.1:43127/");
-        assert!(source.origin.is_loopback());
-        for url in [
-            "http://127.0.0.1:43127",
-            "https://127.9.9.9/",
-            "http://[::1]:8/",
-        ] {
-            let source = ArtifactSource::local(url).unwrap();
-            assert!(source.url().ends_with('/'), "{}", source.url());
-            assert!(source.origin.is_loopback());
-        }
-        for url in [
-            "http://localhost:43127/",
-            "http://example.com/",
-            "https://registry.npmjs.org/",
-            "ftp://127.0.0.1/",
-            "http://192.168.1.4/",
-            " Pane",
-            "http://127.0.0.1:pane/",
-        ] {
-            assert!(ArtifactSource::local(url).is_err(), "{url:?}");
-        }
-    }
-
-    #[test]
-    fn a_source_names_its_index() {
-        let source = ArtifactSource::published();
-        assert_eq!(source.url(), PUBLISHED);
-        assert_eq!(source.index_url(), format!("{PUBLISHED}{INDEX_FILE}"));
-    }
 
     #[test]
     fn a_pin_names_everything_a_fetch_needs() {

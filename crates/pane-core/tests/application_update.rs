@@ -1,15 +1,16 @@
 //! Installing a Pane application update by the user's choice (#54),
-//! through the launcher's public interface: Pane checks the artifact
-//! source for a newer version of itself when it starts and notifies the
+//! through the launcher's public interface: Pane checks its releases on
+//! GitHub for a newer version of itself when it starts and notifies the
 //! user, who chooses whether to install it — nothing is downloaded,
 //! installed or restarted automatically, ever
 //! ([decision](https://github.com/pane-app/pane/issues/1): US76).
 //!
-//! The check and the install run against an artifact source on 127.0.0.1
-//! (`support/artifacts.rs`; nothing reaches the network or Pane's
-//! published downloads), which serves the index with an `application`
-//! entry naming a Pane package — a zip, as the Windows package is — and
-//! the zip itself. Where the program is installed stands in a folder of
+//! The check and the install run against a stand-in for GitHub on
+//! 127.0.0.1 (`support/releases.rs`; nothing reaches the network or Pane's
+//! published releases), which lists the releases as GitHub's API does —
+//! each carrying a Pane package (a zip, as the Windows package is) and its
+//! `.sha256` — and serves their downloads behind a redirect, as GitHub
+//! does. Where the program is installed stands in a folder of
 //! the test's own with a program file in it, as `%LOCALAPPDATA%\Pane`
 //! holds `pane.exe` on Windows; the swap an install performs is the same
 //! platform-independent code the Windows smoke runs for real.
@@ -20,14 +21,13 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use futures::executor::block_on;
-use pane_core::defaults::ArtifactSource;
-use pane_core::{ApplicationUpdate, Launcher, Runtime, Status, Target};
+use pane_core::{ApplicationUpdate, Launcher, ReleaseSource, Runtime, Status, Target};
 use tempfile::TempDir;
 
-#[path = "support/artifacts.rs"]
-mod artifacts;
+#[path = "support/releases.rs"]
+mod releases;
 
-use artifacts::Artifacts;
+use releases::Releases;
 
 #[path = "support/defaults.rs"]
 mod defaults;
@@ -41,8 +41,8 @@ mod rows;
 
 use rows::{select_title, titles};
 
-/// Pane's install folder, data folder, compiled code cache, artifact
-/// source and the server the default extension's repository is served
+/// Pane's install folder, data folder, compiled code cache, stand-in
+/// for Pane's releases and the server the default extension's repository is served
 /// from, for one test. The install folder holds the program and, under
 /// `data`, Pane's own data — as `%LOCALAPPDATA%\Pane` does on Windows, so
 /// an update's swap works around the data it must not touch.
@@ -54,7 +54,7 @@ struct Dirs {
     /// Kept, not read: it holds the compiled code cache alive.
     _cache: TempDir,
     runtime: Runtime,
-    artifacts: Artifacts,
+    releases: Releases,
     server: repo_server::Server,
 }
 
@@ -65,7 +65,7 @@ impl Dirs {
             install: tempfile::tempdir().unwrap(),
             repos: tempfile::tempdir().unwrap(),
             runtime: Runtime::start_with_cache(cache.path().to_path_buf()).unwrap(),
-            artifacts: Artifacts::start(),
+            releases: Releases::start(),
             server: repo_server::Server::start(),
             _cache: cache,
         }
@@ -87,13 +87,13 @@ impl Dirs {
     }
 
     /// A launcher on this data folder, running the version `version` from
-    /// the program file above, checking the local artifact source; a new
+    /// the program file above, checking the local releases; a new
     /// one is a restart of Pane.
     fn launcher(&self, version: &str) -> Launcher {
         Launcher::with_packages(Ok(self.runtime.clone()), vec![], self.packages_dir())
             .with_application_update(
                 version,
-                ArtifactSource::local(self.artifacts.url()).unwrap(),
+                ReleaseSource::local(self.releases.url()).unwrap(),
                 self.program(),
             )
     }
@@ -107,7 +107,7 @@ impl Dirs {
             .and_then(|name| name.to_str())
             .expect("the program file is named")
             .to_owned();
-        let zip = artifacts::pack_zip(&[
+        let zip = releases::pack_zip(&[
             (name.as_str(), program.to_vec()),
             ("README.txt", b"the readme".to_vec()),
         ]);
@@ -115,7 +115,7 @@ impl Dirs {
             .expect("Pane names this system's target")
             .id()
             .to_owned();
-        self.artifacts.publish_application(version, &target, &zip);
+        self.releases.publish_application(version, &target, &zip);
     }
 
     /// Publishes an application package `version` for this system, packed
@@ -131,7 +131,7 @@ impl Dirs {
             .and_then(|name| name.to_str())
             .expect("the program file is named")
             .to_owned();
-        let tarball = artifacts::pack_tgz(&[
+        let tarball = releases::pack_tgz(&[
             (name.as_str(), program.to_vec()),
             ("README.txt", b"the readme".to_vec()),
         ]);
@@ -139,7 +139,7 @@ impl Dirs {
             .expect("Pane names this system's target")
             .id()
             .to_owned();
-        self.artifacts
+        self.releases
             .publish_application_tgz(version, &target, &tarball);
     }
 
@@ -247,20 +247,32 @@ fn choosing_to_install_downloads_and_swaps_the_program() {
     // The row is gone: the offer was installed. Nothing is listed for a
     // Pane whose update is installed.
     assert!(!titles(&launcher).contains(&"Update Pane to 99.0.0".to_owned()));
-    // The package was downloaded once, and the index read once for the
-    // check and once for nothing else.
+    // The releases were listed once, for the check; the install
+    // downloaded the package's `.sha256` and then the package, once each,
+    // each through the redirect GitHub's downloads answer with.
+    assert_eq!(dirs.releases.listed(), 1);
+    assert_eq!(dirs.releases.downloaded(".zip"), 1);
+    assert_eq!(dirs.releases.downloaded(".zip.sha256"), 1);
+    let file = format!("pane-99.0.0-{}.zip", Target::current().unwrap().id());
+    let downloads: Vec<String> = dirs
+        .releases
+        .requests()
+        .into_iter()
+        .filter(|path| !path.starts_with(releases::LISTING))
+        .collect();
     assert_eq!(
-        dirs.artifacts
-            .requests()
-            .iter()
-            .filter(|path| path.ends_with(".zip"))
-            .count(),
-        1
+        downloads,
+        [
+            format!("/pane-app/pane/releases/download/v99.0.0/{file}.sha256"),
+            format!("/assets/{file}.sha256"),
+            format!("/pane-app/pane/releases/download/v99.0.0/{file}"),
+            format!("/assets/{file}"),
+        ]
     );
 
     // A Pane starting with the new program removes what the update left:
     // the old program goes, and the offer stays gone, because this Pane
-    // runs the version the index names.
+    // runs the version the newest release names.
     drop(launcher);
     let launcher = dirs.launcher("99.0.0");
     block_on(launcher.check_application_update());
@@ -274,7 +286,7 @@ fn choosing_to_install_downloads_and_swaps_the_program() {
 #[test]
 fn choosing_to_install_the_linux_packages_tarball_swaps_the_program() {
     let dirs = Dirs::new();
-    // The Linux package: the index names a `.tar.gz`, as `cargo xtask
+    // The Linux package: the release carries a `.tar.gz`, as `cargo xtask
     // package-linux` packs it, and the install unpacks it with the same
     // strictness as the zip the Windows package is.
     dirs.publish_update_tgz("99.0.0", b"the 99.0.0 program");
@@ -300,14 +312,7 @@ fn choosing_to_install_the_linux_packages_tarball_swaps_the_program() {
         b"the 0.1.0 program"
     );
     assert_eq!(dirs.installed(), ["pane", "pane.old"]);
-    assert_eq!(
-        dirs.artifacts
-            .requests()
-            .iter()
-            .filter(|path| path.ends_with(".tar.gz"))
-            .count(),
-        1
-    );
+    assert_eq!(dirs.releases.downloaded(".tar.gz"), 1);
 
     // A Pane starting with the new program removes what the update left.
     drop(launcher);
@@ -352,17 +357,17 @@ fn a_newer_version_is_notified_and_nothing_is_downloaded() {
             "Your extensions and settings are kept; the new version is used the next time Pane starts"
         )
     );
-    // The check read the index and nothing else: no package was
-    // downloaded, installed or restarted. Taking no action keeps it that
-    // way.
+    // The check listed the releases and nothing else: no package, and
+    // not even its `.sha256`, was downloaded, installed or restarted.
+    // Taking no action keeps it that way.
     assert_eq!(
-        dirs.artifacts
+        dirs.releases
             .requests()
             .iter()
-            .filter(|path| path.ends_with(".zip"))
+            .filter(|path| !path.starts_with(releases::LISTING))
             .count(),
         0,
-        "a package was downloaded without the user choosing it"
+        "something was downloaded without the user choosing it"
     );
     assert_eq!(dirs.installed(), ["pane"]);
     assert_eq!(fs::read(dirs.program()).unwrap(), b"the 0.1.0 program");
@@ -373,14 +378,7 @@ fn a_newer_version_is_notified_and_nothing_is_downloaded() {
     let launcher = dirs.launcher("0.1.0");
     block_on(launcher.check_application_update());
     assert!(titles(&launcher).contains(&"Update Pane to 99.0.0".to_owned()));
-    assert_eq!(
-        dirs.artifacts
-            .requests()
-            .iter()
-            .filter(|path| path.ends_with(".zip"))
-            .count(),
-        0
-    );
+    assert_eq!(dirs.releases.downloaded(".zip"), 0);
     assert_eq!(dirs.installed(), ["pane"]);
 }
 
@@ -391,7 +389,7 @@ const DROPPED_AFTER: usize = 16;
 #[test]
 fn the_state_the_about_page_reads_is_the_rows_own_state() {
     let dirs = Dirs::new();
-    // No updater wired (no artifact source given): honestly nothing to
+    // No updater wired (no release source given): honestly nothing to
     // check, which the Settings About page explains instead of promising
     // a release or a feed.
     let plain = Launcher::with_packages(Ok(dirs.runtime.clone()), vec![], dirs.packages_dir());
@@ -408,9 +406,10 @@ fn the_state_the_about_page_reads_is_the_rows_own_state() {
         Status::Result("Pane is up to date".into())
     );
     // While a check runs the state says so; once it has answered, what it
-    // found. The index answers slowly, so the running check is seen.
-    dirs.artifacts
-        .stall("pane-defaults.json", 8, Duration::from_millis(400));
+    // found. The listing (no release yet, `[]`) answers slowly, so the
+    // running check is seen.
+    dirs.releases
+        .stall(releases::LISTING, 1, Duration::from_millis(400));
     let checking = launcher.clone();
     let running = thread::spawn(move || block_on(checking.check_application_update_again()));
     let deadline = Instant::now() + Duration::from_secs(10);
@@ -435,7 +434,8 @@ fn an_install_shows_progress_and_leaves_the_core_usable() {
     // The package arrives slowly, in two pieces, so its bytes are seen
     // arriving one at a time.
     let file = format!("pane-99.0.0-{}.zip", Target::current().unwrap().id());
-    dirs.artifacts.stall(&file, 8, Duration::from_millis(400));
+    dirs.releases
+        .stall(&releases::asset_path(&file), 8, Duration::from_millis(400));
 
     // The install runs as the window drives it: another thread, while the
     // core stays usable.
@@ -484,9 +484,9 @@ fn a_failed_download_leaves_the_old_state_and_can_be_tried_again() {
     dirs.running(b"the 0.1.0 program");
     let launcher = dirs.launcher("0.1.0");
     block_on(launcher.check_application_update());
-    // The package the index names is not what arrives: its bytes were
-    // damaged, so they do not match the integrity the index gives.
-    dirs.artifacts.corrupt_application();
+    // The package the release names is not what arrives: its bytes were
+    // damaged, so they do not match the sha256 its `.sha256` gives.
+    dirs.releases.corrupt_application();
 
     select_title(&launcher, "Update Pane to 99.0.0");
     block_on(launcher.activate_selected());
@@ -499,10 +499,7 @@ fn a_failed_download_leaves_the_old_state_and_can_be_tried_again() {
         error.starts_with("Could not update Pane to 99.0.0: "),
         "{error}"
     );
-    assert!(
-        error.contains("does not match the sha512 integrity"),
-        "{error}"
-    );
+    assert!(error.contains("does not match the sha256"), "{error}");
     // The About page reads the same failure with the offer it belongs
     // to: the offer stays, ready to be chosen again.
     assert!(
@@ -511,7 +508,7 @@ fn a_failed_download_leaves_the_old_state_and_can_be_tried_again() {
             ApplicationUpdate::Offered {
                 failure: Some(why),
                 ..
-            } if why.contains("does not match the sha512 integrity")
+            } if why.contains("does not match the sha256")
         ),
         "the offer keeps its failure: {:?}",
         launcher.application_update()
@@ -540,7 +537,7 @@ fn after_a_failed_install_enter_tries_it_again() {
     dirs.running(b"the 0.1.0 program");
     let launcher = dirs.launcher("0.1.0");
     block_on(launcher.check_application_update());
-    dirs.artifacts.corrupt_application();
+    dirs.releases.corrupt_application();
 
     // The user chooses the update among root search's other rows. The row
     // leaves the list while the install runs, so it cannot be started
@@ -591,7 +588,8 @@ fn an_interrupted_download_is_tried_again() {
     // The first download of the package is interrupted partway: the
     // connection closes after its first bytes.
     let file = format!("pane-99.0.0-{}.zip", Target::current().unwrap().id());
-    dirs.artifacts.drop_after(&file, DROPPED_AFTER, 1);
+    dirs.releases
+        .drop_after(&releases::asset_path(&file), DROPPED_AFTER, 1);
 
     select_title(&launcher, "Update Pane to 99.0.0");
     block_on(launcher.activate_selected());
@@ -604,12 +602,7 @@ fn an_interrupted_download_is_tried_again() {
         )
     );
     assert_eq!(fs::read(dirs.program()).unwrap(), b"the 99.0.0 program");
-    let downloads = dirs
-        .artifacts
-        .requests()
-        .iter()
-        .filter(|path| path.ends_with(".zip"))
-        .count();
+    let downloads = dirs.releases.downloaded(".zip");
     assert_eq!(downloads, 2);
 }
 
@@ -620,8 +613,8 @@ fn an_unreachable_source_is_explained_and_the_row_tries_again() {
     dirs.running(b"the 0.1.0 program");
     let launcher = dirs.launcher("0.1.0");
     assert_eq!(dirs.top_level(), ["pane"]);
-    // Nothing answers where the artifact source is.
-    drop(dirs.artifacts);
+    // Nothing answers where the releases are.
+    drop(dirs.releases);
 
     block_on(launcher.check_application_update());
 
@@ -633,7 +626,7 @@ fn an_unreachable_source_is_explained_and_the_row_tries_again() {
         "{error}"
     );
     assert!(
-        error.contains("Pane's downloads at http://127.0.0.1:")
+        error.contains("Pane's releases at http://127.0.0.1:")
             && error.contains("Pane tried 3 times"),
         "{error}"
     );
@@ -642,7 +635,7 @@ fn an_unreachable_source_is_explained_and_the_row_tries_again() {
     assert!(
         matches!(
             launcher.application_update(),
-            ApplicationUpdate::Failed(why) if why.starts_with("Pane's downloads at")
+            ApplicationUpdate::Failed(why) if why.starts_with("Pane's releases at")
         ),
         "the failure is the state: {:?}",
         launcher.application_update()
@@ -678,18 +671,18 @@ fn a_check_the_source_answers_with_an_error_is_explained_until_it_answers() {
     dirs.publish_update("99.0.0", b"the 99.0.0 program");
     dirs.running(b"the 0.1.0 program");
     let launcher = dirs.launcher("0.1.0");
-    // The source answers, but not with its index.
-    dirs.artifacts
-        .fail_status("pane-defaults.json", 404, usize::MAX);
+    // The source answers, but not with its listing.
+    dirs.releases
+        .fail_status(releases::LISTING, 404, usize::MAX);
 
     block_on(launcher.check_application_update());
 
     let error = error_of(&launcher);
-    assert!(error.contains("answered 404 for its index"), "{error}");
+    assert!(error.contains("answered 404"), "{error}");
     assert!(titles(&launcher).contains(&"Check for a Pane update".to_owned()));
 
     // The source works again; the row that tries again finds the update.
-    dirs.artifacts.stop_failing("pane-defaults.json");
+    dirs.releases.stop_failing(releases::LISTING);
     select_title(&launcher, "Check for a Pane update");
     block_on(launcher.activate_selected());
     assert_eq!(
@@ -700,43 +693,129 @@ fn a_check_the_source_answers_with_an_error_is_explained_until_it_answers() {
 }
 
 #[test]
-fn an_index_pane_cannot_take_is_explained_and_the_defaults_are_set_up() {
+fn a_used_up_rate_limit_is_explained_and_not_tried_again_at_once() {
+    let dirs = Dirs::new();
+    dirs.publish_update("99.0.0", b"the 99.0.0 program");
+    dirs.running(b"the 0.1.0 program");
+    let launcher = dirs.launcher("0.1.0");
+    // GitHub answers as it does once this address read its releases as
+    // often as an hour allows.
+    dirs.releases.rate_limit(releases::LISTING, 1);
+
+    block_on(launcher.check_application_update());
+
+    // Explained, with when the limit lifts; asked once, not three times,
+    // since trying again at once cannot help.
+    let error = error_of(&launcher);
+    assert!(
+        error.contains("GitHub limits how often Pane's releases can be read"),
+        "{error}"
+    );
+    assert!(error.contains("try again in about 10 minutes"), "{error}");
+    assert!(!error.contains("Pane tried"), "{error}");
+    assert_eq!(dirs.releases.listed(), 1);
+
+    // Once it lifts, the row that tries again finds the update.
+    select_title(&launcher, "Check for a Pane update");
+    block_on(launcher.activate_selected());
+    assert_eq!(
+        launcher.view().status,
+        Status::Result("Pane 99.0.0 is available".into())
+    );
+}
+
+#[test]
+fn a_release_without_its_checksum_is_explained_and_nothing_is_downloaded() {
+    let dirs = Dirs::new();
+    dirs.publish_update("99.0.0", b"the 99.0.0 program");
+    dirs.releases.remove_checksums();
+    dirs.running(b"the 0.1.0 program");
+    let launcher = dirs.launcher("0.1.0");
+
+    block_on(launcher.check_application_update());
+
+    // A package with no `.sha256` beside it cannot be checked, so it is
+    // not offered: the check explains why.
+    let error = error_of(&launcher);
+    let file = format!("pane-99.0.0-{}.zip", Target::current().unwrap().id());
+    assert!(
+        error.contains(&format!("no `{file}.sha256` to check it against")),
+        "{error}"
+    );
+    assert!(!titles(&launcher).contains(&"Update Pane to 99.0.0".to_owned()));
+    assert_eq!(dirs.releases.downloaded(".zip"), 0);
+}
+
+#[test]
+fn a_download_redirected_away_from_github_is_refused() {
+    let dirs = Dirs::new();
+    dirs.publish_update("99.0.0", b"the 99.0.0 program");
+    dirs.running(b"the 0.1.0 program");
+    let launcher = dirs.launcher("0.1.0");
+    block_on(launcher.check_application_update());
+    // The package's download redirects somewhere other than where Pane's
+    // releases are served (another port of this computer standing in for
+    // another host): Pane does not follow it.
+    let file = format!("pane-99.0.0-{}.zip", Target::current().unwrap().id());
+    let download = format!("/pane-app/pane/releases/download/v99.0.0/{file}");
+    dirs.releases
+        .redirect(&download, &format!("http://127.0.0.1:9/{file}"), 1);
+
+    select_title(&launcher, "Update Pane to 99.0.0");
+    block_on(launcher.activate_selected());
+
+    // Explained, asked once (a redirect elsewhere is not tried again),
+    // nothing downloaded from where it pointed, and nothing changed.
+    let error = error_of(&launcher);
+    assert!(
+        error.contains("to 127.0.0.1:9, which is not one of GitHub's own hosts"),
+        "{error}"
+    );
+    assert_eq!(
+        dirs.releases
+            .requests()
+            .iter()
+            .filter(|path| **path == download)
+            .count(),
+        1
+    );
+    assert_eq!(dirs.releases.downloaded(&file), 0);
+    assert_eq!(fs::read(dirs.program()).unwrap(), b"the 0.1.0 program");
+    assert!(titles(&launcher).contains(&"Update Pane to 99.0.0".to_owned()));
+
+    // Without the redirect elsewhere, the install goes ahead.
+    block_on(launcher.activate_selected());
+    assert_eq!(fs::read(dirs.program()).unwrap(), b"the 99.0.0 program");
+}
+
+#[test]
+fn a_listing_pane_cannot_take_is_explained_and_the_defaults_are_set_up() {
     let dirs = Dirs::new();
     // The sample's repository is served, so the default extension is
-    // set up from it whatever the artifact source's index says of Pane's
-    // own update.
+    // set up from it whatever Pane's releases say of Pane's own update.
     let sample = dirs.sample();
     dirs.running(b"the 0.1.0 program");
-    // The index describes an application package for another system.
-    let mut index: serde_json::Value = serde_json::from_str(&dirs.artifacts.index()).unwrap();
-    index["application"] = serde_json::json!({
-        "version": "99.0.0",
-        "file": "pane-99.0.0.zip",
-        "integrity": artifacts::integrity(b"whatever"),
-        "size": 8,
-        "target": "some-other-system",
-    });
-    dirs.artifacts.serve_index(index.to_string());
+    // The only newer release carries another system's package.
+    dirs.releases
+        .publish_application("99.0.0", "some-other-system", b"whatever");
     let launcher = Launcher::with_packages(Ok(dirs.runtime.clone()), vec![], dirs.packages_dir())
         .with_defaults(vec![sample])
         .with_application_update(
             "0.1.0",
-            ArtifactSource::local(dirs.artifacts.url()).unwrap(),
+            ReleaseSource::local(dirs.releases.url()).unwrap(),
             dirs.program(),
         );
 
     block_on(launcher.check_application_update());
-    // A package for another system is not this Pane's business: the entry
-    // stays silent, offering nothing, exactly as an equal or older version
-    // does (an entry for this system that cannot be used is the one that
-    // explains itself — the unit tests cover it).
+    // A package for another system is not this Pane's business: the
+    // release stays silent, offering nothing, exactly as an equal or older
+    // version does (a release for this system that cannot be used is the
+    // one that explains itself).
     assert_eq!(launcher.view().status, Status::Idle);
     block_on(launcher.acquire_defaults());
 
     // The default extension is still set up from its repository: one part
-    // of Pane that cannot take an entry never stops the other. The
-    // acquisition's own outcome takes the status line; the check's
-    // explanation stays in its row.
+    // of Pane that cannot take a release never stops the other.
     assert_eq!(
         launcher.view().status,
         Status::Result("Set up the Rust sample".into())
@@ -749,21 +828,20 @@ fn an_index_pane_cannot_take_is_explained_and_the_defaults_are_set_up() {
             .collect::<Vec<_>>(),
         ["Rust sample"]
     );
-    // An index whose format version this Pane does not read is explained
-    // as a broken source, for the update check as for the defaults.
-    let mut index: serde_json::Value = serde_json::from_str(&dirs.artifacts.index()).unwrap();
-    index["formatVersion"] = serde_json::json!(2);
-    dirs.artifacts.serve_index(index.to_string());
+    // A listing that is not a list of releases (an error GitHub gives as
+    // JSON, say) is explained as a broken source.
+    dirs.releases
+        .serve_listing(r#"{ "message": "Not Found" }"#.to_owned());
     let launcher = dirs.launcher("0.1.0");
     block_on(launcher.check_application_update());
     let error = error_of(&launcher);
     assert!(
-        error.contains("gave an index with format version 2, this Pane reads 1"),
+        error.contains("gave a listing that cannot be read"),
         "{error}"
     );
-    // An entry that names no newer version offers nothing and says
+    // A release that names no newer version offers nothing and says
     // nothing: this Pane is new enough.
-    dirs.artifacts.derived_index();
+    dirs.releases.derived_listing();
     dirs.publish_update("0.0.1", b"the 0.0.1 program");
     let launcher = dirs.launcher("0.1.0");
     block_on(launcher.check_application_update());
@@ -829,7 +907,7 @@ fn an_install_keeps_pane_s_data() {
         .with_defaults(vec![sample])
         .with_application_update(
             "0.1.0",
-            ArtifactSource::local(dirs.artifacts.url()).unwrap(),
+            ReleaseSource::local(dirs.releases.url()).unwrap(),
             dirs.program(),
         );
     block_on(launcher.acquire_defaults());

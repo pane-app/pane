@@ -365,7 +365,7 @@ not edit the issue.
   [Linux baseline](../platforms/linux.md)'s — not a desktop session, not a
   real GPU, and the numbers say so in `record.json`.
 - The default binary is the development profile (the smoke's); the release
-  profile's numbers wait for the deployed artifact source (above).
+  profile's numbers wait for a network the runner may not give (above).
 - A 1 s cadence over 60–90 s phases catches steady state and gross growth,
   not sub-second spikes. Window latencies are wall-clock to the window's
   appearance, polled at 0.2 s, so they quantize by about that much and are
@@ -379,10 +379,9 @@ not edit the issue.
 - `hidden-idle` follows a first setup: the defaults were acquired in the
   same run, so what a start does once (the applications' icons) may still
   run after the settling, and is counted there by thread. No update of
-  Pane itself is offered there: neither workload's hidden phase names an
-  application update source, so nothing offers a newer Pane (CI's smoke
-  leaves one in the artifacts it serves, which the hidden phases never
-  read).
+  Pane itself is offered there: neither workload's hidden phase names a
+  release source, so nothing offers a newer Pane (CI's smoke leaves one in
+  the release assets it serves, which the hidden phases never read).
 - Wake-ups are counted at the sample cadence: a thread that ends between
   two samples loses the switches since its last one. Names that share their
   first 15 bytes are one entry, on both platforms (above).

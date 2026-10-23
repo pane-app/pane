@@ -49,6 +49,7 @@ mod preferences;
 mod programs;
 mod protection;
 mod registrations;
+pub mod releases;
 pub mod run;
 mod runtime;
 pub mod schema;
@@ -70,7 +71,7 @@ mod windows_shell;
 mod zip;
 
 pub use arguments::{ArgumentKind, MAX_ARGUMENTS, ManifestArgument};
-pub use defaults::{ArtifactSource, DefaultExtension};
+pub use defaults::DefaultExtension;
 pub use dropdown::DropdownOption;
 pub use feedback::{
     ConfirmAnswer, Confirmation, Hud, NextShowing, PopToRoot, ShownToast, Toast, ToastAction,
@@ -119,6 +120,7 @@ pub use pane_target::{Arch, Target};
 pub use platform::Platform;
 pub use preferences::{HELP_FILE, Preference, PreferenceKind};
 pub use programs::runner::{MAX_PROGRAM_OUTPUT, SearchPath};
+pub use releases::ReleaseSource;
 #[cfg(debug_assertions)]
 #[doc(hidden)]
 pub use runtime::Fault;

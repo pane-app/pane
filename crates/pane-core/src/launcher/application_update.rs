@@ -30,20 +30,20 @@ use std::path::PathBuf;
 use super::{Launcher, Screen, State, Status, off_thread};
 use crate::Target;
 use crate::application_update::{self, Found, Offer, Program};
-use crate::defaults::ArtifactSource;
 use crate::launcher::Entry;
 use crate::launcher::Row;
+use crate::releases::ReleaseSource;
 
 /// This launcher's application: the version of Pane it runs, where its
-/// updates come from (the artifact source, which serves Pane's own
-/// application updates alone) and the program an update replaces. A
+/// updates come from (the releases of Pane's repository on GitHub, or a
+/// stand-in on this computer) and the program an update replaces. A
 /// launcher without one (another system's updater is not wired yet, or
 /// the program could not be named) checks for nothing and offers
 /// nothing.
 #[derive(Clone)]
 pub(in crate::launcher) struct Application {
     version: String,
-    source: ArtifactSource,
+    source: ReleaseSource,
     program: Program,
 }
 
@@ -92,7 +92,7 @@ enum Notice {
 /// or installs anything.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ApplicationUpdate {
-    /// No release source is configured: this Pane was given no artifact
+    /// No release source is configured: this Pane was given no release
     /// source to check (or its own program could not be named), so there
     /// is nothing to check, nothing to offer and no feed to claim. A
     /// page showing this explains the state rather than promising a
@@ -233,7 +233,7 @@ impl Launcher {
     pub fn with_application_update(
         self,
         version: &str,
-        source: ArtifactSource,
+        source: ReleaseSource,
         program: PathBuf,
     ) -> Self {
         let application = Program::at(program).ok().map(|program| {
@@ -250,12 +250,12 @@ impl Launcher {
         }
     }
 
-    /// Checks the artifact source for a newer version of Pane and tells
+    /// Checks Pane's releases for a newer version of Pane and tells
     /// the user what it found: a row in root search and a word on the
     /// status line for an update the user can choose to install, or an
     /// explanation of why the check could not be made, with the row that
     /// tries it again. Nothing is downloaded, installed or restarted: only
-    /// the index is read. Runs in the background; await the returned future
+    /// the list of releases is read. Runs in the background; await the returned future
     /// to apply the result, as the window does at start. Calling it again
     /// while a check runs does nothing. This is the check at Pane's start:
     /// it stays quiet when there is nothing to tell, unlike the one the

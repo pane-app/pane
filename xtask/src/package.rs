@@ -1,5 +1,6 @@
-//! Building Pane's packages and the artifacts its own updates are
-//! downloaded from (#53 for Linux, #51 for Windows, #52 for macOS).
+//! Building Pane's packages, which a release of Pane carries and its own
+//! updates are downloaded from (#53 for Linux, #51 for Windows, #52 for
+//! macOS; from GitHub Releases since #452).
 //!
 //! `package-linux`, `package-windows` and `package-macos` each produce,
 //! under `target/dist/`:
@@ -14,38 +15,34 @@
 //!   extensions (internet-first: Pane fetches them at first setup, from
 //!   the commits this release pins). A `.sha256` file beside it names its
 //!   digest; nothing is signed, since no signing credentials exist yet.
-//! - `artifacts/` — what an artifact source serves: the index document
-//!   `pane-defaults.json`, naming the application package a Pane
-//!   application update downloads, and the package itself. A real
-//!   deployment serves this folder at Pane's published downloads; the
-//!   tests and smokes serve it from this computer
-//!   (`scripts/artifact_server.py`) instead, so no check reaches the
-//!   network.
+//! - `release/` — the assets a release of Pane on GitHub carries for this
+//!   system (ADR 0048): the package, named
+//!   `pane-<version>-<os>-<arch>.tar.gz` or `.zip` — the name Pane's
+//!   updater looks for in a release, which a development package takes
+//!   here too, standing in for a release's — and its `.sha256`. The
+//!   release workflow uploads this folder's files to a draft release; the
+//!   smokes serve it from this computer as a stand-in for GitHub
+//!   (`scripts/release_server.py`), so no check reaches the network.
 //!
 //! `--dev` builds the package's program in the development profile: the
 //! native smokes install that one, because only a development build takes
-//! its artifact source from `PANE_ARTIFACTS` and its default extensions'
-//! pins from `PANE_DEFAULTS` (a release build uses Pane's published
-//! downloads and the committed pins, which no controlled source may
-//! replace). Without it, the release profile is built.
+//! its releases from `PANE_RELEASES` and its default extensions' pins
+//! from `PANE_DEFAULTS` (a release build reads Pane's published releases
+//! and the committed pins, which no controlled source may replace).
+//! Without it, the release profile is built.
 //!
-//! The index the artifacts hold names the application package a Pane
-//! application update downloads (#54): its `application` entry, with the
-//! package's version, file name, sha512 integrity, size and target.
 //! `--package-version <version>` builds the program reporting that
-//! version and names the package and its entry by it — for the smokes,
-//! which need a newer version to offer than the one installed (a real
-//! release builds the workspace's own version, and no override is
-//! given).
+//! version and names the package by it — for the smokes, which need a
+//! newer version to offer than the one installed (a real release builds
+//! the workspace's own version, and no override is given).
 //!
 //! Each task builds the package for the system it runs on, so a release
 //! for several systems builds one package per system (this machine builds
 //! the Linux one, CI's `windows-2025`, `macos-15` and `ubuntu-24.04`
-//! runners theirs). `package-windows` and `package-macos` run everywhere
-//! far enough to assemble the artifacts, then refuse anywhere but their
-//! own system: `pane.exe` needs a Windows build and the `pane` program a
-//! macOS one (no cross toolchain is set up), and packing another system's
-//! program under that system's package name would be worse than
+//! runners theirs). `package-windows` and `package-macos` refuse anywhere
+//! but their own system: `pane.exe` needs a Windows build and the `pane`
+//! program a macOS one (no cross toolchain is set up), and packing another
+//! system's program under that system's package name would be worse than
 //! explaining so.
 
 use std::fs;
@@ -54,7 +51,7 @@ use std::process::Command;
 
 use super::PACKED_MTIME;
 
-use sha2::{Digest, Sha256, Sha512};
+use sha2::{Digest, Sha256};
 
 use crate::zip;
 
@@ -132,36 +129,26 @@ impl System {
     }
 }
 
-/// Builds the Linux package and the artifacts an artifact source serves:
-/// the index naming the application package this task also built, and
-/// the package itself.
+/// Builds the Linux package and the release assets beside it.
 pub fn linux(dev: bool, version: Option<String>) -> Result<(), String> {
     let root = root();
     let out = root.join("target/dist");
     fs::create_dir_all(&out).map_err(|error| error.to_string())?;
-    let artifacts = artifacts_folder(&out)?;
+    let release = release_folder(&out)?;
     build_program(&root, dev, version.as_deref())?;
     let (package, packed) = assemble_package(&root, &out, dev, System::Linux, version.as_deref())?;
-    let target = target_id()?;
-    let application = application_entry(
-        version.as_deref().unwrap_or(VERSION),
-        &package,
-        &packed,
-        &target,
-    );
-    write_index(&artifacts, Some(&application))?;
-    serve_package(&artifacts, &package)?;
+    write_release(&release, System::Linux, version.as_deref(), &packed)?;
     println!("package built into {}", package.display());
-    println!("artifacts built into {}", artifacts.display());
+    println!("release assets built into {}", release.display());
     Ok(())
 }
 
-/// Builds the Windows package and the same artifacts.
+/// Builds the Windows package and the release assets beside it.
 pub fn windows(dev: bool, version: Option<String>) -> Result<(), String> {
     let root = root();
     let out = root.join("target/dist");
     fs::create_dir_all(&out).map_err(|error| error.to_string())?;
-    let artifacts = artifacts_folder(&out)?;
+    let release = release_folder(&out)?;
     // The program comes last, so everything else the task builds is built
     // wherever it runs; but pane.exe can only be built by a Windows
     // checkout (no cross toolchain is set up: a Windows program needs a
@@ -169,39 +156,29 @@ pub fn windows(dev: bool, version: Option<String>) -> Result<(), String> {
     // Windows package's name would be worse than explaining so. CI's
     // `windows-2025` runner builds the package itself.
     if !cfg!(target_os = "windows") {
-        // No package was built, so the index names no application package.
-        write_index(&artifacts, None)?;
+        // No package was built, so the release folder stays empty.
         return Err(format!(
             "package-windows builds the pane program for Windows, which only a Windows checkout \
-             can build; this one runs on {}. The artifacts under {} are assembled for this \
-             system, and a Windows run re-assembles them for windows-x86_64",
+             can build; this one runs on {}, so {} holds no package",
             std::env::consts::OS,
-            artifacts.display()
+            release.display()
         ));
     }
     build_program(&root, dev, version.as_deref())?;
     let (package, packed) =
         assemble_package(&root, &out, dev, System::Windows, version.as_deref())?;
-    let target = target_id()?;
-    let application = application_entry(
-        version.as_deref().unwrap_or(VERSION),
-        &package,
-        &packed,
-        &target,
-    );
-    write_index(&artifacts, Some(&application))?;
-    serve_package(&artifacts, &package)?;
+    write_release(&release, System::Windows, version.as_deref(), &packed)?;
     println!("package built into {}", package.display());
-    println!("artifacts built into {}", artifacts.display());
+    println!("release assets built into {}", release.display());
     Ok(())
 }
 
-/// Builds the macOS package and the same artifacts.
+/// Builds the macOS package and the release assets beside it.
 pub fn macos(dev: bool, version: Option<String>) -> Result<(), String> {
     let root = root();
     let out = root.join("target/dist");
     fs::create_dir_all(&out).map_err(|error| error.to_string())?;
-    let artifacts = artifacts_folder(&out)?;
+    let release = release_folder(&out)?;
     // As on Windows, the program comes last, so everything else the task
     // builds is built wherever it runs; but the `pane` program for macOS
     // can only be built by a macOS checkout (no cross toolchain is set
@@ -209,40 +186,65 @@ pub fn macos(dev: bool, version: Option<String>) -> Result<(), String> {
     // system's program under a macOS package's name would be worse than
     // explaining so. CI's `macos-15` runner builds the package itself.
     if !cfg!(target_os = "macos") {
-        // No package was built, so the index names no application package.
-        write_index(&artifacts, None)?;
+        // No package was built, so the release folder stays empty.
         return Err(format!(
             "package-macos builds the pane program for macOS, which only a macOS checkout can \
-             build; this one runs on {}. The artifacts under {} are assembled for this system, \
-             and a macOS run re-assembles them for macos-aarch64",
+             build; this one runs on {}, so {} holds no package",
             std::env::consts::OS,
-            artifacts.display()
+            release.display()
         ));
     }
     build_program(&root, dev, version.as_deref())?;
     let (package, packed) = assemble_package(&root, &out, dev, System::Macos, version.as_deref())?;
-    let target = target_id()?;
-    let application = application_entry(
-        version.as_deref().unwrap_or(VERSION),
-        &package,
-        &packed,
-        &target,
-    );
-    write_index(&artifacts, Some(&application))?;
-    serve_package(&artifacts, &package)?;
+    write_release(&release, System::Macos, version.as_deref(), &packed)?;
     println!("package built into {}", package.display());
-    println!("artifacts built into {}", artifacts.display());
+    println!("release assets built into {}", release.display());
     Ok(())
 }
 
-/// Keeps the package in the artifacts an artifact source serves, under the
-/// file name its index entry names: a Pane application update downloads
-/// it from that source.
-fn serve_package(artifacts: &Path, package: &Path) -> Result<(), String> {
-    let served = artifacts.join(package.file_name().expect("the package is named"));
-    fs::copy(package, &served)
-        .map_err(|error| format!("copy {} failed: {error}", served.display()))?;
-    Ok(())
+/// Writes the release assets of the package `packed` into `release`: the
+/// package under the name Pane's updater looks for in a release of
+/// `version` (`pane-<version>-<os>-<arch>.<archive>`, whichever profile
+/// was built), and its `.sha256` beside it, which the updater checks the
+/// package against.
+fn write_release(
+    release: &Path,
+    system: System,
+    version: Option<&str>,
+    packed: &[u8],
+) -> Result<(), String> {
+    let name = package_name(system, version, false)?;
+    let package = release.join(&name);
+    fs::write(&package, packed)
+        .map_err(|error| format!("write {} failed: {error}", package.display()))?;
+    write_sha256(release, &name, packed)
+}
+
+/// Writes `<name>.sha256` into `folder`, naming the digest of `packed`
+/// as `sha256sum` writes it, so the file can be checked with
+/// `sha256sum -c` on Linux; on Windows, `Get-FileHash` prints the digest
+/// to compare with.
+fn write_sha256(folder: &Path, name: &str, packed: &[u8]) -> Result<(), String> {
+    let digest: String = Sha256::digest(packed)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    let sha256 = folder.join(format!("{name}.sha256"));
+    fs::write(&sha256, format!("{digest}  {name}\n"))
+        .map_err(|error| format!("write {} failed: {error}", sha256.display()))
+}
+
+/// The package's file name: `pane-<version>-<os>-<arch>[-dev].<archive>`,
+/// the name Pane's updater looks for in a release (without `-dev`).
+fn package_name(system: System, version: Option<&str>, dev: bool) -> Result<String, String> {
+    let suffix = if dev { "-dev" } else { "" };
+    Ok(format!(
+        "pane-{}-{}-{}{suffix}.{}",
+        version.unwrap_or(VERSION),
+        system.id(),
+        arch().ok_or("the package names no architecture for this system")?,
+        system.archive(),
+    ))
 }
 
 fn root() -> PathBuf {
@@ -294,55 +296,13 @@ fn program_name() -> String {
     format!("pane{}", std::env::consts::EXE_SUFFIX)
 }
 
-/// The system this runs on, as Pane names a helper target (`linux-x86_64`).
-fn target_id() -> Result<String, String> {
-    pane_target::Target::current()
-        .map(|target| target.id())
-        .ok_or_else(|| "Pane names no target for this system".to_owned())
-}
-
-/// The empty `artifacts` folder under `out`, replacing whatever an
-/// earlier build left there: the index of Pane's own application updates
-/// and the package it names.
-fn artifacts_folder(out: &Path) -> Result<PathBuf, String> {
-    let artifacts = out.join("artifacts");
-    let _ = fs::remove_dir_all(&artifacts);
-    fs::create_dir_all(&artifacts).map_err(|error| error.to_string())?;
-    Ok(artifacts)
-}
-
-/// Writes the index `pane-defaults.json` into `artifacts`: the
-/// `application` entry naming the package a Pane application update
-/// downloads (its version, file name, sha512 integrity, size and target)
-/// when the task built one. A source that serves no application package
-/// serves the index alone.
-fn write_index(artifacts: &Path, application: Option<&str>) -> Result<(), String> {
-    let mut index = "{\n  \"formatVersion\": 1".to_owned();
-    if let Some(application) = application {
-        index.push_str(",\n");
-        index.push_str(application);
-    }
-    index.push_str("\n}\n");
-    let index_file = artifacts.join("pane-defaults.json");
-    fs::write(&index_file, index)
-        .map_err(|error| format!("write {} failed: {error}", index_file.display()))?;
-    Ok(())
-}
-
-/// The `application` line of the index: what a Pane application update
-/// reads of the package `packed` built as `file`, of `version`, for
-/// `target`.
-fn application_entry(version: &str, package: &Path, packed: &[u8], target: &str) -> String {
-    let file = package
-        .file_name()
-        .and_then(|name| name.to_str())
-        .expect("the package is named");
-    let integrity = format!("sha512-{}", base64(&Sha512::digest(packed)));
-    format!(
-        "  \"application\": {{ \"version\": \"{version}\", \"file\": \"{file}\", \
-         \"integrity\": \"{integrity}\", \"size\": {}, \"target\": \"{target}\" }}",
-        packed.len()
-    )
+/// The empty `release` folder under `out`, replacing whatever an earlier
+/// build left there: the assets a release of this build carries.
+fn release_folder(out: &Path) -> Result<PathBuf, String> {
+    let release = out.join("release");
+    let _ = fs::remove_dir_all(&release);
+    fs::create_dir_all(&release).map_err(|error| error.to_string())?;
+    Ok(release)
 }
 
 /// Every file under `folder`, by its path relative to it, in name order.
@@ -428,14 +388,7 @@ fn assemble_package(
     let stage = out.join("stage/pane");
     let _ = fs::remove_dir_all(stage.parent().expect("the stage folder"));
     fs::create_dir_all(&stage).map_err(|error| error.to_string())?;
-    let suffix = if dev { "-dev" } else { "" };
-    let name = format!(
-        "pane-{}-{}-{}{suffix}.{}",
-        version.unwrap_or(VERSION),
-        system.id(),
-        arch().ok_or("the package names no architecture for this system")?,
-        system.archive(),
-    );
+    let name = package_name(system, version, dev)?;
     let (script, script_name) = system.install_script();
     let copies = [
         (program(root, dev), stage.join(program_name())),
@@ -466,16 +419,7 @@ fn assemble_package(
     let package = out.join(&name);
     fs::write(&package, &packed)
         .map_err(|error| format!("write {} failed: {error}", package.display()))?;
-    // As `sha256sum` writes it, so the file can be checked with
-    // `sha256sum -c` on Linux; on Windows, `Get-FileHash` prints the digest
-    // to compare with.
-    let digest: String = Sha256::digest(&packed)
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect();
-    let sha256 = out.join(format!("{name}.sha256"));
-    fs::write(&sha256, format!("{digest}  {name}\n"))
-        .map_err(|error| format!("write {} failed: {error}", sha256.display()))?;
+    write_sha256(out, &name, &packed)?;
     Ok((package, packed))
 }
 
@@ -754,23 +698,4 @@ fn app_plist(version: &str) -> String {
 </dict>\n\
 </plist>\n"
     )
-}
-
-/// Standard base64 with padding.
-fn base64(bytes: &[u8]) -> String {
-    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut text = String::with_capacity(bytes.len().div_ceil(3) * 4);
-    for chunk in bytes.chunks(3) {
-        let n = (u32::from(chunk[0]) << 16)
-            | (u32::from(*chunk.get(1).unwrap_or(&0)) << 8)
-            | u32::from(*chunk.get(2).unwrap_or(&0));
-        for (i, shift) in [18, 12, 6, 0].into_iter().enumerate() {
-            if i <= chunk.len() {
-                text.push(ALPHABET[(n >> shift) as usize & 63] as char);
-            } else {
-                text.push('=');
-            }
-        }
-    }
-    text
 }
