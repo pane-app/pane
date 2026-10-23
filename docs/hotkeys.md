@@ -208,9 +208,26 @@ application, not to any extension or command. It is set on Settings'
 - If it is shown and focused, it is hidden.
 
 Hidden is not closed: Pane keeps running, the Settings window stays open,
-and the next press shows the same launcher again. A second press within
-600 ms of an accepted one is taken as the repeat of a key still held and
-does nothing.
+and the next press shows the same launcher again.
+
+Every press toggles, however soon it follows the last one (#467). A key
+held down is reported once: `MOD_NOREPEAT` and the hook's repeat rule on
+Windows, the grab's held state on X11, and the Carbon hot key's release
+on macOS keep its repeats from reaching the window. A press that comes
+before the summoned launcher has come forward (a quick second press, a
+press while it opens) hides it. On Windows "has the focus" is the
+system's foreground window, what the user sees in front.
+
+On Windows the launcher comes forward through the system's own calls
+(`SetForegroundWindow`, attached to the input of the thread in front if
+the plain call is refused), not GPUI's activation, which injects an Alt
+press that raced the call and reached the application behind. And the
+launcher never opens Windows' system menu: with Alt+Space as the hotkey,
+a Space still held as the launcher came forward reached it as Alt+Space,
+the menu's own shortcut, and the arrows then moved through that menu
+instead of Pane's list. The launcher's window ends the keyboard's menu
+command (`SC_KEYMENU`) and the menu characters (`WM_SYSCHAR`); Alt+F4
+still closes it, which quits Pane on Windows as before.
 
 ### Defaults
 
@@ -528,7 +545,7 @@ extension cannot assign, read or declare one (no WIT or manifest change).
   on GPUI's test platform with a fake system:
   - the default registered at start, and a press toggling the launcher
     (shown, focused, hidden)
-  - a held key not toggling again
+  - presses in quick succession each toggling (#467)
   - the Settings window's focus not counting
   - recording swapping the registration and the record
   - a shortcut another application has and a command's hotkey refused
@@ -568,6 +585,19 @@ extension cannot assign, read or declare one (no WIT or manifest change).
     use
   - the diagnostics copy holds the hook's state
     ([#259](https://github.com/pane-app/pane/issues/259))
+- Toggling with real keys
+  ([`crates/pane/tests/hotkey_toggle.rs`](../crates/pane/tests/hotkey_toggle.rs),
+  #467), on Windows where `PANE_TEST_REAL_INPUT=1` and
+  `PANE_TEST_REAL_WINDOWS=1` are set (CI's Windows runner): Pane's real
+  launcher window and the system's adapter, with another program's
+  window in front, for Alt+Space registered with the system, Alt+Space
+  held by the other program (the hook takes it) and the Windows key
+  alone:
+  - every press toggles at a person's pace, quickly (150 ms apart) and
+    in bursts (50 ms apart), the show and hide times measured from the
+    key event and printed
+  - Alt+Space held with the Space repeating as the launcher comes
+    forward opens no menu, and Down then moves the list's selection
 - The taskbar choice
   ([`crates/pane/tests/settings.rs`](../crates/pane/tests/settings.rs)),
   on GPUI's test platform with a fake taskbar seam (#268):

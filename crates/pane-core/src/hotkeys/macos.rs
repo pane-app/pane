@@ -4,9 +4,12 @@
 //! Monitoring permission (unlike an event tap, which Pane does not use).
 //! Carbon refuses only a shortcut another application registered
 //! exclusively; Pane's own reserved list covers the system's shortcuts,
-//! which it would not refuse.
+//! which it would not refuse. A hot key held down is reported once: a
+//! press while its key is still down since the last one is the key's
+//! repeat, not the user's press, and is dropped here, so every press the
+//! window hears toggles (#467).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use global_hotkey::hotkey::{Code, HotKey, Modifiers};
@@ -19,6 +22,8 @@ use super::{HotkeyError, Hotkeys, PressSender, Shortcut};
 struct Routing {
     presses: Mutex<Option<PressSender>>,
     registered: Mutex<HashMap<u32, Shortcut>>,
+    /// The ids whose key is down: pressed, and not released since.
+    held: Mutex<HashSet<u32>>,
 }
 
 static ROUTING: OnceLock<Arc<Routing>> = OnceLock::new();
@@ -110,12 +115,20 @@ impl MacHotkeys {
                 let routing = Arc::new(Routing {
                     presses: Mutex::new(None),
                     registered: Mutex::new(HashMap::new()),
+                    held: Mutex::new(HashSet::new()),
                 });
                 let handler = routing.clone();
                 GlobalHotKeyEvent::set_event_handler(Some(move |event: GlobalHotKeyEvent| {
+                    let mut held = handler.held.lock().unwrap_or_else(|p| p.into_inner());
                     if event.state != HotKeyState::Pressed {
+                        held.remove(&event.id);
                         return;
                     }
+                    // Already down: the held key's repeat.
+                    if !held.insert(event.id) {
+                        return;
+                    }
+                    drop(held);
                     let shortcut = handler
                         .registered
                         .lock()
@@ -197,5 +210,12 @@ impl Hotkeys for MacHotkeys {
         if registered.remove(&hot_key.id()).is_some() {
             let _ = self.manager.unregister(hot_key);
         }
+        // A key released after this is never reported: the next press of
+        // the shortcut registered again is a new one.
+        self.routing
+            .held
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .remove(&hot_key.id());
     }
 }

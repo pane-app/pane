@@ -36,6 +36,7 @@ mod first_setup;
 mod game_mode;
 mod held_keys;
 mod history;
+mod hotkey_toggle;
 mod hotkeys;
 mod icons;
 mod install;
