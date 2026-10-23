@@ -1233,6 +1233,25 @@ impl LauncherWindow {
         true
     }
 
+    /// A click on the search header's back button (#469): back one level,
+    /// as Raycast's back button goes, whatever the search field holds.
+    /// The back key clears a typed search before it leaves; the click does
+    /// both at once. Like the Back-a-level key it never hides the
+    /// launcher, and the keyboard stays where it was: the button takes no
+    /// focus, and the screen it lands on puts it in its own field.
+    pub(crate) fn back_clicked(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let typed = self
+            .launcher
+            .screen()
+            .search_field()
+            .is_some_and(|text| !text.is_empty());
+        if typed && self.menu.is_none() && self.actions.is_none() {
+            // The launcher's back clears the search first.
+            self.launcher.back();
+        }
+        self.back_one_level(window, cx);
+    }
+
     /// The Back-a-level key's act (#258): the Back action's order,
     /// without its text clearing — an open footer menu closes, an open
     /// Actions panel steps back one level, and only then is the screen

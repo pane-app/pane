@@ -103,10 +103,13 @@ pub(crate) fn header(
         )
 }
 
-/// The back button's chrome: 32 square, radius 8, the left arrow. The
-/// caller attaches its identity and click.
+/// The back button's chrome: 32 square, radius 8, the left arrow, its
+/// fill washing as the footer's open button does while the pointer is on
+/// it (#469). The caller attaches its identity, its tooltip
+/// ([`back_tooltip`]) and its click.
 pub(crate) fn back_button(theme: &Theme) -> Div {
     let split = &theme.split;
+    let hovered = theme.footer_button_open;
     div()
         .flex_none()
         .flex()
@@ -115,12 +118,22 @@ pub(crate) fn back_button(theme: &Theme) -> Div {
         .size(split.back_size)
         .rounded(split.back_radius)
         .bg(split.back_fill)
+        .hover(move |button| button.bg(hovered))
         .cursor_pointer()
         .child(icon::glyph(
             Glyph::ArrowLeft,
             split.back_glyph,
             split.back_text,
         ))
+}
+
+/// What a back button's tooltip says (#469): what it does, and the
+/// Keyboard page's back key, which does the same from the keyboard.
+pub(crate) fn back_tooltip(cx: &gpui::App) -> SharedString {
+    let key = crate::settings::keyboard_of(cx)
+        .binding(pane_core::KeyboardAction::Back)
+        .to_string();
+    format!("Back ({key})").into()
 }
 
 /// The search field: the editable text element `input` (the caller's own

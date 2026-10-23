@@ -8,16 +8,24 @@
 //! keys still move the caret. The Switch Windows sample stands in for the
 //! default extension (pane-app/switch-windows), whose screen is the same
 //! host-filtered List, with a fake of the open windows.
+//!
+//! Its search bar, a pushed view's, shows a back button where root
+//! search's shows the magnifier (#469): in the same place, so nothing
+//! moves, with a hover wash and a tooltip naming the back key. A click
+//! goes back one level, the keyboard staying in the search field.
 
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
-use gpui::{Entity, TestAppContext, VisualTestContext};
+use gpui::{Entity, Modifiers, TestAppContext, VisualTestContext, point, prelude::*, px, size};
 use pane::LauncherWindow;
 use pane_core::switch_windows::{SwitchWindows, Window, WindowsError};
 use pane_core::{Launcher, LauncherView, Runtime, Screen};
 
+#[path = "support/paint.rs"]
+mod paint;
 #[path = "support/settle.rs"]
 mod settle;
 #[path = "support/setup.rs"]
@@ -147,6 +155,86 @@ fn the_arrow_keys_move_through_the_windows(cx: &mut TestAppContext) {
     cx.simulate_keystrokes("home right");
     cx.simulate_input("c");
     until_state(&window, cx, |view| search_of(view) == Some("acnxob"));
+}
+
+/// How long the pointer rests before a tooltip shows, with room to spare.
+const TOOLTIP_DELAY: Duration = Duration::from_millis(700);
+
+/// Whether root search's query field has keyboard focus.
+fn query_has_focus(window: &Entity<LauncherWindow>, cx: &mut VisualTestContext) -> bool {
+    use gpui::Focusable;
+    let input = cx.read_entity(window, |window, _| window.query_field());
+    cx.update(|window, cx| input.focus_handle(cx).is_focused(window))
+}
+
+#[gpui::test]
+fn a_pushed_views_search_bar_shows_a_back_button(cx: &mut TestAppContext) {
+    let (sources, data) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let folder = package(&sources.path().join("switch-windows"));
+    let fake = FakeWindows::default();
+    *fake.listed.lock().unwrap() = vec![
+        window("1", "notes.txt - Notepad", "Notepad"),
+        window("2", "Standup - Slack", "Slack"),
+    ];
+    let (window, cx) = open(cx, data.path(), &folder, fake);
+    settle(&window, cx);
+
+    // Root search shows the magnifier, and no back button.
+    let magnifier = cx
+        .debug_bounds("search-magnifier")
+        .expect("root search shows the magnifier");
+    assert!(cx.debug_bounds("search-back").is_none());
+
+    // The pushed view shows the back button in the magnifier's place:
+    // the same box across the row, so the field's text starts where it
+    // did (the List's navigation title sits above the row).
+    cx.simulate_input("Switch Windows sample");
+    settle(&window, cx);
+    cx.simulate_keystrokes("enter");
+    until_state(&window, cx, |view| {
+        matches!(view.screen, Screen::DesignedView(_)) && view.rows.len() == 2
+    });
+    let back = cx
+        .debug_bounds("search-back")
+        .expect("the pushed view shows the back button");
+    assert!(cx.debug_bounds("search-magnifier").is_none());
+    assert_eq!(
+        (back.origin.x, back.size),
+        (magnifier.origin.x, magnifier.size),
+        "the button takes the magnifier's place"
+    );
+    assert!(query_has_focus(&window, cx));
+    cx.simulate_input("no");
+    until_state(&window, cx, |view| search_of(view) == Some("no"));
+
+    // Its 32px square, centred in the 44px hit target, has the split
+    // views' back fill at rest and the footer's open wash under the
+    // pointer, which also shows the tooltip naming the back key.
+    let square = gpui::Bounds::new(back.origin + point(px(6.), px(6.)), size(px(32.), px(32.)));
+    let washed = |cx: &mut VisualTestContext, dark: u32, light: u32| {
+        paint::paints_fill_at(cx, square, dark) || paint::paints_fill_at(cx, square, light)
+    };
+    assert!(washed(cx, 0xFFFFFF0F, 0x0000000F), "the resting fill");
+    cx.simulate_mouse_move(back.center(), None, Modifiers::none());
+    cx.executor().advance_clock(TOOLTIP_DELAY);
+    cx.run_until_parked();
+    assert!(washed(cx, 0xFFFFFF1A, 0x0000001A), "the hover wash");
+    assert!(
+        cx.debug_bounds("tooltip-Back (Escape)").is_some(),
+        "the tooltip names the back key"
+    );
+
+    // A click goes back one level, with text in the field too (the back
+    // key would clear it first), and the keyboard stays in the search
+    // field.
+    cx.simulate_click(back.center(), Modifiers::none());
+    let view = until_state(&window, cx, |view| {
+        matches!(view.screen, Screen::Root { .. })
+    });
+    assert!(matches!(view.screen, Screen::Root { .. }));
+    assert!(query_has_focus(&window, cx), "the field keeps the keyboard");
+    assert!(cx.debug_bounds("search-back").is_none());
+    assert!(cx.debug_bounds("search-magnifier").is_some());
 }
 
 /// The text of the open designed List's search field.

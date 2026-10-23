@@ -817,6 +817,10 @@ impl LauncherWindow {
                 .debug_selector(|| "clipboard-back".into())
                 .role(Role::Button)
                 .aria_label("Back to all results")
+                .tooltip(crate::ui::tooltip::text_tooltip(
+                    split_view::back_tooltip(cx),
+                    crate::ui::tooltip::TooltipLook::of(&theme),
+                ))
                 .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
                     this.back(&Back, window, cx);
                 }))
