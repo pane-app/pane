@@ -75,3 +75,17 @@ pub fn no_row_has_focus(json: &str) -> bool {
     };
     tree["active_descendant_focus"].is_null() && !tree["gpui_focus"].as_str().is_some_and(row)
 }
+
+/// The labels of the headings assistive technology reads in the window
+/// `cx` drives: a pushed view's top bar names its view by one (#482).
+pub fn headings(cx: &mut VisualTestContext) -> Vec<String> {
+    let tree: serde_json::Value = serde_json::from_str(&a11y(cx)).unwrap();
+    tree["nodes"]
+        .as_object()
+        .unwrap()
+        .values()
+        .map(|node| &node["aria"])
+        .filter(|aria| aria["role"] == "Heading")
+        .filter_map(|aria| aria["label"].as_str().map(str::to_owned))
+        .collect()
+}

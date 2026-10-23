@@ -1295,7 +1295,8 @@ fn keys_change_the_color_the_view_shows(cx: &mut TestAppContext, sample: &Sample
     // The drawing itself adds no nodes of its own: the view is one
     // control. The tree's column (the navigation title's holder) and the
     // window's own scroll container for the tree are the two containers
-    // around it.
+    // around it; the top bar above them (#482) is its back button and
+    // the heading naming the view.
     let roles: Vec<String> = accessible_nodes(cx)
         .iter()
         .map(|node| node["role"].as_str().unwrap_or_default().to_owned())
@@ -1308,6 +1309,8 @@ fn keys_change_the_color_the_view_shows(cx: &mut TestAppContext, sample: &Sample
     assert_eq!(
         roles,
         [
+            "Button".to_owned(),
+            "Heading".to_owned(),
             "ColorWell".to_owned(),
             "Group".to_owned(),
             "Button".to_owned(),

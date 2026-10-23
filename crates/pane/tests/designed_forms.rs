@@ -224,6 +224,43 @@ fn a_refused_submission_draws_the_fields_error_under_it(cx: &mut TestAppContext)
     );
 }
 
+/// The form has no search bar: its top bar names it by its navigation
+/// title, with the back button (#482). Pointing at the button leaves the
+/// keyboard in the field the form focused, and a click leaves the form,
+/// as the back key does.
+#[gpui::test]
+fn the_forms_top_bar_names_it_and_its_back_button_leaves_it(cx: &mut TestAppContext) {
+    let (window, _data, cx) = open_installed(cx, &RUST.component.replace('_', "-"));
+    open_form(&window, cx);
+
+    assert!(
+        a11y::headings(cx).contains(&"Greet someone".to_owned()),
+        "the top bar names the form"
+    );
+    assert_eq!(a11y::focused_label(cx).as_deref(), Some("Name"));
+    cx.simulate_input("Ada");
+    let back = cx
+        .debug_bounds("search-back")
+        .expect("the top bar's back button");
+    cx.simulate_mouse_move(back.center(), None, gpui::Modifiers::none());
+    cx.run_until_parked();
+    assert_eq!(
+        a11y::focused_label(cx).as_deref(),
+        Some("Name"),
+        "pointing at the button takes no focus"
+    );
+    assert_eq!(field_value(&window, cx, "name"), "Ada");
+
+    cx.simulate_click(back.center(), gpui::Modifiers::none());
+    let view = settle(&window, cx);
+    assert!(
+        matches!(view.screen, Screen::Root { .. }),
+        "{:?}",
+        view.screen
+    );
+    assert!(cx.debug_bounds("top-bar").is_none());
+}
+
 /// Declares one window test per check for each sample.
 macro_rules! for_each_sample {
     ($($check:ident),* $(,)?) => {

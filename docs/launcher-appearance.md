@@ -194,6 +194,19 @@ back key ("Back (Escape)"). A click goes back one level, whatever the
 field holds, and the keyboard stays in the search field. Root search
 shows the magnifier.
 
+A pushed view with no search bar (a designed view whose tree names no
+List or Grid: a form, a detail, a canvas; and the forms Pane itself
+asks, such as the alias form) has a top bar in its place, as Raycast's
+does (#482). The top bar is the search bar's row: the same 64px, rule
+(or frosted pill) and loading bar, the same back button in the same
+place, and the view's navigation title in the row title's 14/500 where
+the query's text starts (the open command's title when the tree names
+none). Nothing in the row moves between a search view and a top-bar
+view, and the content starts at the same height. The title is the row's
+drag region. The bar takes no focus: the keyboard stays where the view
+put it, a form's first field say. The core's own screens (a package's
+preview, a confirmation, the details screens) keep their heading.
+
 ### Status lines, forms and extension drawing
 
 Unavailable reasons wrap and stay visible and non-invokable. Host forms

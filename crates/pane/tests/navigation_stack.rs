@@ -13,18 +13,29 @@
 //! The launcher's changes are wired to the window, as Pane's are, so the
 //! pop event's re-render — which the launcher answers in the background —
 //! reaches the window and is drawn.
+//!
+//! The sample's views have no search bar: each shows the top bar a pushed
+//! view without one has (#482), the search bar's row with the back button
+//! in the same place and the view's navigation title, whose click pops
+//! one view as the back key does, the keyboard staying where the view
+//! put it.
 
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Duration;
 
-use gpui::{Entity, TestAppContext, VisualTestContext, prelude::*};
+use gpui::{Entity, Modifiers, TestAppContext, VisualTestContext, point, prelude::*, px, size};
 use pane::LauncherWindow;
 use pane_core::develop::Toolchains;
 use pane_core::{Launcher, Runtime, Screen};
 
 use tempfile::TempDir;
 
+#[path = "support/a11y.rs"]
+mod a11y;
+#[path = "support/paint.rs"]
+mod paint;
 #[path = "support/settle.rs"]
 mod settle;
 
@@ -33,6 +44,23 @@ use settle::{settle, until};
 /// The launcher window with the Rust navigation sample installed, with the
 /// launcher's background changes wired to it, and its command open.
 fn open(cx: &mut TestAppContext) -> (TempDir, Entity<LauncherWindow>, &mut VisualTestContext) {
+    let (data, window, cx) = installed(cx);
+    open_sample(&window, cx);
+    (data, window, cx)
+}
+
+/// Opens the navigation sample's command from root search.
+fn open_sample(window: &Entity<LauncherWindow>, cx: &mut VisualTestContext) {
+    cx.simulate_input("navigation sample");
+    cx.simulate_keystrokes("enter");
+    until(window, cx, |view| {
+        matches!(view.screen, Screen::DesignedView(_))
+    });
+}
+
+/// The launcher window with the Rust navigation sample installed, with the
+/// launcher's background changes wired to it, at root search.
+fn installed(cx: &mut TestAppContext) -> (TempDir, Entity<LauncherWindow>, &mut VisualTestContext) {
     let data = tempfile::tempdir().unwrap();
     cx.update(|cx| {
         pane::settings::init_with_overrides(None, pane::settings::Overrides::parse(None, None), cx)
@@ -58,11 +86,6 @@ fn open(cx: &mut TestAppContext) -> (TempDir, Entity<LauncherWindow>, &mut Visua
         let mut launcher_window = LauncherWindow::new(launcher, window, cx);
         launcher_window.follow_changes(changes, window, cx);
         launcher_window
-    });
-    cx.simulate_input("navigation sample");
-    cx.simulate_keystrokes("enter");
-    until(&window, cx, |view| {
-        matches!(view.screen, Screen::DesignedView(_))
     });
     (data, window, cx)
 }
@@ -207,4 +230,102 @@ fn shift_escape_drops_the_whole_stack(cx: &mut TestAppContext) {
         0,
         "the designed view's controls are gone"
     );
+}
+
+/// How long the pointer rests before a tooltip shows, with room to spare.
+const TOOLTIP_DELAY: Duration = Duration::from_millis(700);
+
+/// Whether root search's query field has keyboard focus.
+fn query_has_focus(window: &Entity<LauncherWindow>, cx: &mut VisualTestContext) -> bool {
+    use gpui::Focusable;
+    let input = cx.read_entity(window, |window, _| window.query_field());
+    cx.update(|window, cx| input.focus_handle(cx).is_focused(window))
+}
+
+/// Whether the top bar names its view `title`.
+fn titled(cx: &mut VisualTestContext, title: &str) -> bool {
+    a11y::headings(cx).iter().any(|heading| heading == title)
+}
+
+#[gpui::test]
+fn a_view_with_no_search_bar_has_a_top_bar_with_a_back_button(cx: &mut TestAppContext) {
+    let (_data, window, cx) = installed(cx);
+    settle(&window, cx);
+
+    // Root search: the magnifier at the search bar's left, the results
+    // under its row, and no top bar.
+    let magnifier = cx
+        .debug_bounds("search-magnifier")
+        .expect("root search shows the magnifier");
+    let results = cx.debug_bounds("rows").expect("root search's results");
+    assert!(cx.debug_bounds("top-bar").is_none());
+
+    // The view has no search bar: its top bar is the search bar's row,
+    // the back button exactly where the magnifier was and the view
+    // starting where the results did, so nothing jumps. It names the view
+    // by its navigation title, and the keyboard is on the view's first
+    // button, where the view put it.
+    open_sample(&window, cx);
+    wait_for(&window, cx, "Nothing picked yet");
+    let bar = cx.debug_bounds("top-bar").expect("the view's top bar");
+    let back = cx
+        .debug_bounds("search-back")
+        .expect("the top bar's back button");
+    assert!(cx.debug_bounds("search-magnifier").is_none());
+    assert_eq!(back, magnifier, "the button takes the magnifier's place");
+    assert_eq!(
+        bar.bottom(),
+        results.top(),
+        "the bar is the search bar's row"
+    );
+    let view = cx.debug_bounds("designed-view").expect("the view's tree");
+    assert_eq!(view.top(), results.top(), "the view starts below the bar");
+    assert!(titled(cx, "Navigation sample"));
+    assert_eq!(a11y::focused_label(cx).as_deref(), Some("One"));
+
+    // The search bar's back button: the split views' fill at rest, the
+    // footer's open wash under the pointer, and the tooltip naming the
+    // back key. Pointing at it takes no focus.
+    let square = gpui::Bounds::new(back.origin + point(px(6.), px(6.)), size(px(32.), px(32.)));
+    let washed = |cx: &mut VisualTestContext, dark: u32, light: u32| {
+        paint::paints_fill_at(cx, square, dark) || paint::paints_fill_at(cx, square, light)
+    };
+    assert!(washed(cx, 0xFFFFFF0F, 0x0000000F), "the resting fill");
+    cx.simulate_mouse_move(back.center(), None, Modifiers::none());
+    cx.executor().advance_clock(TOOLTIP_DELAY);
+    cx.run_until_parked();
+    assert!(washed(cx, 0xFFFFFF1A, 0x0000001A), "the hover wash");
+    assert!(
+        cx.debug_bounds("tooltip-Back (Escape)").is_some(),
+        "the tooltip names the back key"
+    );
+    assert_eq!(a11y::focused_label(cx).as_deref(), Some("One"));
+
+    // A pushed view's bar is the same, named by its own title, the
+    // keyboard on its own first button.
+    cx.simulate_keystrokes("enter");
+    wait_for(&window, cx, "Detail: One");
+    assert_eq!(depth(&window, cx), 2);
+    assert_eq!(cx.debug_bounds("search-back"), Some(back));
+    assert!(titled(cx, "One"));
+    assert_eq!(a11y::focused_label(cx).as_deref(), Some("Deeper"));
+
+    // A click pops one view, as the back key does: the view below shows,
+    // its keyboard on its first button again.
+    cx.simulate_click(back.center(), Modifiers::none());
+    wait_for(&window, cx, "Picked: nothing");
+    assert_eq!(depth(&window, cx), 1);
+    assert!(titled(cx, "Navigation sample"));
+    assert_eq!(a11y::focused_label(cx).as_deref(), Some("One"));
+
+    // The last view's click leaves the command for root search, whose
+    // field takes the keyboard and whose magnifier is back.
+    cx.simulate_click(back.center(), Modifiers::none());
+    let view = until(&window, cx, |view| {
+        matches!(view.screen, Screen::Root { .. })
+    });
+    assert!(matches!(view.screen, Screen::Root { .. }));
+    assert!(query_has_focus(&window, cx), "the field has the keyboard");
+    assert!(cx.debug_bounds("top-bar").is_none());
+    assert_eq!(cx.debug_bounds("search-magnifier"), Some(magnifier));
 }

@@ -24,8 +24,8 @@
 //! ([`crate::features::announcer`], #132).
 
 use gpui::{
-    AnyElement, App, Context, Div, Entity, Focusable, KeyBinding, Role, Subscription, Window,
-    WindowControlArea, div, prelude::*, px,
+    AnyElement, App, Context, Div, Entity, Focusable, KeyBinding, Role, SharedString, Subscription,
+    Window, WindowControlArea, div, prelude::*, px,
 };
 use gpui_elements::editable_text::actions::DEFAULT_INPUT_CONTEXT;
 use gpui_elements::editable_text::{EditableTextState, StringStorage, TextChanged, text_input};
@@ -338,7 +338,8 @@ pub(crate) fn magnifier(theme: &Theme) -> AnyElement {
 /// was when the button takes the magnifier's place. Its tooltip names the
 /// back key. A click goes back one level whatever the field holds
 /// ([`LauncherWindow::back_clicked`]); the button takes no focus, so the
-/// keyboard stays in the search field.
+/// keyboard stays in the search field. A view with no search bar shows
+/// it in the same place, in its top bar ([`top_bar`], #482).
 pub(crate) fn back_button(theme: &Theme, cx: &mut Context<LauncherWindow>) -> AnyElement {
     let hovered = theme.footer_button_open;
     div()
@@ -449,6 +450,66 @@ pub(crate) fn search_header(
             ),
         )
         .when_some(arguments, |row, arguments| row.child(arguments));
+    header_row(field, loading, theme)
+}
+
+/// A pushed view's top bar, where it has no search bar (#482): a form, a
+/// detail, a canvas — a designed view whose tree names no List or Grid —
+/// and a form Pane itself asks. It is the search header's row, as
+/// Raycast's top bar is its search bar's: the same 64px, padding, rule
+/// (or frosted pill) and loading bar ([`header_row`]), the back button
+/// ([`back_button`]) in the same place, and the view's `title` where the
+/// query's text starts, so nothing in the row moves between a search
+/// view and a top-bar view, and the body below starts at the same
+/// height. The title is the window's drag region, as the magnifier is
+/// root search's. The bar takes no focus: the keyboard stays where the
+/// view put it (a form's first field, say).
+pub(crate) fn top_bar(
+    title: SharedString,
+    loading: Option<loading::LoadingBar>,
+    theme: &Theme,
+    cx: &mut Context<LauncherWindow>,
+) -> Div {
+    let geometry = &theme.geometry;
+    let typography = &theme.typography;
+    let field = div()
+        .flex()
+        .items_center()
+        .gap(geometry.search_gap)
+        .child(back_button(theme, cx))
+        .child(
+            div()
+                .id("top-bar-title")
+                .debug_selector(|| "top-bar-title".into())
+                .window_control_area(WindowControlArea::Drag)
+                .flex_1()
+                .min_w(px(0.))
+                .h_full()
+                .flex()
+                .items_center()
+                .pl(geometry.search_text_inset)
+                .role(Role::Heading)
+                .aria_label(title.clone())
+                .child(
+                    div()
+                        .min_w(px(0.))
+                        .truncate()
+                        .text_size(typography.row_title_size)
+                        .font_weight(typography.medium)
+                        .text_color(theme.text_title)
+                        .child(title),
+                ),
+        );
+    header_row(field, loading, theme).debug_selector(|| "top-bar".into())
+}
+
+/// The search header's row around `field` — the lead (the magnifier or
+/// the back button) and what follows it: the 64px row, its padding and
+/// the rule below it, or over a background image the frosted pill, with
+/// the loading bar along the rule. The search header and the top bar
+/// share it, so the two rows are one.
+fn header_row(field: Div, loading: Option<loading::LoadingBar>, theme: &Theme) -> Div {
+    let geometry = &theme.geometry;
     match theme.frost {
         // The header's own rule carries the loading bar: the wrapper holds
         // the bordered row and the 1px line over its border — a child of
