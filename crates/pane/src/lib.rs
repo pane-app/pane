@@ -18,6 +18,7 @@ mod extension_views;
 mod features;
 mod keyboard;
 mod links;
+mod off_taskbar;
 mod ui;
 
 pub mod placement;
@@ -189,6 +190,50 @@ pub fn observe_reduced_motion(cx: &mut App) {
 pub fn launcher_client_size() -> gpui::Size<gpui::Pixels> {
     let (width, height) = ui::shell::LAUNCHER_CLIENT;
     gpui::size(gpui::px(width), gpui::px(height))
+}
+
+/// Opens the launcher's window, whose root view `build` makes: the
+/// reference's launcher panel at its client size (see
+/// [`launcher_client_size`]), centered, with the frost material's
+/// background (see [`window_background`]) and no native title bar drawn —
+/// the panel's own glass chrome is the whole window. The window has no
+/// taskbar button and no entry in the window switcher (#458, see
+/// `off_taskbar`): on Windows it opens hidden, is made a tool window, and
+/// is shown only then, since Windows gives a window its taskbar button as
+/// it is first shown. Its corners are rounded by Windows' Desktop Window
+/// Manager ([`prefer_rounded_window_corners`]), and macOS's window buttons
+/// are hidden ([`hide_window_buttons`]).
+pub fn open_launcher_window<V: 'static + gpui::Render>(
+    cx: &mut App,
+    build: impl FnOnce(&mut Window, &mut App) -> gpui::Entity<V>,
+) -> gpui::Result<gpui::WindowHandle<V>> {
+    let bounds = gpui::Bounds::centered(None, launcher_client_size(), cx);
+    let options = gpui::WindowOptions {
+        window_bounds: Some(gpui::WindowBounds::Windowed(bounds)),
+        window_background: window_background(cx),
+        titlebar: Some(gpui::TitlebarOptions {
+            title: Some("Pane".into()),
+            appears_transparent: true,
+            ..Default::default()
+        }),
+        show: !cfg!(target_os = "windows"),
+        ..Default::default()
+    };
+    let window = cx.open_window(options, |window, cx| {
+        #[cfg(target_os = "windows")]
+        prefer_rounded_window_corners(window);
+        // macOS draws its close, minimize and zoom buttons over the
+        // transparent titlebar, which here is the search field: the
+        // launcher shows none, as on Windows and Linux.
+        #[cfg(target_os = "macos")]
+        hide_window_buttons(window);
+        off_taskbar::keep_off_taskbar(window);
+        build(window, cx)
+    })?;
+    // Shown as GPUI shows a window it opens visible, taking the focus.
+    #[cfg(target_os = "windows")]
+    window.update(cx, |_, window, _| window.set_visible(true))?;
+    Ok(window)
 }
 
 /// The window background appearance the host settings' material asks for,

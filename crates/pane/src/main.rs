@@ -3,7 +3,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use gpui::{App, Bounds, TitlebarOptions, WindowBounds, WindowOptions, prelude::*};
+use gpui::{App, prelude::*};
 use pane::LauncherWindow;
 use pane_core::develop::Toolchains;
 use pane_core::{Launcher, Runtime, local_channel};
@@ -105,7 +105,17 @@ fn main() {
     // write a diagnostic or panic: the log keeps what standard error says,
     // and the record tells whether the run before ended unexpectedly.
     let crash_record = pane::start_crash_record();
-    gpui_platform::application().run(move |cx: &mut App| {
+    let application = gpui_platform::application();
+    // On macOS Pane is an accessory application, as menu-bar launchers
+    // are (#458): no Dock icon and no Cmd+Tab entry, reached by its hotkey
+    // and its menu-bar entry, its windows still activated when shown.
+    // Set here, before launching finishes, rather than as `LSUIElement` in
+    // the bundle's Info.plist, so a development build run from the
+    // checkout behaves as the installed app does and no Dock icon shows
+    // even for a moment.
+    #[cfg(target_os = "macos")]
+    let application = application.with_activation_policy(gpui::MacActivationPolicy::Accessory);
+    application.run(move |cx: &mut App| {
         // Pane's own settings — the appearance preferences recorded in
         // settings.json, with the PANE_THEME/PANE_MATERIAL development
         // overrides winning for this process — and the embedded Geist
@@ -336,51 +346,27 @@ fn main() {
         let acquiring = launcher.clone();
         let checking = launcher.clone();
         let developing = launcher.clone();
-        // The window is the reference's launcher panel, at its client size
-        // (see `pane::launcher_client_size`). No native title bar is drawn:
-        // the panel's own glass chrome is the whole window. Its background
-        // is the frost material's (acrylic behind the glass panel, opaque
-        // otherwise).
-        let bounds = Bounds::centered(None, pane::launcher_client_size(), cx);
-        let options = WindowOptions {
-            window_bounds: Some(WindowBounds::Windowed(bounds)),
-            window_background: pane::window_background(cx),
-            titlebar: Some(TitlebarOptions {
-                title: Some("Pane".into()),
-                appears_transparent: true,
-                ..Default::default()
-            }),
-            ..Default::default()
-        };
-        let window = cx
-            .open_window(options, |window, cx| {
-                // The window's own corners are rounded by the Desktop Window
-                // Manager, so nothing shows behind the panel that fills it.
-                #[cfg(target_os = "windows")]
-                pane::prefer_rounded_window_corners(window);
-                // macOS draws its close, minimize and zoom buttons over the
-                // transparent titlebar, which here is the search field: the
-                // launcher shows none, as on Windows and Linux.
-                #[cfg(target_os = "macos")]
-                pane::hide_window_buttons(window);
-                cx.new(|cx| {
-                    let mut launcher = LauncherWindow::new(launcher, window, cx);
-                    launcher.follow_changes(changes, window, cx);
-                    match &preview {
-                        Some(ToPreview::Folder(folder)) => {
-                            launcher.preview_package(folder, window, cx)
-                        }
-                        Some(ToPreview::Collection(folder, id)) => {
-                            launcher.preview_collection(folder, id, window, cx)
-                        }
-                        Some(ToPreview::Npm(spec)) => launcher.preview_npm(spec, window, cx),
-                        Some(ToPreview::Git(spec)) => launcher.preview_git(spec, window, cx),
-                        None => {}
+        // The window is the reference's launcher panel, with the frost
+        // material's background (acrylic behind the glass panel, opaque
+        // otherwise), no native title bar, and no taskbar button or
+        // window-switcher entry (see `pane::open_launcher_window`).
+        let window = pane::open_launcher_window(cx, |window, cx| {
+            cx.new(|cx| {
+                let mut launcher = LauncherWindow::new(launcher, window, cx);
+                launcher.follow_changes(changes, window, cx);
+                match &preview {
+                    Some(ToPreview::Folder(folder)) => launcher.preview_package(folder, window, cx),
+                    Some(ToPreview::Collection(folder, id)) => {
+                        launcher.preview_collection(folder, id, window, cx)
                     }
-                    launcher
-                })
+                    Some(ToPreview::Npm(spec)) => launcher.preview_npm(spec, window, cx),
+                    Some(ToPreview::Git(spec)) => launcher.preview_git(spec, window, cx),
+                    None => {}
+                }
+                launcher
             })
-            .expect("failed to open the Pane window");
+        })
+        .expect("failed to open the Pane window");
         // The opt-in native smoke of the HUD (scripts/smoke-windows-hud.ps1)
         // has a development build show one at once, over the application
         // in front.

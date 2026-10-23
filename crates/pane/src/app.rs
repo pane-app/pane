@@ -1572,6 +1572,11 @@ impl LauncherWindow {
         // A pending HUD is over once the launcher is active again (#250).
         self.close_pending_hud(cx);
         if self.presence.show() {
+            // Off the taskbar and the window switcher again before it
+            // maps (#458): an X11 window manager may forget the state of a
+            // window it withdrew. (Windows keeps the style; asking again
+            // changes nothing there.)
+            crate::off_taskbar::keep_off_taskbar(window);
             window.set_visible(true);
             // The pointer is wherever it is now: the next event records it.
             self.pointer = None;
