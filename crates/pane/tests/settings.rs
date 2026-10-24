@@ -2778,6 +2778,291 @@ fn a_command_is_turned_off_and_on_from_its_extensions_page(cx: &mut TestAppConte
     );
 }
 
+/// Walks the sidebar with Down, from the General page Settings opens on,
+/// to the first installed extension's page, as a user without a pointer
+/// does.
+fn open_page_by_keys(settings: &WindowHandle<SettingsWindow>, settings_cx: &mut VisualTestContext) {
+    for _ in 0..12 {
+        let shown = settings
+            .read_with(settings_cx, |window, _| window.shown_extension())
+            .expect("the Settings window is open");
+        if shown.is_some() {
+            return;
+        }
+        settings_cx.simulate_keystrokes("down");
+        settings_cx.run_until_parked();
+    }
+    panic!("Down never reached an extension's page");
+}
+
+/// The label of the node with the keyboard, as assistive technology reads
+/// it, or "" for none.
+fn focused(cx: &mut VisualTestContext) -> String {
+    focused_label(cx).unwrap_or_default()
+}
+
+#[gpui::test]
+fn an_extension_is_uninstalled_from_its_page_with_the_keyboard_alone(cx: &mut TestAppContext) {
+    let (sources, data) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let folder = settings_package(&sources.path().join("settings"));
+    let (launcher, cx) = open_installed(cx, &data, &folder);
+    let mut settings_cx = open_settings(cx);
+    let settings = settings_windows(cx).pop().expect("Settings opened");
+
+    // The sidebar's Down reaches the extension's page, and Tab its
+    // Actions… button: no pointer anywhere in this test.
+    open_page_by_keys(&settings, &mut settings_cx);
+    assert!(
+        settings_cx
+            .debug_bounds("extension-page-title-Settings sample")
+            .is_some(),
+        "its page shows"
+    );
+    tab_to(&mut settings_cx, "Actions for Settings sample");
+
+    // Enter opens the menu with the keyboard on its first item that can be
+    // chosen: a folder's extension's Check for Update cannot, and says why,
+    // so the arrows pass it.
+    settings_cx.simulate_keystrokes("enter");
+    assert!(
+        settings_cx.debug_bounds("extension-menu-popup").is_some(),
+        "the menu opened"
+    );
+    let first = focused(&mut settings_cx);
+    assert!(
+        !first.is_empty() && first != "Check for Update",
+        "the keyboard is on the first item that can be chosen: {first:?}"
+    );
+    assert!(has_node(&mut settings_cx, "MenuItem", &first));
+    // Up stops at the first; Down moves on; Home goes back; End reaches
+    // Uninstall, the last.
+    settings_cx.simulate_keystrokes("up");
+    assert_eq!(focused(&mut settings_cx), first, "Up stops at the first");
+    settings_cx.simulate_keystrokes("down");
+    let second = focused(&mut settings_cx);
+    assert!(
+        second != first && has_node(&mut settings_cx, "MenuItem", &second),
+        "Down moves to the next item: {second:?}"
+    );
+    settings_cx.simulate_keystrokes("home");
+    assert_eq!(focused(&mut settings_cx), first, "Home goes to the first");
+    settings_cx.simulate_keystrokes("end");
+    assert_eq!(focused(&mut settings_cx), "Uninstall");
+    settings_cx.simulate_keystrokes("down");
+    assert_eq!(
+        focused(&mut settings_cx),
+        "Uninstall",
+        "Down stops at the last"
+    );
+
+    // Enter chooses it: the menu closes and the launcher's own "Uninstall
+    // Settings sample?" shows in place of the page, as a click on it shows.
+    settings_cx.simulate_keystrokes("enter");
+    settings_cx.run_until_parked();
+    assert!(
+        settings_cx.debug_bounds("extension-menu-popup").is_none(),
+        "the menu closed"
+    );
+    for row in [
+        "extension-row-Uninstall and keep saved data",
+        "extension-row-Uninstall and delete saved data",
+        "extension-row-Cancel",
+    ] {
+        assert!(settings_cx.debug_bounds(row).is_some(), "{row} is drawn");
+    }
+    let view = cx.read_entity(&launcher, |window, _| window.launcher().view());
+    assert!(
+        matches!(view.screen, Screen::Confirm { .. }),
+        "{:?}",
+        view.screen
+    );
+    assert_eq!(settings_windows(cx).len(), 1, "Settings stays open");
+}
+
+#[gpui::test]
+fn escape_and_tab_close_the_actions_menu_and_leave_settings_open(cx: &mut TestAppContext) {
+    let (sources, data) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let folder = settings_package(&sources.path().join("settings"));
+    let (_launcher, cx) = open_installed(cx, &data, &folder);
+    let mut settings_cx = open_settings(cx);
+    let settings = settings_windows(cx).pop().expect("Settings opened");
+    open_page_by_keys(&settings, &mut settings_cx);
+    tab_to(&mut settings_cx, "Actions for Settings sample");
+
+    // Down opens the menu too, as a menu button's does; Escape closes the
+    // menu — the innermost thing — and gives the keyboard back to the
+    // button, leaving Settings open.
+    settings_cx.simulate_keystrokes("down");
+    assert!(settings_cx.debug_bounds("extension-menu-popup").is_some());
+    let item = focused(&mut settings_cx);
+    assert!(has_node(&mut settings_cx, "MenuItem", &item), "{item:?}");
+    settings_cx.simulate_keystrokes("escape");
+    settings_cx.run_until_parked();
+    assert!(
+        settings_cx.debug_bounds("extension-menu-popup").is_none(),
+        "Escape closed the menu"
+    );
+    assert_eq!(settings_windows(cx).len(), 1, "and not Settings");
+    assert_eq!(focused(&mut settings_cx), "Actions for Settings sample");
+
+    // Space opens it; Tab closes it, back on the button.
+    settings_cx.simulate_keystrokes("space");
+    assert!(settings_cx.debug_bounds("extension-menu-popup").is_some());
+    settings_cx.simulate_keystrokes("tab");
+    settings_cx.run_until_parked();
+    assert!(
+        settings_cx.debug_bounds("extension-menu-popup").is_none(),
+        "Tab closed the menu"
+    );
+    assert_eq!(focused(&mut settings_cx), "Actions for Settings sample");
+
+    // With no menu open, Escape is the window's again: it closes Settings,
+    // as the Keyboard page's default says.
+    settings_cx.simulate_keystrokes("escape");
+    settings_cx.run_until_parked();
+    assert!(settings_windows(cx).is_empty(), "Escape closed Settings");
+}
+
+#[gpui::test]
+fn the_extension_page_s_switches_turn_with_the_keyboard(cx: &mut TestAppContext) {
+    let (sources, data) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let folder = settings_package(&sources.path().join("settings"));
+    let (launcher, cx) = open_installed(cx, &data, &folder);
+    let mut settings_cx = open_settings(cx);
+    let settings = settings_windows(cx).pop().expect("Settings opened");
+    open_page_by_keys(&settings, &mut settings_cx);
+
+    // Tab reaches the extension's switch after the Actions… button; Space
+    // disables the extension and turns it back on, the keyboard staying on
+    // the switch.
+    let passed = tab_to(&mut settings_cx, "Settings sample");
+    assert!(
+        passed.contains(&"Actions for Settings sample".to_owned()),
+        "{passed:?}"
+    );
+    settings_cx.simulate_keystrokes("space");
+    until_text(&mut settings_cx, "Disabled Settings sample");
+    assert!(!extension_enabled(&mut settings_cx, "Settings sample"));
+    assert_eq!(focused(&mut settings_cx), "Settings sample");
+    settings_cx.simulate_keystrokes("enter");
+    until(&mut settings_cx, |cx| {
+        extension_enabled(cx, "Settings sample").then_some(())
+    });
+
+    // Tab goes on through the command's alias and hotkey cells to its own
+    // switch, which Enter turns off and on.
+    let passed = tab_to(&mut settings_cx, "Greeting enabled");
+    assert!(passed.len() >= 2, "the alias and hotkey cells: {passed:?}");
+    settings_cx.simulate_keystrokes("enter");
+    until_text(&mut settings_cx, "Turned off Greeting");
+    assert!(!has_node_toggled(&mut settings_cx, "Greeting enabled"));
+    assert_eq!(focused(&mut settings_cx), "Greeting enabled");
+    settings_cx.simulate_keystrokes("space");
+    until_text(&mut settings_cx, "Turned on Greeting");
+    assert!(has_node_toggled(&mut settings_cx, "Greeting enabled"));
+    assert!(
+        cx.read_entity(&launcher, |window, _| window.launcher().packages())
+            .iter()
+            .all(|package| package.enabled),
+        "the extension is enabled"
+    );
+}
+
+#[gpui::test]
+fn the_extensions_group_installs_and_opens_pages_from_the_keyboard(cx: &mut TestAppContext) {
+    let (sources, data) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let folder = settings_package(&sources.path().join("settings"));
+    let (_launcher, cx) = open_installed(cx, &data, &folder);
+    let mut settings_cx = open_settings(cx);
+    let settings = settings_windows(cx).pop().expect("Settings opened");
+    // Down to the group's own page, the entry before the extension's.
+    open_page_by_keys(&settings, &mut settings_cx);
+    settings_cx.simulate_keystrokes("up");
+    settings_cx.run_until_parked();
+    assert!(
+        settings_cx
+            .debug_bounds("extension-item-Settings sample")
+            .is_some(),
+        "the group's page shows"
+    );
+
+    // The + button is a menu button: Tab reaches it, Down opens its menu
+    // on its first source, Escape closes the menu and not Settings.
+    tab_to(&mut settings_cx, "Install an extension");
+    settings_cx.simulate_keystrokes("down");
+    assert!(settings_cx.debug_bounds("extensions-add-menu").is_some());
+    assert_eq!(focused(&mut settings_cx), "Install from Folder…");
+    settings_cx.simulate_keystrokes("escape");
+    settings_cx.run_until_parked();
+    assert!(settings_cx.debug_bounds("extensions-add-menu").is_none());
+    assert_eq!(settings_windows(cx).len(), 1, "Settings stays open");
+    assert_eq!(focused(&mut settings_cx), "Install an extension");
+
+    // Its npm source asks in the group page's field, which takes the
+    // keyboard; Enter there shows the package, as Show Package does.
+    settings_cx.simulate_keystrokes("enter down enter");
+    settings_cx.run_until_parked();
+    let field = settings
+        .read_with(&settings_cx, |window, _| window.install_field())
+        .unwrap()
+        .expect("the install field");
+    {
+        use gpui::Focusable;
+        assert!(
+            settings_cx.update(|window, cx| field.focus_handle(cx).is_focused(window)),
+            "the field has the keyboard"
+        );
+    }
+    settings_cx.simulate_input("Not A Package!");
+    settings_cx.simulate_keystrokes("enter");
+    until_text(
+        &mut settings_cx,
+        "`Not A Package!` is not an npm package name",
+    );
+}
+
+#[gpui::test]
+fn the_extensions_group_s_rows_and_buttons_are_tab_stops(cx: &mut TestAppContext) {
+    let (sources, data) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let folder = settings_package(&sources.path().join("settings"));
+    let (_launcher, cx) = open_installed(cx, &data, &folder);
+    let mut settings_cx = open_settings(cx);
+    let settings = settings_windows(cx).pop().expect("Settings opened");
+    open_page_by_keys(&settings, &mut settings_cx);
+    settings_cx.simulate_keystrokes("up");
+    settings_cx.run_until_parked();
+
+    // Tab walks the installed extension's row, the automatic updates'
+    // switch, Check for updates and the install sources, in page order.
+    let passed = tab_to(&mut settings_cx, "Install from Git…");
+    for stop in [
+        "Settings sample",
+        "Update extensions automatically",
+        "Check for updates",
+        "Install from Folder…",
+        "Install from npm…",
+    ] {
+        assert!(passed.contains(&stop.to_owned()), "{stop}: {passed:?}");
+    }
+
+    // Shift+Tab back to the extension's row, whose Enter opens its page.
+    for _ in 0..12 {
+        if focused(&mut settings_cx) == "Settings sample" {
+            break;
+        }
+        settings_cx.simulate_keystrokes("shift-tab");
+    }
+    assert_eq!(focused(&mut settings_cx), "Settings sample");
+    settings_cx.simulate_keystrokes("enter");
+    settings_cx.run_until_parked();
+    assert!(
+        settings_cx
+            .debug_bounds("extension-page-title-Settings sample")
+            .is_some(),
+        "its page opened"
+    );
+}
+
 /// Whether the switch labelled `label` reads as on, as assistive
 /// technology sees it.
 fn has_node_toggled(cx: &mut VisualTestContext, label: &str) -> bool {
