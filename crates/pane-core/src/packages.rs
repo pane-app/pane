@@ -1214,10 +1214,10 @@ impl Manifest {
         let package = self
             .icon
             .iter()
-            .map(|icon| (icon, "the package".to_owned()));
+            .map(|icon| (icon, "the extension's icon".to_owned()));
         let commands = self.commands.iter().filter_map(|command| {
             let icon = command.icon.as_ref()?;
-            Some((icon, format!("command `{}`", command.id)))
+            Some((icon, format!("the icon of command `{}`", command.id)))
         });
         for (icon, what) in package.chain(commands) {
             icons::check_manifest_files(icon, folder, &what)
@@ -1242,6 +1242,33 @@ impl Manifest {
             }
         }
         files
+    }
+
+    /// The files the package in `folder` ships that no build makes, besides
+    /// its `pane.json` and its helpers' files, relative to `folder`: the
+    /// images its own and its commands' icons name, with the `@light` and
+    /// `@dark` variants it has; the help its Setup screen shows
+    /// ([`preferences::HELP_FILE`]); and every file of its [`ASSETS_DIR`]
+    /// folder, which holds the images its lists name. Only regular files are
+    /// named; a link is not followed. An install copies these into the
+    /// managed copy, and development mode stages them beside each build's
+    /// components, so that a reload from the build reads as the package
+    /// does (an image icon the build left behind would refuse the reload).
+    pub(crate) fn shipped_files(&self, folder: &Path) -> io::Result<Vec<PathBuf>> {
+        let is_file = |file: &PathBuf| {
+            fs::symlink_metadata(folder.join(file)).is_ok_and(|metadata| metadata.is_file())
+        };
+        let mut files: Vec<PathBuf> = self
+            .icon_files()
+            .into_iter()
+            .chain([PathBuf::from(preferences::HELP_FILE)])
+            .filter(is_file)
+            .collect();
+        files_under(&folder.join(ASSETS_DIR), Path::new(ASSETS_DIR), &mut files)?;
+        // An icon may be one of the assets.
+        files.sort();
+        files.dedup();
+        Ok(files)
     }
 
     /// Reads a managed copy as the installed listing does: like
@@ -4621,8 +4648,9 @@ fn put_retained(registry: &mut RegistryJson, source: &Source, title: String, at:
     }
 }
 
-/// Writes the validated `pane.json` and copies the components it names and
-/// the file of each helper for this system, keeping their relative paths.
+/// Writes the validated `pane.json` and copies the components it names,
+/// the file of each helper for this system and the files it ships beside
+/// them ([`Manifest::shipped_files`]), keeping their relative paths.
 /// Nothing else in the source folder is copied, not even helpers' files for
 /// other systems.
 fn copy_package(package: &SourcePackage, location: &Path) -> io::Result<()> {
@@ -4677,13 +4705,16 @@ fn copy_package(package: &SourcePackage, location: &Path) -> io::Result<()> {
     for file in helper_files {
         make_executable(&location.join(file))?;
     }
-    // The help the Setup screen shows beside a command's preferences, if
-    // the package ships it: a regular file only, never a link followed.
-    let help = package.folder.join(preferences::HELP_FILE);
-    if fs::symlink_metadata(&help).is_ok_and(|metadata| metadata.is_file()) {
-        fs::copy(&help, location.join(preferences::HELP_FILE))?;
+    // Its icons' images, the help the Setup screen shows beside a
+    // command's preferences and its assets, where it ships them.
+    for file in package.manifest.shipped_files(&package.folder)? {
+        let target = location.join(&file);
+        if let Some(parent) = target.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        fs::copy(package.folder.join(&file), target)?;
     }
-    copy_images(package, location)
+    Ok(())
 }
 
 /// The source map kept beside the component at `component`, when there is
@@ -4697,43 +4728,21 @@ pub(crate) fn map_beside(component: &Path) -> Option<PathBuf> {
 /// Raycast's `assets` folder is: copied whole into the managed copy.
 pub(crate) const ASSETS_DIR: &str = "assets";
 
-/// Copies the images a package shows into its managed copy at
-/// `location`: the files its own and its commands' icons name, with
-/// their `@light` and `@dark` variants where it has them, and its
-/// [`ASSETS_DIR`] folder, which holds the images its lists name. Only
-/// regular files and folders are copied; a link is not followed.
-fn copy_images(package: &SourcePackage, location: &Path) -> io::Result<()> {
-    for file in package.manifest.icon_files() {
-        let source = package.folder.join(&file);
-        if !fs::symlink_metadata(&source).is_ok_and(|metadata| metadata.is_file()) {
-            // A variant the package does not have; the icon itself was
-            // checked when the package was read.
-            continue;
-        }
-        let target = location.join(&file);
-        if let Some(parent) = target.parent() {
-            fs::create_dir_all(parent)?;
-        }
-        fs::copy(source, target)?;
-    }
-    copy_folder(&package.folder.join(ASSETS_DIR), &location.join(ASSETS_DIR))
-}
-
-/// Copies the regular files and folders under `from` to `to`, if `from`
-/// is a folder; links and other entries are left behind.
-fn copy_folder(from: &Path, to: &Path) -> io::Result<()> {
+/// Adds the regular files under `from` (`prefix` its path relative to the
+/// package) to `files`, folders recursed into, if `from` is a folder;
+/// links and other entries are left out.
+fn files_under(from: &Path, prefix: &Path, files: &mut Vec<PathBuf>) -> io::Result<()> {
     if !fs::symlink_metadata(from).is_ok_and(|metadata| metadata.is_dir()) {
         return Ok(());
     }
-    fs::create_dir_all(to)?;
     for entry in fs::read_dir(from)? {
         let entry = entry?;
         let kind = entry.file_type()?;
-        let target = to.join(entry.file_name());
+        let path = prefix.join(entry.file_name());
         if kind.is_dir() {
-            copy_folder(&entry.path(), &target)?;
+            files_under(&entry.path(), &path, files)?;
         } else if kind.is_file() {
-            fs::copy(entry.path(), target)?;
+            files.push(path);
         }
     }
     Ok(())

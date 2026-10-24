@@ -24,7 +24,8 @@ use std::process::Command;
 use std::time::{Duration, Instant};
 
 use futures::executor::block_on;
-use pane_core::develop::{BuildJob, BuildOutcome, Builder, Toolchains};
+use pane_build::stage_package;
+use pane_core::develop::{BuildJob, BuildOutcome, Builder, PaneManifest, Toolchains};
 use pane_core::templates::{Kind, Language};
 use pane_core::{Launcher, Manifest, Runtime, Screen, Status, ToastStyle};
 
@@ -169,14 +170,12 @@ fn build(folder: &Path) {
     let toolchains = Toolchains::from_env(None);
     let build = toolchains.build_for(folder).unwrap();
     let staging = tempfile::tempdir().unwrap();
-    fs::copy(folder.join("pane.json"), staging.path().join("pane.json")).unwrap();
-    // The icon the manifest names, so the staged folder reads as the
-    // package it is (the samples' manifests name no icon, which is why
-    // the develop tests never copy one).
-    let icon = folder.join("icon.png");
-    if icon.is_file() {
-        fs::copy(&icon, staging.path().join("icon.png")).unwrap();
-    }
+    // Staged as development mode stages it, the placeholder icon with the
+    // manifest: a reload takes the package from the staged folder, so it
+    // must read as the package it is: a staged build without the icon its
+    // manifest names is refused, as every new extension's was (#486).
+    stage_package(&PaneManifest, folder, staging.path()).unwrap();
+    assert!(staging.path().join("icon.png").is_file());
     let job = BuildJob::new(staging.path().to_path_buf());
     let outcome = build.run(&job);
     assert_eq!(outcome, BuildOutcome::Built, "{:#?}", job.output());

@@ -350,10 +350,16 @@ is looked at again.
 After a save, once nothing more is saved for 150 ms (an editor's several
 writes are one save), Pane:
 
-1. copies `pane.json` and the files of the [helpers](helpers.md) the
-   package ships for this system (which no build makes) to a staging
-   folder of the build's own, under Pane's data folder
-   (`extensions/develop/<hash of the identity>/staging/build-<n>`);
+1. copies `pane.json` and the files the package ships that no build
+   makes to a staging folder of the build's own, under Pane's data folder
+   (`extensions/develop/<hash of the identity>/staging/build-<n>`): the
+   files of the [helpers](helpers.md) it ships for this system, the images
+   its own and its commands' icons name (with their `@light` and `@dark`
+   variants), `HELP.md` and the `assets` folder — what an install copies
+   besides the components, so the staged build reads as the source folder
+   does. Before #486 only the helpers' files were staged, so every reload
+   of a package with an image icon (each new extension's `icon.png`) was
+   refused for the missing image;
 2. runs the package's build in the source folder, one adapter per
    language, the command the guest README documents.
 
@@ -693,8 +699,11 @@ These are implementation choices of #12/#13, not user decisions:
 - Unit tests in Pane's core's
   [`develop.rs`](../crates/pane-core/src/develop.rs): the adapters'
   commands (paths with spaces quoted) and ignored paths, a folder without
-  a known build or tool, and staging `pane.json` with this system's helper
-  files.
+  a known build or tool, staging `pane.json` with this system's helper
+  files, and staging the icons' images, `HELP.md` and the assets with it
+  (so the staged folder reads as the package, and a link is not followed).
+  The development-builds tests give each sample copy an `icon.png`, as a
+  new extension has, so each reload from a staged build checks it.
 - Unit tests in the shared build crate's
   [`build.rs`](../crates/pane-build/src/build.rs). `pane-build` holds the
   builds, the session that runs them after each save and the process

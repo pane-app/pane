@@ -353,14 +353,15 @@ pub(crate) fn check_builtin_names(icon: &Icon) -> Result<(), String> {
 /// Checks that every image `icon` and its fallbacks name is a file in
 /// `folder`, the package's: for one path, that file (its `@light` and
 /// `@dark` variants are optional), and both files of a light and dark
-/// pair. `what` names the icon's owner in the message.
+/// pair. `what` names the icon in the message, such as "the extension's
+/// icon" or "the icon of command `x`".
 pub(crate) fn check_manifest_files(icon: &Icon, folder: &Path, what: &str) -> Result<(), String> {
     if let IconSource::Image { light, dark } = &icon.source {
         for file in [light, dark] {
             if !folder.join(file).is_file() {
+                let file = file.display();
                 return Err(format!(
-                    "the icon of {what} names {}, which is not in the package",
-                    file.display()
+                    "it names {file} as {what}, but there is no {file} in the package"
                 ));
             }
         }
@@ -1309,10 +1310,10 @@ mod tests {
         let folder = tempfile::tempdir().unwrap();
         std::fs::write(folder.path().join("a.png"), b"x").unwrap();
         let icon = parse(&json!({"light": "a.png", "dark": "b.png"})).unwrap();
-        let error = check_manifest_files(&icon, folder.path(), "the package").unwrap_err();
+        let error = check_manifest_files(&icon, folder.path(), "the extension's icon").unwrap_err();
         assert_eq!(
             error,
-            "the icon of the package names b.png, which is not in the package"
+            "it names b.png as the extension's icon, but there is no b.png in the package"
         );
         assert!(check_manifest_files(&parse(&json!("a.png")).unwrap(), folder.path(), "x").is_ok());
     }
