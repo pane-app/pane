@@ -113,7 +113,7 @@ What invoking a root result reaches, shown on its row: Command, Application, Fil
 _Avoid_: Type, category
 
 **Result section**:
-A labelled run of root results: "Commands" over a blank query's commands and applications, below the pinned home; "Results" with their count over a query's, then "Fallbacks"; a run of computed answers sits under the title of the command that computed them ("Calculator"), the rows declared for the address or path the query is under "Addresses" (#195), and the files found for the query, with the row searching them all, under "Files". Sections only label the list; they never reorder or filter it, and none claims recent use: learning orders the list (frecency orders the blank query's), never a section.
+A labelled run of root results: "Update" over the application update's Restart to Update Pane row or the What's New item, which a blank query lists first, above the pinned home (ADR 0050); "Commands" over a blank query's commands and applications, below the pinned home; "Results" with their count over a query's, then "Fallbacks"; a run of computed answers sits under the title of the command that computed them ("Calculator"), the rows declared for the address or path the query is under "Addresses" (#195), and the files found for the query, with the row searching them all, under "Files". Sections only label the list; they never reorder or filter it, and none claims recent use: learning orders the list (frecency orders the blank query's), never a section.
 _Avoid_: Group (a shortcut group is a Settings term), suggestions
 
 **Learned ranking**:
@@ -369,8 +369,12 @@ Pane's own copy of an installed package's manifest and components, kept in Pane'
 _Avoid_: Cache (it is not disposable)
 
 **Application update**:
-A newer version of Pane itself, which Pane finds out about from its release source when it starts and tells the user of, as a row in root search; Pane downloads and installs it only when the user chooses, replacing the program in the install folder (the running one renamed aside) so the new version is used on the next start — which the user does, since Pane never restarts itself. Pane's data, and the extensions it installed, are untouched by one.
-_Avoid_: Self-update, auto-update (nothing is automatic), app update
+A newer version of Pane itself, which Pane finds out about from its release source by checking at start, every few hours and when the launcher opens after a stale check, and downloads and verifies in the background without asking (ADR 0050). Once it is ready, root search lists Restart to Update Pane first, and the user's Enter on it installs it: the program in the install folder is replaced (the running one renamed aside), and Pane starts the new version and quits, so the new version runs at once. Pane never installs one without that Enter. Pane's data, and the extensions it installed, are untouched by one. Check for Pane Updates checks at once.
+_Avoid_: Self-update, auto-update (the install waits for the user), app update
+
+**What's New item**:
+The root result a Pane that has just changed version lists first for a day: What's New in Pane <version>, which shows that release's notes. It goes when the user opens or dismisses it, or after the day.
+_Avoid_: Changelog (the release notes themselves), update notice
 
 **Update**:
 Replacing the managed copy of an installed package from its source while keeping its package identity. A second explicit install of the same identity is rejected instead.

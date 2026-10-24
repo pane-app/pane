@@ -23,7 +23,11 @@ superseded as the runtime baseline and preserved in the interview and ADRs.
   bootstrap/download design remains proposed. Normal users still need no
   manual runtime/compiler setup.
 - Application updates notify the user and are installed at their choice.
-  Do not infer automatic application downloads or restarts. This is
+  Do not infer automatic application downloads or restarts. (Superseded
+  2026-10-24 by
+  [ADR 0050](adr/0050-pane-downloads-its-updates-by-itself-and-restarts-into-them.md):
+  Pane now downloads an update by itself, and restarts into it when the
+  user presses Enter on Restart to Update Pane.) This is
   separate from automatic compatible extension updates below.
 - Only Windows prototypes have been tested. macOS/Linux remain intended
   targets, and previews may be staggered.
