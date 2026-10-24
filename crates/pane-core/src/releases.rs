@@ -10,11 +10,16 @@
 //! preview for now — and [`crate::application_update`] takes the newest
 //! one that carries this system's package.
 //!
-//! Reading the list is one request to `api.github.com` at Pane's start
-//! (and one more each time the user asks for a check), well within the
-//! 60 requests an hour GitHub allows an address that does not sign in. A
-//! limit that was used up anyway is explained, with when it lifts, and
-//! not tried again at once. Downloading an asset asks `github.com`, which
+//! Reading the list is one request to `api.github.com` when a check is
+//! due — at most every few hours, and each time the user asks (ADR
+//! 0050) — well within the 60 requests an hour GitHub allows an address
+//! that does not sign in. The request names the listing it read last
+//! (`If-None-Match` with its `ETag`), so a listing that has not changed is
+//! answered `304 Not Modified` and not read again; GitHub still counts
+//! such an answer against the limit for an address that does not sign
+//! in, so the schedule is what keeps Pane inside it. A limit that was
+//! used up anyway is explained, with when it lifts, and not tried again
+//! until then. Downloading an asset asks `github.com`, which
 //! redirects to the host it serves release assets from; Pane follows a
 //! redirect only to GitHub's own hosts ([`ASSET_HOSTS`]), only over
 //! HTTPS, and only a few times, so a release's download can lead nowhere
@@ -29,7 +34,7 @@
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::defaults::{Failure, answer, failed, interrupted};
 use crate::http::{Answer, GetError, OWN_LIMITS};
@@ -89,16 +94,40 @@ impl Default for ReleaseSource {
 }
 
 /// One release of Pane, as the listing gives it: its version (its tag,
-/// `v<version>`, without the `v`) and its assets.
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// `v<version>`, without the `v`), its assets, and its notes and page,
+/// which What's New shows after an update. Pane's update record keeps
+/// what it needs of the listing in this shape too.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct Release {
     pub(crate) version: String,
     pub(crate) assets: Vec<Asset>,
+    /// The release's notes, as Markdown (GitHub's `body`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) notes: Option<String>,
+    /// The release's page on GitHub (`html_url`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) page: Option<String>,
+}
+
+/// What one request for the listing answered.
+#[derive(Debug)]
+pub(crate) enum Listed {
+    /// The listing, with the `ETag` that names it, if GitHub gave one.
+    Releases {
+        releases: Vec<Release>,
+        etag: Option<String>,
+    },
+    /// `304 Not Modified`: the listing the `ETag` sent names is still the
+    /// listing.
+    Unchanged,
+    /// GitHub's rate limit refused the request: why, and how many seconds
+    /// from now it lifts.
+    Limited { why: String, wait: u64 },
 }
 
 /// One asset of a release: its file name, its size in bytes and the
 /// address it is downloaded from.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct Asset {
     pub(crate) name: String,
     pub(crate) size: u64,
@@ -185,13 +214,18 @@ impl ReleaseSource {
 
     /// Lists Pane's newest releases: those whose tag is a release tag
     /// (`v` and dotted numbers), drafts left out (which GitHub shows no
-    /// one who does not sign in anyway), prereleases kept.
-    pub(crate) fn list(&self) -> Result<Vec<Release>, Failure> {
+    /// one who does not sign in anyway), prereleases kept. `etag` names the
+    /// listing read last, if one was kept: GitHub answers `304 Not
+    /// Modified` while it is still the listing ([`Listed::Unchanged`]).
+    pub(crate) fn list(&self, etag: Option<&str>) -> Result<Listed, Failure> {
         let url = self.listing_url();
-        let headers = [
+        let mut headers = vec![
             ("Accept", "application/vnd.github+json"),
             ("X-GitHub-Api-Version", API_VERSION),
         ];
+        if let Some(etag) = etag {
+            headers.push(("If-None-Match", etag));
+        }
         crate::http::https_only(self.loopback, &url).map_err(failed)?;
         let read = crate::http::get_blocking(&url, &headers, MAX_LISTING, OWN_LIMITS).map_err(
             |error| match error {
@@ -204,8 +238,12 @@ impl ReleaseSource {
                 )),
             },
         )?;
-        if let Some(why) = rate_limited(&read) {
-            return Err(failed(why));
+        if let Some((why, wait)) = rate_limited(&read) {
+            return Ok(Listed::Limited { why, wait });
+        }
+        // Only a request that named a listing can be told it is unchanged.
+        if read.status == 304 && etag.is_some() {
+            return Ok(Listed::Unchanged);
         }
         if read.status != 200 {
             return Err(answer(
@@ -213,11 +251,17 @@ impl ReleaseSource {
                 format!("Pane's releases at {url} answered {}", read.status),
             ));
         }
-        parse_listing(&read.body).map_err(|why| {
+        let releases = parse_listing(&read.body).map_err(|why| {
             failed(format!(
                 "Pane's releases at {url} gave a listing that {why}"
             ))
-        })
+        })?;
+        let etag = read
+            .headers
+            .get(http::header::ETAG)
+            .and_then(|etag| etag.to_str().ok())
+            .map(str::to_owned);
+        Ok(Listed::Releases { releases, etag })
     }
 
     /// Downloads `url`, an asset of Pane's releases (`what` names it in
@@ -286,8 +330,10 @@ impl ReleaseSource {
 /// requests an hour it allows an address that does not sign in were used
 /// up (`403` or `429` with no requests remaining), or it asked for a
 /// pause (`429`, or `Retry-After`). Trying again at once cannot help, so
-/// the explanation says when it can.
-fn rate_limited(read: &Answer) -> Option<String> {
+/// the explanation says when it can, and the answer gives how many
+/// seconds from now that is (an hour when GitHub did not say), so a check
+/// is not made again before it.
+fn rate_limited(read: &Answer) -> Option<(String, u64)> {
     if !matches!(read.status, 403 | 429) {
         return None;
     }
@@ -310,6 +356,12 @@ fn rate_limited(read: &Answer) -> Option<String> {
             .and_then(|value| value.parse::<u64>().ok())
             .map(|reset| reset.saturating_sub(now))
     });
+    Some((limit_reached(wait), wait.unwrap_or(3600)))
+}
+
+/// Why a check cannot be made while GitHub's rate limit is used up, with
+/// when it lifts, `wait` seconds from now (if that is known).
+pub(crate) fn limit_reached(wait: Option<u64>) -> String {
     let when = match wait {
         Some(seconds) => {
             let minutes = seconds.div_ceil(60).max(1);
@@ -318,10 +370,10 @@ fn rate_limited(read: &Answer) -> Option<String> {
         }
         None => "try again later".to_owned(),
     };
-    Some(format!(
+    format!(
         "GitHub limits how often Pane's releases can be read from this address, and the limit \
          is reached; {when}"
-    ))
+    )
 }
 
 /// `location`, as an absolute address: a redirect to a path stays on the
@@ -366,6 +418,8 @@ pub(crate) fn parse_listing(body: &[u8]) -> Result<Vec<Release>, String> {
                     url: asset.browser_download_url,
                 })
                 .collect(),
+            notes: release.body.filter(|body| !body.trim().is_empty()),
+            page: release.html_url,
         })
         .collect())
 }
@@ -379,6 +433,10 @@ struct ReleaseJson {
     draft: bool,
     #[serde(default)]
     assets: Vec<AssetJson>,
+    #[serde(default)]
+    body: Option<String>,
+    #[serde(default)]
+    html_url: Option<String>,
 }
 
 /// One asset of a release, as GitHub's API writes it.
@@ -477,7 +535,9 @@ mod tests {
     #[test]
     fn a_listing_names_pane_s_versions_and_their_assets() {
         let listing = serde_json::json!([
-            { "tag_name": "v0.2.0", "draft": false, "prerelease": true, "assets": [
+            { "tag_name": "v0.2.0", "draft": false, "prerelease": true,
+              "body": "## What's new\n\nThings.",
+              "html_url": "https://github.com/pane-app/pane/releases/tag/v0.2.0", "assets": [
                 { "name": "pane-0.2.0-windows-x86_64.zip", "size": 12,
                   "browser_download_url": "https://github.com/pane-app/pane/releases/download/v0.2.0/pane-0.2.0-windows-x86_64.zip",
                   "state": "uploaded" }
@@ -486,7 +546,7 @@ mod tests {
             { "tag_name": "v0.3.0", "draft": true, "assets": [] },
             { "tag_name": "nightly", "assets": [] },
             { "tag_name": "v0.3.0-rc.1", "assets": [] },
-            { "tag_name": "v0.1.0", "assets": [] }
+            { "tag_name": "v0.1.0", "body": "  ", "assets": [] }
         ]);
         let releases = parse_listing(listing.to_string().as_bytes()).unwrap();
         assert_eq!(
@@ -499,10 +559,15 @@ mod tests {
                         size: 12,
                         url: "https://github.com/pane-app/pane/releases/download/v0.2.0/pane-0.2.0-windows-x86_64.zip".into(),
                     }],
+                    notes: Some("## What's new\n\nThings.".into()),
+                    page: Some("https://github.com/pane-app/pane/releases/tag/v0.2.0".into()),
                 },
+                // Notes that are only blank are none.
                 Release {
                     version: "0.1.0".into(),
                     assets: vec![],
+                    notes: None,
+                    page: None,
                 },
             ]
         );
@@ -536,15 +601,20 @@ mod tests {
                 ("x-ratelimit-reset", (now + 600).to_string()),
             ],
         );
-        let why = rate_limited(&limited).unwrap();
+        let (why, until) = rate_limited(&limited).unwrap();
         assert!(why.contains("limit is reached"), "{why}");
         assert!(why.contains("try again in about 10 minutes"), "{why}");
+        // When it lifts is kept, so no check is made before it.
+        assert!((590..=600).contains(&until), "{until}");
         let paused = answer(429, &[("retry-after", "30".into())]);
-        assert!(
-            rate_limited(&paused)
-                .unwrap()
-                .contains("try again in about 1 minute")
-        );
+        let (why, until) = rate_limited(&paused).unwrap();
+        assert!(why.contains("try again in about 1 minute"), "{why}");
+        assert_eq!(until, 30);
+        // A limit that does not say when it lifts is waited out an hour.
+        let unsaid = answer(429, &[]);
+        let (why, until) = rate_limited(&unsaid).unwrap();
+        assert!(why.contains("try again later"), "{why}");
+        assert_eq!(until, 3600);
         // A 403 that is not the rate limit, and a 200, are not.
         assert_eq!(
             rate_limited(&answer(403, &[("x-ratelimit-remaining", "12".into())])),

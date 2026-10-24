@@ -103,7 +103,7 @@ pub use launcher::{
     RequirementFix, ResultAction, ResultActionItem, ResultActions, Row, RowKind, RowPresentation,
     Screen, Section, SelectedAction, SettingsTarget, ShortcutCatalog, ShortcutCommand,
     ShortcutGroup, SlotChange, Status, SubmenuState, UNEXPECTED_QUIT, Unavailable, UnboundShortcut,
-    UnmetRequirement, UpdateHold, UpdateResult, UpdateResults, UpdateResultsAction,
+    UnmetRequirement, UpdateChecks, UpdateHold, UpdateResult, UpdateResults, UpdateResultsAction,
     answer_sections, root_sections,
 };
 pub use links::LinkOpener;

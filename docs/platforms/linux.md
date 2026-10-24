@@ -1321,20 +1321,25 @@ History is disabled first (the Helper sample was, until #162 took it out of
 the default set), so an extension the user disabled before the update must
 stay disabled after it.
 
-- The offer appears as **Update Pane to 99.0.0** in root search (frame
-  601); the status line tells what was found (frame 600).
-- The release server's log must hold **no request for the package** until
-  the row is chosen. Nothing is downloaded, installed or restarted
-  automatically.
-- Choosing the row with a **damaged package** is explained (its bytes do
-  not match the sha256 its `.sha256` gives, frame 602). The program, the data
-  and the bin folder are untouched and the row is ready to try again.
-- The real choice downloads the tarball, checks it, unpacks it (the same
-  tar reader npm tarballs are read by, with the application package's own
-  size bound) and swaps the running program. The old `~/.local/bin/pane` is
-  renamed `pane.old` beside it, the new one is put in its place, and the
-  staging folder is gone (frame 603, and byte comparisons of both programs
-  against the two packages' own files).
+Since [#502](https://github.com/pane-app/pane/issues/502)
+([ADR 0050](../adr/0050-pane-downloads-its-updates-by-itself-and-restarts-into-them.md))
+Pane downloads an update by itself, and the phase checks that instead of
+"no request for the package until the row is chosen":
+
+- The tarball served first is **damaged** (its bytes do not match the
+  sha256 its `.sha256` gives). Pane downloads it **by itself**, before
+  anything is chosen, and the download fails quietly (frame 600, evidence
+  only): nothing is staged, and the program is the one installed.
+- With the tarball whole again, **Check for Pane Updates** downloads it,
+  unpacks it (the same tar reader npm tarballs are read by, with the
+  application package's own size bound) and stages it: "Pane 99.0.0 is
+  ready to install" (frame 601), the marker written in
+  `~/.local/bin/update/`, and the tarball downloaded twice in all. Root
+  search then lists **Update Pane to 99.0.0**, selected (frame 602).
+- Enter swaps the running program without downloading again. The old
+  `~/.local/bin/pane` is renamed `pane.old` beside it, the new one is put
+  in its place, and the staging folder is gone (frame 603, and byte
+  comparisons of both programs against the two packages' own files).
 - The next start runs the new version. It reports `Pane 99.0.0` and removes
   `pane.old` at start. The calculator still answers "6*7" with 42 from the
   old version's install (the calculator set up at first setup, from the

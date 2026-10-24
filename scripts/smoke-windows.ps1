@@ -2859,26 +2859,25 @@ try {
     Remove-Item Env:PANE_DATA_DIR -ErrorAction SilentlyContinue
 }
 
-# Installing a Pane application update by the user's choice (#54): a
-# second package is built with --package-version 99.0.0, whose program
-# reports 99.0.0 and whose release names it (the two runnable builds
-# the update goes between); the package the #51 phase built, at the
-# version crates/pane/Cargo.toml names, is installed on another clean
-# profile, and its Pane, running from
-# %LOCALAPPDATA%\Pane\pane.exe, is told by the check it makes at start
-# that 99.0.0 exists: a row in root search with the version, and a word on
-# the status line. Nothing is downloaded until that row is chosen; the
-# choice is proven by the release server's log, which must hold no
-# request for the package until then. A corrupted package is explained
-# first (its bytes do not match the sha256 its .sha256 gives), everything
-# untouched and the row ready to try again; then the real install
-# downloads the package, checks it, and swaps the running pane.exe — the
-# old one renamed pane.exe.old, removed on a later start — so the new
-# version is used the next time Pane starts (Pane never restarts itself).
-# The new Pane, started again, reports 99.0.0, with the old version's
-# data (the calculator set up at first setup, from the pinned
-# repositories) and the extension the user disabled (Clipboard History)
-# kept, and with nothing of the update left in the install folder.
+# Pane's own update (#54, ADR 0050): a second package is built with
+# --package-version 99.0.0, whose program reports 99.0.0 and whose
+# release names it (the two runnable builds the update goes between); the
+# package the #51 phase built, at the version crates/pane/Cargo.toml
+# names, is installed on another clean profile, and its Pane, running
+# from %LOCALAPPDATA%\Pane\pane.exe, checks at start and downloads
+# 99.0.0 by itself, before anyone chooses anything: the release server's
+# log holds the package's request. The first package served is damaged
+# (its bytes do not match the sha256 its .sha256 gives), so that download
+# fails quietly: nothing staged, the program untouched, no row. Check for
+# Pane Updates, once the package is whole again, downloads it and stages
+# it; the row Update Pane to 99.0.0 then installs it without downloading
+# again, swapping the running pane.exe — the old one renamed
+# pane.exe.old, removed on a later start — so the new version is used the
+# next time Pane starts. The new Pane, started again, reports 99.0.0,
+# with the old version's data (the calculator set up at first setup, from
+# the pinned repositories) and the extension the user disabled (Clipboard
+# History) kept, and with nothing of the update left in the install
+# folder.
 cargo xtask package-windows --dev --package-version 99.0.0
 if ($LASTEXITCODE -ne 0) { throw "the update package was not built" }
 $workspaceVersion = (Select-String -Path crates/pane/Cargo.toml -Pattern '^version = "(.*)"$').Matches[0].Groups[1].Value
@@ -2926,11 +2925,20 @@ try {
     $env:PATH = $cleanBin
     $env:PANE_RELEASES = "http://127.0.0.1:$((Get-Content $portFile).Trim())/"
     $env:PANE_DEFAULTS = $DefaultPins
+    # The package served first is damaged: the download Pane makes by
+    # itself fails its sha256. The release assets name the package as a
+    # release does, without -dev.
+    $served = Join-Path "target/dist/release" ($newer.Name -replace '-dev\.', '.')
+    $bytes = [IO.File]::ReadAllBytes($served)
+    $at = [int]($bytes.Length / 2)
+    $bytes[$at] = $bytes[$at] -bxor 1
+    [IO.File]::WriteAllBytes($served, $bytes)
+    $staged = Join-Path $install "update\.pane-staged.json"
     $process = Start-Pane "update-stderr-0.1.0.log" @() $installed
     $env:PATH = $realPath
     # First setup fetches the pinned commits from the repositories (no
     # request reaches the release server for them), and Pane's own check
-    # lists the releases once — its request is the first.
+    # lists the releases at start — its request is the first.
     if ($process.HasExited) { throw "the installed Pane exited during setup" }
     # The default extensions: on Windows all eight -- the five of #60
     # plus Run, System Commands and Switch Windows (ADR 0040), pinned
@@ -2939,21 +2947,23 @@ try {
     foreach ($default in "calculator", "applications", "quicklinks", "files", "clipboard-history", "run", "system-commands", "switch-windows") {
         Wait-For $registry ('"default": "' + $default + '"') $true 1200
     }
-    # The check has listed the releases: the offer is in root search. The
-    # status line tells what it found; nothing has been downloaded.
+    # The check has listed the releases and, finding 99.0.0, downloaded
+    # its package by itself, with no choice made: the server's log holds
+    # the request. The damaged package failed its sha256 quietly: nothing
+    # is staged and the program is the one installed.
     for ($i = 0; $i -lt 100; $i++) {
         if ((Select-String -SimpleMatch "/repos/pane-app/pane/releases" $serverLog).Count -ge 1) { break }
         Start-Sleep -Milliseconds 100
     }
     if ((Select-String -SimpleMatch "/repos/pane-app/pane/releases" $serverLog).Count -lt 1) { throw "Pane never checked for its own update" }
+    for ($i = 0; $i -lt 600 -and (Select-String -SimpleMatch ".zip HTTP" $serverLog).Count -lt 1; $i++) { Start-Sleep -Milliseconds 100 }
+    if ((Select-String -SimpleMatch ".zip HTTP" $serverLog).Count -lt 1) { throw "Pane did not download the update by itself" }
     Start-Sleep -Seconds 2
-    Capture "600-notification.png"   # evidence only: the toast ("Pane 99.0.0 is available", or the setup's own outcome) leaves after 3 s, and may have left while the defaults were waited for; 601's offer row is what says the check found the update
-    Send "^a"; Send "update"; Start-Sleep -Seconds 1
-    Capture "601-offered.png"
-    Check "601-offered.png" "subtitle"   # the offer row: "Your extensions and settings are kept; ..."
-    Check "601-offered.png" "selected" 3000   # the row, selected
-    # Taking no action downloads nothing: no package was asked for.
-    if (Select-String -SimpleMatch ".zip" $serverLog) { throw "a package was downloaded without the user choosing it" }
+    Capture "600-quiet-failure.png"   # evidence only: a download Pane made by itself that failed shows nothing
+    if (Test-Path $staged) { throw "a damaged package was staged" }
+    if ((Get-FileHash $installed).Hash -ne (Get-FileHash (Join-Path $unpackOld "pane\pane.exe")).Hash) {
+        throw "a failed download changed the program"
+    }
 
     # Disable Clipboard History first: an extension the user disabled
     # before the update must stay disabled after it (the switch on its
@@ -2963,30 +2973,23 @@ try {
     Wait-For $registry '"disabled": true' $true
     Close-Settings
 
-    # A package that does not match the sha256 its release gives is
-    # explained and not installed: the bytes of the served package are
-    # damaged, and the program keeps running the one it was.
-    # The release assets name the package as a release does, without -dev.
-    $served = Join-Path "target/dist/release" ($newer.Name -replace '-dev\.', '.')
-    $bytes = [IO.File]::ReadAllBytes($served)
-    $at = [int]($bytes.Length / 2)
-    $bytes[$at] = $bytes[$at] -bxor 1
-    [IO.File]::WriteAllBytes($served, $bytes)
-    Send "^a"; Send "update pane"; Start-Sleep -Seconds 1
-    Send "{ENTER}"
-    Capture-Until "602-corrupt-package.png" "error" 60   # "Could not update Pane to 99.0.0: ... does not match the sha256"
-    if (Test-Path (Join-Path $install "pane.exe.old")) { throw "a failed install replaced the program" }
-    if ((Get-FileHash $installed).Hash -ne (Get-FileHash (Join-Path $unpackOld "pane\pane.exe")).Hash) {
-        throw "a failed install changed the program"
-    }
-    if (Test-Path (Join-Path $install "update")) { throw "a failed install left its staging behind" }
-
-    # The source works again; the row that stays tries again, and the
-    # update is installed: the new program takes the old one's name and
-    # place, the old one is renamed out of its way.
-    # The row leaves the list while an install runs, and comes back
-    # selected once it failed (#424): Enter alone tries again.
+    # The package is whole again; Check for Pane Updates checks at once
+    # and downloads it, and it is staged.
     Copy-Item $newer.FullName $served -Force
+    Send "^a"; Send "check for pane updates"; Start-Sleep -Seconds 1
+    Send "{ENTER}"
+    Capture-Until "601-ready.png" "success" 120   # "Pane 99.0.0 is ready to install"
+    Wait-For $staged "99.0.0" $true 600
+    # The package was downloaded once for each attempt: the damaged one
+    # and the one staged.
+    if ((Select-String -SimpleMatch ".zip HTTP" $serverLog).Count -ne 2) { throw "the package was not downloaded exactly twice" }
+    Send "^a"; Send "update pane"; Start-Sleep -Seconds 1
+    Capture "602-offered.png"
+    Check "602-offered.png" "subtitle"   # the row: "Your extensions and settings are kept; ..."
+    Check "602-offered.png" "selected" 3000   # the row, selected
+
+    # Enter installs the staged update: the new program takes the old
+    # one's name and place, the old one is renamed out of its way.
     Send "{ENTER}"
     for ($i = 0; $i -lt 1200 -and -not (Test-Path (Join-Path $install "pane.exe.old")); $i++) {
         if ($process.HasExited) { throw "Pane exited while updating itself" }
@@ -3001,9 +3004,8 @@ try {
         throw "the old program was not kept out of the new one's way"
     }
     if (Test-Path (Join-Path $install "update")) { throw "the install left its staging behind" }
-    # The package was downloaded once for each attempt: the damaged one
-    # and the one that installed.
-    if ((Select-String -SimpleMatch ".zip HTTP" $serverLog).Count -ne 2) { throw "the package was not downloaded exactly twice" }
+    # Installing downloaded nothing more.
+    if ((Select-String -SimpleMatch ".zip HTTP" $serverLog).Count -ne 2) { throw "the install downloaded the package again" }
     Stop-Pane $process
 
     # The next start runs the new version: it reports 99.0.0, removes what
@@ -3023,7 +3025,7 @@ try {
     Send "{ENTER}"
     Capture-Until "605-copied-after-update.png" "success" 10   # "Copied 42 to the clipboard"
     Wait-For $registry '"disabled": true' $true
-    $shots = "600-notification", "601-offered", "602-corrupt-package", "603-installed", "604-answer-after-update" |
+    $shots = "601-ready", "602-offered", "603-installed", "604-answer-after-update" |
         ForEach-Object { Join-Path $OutDir "$_.png" }
     python "$PSScriptRoot/check_screenshot.py" --distinct @shots
     if ($LASTEXITCODE -ne 0) { throw "screenshot check failed: the update changed nothing" }

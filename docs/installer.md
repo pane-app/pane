@@ -570,31 +570,29 @@ failed.
 ## Updating Pane itself
 
 > **Being replaced.** [ADR 0050](adr/0050-pane-downloads-its-updates-by-itself-and-restarts-into-them.md)
-> (accepted 2026-10-24) makes Pane update the way Raycast does:
+> (accepted 2026-10-24) makes Pane update the way Raycast does. The check
+> on a schedule, the download by itself and **Check for Pane Updates**
+> have landed ([#502](https://github.com/pane-app/pane/issues/502)) and
+> are described below. Still to come:
 >
-> - it checks at start, every 4 hours, and when the launcher opens after
->   a stale check, remembering the last check and its `ETag` across
->   restarts;
-> - it downloads and verifies a newer release in the background without
->   asking;
 > - it lists **Restart to Update Pane** first in root search, with a
->   toast;
-> - Enter swaps the program and Pane starts the new version by itself;
+>   toast ([#503](https://github.com/pane-app/pane/issues/503));
+> - Enter swaps the program and Pane starts the new version by itself
+>   ([#504](https://github.com/pane-app/pane/issues/504));
 > - after the restart, **What's New in Pane <version>** shows the
->   release notes for a day;
-> - **Check for Pane Updates** checks at once.
+>   release notes for a day
+>   ([#505](https://github.com/pane-app/pane/issues/505)).
 >
-> This supersedes "Pane never downloads, installs or restarts itself
-> unprompted" (US76, decision 17, Q38) and the once-per-start check
-> below. Until the build lands, the rest of this section describes
-> Pane 0.1.1, and each part is rewritten as its piece ships.
+> Until those land, the staged update is installed by **Update Pane to
+> <version>**, and the new version is used the next time Pane starts.
 
-Pane checks its GitHub releases for a newer version of itself when it
-starts and tells the user, who alone chooses whether to download and
-install it. Pane never downloads, installs or restarts itself unprompted
-([decision 17](https://github.com/pane-app/pane/issues/1),
-[Q38](https://github.com/pane-app/pane/blob/archive/docs-history-2026-10-23/docs/current-decisions.md)).
-[#54](https://github.com/pane-app/pane/issues/54) added this, and
+Pane checks its GitHub releases for a newer version of itself at start,
+every few hours and when the launcher opens after a stale check. It
+downloads, verifies and stages a newer version by itself, quietly, and
+installs it only when the user chooses
+([ADR 0050](adr/0050-pane-downloads-its-updates-by-itself-and-restarts-into-them.md),
+which supersedes US76, decision 17 and Q38 on this).
+[#54](https://github.com/pane-app/pane/issues/54) added the update, and
 [#55](https://github.com/pane-app/pane/issues/55) wired the macOS half.
 The check, the download, the verification and the swap are
 platform-independent and live in `pane-core`, ready for another system's
@@ -620,55 +618,85 @@ The releases are read only where an update is checked, so a release one
 Pane cannot take changes nothing else: a default extension is set up from
 its repository whether the releases can be read or not.
 
+### When Pane checks
+
+- **At start**, if a check is due: none was ever made, or the last one is
+  more than 4 hours old.
+- **Every 4 hours** while Pane runs, each check a random moment of up to
+  15 minutes later, so that Panes sharing one address do not all ask at
+  once.
+- **When the launcher is shown** after it was hidden, if the last check is
+  more than 4 hours old (a computer that slept through a scheduled check,
+  say).
+- **When the user asks**: root search's **Check for Pane Updates** (also
+  found as "Check for Updates", Raycast's name for it) and the About
+  page's **Check for updates** check at once, whatever the schedule.
+
+The schedule follows the launcher's clock. A development build can be
+given a shorter interval in seconds through `PANE_UPDATE_INTERVAL`, as it
+is given `PANE_RELEASES`; a release build has no such hook.
+
+### The record
+
+Pane keeps `application-update.json` in its cache folder
+(`%LOCALAPPDATA%\Pane\cache`, `~/Library/Caches/Pane`,
+`~/.cache/pane`), with a version field as Pane's other records have. It
+holds:
+
+- when the last check was made, whatever it came to;
+- the listing's `ETag`, and what choosing a release needs of that
+  listing: each release's version, the assets this system's package can
+  be (the package and its `.sha256`), and its notes and page, which
+  What's New will show;
+- when GitHub's rate limit lifts, if a check found it used up;
+- the last check or download that failed, when and why.
+
+So a restart within the interval does not call the API at all. A record
+that is missing or cannot be read is an empty one, and the next check
+writes it again.
+
 ### The check
 
-Once, when Pane starts, Pane lists the newest releases in the background
-through GitHub's API (`api.github.com/repos/pane-app/pane/releases`, ten
-at a time), drafts left out and prereleases kept while every release of
-Pane is a preview. It takes the newest release, by version, that carries
-this system's package, and compares that version with the version it
-runs: dotted numbers, compared by number. A release whose tag is not
-`v` and dotted numbers is not one of Pane's versions, and is passed over.
-That cadence is provisional; no interval is checked meanwhile.
+Pane lists the newest releases through GitHub's API
+(`api.github.com/repos/pane-app/pane/releases`, ten at a time), drafts
+left out and prereleases kept while every release of Pane is a preview.
+The request sends `If-None-Match` with the `ETag` the record keeps, and a
+listing that has not changed is answered `304 Not Modified`: Pane then
+chooses from the record. GitHub still counts a `304` against the 60
+requests an hour it allows an address that does not sign in (checked
+2026-10-24: two `304`s in a row took the remaining count from 58 to 56),
+so it is the schedule, at most a few requests a day, that keeps Pane
+inside the limit.
 
-The check reads only the list of releases, one API request. **Nothing is
-downloaded until the user chooses**, and Pane does nothing else: no download, no install, no
-restart (US76,
-[Q38](https://github.com/pane-app/pane/blob/archive/docs-history-2026-10-23/docs/current-decisions.md)).
-An equal or older version says nothing: no downgrades are offered or
-picked.
+Pane takes the newest release, by version, that carries this system's
+package, and compares that version with the version it runs: dotted
+numbers, compared by number. A release whose tag is not `v` and dotted
+numbers is not one of Pane's versions, and is passed over. An equal or
+older version says nothing: no downgrades are offered or picked.
 
 A release that carries only other systems' packages is passed over
 silently. A newer package with no `.sha256` beside it, a listing Pane
-cannot read, or a package whose address is not one of Pane's releases is
-explained. So is a source that cannot be reached (tried three times, like
-an interrupted acquisition). GitHub allows an address that does not sign
-in 60 API requests an hour; when they are used up, the check says so and
-when the limit lifts, and does not try again at once.
+cannot read, a package whose address is not one of Pane's releases, and
+a source that cannot be reached (tried three times, like an interrupted
+acquisition) are failures. When GitHub's limit is used up, the check
+keeps when it lifts and makes no request before then, not even one the
+user asks for, which says when to try again.
 
-When there is a newer version, the status line says what was found
-("Pane 99.0.0 is available"), and root search lists the offer after the
-install rows and before Manage extensions: **Update Pane to 99.0.0**. Its
-subtitle says what installing does: the user's extensions and settings
-are kept, and the new version is used the next time Pane starts. A check
-that failed lists **Check for a Pane update** with why, which tries
-again.
+### The download
 
-### The install
+As soon as a check finds a newer version, Pane downloads it in the
+background, without asking:
 
-Choosing the row:
-
-1. Downloads the package's `.sha256`, then the package with progress
-   ("Downloading Pane 99.0.0: 34% of 186 MiB"), with the same retries an
-   interrupted acquisition gets (three attempts). Both come from
-   `github.com`, which redirects to the host it serves release assets
-   from; Pane follows that redirect only to GitHub's own hosts
+1. It downloads the package's `.sha256`, then the package, with the same
+   retries an interrupted acquisition gets (three attempts). Both come
+   from `github.com`, which redirects to the host it serves release
+   assets from; Pane follows that redirect only to GitHub's own hosts
    (`github.com`, `release-assets.githubusercontent.com`,
    `objects.githubusercontent.com`), only over HTTPS and at most five
    times. A redirect anywhere else, a package that is not there, or one
-   whose bytes do not match the sha256 its `.sha256` gives, is explained
-   and never retried.
-2. Checks it and unpacks it, in the format the package's system packs:
+   whose bytes do not match the sha256 its `.sha256` gives, fails and is
+   not retried until the next check.
+2. It checks it and unpacks it, in the format the package's system packs:
    - the zip a Windows or macOS package is, read as strictly as an npm
      package's tarball: only files and folders inside the package, one
      plain name per part on every system, every entry checked against the
@@ -678,36 +706,62 @@ Choosing the row:
      read raw, an ambiguous size refused;
    - an AppImage is not unpacked: it must be an ELF file with the
      AppImage type 2 mark, or it is refused.
-3. Stages it in the install folder's `update` folder, or for an AppImage
-   in a hidden `.<name>.update` folder beside it: an AppImage often sits
-   in a folder of the user's own, where an `update` folder may be theirs.
-4. Swaps. The running program is renamed out of its way: `pane.exe` to
+3. It stages it in the install folder's `update` folder, or for an
+   AppImage in a hidden `.<name>.update` folder beside it: an AppImage
+   often sits in a folder of the user's own, where an `update` folder may
+   be theirs. Last, it writes the marker `.pane-staged.json`, naming the
+   version and the staged program's sha256.
+
+Pane downloads one update at a time, and a newer release replaces an
+update staged before it. A check that finds the version already staged
+downloads nothing. While it downloads, nothing the user sees changes
+except the About page, which shows the progress; after a check the user
+asked for, the status line shows it too.
+
+A staged update survives a restart. At start, Pane keeps a staging folder
+whose marker names a version newer than the one running, and removes any
+other: one without a marker (a download that did not end), or one whose
+version is not newer (the setup installed it, say).
+
+### The install
+
+Once an update is staged, root search lists **Update Pane to 99.0.0**.
+Its subtitle says what installing does: the user's extensions and
+settings are kept, and the new version is used the next time Pane
+starts. Choosing it, or the About page's **Update to 99.0.0**, downloads
+nothing:
+
+1. The staged program is checked against the sha256 its marker names. A
+   staged program that changed or went missing is removed, explained,
+   and downloaded again in the background.
+2. The swap. The running program is renamed out of its way: `pane.exe` to
    `pane.exe.old` on Windows, the bundle's `pane` to `pane.old` on macOS,
-   `pane` to `pane.old` on Linux, and an AppImage to `<name>.old`. Every system allows renaming a running
-   program; only overwriting one is refused. The staged program takes its
-   name and place, and the staging folder goes.
+   `pane` to `pane.old` on Linux, and an AppImage to `<name>.old`. Every
+   system allows renaming a running program; only overwriting one is
+   refused. The staged program takes its name and place, and the staging
+   folder goes.
 
 **The new version is used the next time Pane starts**, the user's next
-start, whenever they choose. Pane itself never restarts. A start removes
-what earlier updates left: the renamed old program (best effort, since
-another Pane may still run it) and a staging folder a Pane stopped
-mid-install left.
+start, whenever they choose. Pane does not restart itself yet (#504). A
+start removes what earlier updates left: the renamed old program (best
+effort, since another Pane may still run it).
 
-Installing while Pane is being used is fine. The download runs off the
-thread, so commands and services keep answering while it goes, and only
-the last renames touch the program's folder, between two of the user's
-actions. A command still running when the user closes Pane ends as any
-command does, and the update left staged is applied (or cleaned up) by
-the next start.
+Installing while Pane is being used is fine. Only the last renames touch
+the program's folder, between two of the user's actions.
 
 ### What a failure leaves
 
-A failed check or install explains itself on the status line and leaves
-everything untouched: the program is still the one running, nothing is
-staged, nothing is renamed. The row stays (the offer, or the check), and
-the user can try again. The offer's row leaves root search while its
-install runs, so it cannot be started twice, and comes back selected once
-the install failed, so Enter tries again
+A check or download Pane made by itself that fails says nothing: no row
+and no status line. It is written to Pane's log and the record, the About
+page shows when and why, and Pane tries again when the next check is due
+(never in a tight loop). Only a check the user asked for explains a
+failure on the status line.
+
+An install that fails explains itself on the status line and leaves
+everything untouched: the program is still the one running, and the
+update is still staged. The row leaves root search while its install
+runs, so it cannot be started twice, and comes back selected once the
+install failed, so Enter tries again
 ([#424](https://github.com/pane-app/pane/issues/424)).
 
 The old version's data is never touched. Pane's data and caches live
@@ -727,21 +781,24 @@ and enablement are exactly what they were.
 There are two entry points: root search's rows, and the Settings window's
 About page ([#82](https://github.com/pane-app/pane/issues/82)). The page
 reads the same state the rows come from (`Launcher::application_update`),
-so the two cannot disagree, and its "Check for updates" and "Update Pane
-to <version>" rows run the same check and the same install the root rows
+so the two cannot disagree, and its "Check for updates" and "Update to
+<version>" buttons run the same check and the same install the root rows
 run.
 
-The page also says the states the rows stay quiet about:
+The page also says what the rows stay quiet about:
 
-- that Pane is up to date (after a check the user asked for);
+- a check running, and a download's progress;
+- that Pane is up to date, or that the last check failed and why;
+- when Pane last checked ("Last checked 2 hours ago"), and the last check
+  or download that failed;
 - that no release source is configured at all (a development build
   without `PANE_RELEASES`, whose page explains the state rather than
   promising a release);
-- why installing the offer last failed, since the offer stays, ready to
+- why installing the staged update last failed, since it stays, ready to
   be chosen again.
 
 A check the user asks for from either entry point answers even when there
-is nothing to offer.
+is nothing to offer ("Pane is up to date").
 
 The same page's **Log** row and root search's **Pane quit unexpectedly
 last time** row, which follows the update's rows, work the same way for
@@ -836,8 +893,9 @@ true across a swap. The uninstaller also removes the `pane.exe.old` and
 `update\` a swap may have left.
 
 The setup is not what an update runs because running it would mean
-quitting Pane and starting it again, which Pane never does by itself (the
-new version is used the next time the user starts Pane), and would give
+quitting Pane and starting it again, which Pane does not do by itself
+yet (the new version is used the next time the user starts Pane; #504
+adds the restart), and would give
 Windows a second update path that installs made from the zip could not
 take. The swap already works for every install, and the entry's version is
 all that the setup knows and the swap would otherwise leave stale.
@@ -870,7 +928,9 @@ from it is followed only to itself.
   redirect as GitHub's are (`crates/pane-core/tests/support/releases.rs`).
 
 A development build with no `PANE_RELEASES` checks for no application
-update, so a checkout runs nothing over the network by itself.
+update, so a checkout runs nothing over the network by itself. One that
+names a stand-in checks it on the same schedule a release build keeps,
+or every `PANE_UPDATE_INTERVAL` seconds when that is set.
 
 ## Trying a first setup by hand
 
@@ -1174,8 +1234,8 @@ with `&`).
   [ADR 0050](adr/0050-pane-downloads-its-updates-by-itself-and-restarts-into-them.md)
   checks at start, every 4 hours and when the launcher opens after a
   stale check, and a background check that fails retries quietly at the
-  next one. Until that is built, Pane 0.1.1 checks when it starts and at
-  no interval.
+  next one. That schedule is built (#502); Pane 0.1.1 and earlier still
+  check only when they start.
   Extension updates and application updates stay separate. Extension
   updates have their own controls (npm packages update automatically
   since #49, tracked Git branches since #50). The application update

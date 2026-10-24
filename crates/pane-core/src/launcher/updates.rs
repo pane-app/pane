@@ -1653,7 +1653,10 @@ pub(super) fn refusal_message(reason: &PackageError, launcher: &Launcher) -> Str
 /// help. Nothing when no offer exists or no release source is configured.
 fn application_update_note(launcher: &Launcher) -> String {
     match launcher.application_update() {
-        ApplicationUpdate::Offered { version, .. } | ApplicationUpdate::Installing { version } => {
+        ApplicationUpdate::Offered { version, .. }
+        | ApplicationUpdate::Downloading { version, .. }
+        | ApplicationUpdate::Ready { version, .. }
+        | ApplicationUpdate::Installing { version } => {
             format!(". Pane {version} is available: update Pane itself.")
         }
         ApplicationUpdate::Installed { version } => {

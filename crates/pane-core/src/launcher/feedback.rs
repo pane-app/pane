@@ -235,6 +235,13 @@ impl Launcher {
                 files.indexer().launcher_shown();
             }
             let same = state.feedback.presence == presence;
+            // Shown after it was hidden: Pane checks for its own update if
+            // the last check is older than the interval (ADR 0050).
+            if state.feedback.presence == WindowPresence::Hidden
+                && presence != WindowPresence::Hidden
+            {
+                self.application_update_shown(&state);
+            }
             if !same {
                 state.feedback.presence = presence;
             }
