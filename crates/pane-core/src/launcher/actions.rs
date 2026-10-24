@@ -68,8 +68,8 @@ pub enum ResultAction {
     /// own "Uninstall X?" confirmation, which returns to the search it was
     /// opened from ([`Launcher::open_result_action`]).
     UninstallExtension,
-    /// Takes away the notice that Pane quit unexpectedly last time
-    /// ([`Launcher::dismiss_crash_notice`]).
+    /// Takes away the notice the row is: that Pane quit unexpectedly last
+    /// time, or What's New ([`Launcher::dismiss_notice`]).
     DismissNotice,
     /// Clears what root search learned about the result — its frecency
     /// and its learned queries (see `learned`, #200).
@@ -401,6 +401,15 @@ fn result_actions(launcher: &Launcher, state: &State) -> Option<ResultActions> {
             reason: None,
         });
     }
+    // So can What's New (see `whats_new`).
+    if matches!(state.entries.get(index), Some(Entry::WhatsNew)) {
+        items.push(ResultActionItem {
+            action: ResultAction::DismissNotice,
+            label: super::whats_new::DISMISS_WHATS_NEW.into(),
+            available: true,
+            reason: None,
+        });
+    }
     // An installed command's own row — not one that sends text through
     // an alias, and not this build's samples, which take no configuration.
     let command = matches!(
@@ -610,6 +619,7 @@ pub(in crate::launcher) fn selected_action(state: &State) -> SelectedAction {
         (_, Some(Entry::Acquire(_))) => acting("Set up extension"),
         (_, Some(Entry::RestartToUpdate)) => acting("Restart to update"),
         (_, Some(Entry::CheckUpdate)) => acting("Check for update"),
+        (_, Some(Entry::WhatsNew)) => acting("Show what's new"),
         (_, Some(Entry::CheckExtensionUpdates)) => acting("Check for updates"),
         (_, Some(Entry::OpenLogFolder)) => acting("Open log folder"),
         (_, Some(Entry::Manage)) => acting("Manage Extensions"),

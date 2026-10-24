@@ -132,6 +132,7 @@ mod uninstall;
 mod update_results;
 mod updates;
 mod watchers;
+mod whats_new;
 
 pub use acquire::OfficialExtension;
 use acquire::{Acquisitions, Defaults};
@@ -175,6 +176,7 @@ pub use shortcuts::{ShortcutCatalog, ShortcutCommand, ShortcutGroup};
 pub use submenus::{OpenSubmenu, SubmenuState};
 pub use update_results::{UpdateResult, UpdateResults, UpdateResultsAction};
 pub use updates::UpdateHold;
+pub use whats_new::{DISMISS_WHATS_NEW, WHATS_NEW_ROW};
 
 /// The id of the root row that installs a package from a local folder.
 const INSTALL_FROM_FOLDER: &str = "pane.install-from-folder";
@@ -1000,6 +1002,9 @@ struct State {
     /// This run's crash record, and whether root search still tells that
     /// Pane quit unexpectedly last time (see `crash_notice`).
     crash: crash_notice::Notice,
+    /// What's New after an update of Pane, while root search lists it (see
+    /// `whats_new`).
+    whats_new: whats_new::WhatsNew,
     /// The Clipboard History view's records, as last made from the history,
     /// shared until it changes (see `clipboard_view`, #192).
     clipboard_records: clipboard_view::Projected,
@@ -1347,6 +1352,9 @@ enum FormPurpose {
     /// Launches the command waiting for its arguments, with the form's
     /// values (Pane's own argument form; see `argument_form`).
     Arguments(Box<argument_form::Asking>),
+    /// Opens this release page: What's New's detail view, whose primary
+    /// action it is (Pane's own; see `whats_new`).
+    ReleaseNotes(String),
 }
 
 /// A result root search can list: its row, what activating it does, and
@@ -1461,6 +1469,9 @@ enum Entry {
     /// Check for a Pane application update at once, whatever the schedule
     /// (root: Check for Pane Updates).
     CheckUpdate,
+    /// Show the notes of the version of Pane this run updated to (root:
+    /// What's New in Pane <version>; see `whats_new`).
+    WhatsNew,
     /// Check every updatable extension at once and update what the pass
     /// finds, whatever the cadence (root): the pass the user asked for,
     /// whose toast follows it and whose record holds what it came to (see
@@ -1673,6 +1684,7 @@ enum Pending {
     Acquire(String),
     RestartToUpdate,
     CheckUpdate,
+    WhatsNew,
     CheckExtensionUpdates,
     OpenLogFolder,
     StopSharing(PackageIdentity),
@@ -1917,6 +1929,7 @@ impl Launcher {
             prefetches: prefetch::Prefetches::default(),
             updates: Updates::default(),
             crash: crash_notice::Notice::default(),
+            whats_new: whats_new::WhatsNew::default(),
             clipboard_records: clipboard_view::Projected::default(),
             sent_from: None,
             list_entered: false,
@@ -3806,6 +3819,7 @@ impl Launcher {
                 Pending::FirstSetup(declined) => launcher.finish_first_setup(declined).await,
                 Pending::RestartToUpdate => launcher.restart_to_update().await,
                 Pending::CheckUpdate => launcher.check_application_update_again().await,
+                Pending::WhatsNew => launcher.open_whats_new(epoch).await,
                 Pending::CheckExtensionUpdates => launcher.check_extension_updates().await,
                 Pending::OpenLogFolder => launcher.open_log_folder().await,
                 Pending::StopSharing(identity) => launcher.stop_sharing_folder(identity).await,
@@ -4037,6 +4051,12 @@ impl Launcher {
                     since: Instant::now(),
                 };
                 Pending::CheckUpdate
+            }
+            Entry::WhatsNew => {
+                state.view.status = Status::Running {
+                    since: Instant::now(),
+                };
+                Pending::WhatsNew
             }
             Entry::CheckExtensionUpdates => {
                 state.view.status = Status::Running {
@@ -4863,11 +4883,14 @@ impl Launcher {
             return;
         }
         let (rows, entries) = root_rows(state, &query);
-        // Restart to Update Pane, newly listed first (a blank query's),
-        // takes the selection, so Enter restarts (ADR 0050).
-        let restart_arrived = matches!(entries.first(), Some(Entry::RestartToUpdate))
-            && !state.view.rows.iter().any(|row| row.id == RESTART_ROW);
-        let selected = if restart_arrived {
+        // Restart to Update Pane, or else What's New, newly listed first (a
+        // blank query's), takes the selection, so Enter restarts or shows
+        // the notes (ADR 0050).
+        let lead_arrived = matches!(
+            entries.first(),
+            Some(Entry::RestartToUpdate | Entry::WhatsNew)
+        ) && !state.view.rows.iter().any(|row| row.id == rows[0].id);
+        let selected = if lead_arrived {
             Some(0)
         } else {
             selected_id
@@ -5185,6 +5208,20 @@ impl Launcher {
                     CommandMatches::Title,
                 );
             }
+        }
+        // What's New after an update of Pane, for a day (ADR 0050), which
+        // a blank query lists near the top, below Restart to Update Pane
+        // (see `rank_statics`).
+        for (row, entry) in state.whats_new.rows(state.clock.now()) {
+            add(
+                row,
+                entry,
+                None,
+                None,
+                &[],
+                CommandWhen::Always,
+                CommandMatches::Title,
+            );
         }
         // The extensions' updates, checked on the user's demand: the row
         // starts the pass at once, whatever the cadence, over every
@@ -6282,10 +6319,16 @@ fn rank_statics(state: &State, query: &str) -> Ranked {
     let named = |index: &usize| parsed.is_alias_of(&candidates[*index].0.keys);
     // Restart to Update Pane, for a blank query, is pinned first of all
     // (ADR 0050), above the pinned home: the update the user is to restart
-    // into is selected when the launcher opens. A typed query finds it as
-    // it finds any row.
-    let pinned =
-        |index: &usize| blank && matches!(candidates[*index].0.entry, Entry::RestartToUpdate);
+    // into is selected when the launcher opens. What's New comes next, the
+    // order Pane's own rows are listed in. A typed query finds them as it
+    // finds any row.
+    let pinned = |index: &usize| {
+        blank
+            && matches!(
+                candidates[*index].0.entry,
+                Entry::RestartToUpdate | Entry::WhatsNew
+            )
+    };
     let matches: Vec<usize> =
         search::ranked_matches(&parsed, candidates.iter().map(keys), state.sensitivity)
             .into_iter()

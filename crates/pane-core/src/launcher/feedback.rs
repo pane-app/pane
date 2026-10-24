@@ -241,6 +241,14 @@ impl Launcher {
                 && presence != WindowPresence::Hidden
             {
                 self.application_update_shown(&state);
+                // What's New whose day ended while Pane was hidden leaves
+                // the list it is shown with.
+                if state
+                    .whats_new
+                    .expired_in_view(&state.view.rows, state.clock.now())
+                {
+                    self.refresh(&mut state);
+                }
             }
             if !same {
                 state.feedback.presence = presence;

@@ -373,7 +373,7 @@ A newer version of Pane itself, which Pane finds out about from its release sour
 _Avoid_: Self-update, auto-update (the install waits for the user), app update
 
 **What's New item**:
-The root result a Pane that has just changed version lists first for a day: What's New in Pane <version>, which shows that release's notes. It goes when the user opens or dismisses it, or after the day.
+The root result a Pane that has just been updated lists near the top for a day: What's New in Pane <version>, whose Enter shows that release's notes (the GitHub release's body) in a detail view, with an action that opens the release's page. A start on a newer version than the last start recorded in the data folder is an update, whether Pane restarted into it or the setup installed it; a fresh data folder is not. It is listed under the Update section, below Restart to Update Pane when both are, and goes when the user opens or dismisses it, or after the day (ADR 0050).
 _Avoid_: Changelog (the release notes themselves), update notice
 
 **Update**:

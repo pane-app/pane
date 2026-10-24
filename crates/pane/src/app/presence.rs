@@ -13,6 +13,10 @@
 
 use std::time::{Duration, Instant};
 
+/// The most update rows the collapsed window shows under its search
+/// field: Restart to Update Pane and What's New (ADR 0050).
+const MOST_UPDATE_ROWS: usize = 2;
+
 /// A window size in logical pixels, as the window reports it.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct WindowSize {
@@ -44,10 +48,11 @@ pub(crate) struct Fit {
     pub(crate) bar: f32,
     /// The pins' row's height, added under the bar while it shows.
     pub(crate) pin_row: f32,
-    /// Whether the collapsed window shows Restart to Update Pane under its
-    /// search field (ADR 0050); asked only while it collapses.
-    pub(crate) shows_update: bool,
-    /// That row's height, added under the bar while it shows.
+    /// How many of root search's update rows the collapsed window shows
+    /// under its search field — Restart to Update Pane and What's New (ADR
+    /// 0050); asked only while it collapses.
+    pub(crate) updates: usize,
+    /// One such row's height, added under the bar for each that shows.
     pub(crate) update_row: f32,
     /// The window's size now.
     pub(crate) current: WindowSize,
@@ -177,10 +182,10 @@ impl Presence {
     /// longer call for.
     pub(crate) fn fit(&mut self, fit: Fit) -> Option<WindowSize> {
         // The collapsed height this frame calls for: the bar, and under it
-        // the update's row and the pins' row while each shows.
+        // the update rows and the pins' row while each shows.
         let target = fit.bar
-            + if fit.collapses && fit.shows_update {
-                fit.update_row
+            + if fit.collapses {
+                fit.update_row * fit.updates as f32
             } else {
                 0.
             }
@@ -192,10 +197,10 @@ impl Presence {
         let size = fit.current;
         let near = |height: f32| (size.height - height).abs() < 1.;
         // Any collapsed height: a size never to keep as the expanded one.
-        let is_bar = [0., fit.update_row].into_iter().any(|update| {
+        let is_bar = (0..=MOST_UPDATE_ROWS).any(|updates| {
             [0., fit.pin_row]
                 .into_iter()
-                .any(|pins| near(fit.bar + update + pins))
+                .any(|pins| near(fit.bar + fit.update_row * updates as f32 + pins))
         });
         let resize = if fit.collapses && !near(target) {
             if !is_bar {
@@ -237,7 +242,7 @@ mod tests {
             shows_pins,
             bar: BAR,
             pin_row: PIN_ROW,
-            shows_update: false,
+            updates: 0,
             update_row: UPDATE_ROW,
             current,
             default_expanded: DEFAULT,
@@ -372,7 +377,7 @@ mod tests {
     fn a_ready_update_adds_its_row_under_the_bar() {
         let mut presence = Presence::default();
         let with_update = |shows_pins, current| Fit {
-            shows_update: true,
+            updates: 1,
             ..fit(true, shows_pins, current)
         };
         assert_eq!(
@@ -392,6 +397,18 @@ mod tests {
         );
         assert_eq!(
             presence.fit(fit(false, false, size(BAR + PIN_ROW))),
+            Some(EXPANDED)
+        );
+        // Restart to Update Pane and What's New both: two rows, and a
+        // height of two rows is a collapsed one, never kept as expanded.
+        let mut presence = Presence::default();
+        let both = Fit {
+            updates: 2,
+            ..fit(true, false, EXPANDED)
+        };
+        assert_eq!(presence.fit(both), Some(size(BAR + 2. * UPDATE_ROW)));
+        assert_eq!(
+            presence.fit(fit(false, false, size(BAR + 2. * UPDATE_ROW))),
             Some(EXPANDED)
         );
     }

@@ -1534,3 +1534,294 @@ fn read_all(folder: &Path) -> Vec<(String, Vec<u8>)> {
     files.sort_by(|a, b| a.0.cmp(&b.0));
     files
 }
+
+/// What's New's row after an update to 99.0.0.
+const WHATS_NEW: &str = "What's New in Pane 99.0.0";
+
+/// A link opener that records the links Pane opened.
+#[derive(Default)]
+struct Links(Mutex<Vec<String>>);
+
+impl Links {
+    fn opened(&self) -> Vec<String> {
+        self.0.lock().unwrap().clone()
+    }
+}
+
+impl pane_core::LinkOpener for Links {
+    fn open(&self, url: &str) -> Result<(), String> {
+        self.0.lock().unwrap().push(url.to_owned());
+        Ok(())
+    }
+}
+
+impl Dirs {
+    /// Pane's data folder, in the install folder, as on Windows.
+    fn data(&self) -> PathBuf {
+        self.install.path().join("data")
+    }
+
+    /// A start of Pane `version` at `clock`'s time, restarted into it from
+    /// `updated_from` if it was: the version is recorded in the data folder
+    /// as `main` records it, before anything else, and What's New is listed
+    /// as that start found. The links Pane opens are recorded.
+    fn start(
+        &self,
+        version: &str,
+        updated_from: Option<&str>,
+        clock: &Arc<ManualClock>,
+    ) -> (Launcher, Arc<Links>) {
+        use pane_core::clipboard::Clock as _;
+        let started = pane_core::whats_new::start(&self.data(), version, updated_from, clock.now());
+        let links = Arc::new(Links::default());
+        let launcher = self
+            .launcher_at(version, clock)
+            .with_link_opener(links.clone());
+        let launcher = match updated_from {
+            Some(previous) => launcher.with_updated_from(previous),
+            None => launcher,
+        };
+        (
+            launcher.with_whats_new(&self.data(), version, &started),
+            links,
+        )
+    }
+
+    /// The release page the stand-in gives `v<version>`.
+    fn page(&self, version: &str) -> String {
+        format!(
+            "{}pane-app/pane/releases/tag/v{version}",
+            self.releases.url()
+        )
+    }
+}
+
+/// The Markdown of the detail view on screen, as its blocks.
+fn notes_on_screen(launcher: &Launcher) -> Vec<pane_core::markdown::Block> {
+    let pane_core::Screen::PaneForm(form) = launcher.view().screen else {
+        panic!("not a detail view: {:?}", launcher.view().screen);
+    };
+    let form = &form.tree.root.children[0];
+    match &form.children[0].kind {
+        pane_core::NodeKind::Markdown(markdown) => markdown.blocks.clone(),
+        other => panic!("not the notes: {other:?}"),
+    }
+}
+
+#[test]
+fn after_an_update_what_s_new_shows_the_release_notes_and_goes_once_opened() {
+    let dirs = Dirs::new();
+    let clock = ManualClock::at(START);
+    dirs.publish_update("99.0.0", b"the 99.0.0 program");
+    dirs.running(b"the 0.1.0 program");
+    // 0.1.0 starts on a fresh data folder: a first start, no What's New.
+    let (launcher, _) = dirs.start("0.1.0", None, &clock);
+    assert!(!titles(&launcher).contains(&"What's New in Pane 0.1.0".to_owned()));
+    // It finds 99.0.0 and stages it; the listing it read holds the notes.
+    block_on(launcher.check_application_update());
+    assert_eq!(launcher.application_update(), ready("99.0.0"));
+    drop(launcher);
+
+    // Restarted into 99.0.0: What's New is listed first for a blank query,
+    // under the Update section, selected, and the first showing says Pane
+    // was updated.
+    clock.advance(Duration::from_secs(60));
+    let (launcher, links) = dirs.start("99.0.0", Some("0.1.0"), &clock);
+    launcher.set_window_presence(WindowPresence::Shown);
+    assert_eq!(
+        toast_title(&launcher).as_deref(),
+        Some("Updated to Pane 99.0.0")
+    );
+    block_on(launcher.set_query(""));
+    let (view, listing) = launcher.presented_list();
+    assert_eq!(view.rows[0].title, WHATS_NEW, "{:#?}", view.rows);
+    assert_eq!(view.selected, Some(0));
+    assert_eq!(listing.lead, 1);
+    assert_eq!(listing.sections[0].label, "Update");
+    assert_eq!(listing.sections[1].first, 1);
+    assert_eq!(launcher.selected_action().label, "Show what's new");
+
+    // Enter shows the notes the listing kept, as Markdown in a detail view
+    // titled for the version, asking GitHub for nothing more.
+    let asked = dirs.releases.requests().len();
+    block_on(launcher.activate_selected());
+    assert_eq!(launcher.view().title, WHATS_NEW);
+    assert_eq!(
+        notes_on_screen(&launcher),
+        pane_core::markdown::parse(&releases::notes_of("99.0.0"))
+    );
+    assert_eq!(dirs.releases.requests().len(), asked);
+    // Its primary action opens the release's page.
+    assert_eq!(launcher.selected_action().label, "Open Release Page");
+    block_on(launcher.submit_pane_form(Vec::new()));
+    assert_eq!(links.opened(), [dirs.page("99.0.0")]);
+
+    // Opened, it is gone, and stays gone after a restart.
+    launcher.back();
+    block_on(launcher.set_query(""));
+    assert!(!titles(&launcher).contains(&WHATS_NEW.to_owned()));
+    drop(launcher);
+    let (launcher, _) = dirs.start("99.0.0", None, &clock);
+    block_on(launcher.set_query(""));
+    assert!(!titles(&launcher).contains(&WHATS_NEW.to_owned()));
+}
+
+#[test]
+fn an_update_the_setup_installed_lists_what_s_new_and_reads_its_notes_once() {
+    let dirs = Dirs::new();
+    let clock = ManualClock::at(START);
+    dirs.publish_update("99.0.0", b"the 99.0.0 program");
+    dirs.running(b"the 0.1.0 program");
+    drop(dirs.start("0.1.0", None, &clock));
+    // The setup installed 99.0.0 over it: no `--updated-from`, and no
+    // listing kept, as 0.1.0 never checked. The record of the last start
+    // tells the update; the first showing says so too.
+    dirs.running(b"the 99.0.0 program");
+    let (launcher, _) = dirs.start("99.0.0", None, &clock);
+    launcher.set_window_presence(WindowPresence::Shown);
+    assert_eq!(
+        toast_title(&launcher).as_deref(),
+        Some("Updated to Pane 99.0.0")
+    );
+    block_on(launcher.set_query(""));
+    assert_eq!(titles(&launcher)[0], WHATS_NEW);
+    // Enter reads the release alone, once, and shows its notes.
+    block_on(launcher.activate_selected());
+    assert_eq!(
+        notes_on_screen(&launcher),
+        pane_core::markdown::parse(&releases::notes_of("99.0.0"))
+    );
+    let read: Vec<String> = dirs
+        .releases
+        .requests()
+        .into_iter()
+        .filter(|path| path.contains("/releases/tags/"))
+        .collect();
+    assert_eq!(read, [releases::release_path("99.0.0")]);
+}
+
+#[test]
+fn what_s_new_whose_notes_cannot_be_read_opens_the_release_page() {
+    let dirs = Dirs::new();
+    let clock = ManualClock::at(START);
+    dirs.publish_update("99.0.0", b"the 99.0.0 program");
+    dirs.running(b"the 0.1.0 program");
+    drop(dirs.start("0.1.0", None, &clock));
+    dirs.running(b"the 99.0.0 program");
+    let (launcher, links) = dirs.start("99.0.0", None, &clock);
+    dirs.releases
+        .fail_status(&releases::release_path("99.0.0"), 500, 1);
+    block_on(launcher.set_query(""));
+    assert_eq!(titles(&launcher)[0], WHATS_NEW);
+    // Enter opens the release's page instead of the notes, with no error.
+    block_on(launcher.activate_selected());
+    assert_eq!(links.opened(), [dirs.page("99.0.0")]);
+    let status = launcher.view().status;
+    assert!(!matches!(status, Status::Error(_)), "{status:?}");
+    assert!(matches!(
+        launcher.view().screen,
+        pane_core::Screen::Root { .. }
+    ));
+    block_on(launcher.set_query(""));
+    assert!(!titles(&launcher).contains(&WHATS_NEW.to_owned()));
+}
+
+#[test]
+fn what_s_new_is_listed_for_a_day_across_restarts() {
+    let dirs = Dirs::new();
+    let clock = ManualClock::at(START);
+    drop(dirs.start("0.1.0", None, &clock));
+    let (launcher, _) = dirs.start("99.0.0", None, &clock);
+    block_on(launcher.set_query(""));
+    assert_eq!(titles(&launcher)[0], WHATS_NEW);
+    // Most of a day later, a restart still lists it, from the same start.
+    clock.advance(Duration::from_secs(23 * 3600));
+    drop(launcher);
+    let (launcher, _) = dirs.start("99.0.0", None, &clock);
+    block_on(launcher.set_query(""));
+    assert_eq!(titles(&launcher)[0], WHATS_NEW);
+    // A day after the update, it is gone: the next time the launcher is
+    // shown, and after a restart.
+    launcher.set_window_presence(WindowPresence::Hidden);
+    clock.advance(Duration::from_secs(3600));
+    launcher.set_window_presence(WindowPresence::Shown);
+    assert!(!titles(&launcher).contains(&WHATS_NEW.to_owned()));
+    let (_, listing) = launcher.presented_list();
+    assert_eq!(listing.lead, 0);
+    drop(launcher);
+    let (launcher, _) = dirs.start("99.0.0", None, &clock);
+    block_on(launcher.set_query(""));
+    assert!(!titles(&launcher).contains(&WHATS_NEW.to_owned()));
+}
+
+#[test]
+fn what_s_new_is_dismissed_from_the_actions_panel_for_good() {
+    let dirs = Dirs::new();
+    let clock = ManualClock::at(START);
+    drop(dirs.start("0.1.0", None, &clock));
+    let (launcher, _) = dirs.start("99.0.0", None, &clock);
+    block_on(launcher.set_query(""));
+    assert_eq!(titles(&launcher)[0], WHATS_NEW);
+    let actions = launcher.result_actions().expect("its Actions panel");
+    let dismiss = actions
+        .items
+        .iter()
+        .find(|item| item.label == pane_core::DISMISS_WHATS_NEW)
+        .expect("Dismiss What's New");
+    assert_eq!(dismiss.action, pane_core::ResultAction::DismissNotice);
+    launcher.dismiss_notice(&actions.target);
+    assert!(!titles(&launcher).contains(&WHATS_NEW.to_owned()));
+    drop(launcher);
+    let (launcher, _) = dirs.start("99.0.0", None, &clock);
+    block_on(launcher.set_query(""));
+    assert!(!titles(&launcher).contains(&WHATS_NEW.to_owned()));
+}
+
+#[test]
+fn a_fresh_data_folder_lists_no_what_s_new_and_one_from_before_lists_it() {
+    // A fresh data folder: a first install, not an update.
+    let dirs = Dirs::new();
+    let clock = ManualClock::at(START);
+    let (launcher, _) = dirs.start("99.0.0", None, &clock);
+    block_on(launcher.set_query(""));
+    assert!(!titles(&launcher).contains(&WHATS_NEW.to_owned()));
+    launcher.set_window_presence(WindowPresence::Shown);
+    assert_eq!(toast_title(&launcher), None);
+    drop(launcher);
+
+    // A data folder a Pane from before the record used: an update.
+    let dirs = Dirs::new();
+    fs::create_dir_all(dirs.data()).unwrap();
+    fs::write(dirs.data().join("settings.json"), "{}").unwrap();
+    let (launcher, _) = dirs.start("99.0.0", None, &clock);
+    block_on(launcher.set_query(""));
+    assert_eq!(titles(&launcher)[0], WHATS_NEW);
+}
+
+#[test]
+fn restart_to_update_pane_comes_before_what_s_new() {
+    let dirs = Dirs::new();
+    let clock = ManualClock::at(START);
+    drop(dirs.start("98.0.0", None, &clock));
+    // Updated to 99.0.0, which finds 100.0.0 and stages it.
+    dirs.publish_update("100.0.0", b"the 100.0.0 program");
+    dirs.running(b"the 99.0.0 program");
+    let (launcher, _) = dirs.start("99.0.0", None, &clock);
+    block_on(launcher.check_application_update());
+    block_on(launcher.set_query(""));
+    let (view, listing) = launcher.presented_list();
+    let listed: Vec<&str> = view.rows.iter().map(|row| row.title.as_str()).collect();
+    assert_eq!(listed[..2], [RESTART, WHATS_NEW]);
+    assert_eq!(view.selected, Some(0));
+    // Both under the Update section, above the pinned home.
+    assert_eq!(listing.lead, 2);
+    assert_eq!(listing.sections[0].label, "Update");
+    assert_eq!(listing.sections[1].first, 2);
+    assert!(launcher.present_row(0).highlighted);
+    assert!(!launcher.present_row(1).highlighted);
+    // A typed query finds What's New as any row, with no section of its
+    // own.
+    block_on(launcher.set_query("what's new"));
+    assert!(titles(&launcher).contains(&WHATS_NEW.to_owned()));
+    assert_eq!(launcher.presented_list().1.lead, 0);
+}

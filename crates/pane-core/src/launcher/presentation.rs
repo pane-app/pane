@@ -319,16 +319,20 @@ pub(super) fn row_presentation(state: &State, index: usize) -> RowPresentation {
 }
 
 /// How many of root search's first rows come above its pinned home (see
-/// [`ListPresentation::lead`]): Restart to Update Pane, when a blank query
-/// lists it first.
+/// [`ListPresentation::lead`]): Restart to Update Pane and What's New,
+/// those of them a blank query lists first.
 fn lead(state: &State) -> usize {
     let blank = matches!(&state.view.screen, Screen::Root { .. })
         && state.published.as_str().trim().is_empty();
-    usize::from(
-        blank
-            && !state.view.rows.is_empty()
-            && matches!(state.entries.first(), Some(Entry::RestartToUpdate)),
-    )
+    if !blank {
+        return 0;
+    }
+    state
+        .entries
+        .iter()
+        .take(state.view.rows.len())
+        .take_while(|entry| matches!(entry, Entry::RestartToUpdate | Entry::WhatsNew))
+        .count()
 }
 
 /// Starts loading what the icons of `state`'s row at `index` need (#142),
@@ -438,11 +442,12 @@ fn sections(state: &State) -> Vec<Section> {
         })
         .collect();
     let mut sections = answer_sections(query, &answers, first_fallback);
-    // Restart to Update Pane, first for a blank query, is under a section
-    // of its own (ADR 0050); the rest stay under theirs.
-    if lead(state) > 0 {
+    // Restart to Update Pane and What's New, first for a blank query, are
+    // under a section of their own (ADR 0050); the rest stay under theirs.
+    let lead = lead(state);
+    if lead > 0 {
         for section in &mut sections {
-            section.first += 1;
+            section.first += lead;
         }
         sections.retain(|section| section.first < shown);
         sections.insert(
@@ -584,6 +589,7 @@ pub(super) fn kind(entry: &Entry) -> Option<RowKind> {
         | Entry::InstallOfficial(_)
         | Entry::RestartToUpdate
         | Entry::CheckUpdate
+        | Entry::WhatsNew
         | Entry::CheckExtensionUpdates
         | Entry::OpenLogFolder
         | Entry::Manage

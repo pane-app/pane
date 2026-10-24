@@ -291,7 +291,8 @@ impl Launcher {
     /// its fields (keyed by their keys). Await the returned future to
     /// apply what its purpose does: the argument form validates and
     /// launches, the Setup screen saves and launches, the alias form
-    /// applies, the npm and Git forms preview. While a submission is
+    /// applies, the npm and Git forms preview, What's New opens the
+    /// release's page. While a submission is
     /// waiting for its reply, submitting again does nothing.
     pub fn submit_pane_form(
         &self,
@@ -321,6 +322,18 @@ impl Launcher {
         // the templates, built once and handed to the install preview the
         // author confirms, after which Pane develops it (see `create`).
         let creation = super::Launcher::begun_creation(state, &values);
+        // What's New's detail view opens the release's page (see
+        // `whats_new`).
+        let release_page = match (&state.view.screen, &state.form) {
+            (
+                super::Screen::PaneForm(_),
+                Some(super::OpenForm {
+                    purpose: super::FormPurpose::ReleaseNotes(page),
+                    ..
+                }),
+            ) => Some(page.clone()),
+            _ => None,
+        };
         // Pane's own npm and Git forms preview the package they name; the
         // form stays until the preview replaces it, and Back meanwhile
         // discards it.
@@ -371,6 +384,9 @@ impl Launcher {
             }
             if let Some(creation) = creation {
                 launcher.finish_creation(epoch, creation).await;
+            }
+            if let Some(page) = release_page {
+                launcher.open_url(epoch, page).await;
             }
         }
     }

@@ -3088,7 +3088,7 @@ impl LauncherWindow {
     fn fit_window_mode(
         &mut self,
         view: &LauncherView,
-        update: bool,
+        updates: usize,
         window: &mut Window,
         cx: &App,
     ) -> bool {
@@ -3102,7 +3102,7 @@ impl LauncherWindow {
             shows_pins: collapsed && self.shows_compact_pins(cx),
             bar: f32::from(bar),
             pin_row: compact_pins::ROW_HEIGHT,
-            shows_update: update,
+            updates,
             update_row: compact_pins::update_row_height(&theme),
             current: window_size(window.viewport_size()),
             default_expanded: WindowSize { width, height },
@@ -3150,9 +3150,9 @@ impl Render for LauncherWindow {
             return split.children(asked);
         }
         // The compact window mode shows only the search field until
-        // something is typed — and Restart to Update Pane under it, while
-        // an update is ready (ADR 0050).
-        let collapsed = self.fit_window_mode(&view, listing.lead > 0, window, cx);
+        // something is typed — and Restart to Update Pane and What's New
+        // under it, while they are listed (ADR 0050).
+        let collapsed = self.fit_window_mode(&view, listing.lead, window, cx);
         // Collapsed to its search field, the launcher has no footer for a
         // toast: one shown is a HUD (#141).
         if !self.presence.hidden() {
@@ -3369,10 +3369,10 @@ impl Render for LauncherWindow {
         // into the list (#132).
         let followed = self.followed_list(&view, &sections, notice.is_some(), cx);
         let rows = std::mem::take(&mut view.rows);
-        // The compact window's update row, drawn from the row the list
+        // The compact window's update rows, drawn from the rows the list
         // holds first (ADR 0050).
-        let compact_update = rows.first().cloned().filter(|_| listing.lead > 0);
-        let compact_selected = view.selected == Some(0);
+        let compact_updates: Vec<Row> = rows.iter().take(listing.lead).cloned().collect();
+        let compact_selected = view.selected;
         let rows_changed = self.results.show(result_list::ListFrame {
             view: view.clone(),
             children: crate::ui::virtual_list::children_led(
@@ -3490,11 +3490,8 @@ impl Render for LauncherWindow {
             // Collapsed, root search is its search field alone — with the
             // pins' row under it, where the Launcher page shows them.
             Screen::Root { query } if collapsed => {
-                let update = (listing.lead > 0)
-                    .then(|| {
-                        self.render_compact_update(compact_update, compact_selected, &theme, cx)
-                    })
-                    .flatten();
+                let update =
+                    self.render_compact_updates(compact_updates, compact_selected, &theme, cx);
                 let pins = self.render_compact_pins(numbers, &theme, cx);
                 let placeholder = self.search_placeholder();
                 self.render_search(
@@ -3964,6 +3961,7 @@ pub(crate) fn row_icon(id: &str) -> (IconTone, Glyph) {
         pane_core::QUIT_PANE => (IconTone::Command, Glyph::Power),
         pane_core::UNEXPECTED_QUIT => (IconTone::Folder, Glyph::Folder),
         pane_core::RESTART_ROW => (IconTone::Accent, Glyph::Reset),
+        pane_core::WHATS_NEW_ROW => (IconTone::Command, Glyph::Lines),
         _ => (IconTone::Command, Glyph::Prompt),
     }
 }

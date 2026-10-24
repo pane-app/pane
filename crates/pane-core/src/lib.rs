@@ -68,6 +68,7 @@ pub mod tray;
 mod typed_folder;
 mod util;
 mod waiting;
+pub mod whats_new;
 #[cfg(windows)]
 mod windows_shell;
 mod zip;
@@ -94,8 +95,8 @@ pub use launcher::search_files;
 pub use launcher::{
     AliasFlow, AliasOutcome, ApplicationUpdate, ArgumentFields, BuildFailure, Capability,
     CapabilityProvider, Choice, ChoiceExtension, ChoiceOutcome, ChoiceView, CommandPreferences,
-    CommandRegistration, ComputedAnswer, DISMISS_NOTICE, DesignedDropdown, DesignedList,
-    DesignedRow, DesignedViewSnapshot, Development, ExtensionDetails, ExtensionMark,
+    CommandRegistration, ComputedAnswer, DISMISS_NOTICE, DISMISS_WHATS_NEW, DesignedDropdown,
+    DesignedList, DesignedRow, DesignedViewSnapshot, Development, ExtensionDetails, ExtensionMark,
     ExtensionOperation, ExtensionWait, FieldKind, FixAction, FolderAsk, FormField, GridShape,
     HotkeyOutcome, ItemAction, ItemActions, LOADING_MS, Launcher, LauncherView, ListPresentation,
     LogNotice, MANAGE_EXTENSIONS, OfficialExtension, OpenSubmenu, OperationKind,
@@ -105,7 +106,8 @@ pub use launcher::{
     Row, RowKind, RowPresentation, Screen, Section, SelectedAction, SettingsTarget,
     ShortcutCatalog, ShortcutCommand, ShortcutGroup, SlotChange, Status, SubmenuState,
     UNEXPECTED_QUIT, Unavailable, UnboundShortcut, UnmetRequirement, UpdateChecks, UpdateHold,
-    UpdateResult, UpdateResults, UpdateResultsAction, answer_sections, root_sections,
+    UpdateResult, UpdateResults, UpdateResultsAction, WHATS_NEW_ROW, answer_sections,
+    root_sections,
 };
 pub use links::LinkOpener;
 pub use operations::{MAX_CALL_DEPTH, MAX_OPERATION_JSON};
