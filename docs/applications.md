@@ -259,18 +259,31 @@ every system.
 Each system's adapter reports sources (a shortcut, a packaged app, a
 bundle, a desktop entry), each with the key of what it opens:
 
-- A Windows desktop program is keyed by the shortcut's target, in
-  lowercase with its arguments. The target is read through the shell's
-  shortcut interface (`IShellLinkW`), on single-threaded COM apartments,
-  up to eight threads at once, and each shortcut is read again only when
-  its file changed.
+- A Windows desktop program's shortcut that carries its own
+  AppUserModelID (`System.AppUserModel.ID`, not a packaged app's) is keyed
+  by it, in lowercase, as Windows groups a program's shortcuts and windows
+  by it (#508). So Discord's shortcuts, which all carry
+  `com.squirrel.Discord.Discord` but pass different arguments (the
+  Desktop's `--processStart Discord.exe`, the Start menu's none), are one
+  application, as Raycast lists one entry per app. Browser profiles and
+  web apps carry their own AppUserModelIDs and stay apart.
+- Any other Windows desktop program is keyed by the shortcut's target, in
+  lowercase with its arguments. The target and the AppUserModelID are read
+  through the shell's shortcut interface (`IShellLinkW`), on
+  single-threaded COM apartments, up to eight threads at once, and each
+  shortcut is read again only when its file changed.
 
   Every path segment that is a version becomes a wildcard keeping its
   prefix (`app-*`). A version is digits separated by one to three dots,
   optionally after a prefix of up to eight letters and one separator:
   `app-1.0.9003`, `1.2.3.4`, `v2.0`. So Discord or Slack moving into a
   new version folder stays the same application. Different arguments (two
-  browser profiles, two web apps) are different applications.
+  browser profiles, two web apps) are different applications, unless the
+  shortcuts also share their name (below).
+
+  A Squirrel updater's shortcut, `Update.exe --processStart X.exe`, is
+  keyed as a shortcut to the `X.exe` beside `Update.exe` (when it is
+  there), with the arguments left after it.
 
   An MSI-advertised shortcut (Office's, for instance) names the product it
   installs rather than a file. It is resolved through the Windows
@@ -298,13 +311,23 @@ bundle, a desktop entry), each with the key of what it opens:
 Sources with one key are one application: two shortcuts to one program
 are one result.
 
-Its primary source is the one whose name is its title and which Pane
-opens. That is the source in the most preferred place, then the one with
-the shorter path:
+On Windows, shortcuts that run one program (the resolved target, version
+folders wildcarded) under one name (compared without case) are also one
+application, whatever arguments they pass. Two different AppUserModelIDs
+are never merged, and a shortcut without one joins a shortcut carrying one
+only when exactly one AppUserModelID runs that program under that name. A
+merged application's id is its AppUserModelID's, else that of the
+shortcut passing the fewest arguments.
 
-- On Windows: the user's Desktop, every user's Desktop, the user's Start
-  menu, every user's, the taskbar pins, then the Apps folder, as Explorer
-  prefers a shortcut of the user's own.
+Its primary source is the one whose name is its title and which Pane
+opens. That is the source in the most preferred place, then one passing
+its program no arguments, then the one with the shorter path:
+
+- On Windows: the user's Start menu, every user's Start menu, the user's
+  Desktop, every user's Desktop, the taskbar pins, then the Apps folder.
+  The Start menu's shortcut is the one its installer made and the Start
+  menu lists; a Desktop copy may pass extra arguments, as Discord's does.
+  A Desktop copy's name stays an alternate title.
 - On macOS: `/Applications`, `/System/Applications`, `~/Applications`.
 
 ### Ids
@@ -329,6 +352,21 @@ A quick slot holding one is carried over when the command's results
 arrive. It resolves to the result now listed for that application, and
 `quick-slots.json` is rewritten with the new id. One whose source is gone
 keeps its slot and says that Applications no longer lists it.
+
+### Ids from before AppUserModelIDs
+
+Before #508 every desktop program's shortcut was keyed by its target and
+arguments, so Discord's Desktop and Start menu shortcuts had two ids. The
+host keeps each shortcut's earlier id, and the id of every group of
+shortcuts merged into another, as another name for its application
+(unless another application has that id now). When the command's
+results arrive, a quick slot holding an earlier id is carried over as
+above, and what root search learned under it (`learned.json`: frecency
+and queries) moves to the result now listed. Two entries that land on one
+result are joined as if every use had been of it. Aliases and global
+hotkeys belong to commands, not to applications, so no id of theirs
+changes. The icon cache extracts a merged application's icon again under
+its new id.
 
 ## Names
 
@@ -638,7 +676,7 @@ provider, has no list of its own.
 | Name | The name Explorer shows for the shortcut (localized), else its file name; a packaged app's display name | The bundle's display name as Finder shows it (localized), else its folder name | The entry's `Name` for the messages locale (`Name[vi]`), else the plain `Name` |
 | Also found by | The shortcut's file name, other shortcuts' names, a shell link's target program's name (an internet shortcut or a ClickOnce reference has no program) | The bundle's folder name | The plain `Name`, the `Exec` program's name, `Keywords` for the locale |
 | Icon | The shell's 256-pixel image, padded or framed small icons rejected for the shortcut's icon location, its target's image, the target's own largest icon or the file information icon (an internet shortcut's `IconFile`); a packaged app's manifest logo with light and dark variants | The workspace's icon of the bundle | The entry's `Icon` in the user's icon theme, its parents, `hicolor`, then `pixmaps` |
-| Identified by | A shell link's target and arguments, version folders wildcarded (an MSI-advertised one's installed program); an internet shortcut's URL; a ClickOnce reference's deployment; a packaged app's package family | The bundle identifier | The desktop file id |
+| Identified by | A shell link's own AppUserModelID, else its target and arguments, version folders wildcarded (an MSI-advertised one's installed program, a Squirrel `Update.exe --processStart X.exe`'s `X.exe`), shortcuts to one program under one name merged; an internet shortcut's URL; a ClickOnce reference's deployment; a packaged app's package family | The bundle identifier | The desktop file id |
 | Left out | The Startup folders (`Startup` in either Start menu's Programs folder); uninstallers: a shortcut whose name contains "Uninstall" or whose program's name starts with `unins` (`unins000.exe`, `uninstall.exe`); a shell link whose target is missing (broken), empty (a shell item, or an advertised product that is not installed), a folder, or a document rather than a program (a program is `.exe`, `.com`, `.bat`, `.cmd`, `.msc`, `.cpl`, `.vbs`, `.vbe`, `.wsf` or `.wsh`); an internet shortcut to a web page or a document (`http`, `https`, `ftp`, `file`, `mailto`, `news`) or to a scheme nothing handles; folders that are symbolic links or junctions, which are not walked; a shortcut at the same place in the all-users menu (or Desktop) as in the user's; Apps folder items that are not packaged apps (desktop programs, found by their shortcuts) or that have a shortcut's name | Nothing | `Type` other than `Application`, `NoDisplay` or `Hidden` (a hidden entry also hides a lower one with the same desktop file id), no `Exec`, `OnlyShowIn`/`NotShowIn` against `$XDG_CURRENT_DESKTOP`, a `TryExec` program that is missing, an `Exec` line using field codes against the spec (`%i`, `%F` or `%U` inside an argument, more than one of `%f %u %F %U`, an unknown code or a lone `%`: skipped with a line on standard error, not guessed) |
 | Opened by (the primary source) | `ShellExecuteEx` on the shortcut, or on `shell:AppsFolder\<AppUserModelID>` for a packaged app, as Explorer opens them (errors returned, no dialog), with COM initialized for the call and uninitialized after | `/usr/bin/open` on the bundle (Launch Services); its error message is shown | Running the `Exec` program directly (quoting and field codes per the Desktop Entry spec; file and URL codes dropped; `Path` as working folder), in its own process group; a `Terminal=true` entry runs in `$TERMINAL -e`, else the first installed of `x-terminal-emulator -e`, `gnome-terminal --`, `konsole -e`, `xfce4-terminal -x`, `alacritty -e`, `kitty`, `foot`, `xterm -e`, and is refused with an explanation when there is none |
 | Not supported yet | Windows Settings pages and Control Panel items (a later slice of #124) | Spotlight-only locations, program names | D-Bus activation, desktop actions, `GenericName` |
@@ -693,13 +731,21 @@ adapter differs. An extension receives `application` records and returns
     resolve and are rewritten with the new ids, and a gone one keeps its
     slot and says why;
   - the host opens an application by its old path;
+  - shortcuts carrying one AppUserModelID are one result, opened by the
+    Start menu's, while another AppUserModelID on the same program stays
+    its own;
+  - a pin and learned ranking made under the ids an earlier Pane gave
+    Discord's two shortcuts carry over to the merged result, and their
+    records are rewritten;
   - the JavaScript and TypeScript samples receive the stable id and open
     by it.
 
   The pure rules (version folders and what is not one, the key and its
-  digest, packaged apps' keys, primary election, legacy lookup) are unit
-  tests of `identity`, and reading `Info.plist` (XML and binary) of
-  `plist`.
+  digest, packaged apps' keys, primary election, merging one program
+  under one name and never two AppUserModelIDs, earlier ids, legacy
+  lookup) are unit tests of `identity`; AppUserModelID keys, the Squirrel
+  mapping and browser profiles staying apart are unit tests of
+  `start_menu`; and reading `Info.plist` (XML and binary) of `plist`.
 - Live list
   ([`crates/pane-core/tests/application_cache.rs`](../crates/pane-core/tests/application_cache.rs)),
   over a fake system whose sources and watcher the test drives, on a
@@ -852,7 +898,10 @@ adapter differs. An extension receives `application` records and returns
     program in two version folders are one application, opened by the
     user's own; different arguments two; a shortcut on the Desktop and in
     the Start menu to one program is one application, opened by the
-    Desktop's; every user's Desktop and the taskbar pins are found, and a
+    Start menu's; Discord's four shortcuts carrying one AppUserModelID are
+    one application, opened by the Start menu's shortcut passing no
+    arguments and found by every id they had before, while two browser
+    profiles carrying their own stay two; every user's Desktop and the taskbar pins are found, and a
     Desktop's subfolder is not looked into; internet shortcuts to a scheme
     with a (fake) handler are found, one link on the Desktop and in the
     Start menu once, while those to a scheme nothing handles or to a web

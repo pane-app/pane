@@ -131,7 +131,7 @@ pub fn arguments_name_something(arguments: &[String]) -> bool {
 
 /// Text compared without case: two names are the same name when they
 /// match in lowercase.
-fn folded(text: &str) -> String {
+pub(super) fn folded(text: &str) -> String {
     text.trim().to_lowercase()
 }
 

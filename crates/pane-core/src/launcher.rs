@@ -2923,7 +2923,7 @@ impl Launcher {
                 ),
                 Err(error) => (Err(error), None),
             };
-            let carried = {
+            let (carried, learned) = {
                 let mut state = self.lock();
                 let state = &mut *state;
                 if data.as_ref().and_then(PackageData::stopped).is_some() {
@@ -2935,11 +2935,17 @@ impl Launcher {
                 state.statics += 1;
                 // Their applications' icons are refreshed (#172).
                 application_icons::listed(state);
-                // Pins made before applications had stable identities
-                // resolve to the results listed for them now.
-                let carried = applications.is_some_and(|applications| {
-                    quick_slots::carry_over(state, &command.id, applications.as_ref())
-                });
+                // Pins and what root search learned under an id an
+                // application had before (a path before stable identities,
+                // a shortcut's target before its AppUserModelID, #508)
+                // carry over to the results listed for it now.
+                let (carried, learned) = match &applications {
+                    Some(applications) => (
+                        quick_slots::carry_over(state, &command.id, applications.as_ref()),
+                        learned::carry_over(state, &command.id, applications.as_ref()),
+                    ),
+                    None => (false, false),
+                };
                 // While the query's list is held, its publication ranks the
                 // answer with everything else (#201): the rows shown stay
                 // the previous query's.
@@ -2948,10 +2954,13 @@ impl Launcher {
                 {
                     relist(state, &query);
                 }
-                carried
+                (carried, learned)
             };
             if carried {
                 self.record_carried_over().await;
+            }
+            if learned {
+                self.record_learned_carried_over().await;
             }
         }
     }

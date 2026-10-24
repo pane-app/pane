@@ -161,8 +161,11 @@ pub(crate) struct Target {
 pub(crate) fn front_application(target: &Target, installed: &Catalog) -> FrontApplication {
     if let Some(aumid) = trimmed(target.aumid.as_deref()) {
         let reference = format!("shell:AppsFolder\\{aumid}");
+        // A packaged application by its Apps folder name, or a desktop
+        // program whose shortcuts carry the window's AppUserModelID.
         let name = installed
             .find(&reference)
+            .or_else(|| installed.find(&Key::App(aumid.to_lowercase()).id()))
             .map(|found| found.primary().name.clone())
             .unwrap_or_else(|| named(target));
         return FrontApplication {
@@ -455,6 +458,30 @@ mod tests {
                 icon: Some("shell:AppsFolder\\Contoso.Suite_abc!Writer".into()),
             }
         );
+    }
+
+    #[test]
+    fn a_desktop_program_s_app_user_model_id_names_it() {
+        // Discord's window carries the AppUserModelID its shortcuts carry,
+        // and runs a program in a version folder no shortcut targets.
+        let aumid = "com.squirrel.Discord.Discord";
+        let catalog = Catalog::new(vec![Source {
+            program: Some(r"C:\Discord\Discord.exe".into()),
+            ..Source::new(
+                Key::App(aumid.to_lowercase()),
+                r"C:\Menu\Discord.lnk",
+                "Discord",
+                "the Start menu",
+                0,
+            )
+        }]);
+        let target = Target {
+            title: "#general - Discord".into(),
+            aumid: Some(aumid.into()),
+            program: Some(r"C:\Discord\app-1.0.9264\Discord.exe".into()),
+            family: None,
+        };
+        assert_eq!(front_application(&target, &catalog).name, "Discord");
     }
 
     #[test]

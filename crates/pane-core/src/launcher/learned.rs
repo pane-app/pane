@@ -12,7 +12,10 @@
 //! 0026): a registered command by its command id, an indexed result —
 //! such as an application, whose id survives an update into a new
 //! version folder (#124) — by its own id under the command that supplies
-//! it; never a row's title or position. Not recorded: a use a global
+//! it; never a row's title or position. An application whose id changed
+//! (#508) keeps what was learned: as its command's results arrive, an
+//! entry under an id the command no longer lists moves to the result now
+//! listed for that application, as a quick slot does. Not recorded: a use a global
 //! hotkey opens, a computed answer or other computed result, a file, a
 //! fallback row, and Pane's own install and management rows — none of
 //! them a root result chosen from root search. Invoking a quick slot
@@ -45,6 +48,7 @@ use serde_json::{Map, Value};
 use super::actions::{ResultAction, ResultActionItem};
 use super::choices::{Choices, Record};
 use super::{Entry, Launcher, Screen, State, Status, off_thread};
+use crate::applications::Applications;
 use crate::packages::PackageIdentity;
 use crate::search::Learned;
 
@@ -300,6 +304,74 @@ pub(super) fn record(state: &mut State, id: &str, query: Option<&str>, now: u64)
     true
 }
 
+/// Carries what root search learned about `command`'s results by an id it
+/// no longer lists over to the result now listed for the same application
+/// (`quick_slots::carried`), as the command's results arrive: an
+/// application whose id changed (#508: its shortcuts now keyed by their
+/// AppUserModelID, or two of its shortcuts merged into one result) keeps
+/// its ranking. Two entries carried to one result are joined as if every
+/// use had been of it ([`joined`]). Whether anything changed; nothing
+/// changes while the record cannot be read.
+pub(super) fn carry_over(
+    state: &mut State,
+    command: &str,
+    applications: &dyn Applications,
+) -> bool {
+    if state.learned.unreadable().is_some() {
+        return false;
+    }
+    let scope = format!("{command}:");
+    let carried: Vec<(String, String)> = state
+        .learned
+        .chosen
+        .uses
+        .keys()
+        .filter_map(|id| {
+            let result = id.strip_prefix(&scope)?;
+            let to = super::quick_slots::carried(state, command, result, applications)?;
+            Some((id.clone(), to.key()))
+        })
+        .collect();
+    let uses = &mut state.learned.chosen.uses;
+    for (from, to) in &carried {
+        let Some(moved) = uses.remove(from) else {
+            continue;
+        };
+        let use_ = match uses.remove(to) {
+            Some(kept) => joined(kept, moved),
+            None => moved,
+        };
+        uses.insert(to.clone(), use_);
+    }
+    !carried.is_empty()
+}
+
+/// Two learned uses of one result as one: the score each had decayed to
+/// the later use, summed as their uses would have summed (each use adds 1
+/// to the floor of 1), anchored at that use, with the later one's queries
+/// first.
+fn joined(a: Use, b: Use) -> Use {
+    let (older, newer) = if a.last_opened <= b.last_opened {
+        (a, b)
+    } else {
+        (b, a)
+    };
+    let now = newer.last_opened;
+    let score = frecency(&older, now) + frecency(&newer, now) - 1.0;
+    let mut queries = newer.queries;
+    for query in older.queries {
+        if !queries.contains(&query) {
+            queries.push(query);
+        }
+    }
+    queries.truncate(KEPT_QUERIES);
+    Use {
+        score,
+        last_opened: now,
+        queries,
+    }
+}
+
 /// What the status line says while an unreadable record keeps root
 /// search from learning anything.
 pub(super) fn unreadable_report(problem: &str) -> String {
@@ -368,6 +440,19 @@ impl Launcher {
     pub fn wait_for_learned_recorded(&self, limit: std::time::Duration) -> bool {
         let saves = self.lock().learned_saves.clone();
         saves.settled(limit)
+    }
+
+    /// Writes what was learned after [`carry_over`] changed it, off the
+    /// window's thread; a write that fails is reported and leaves Pane's
+    /// copy as it is, to be written with the next change.
+    pub(super) async fn record_learned_carried_over(&self) {
+        let saves = self.lock().learned_saves.clone();
+        saves.begin();
+        let writer = self.clone();
+        if let Err(error) = off_thread(move || writer.save::<LearnedChoices>(None)).await {
+            crate::diagnostic!("Pane could not record what root search learned: {error}");
+        }
+        saves.end();
     }
 
     /// Resets what root search learned about `target` — the Actions

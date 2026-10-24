@@ -6,8 +6,10 @@
 //! application keeps its id, and so its pin,
 //! when its program moves to a new version folder; shortcuts to one program
 //! are one result, opened by the preferred one; arguments keep two programs
-//! apart; and a pin made before applications had stable identities, which
-//! holds a shortcut's path, resolves and is rewritten. The pure rules are
+//! apart; shortcuts carrying one AppUserModelID are one result (#508); and a
+//! pin made before applications had stable identities, which holds a
+//! shortcut's path, or a pin and learned ranking made before shortcuts were
+//! keyed by their AppUserModelID, resolve and are rewritten. The pure rules are
 //! unit tests of `pane_core::applications::identity`; the real systems'
 //! sources are checked in `application_adapters.rs`.
 
@@ -74,11 +76,11 @@ impl Discovery for FakeSystem {
     }
 }
 
-/// Where a shortcut is: the user's Desktop is preferred to their Start
-/// menu, which is preferred to every user's (`Place` on Windows).
-const DESKTOP: usize = 0;
-const START_MENU: usize = 2;
-const ALL_USERS_START_MENU: usize = 3;
+/// Where a shortcut is: the user's Start menu is preferred to every
+/// user's, which is preferred to the user's Desktop (`Place` on Windows).
+const START_MENU: usize = 0;
+const ALL_USERS_START_MENU: usize = 1;
+const DESKTOP: usize = 2;
 
 /// The shortcut `name` in the folder of `place`, to `target` with
 /// `arguments`.
@@ -94,6 +96,18 @@ fn shortcut(name: &str, place: usize, target: &str, arguments: &str) -> Source {
             folder,
             place,
         )
+    }
+}
+
+/// The shortcut `name` in the folder of `place`, to `target` with
+/// `arguments`, carrying the desktop program's AppUserModelID `aumid`, as
+/// Pane keys it since #508; before, it was keyed by its target and
+/// arguments.
+fn identified(name: &str, place: usize, target: &str, arguments: &str, aumid: &str) -> Source {
+    Source {
+        key: Key::App(aumid.to_lowercase()),
+        previous: Some(Key::program(target, arguments)),
+        ..shortcut(name, place, target, arguments)
     }
 }
 
@@ -204,10 +218,13 @@ fn two_shortcuts_to_one_program_are_one_result_opened_by_the_preferred_one() {
 
     search(&launcher, "editor");
 
-    // One result, named and opened by the user's own Desktop shortcut.
-    assert_eq!(titles(&launcher), ["Launch My Editor"]);
+    // One result, named and opened by the user's own Start menu shortcut,
+    // and found by the Desktop copy's name too.
+    assert_eq!(titles(&launcher), ["Launch Editor"]);
+    search(&launcher, "my editor");
+    assert_eq!(titles(&launcher), ["Launch Editor"]);
     block_on(launcher.activate_selected());
-    assert_eq!(system.opened(), [r"C:\Places\0\My Editor.lnk"]);
+    assert_eq!(system.opened(), [r"C:\Places\0\Editor.lnk"]);
     // Opened, the launcher closed, back on root search with its query
     // empty, as Raycast pops to root (#468).
     assert_eq!(launcher.view().status, Status::Idle);
@@ -243,7 +260,7 @@ fn shortcuts_to_one_program_with_different_arguments_stay_two_results() {
     );
     select_title(&launcher, "Launch Browser Work");
     block_on(launcher.activate_selected());
-    assert_eq!(system.opened(), [r"C:\Places\2\Browser Work.lnk"]);
+    assert_eq!(system.opened(), [r"C:\Places\0\Browser Work.lnk"]);
 }
 
 #[test]
@@ -279,7 +296,7 @@ fn an_application_updated_into_a_new_version_folder_keeps_its_id_and_its_pin() {
     assert_eq!(slot.title, "Launch Discord");
     assert_eq!(pinned_result(&launcher), pinned);
     block_on(launcher.activate_quick_slot(0));
-    assert_eq!(system.opened(), [r"C:\Places\2\Discord.lnk"]);
+    assert_eq!(system.opened(), [r"C:\Places\0\Discord.lnk"]);
     // The same result is found by typing, with the same id.
     search(&launcher, "disc");
     assert_eq!(titles(&launcher), ["Launch Discord"]);
@@ -325,12 +342,13 @@ fn pins_made_before_identities_resolve_keep_their_slots_and_are_rewritten() {
         pin(&launcher, "notes", "Launch Notes");
     }
     let record = dirs.record();
-    assert!(record.contains(r"C:\\Places\\2\\Firefox.lnk"), "{record}");
+    assert!(record.contains(r"C:\\Places\\0\\Firefox.lnk"), "{record}");
 
-    // This Pane: Firefox is the same; Mail's shortcut now also has a
-    // Desktop copy, which is preferred; Notes was uninstalled.
-    let mine = shortcut("Mail", DESKTOP, r"C:\Mail\mail.exe", "");
-    let system = FakeSystem::with(vec![firefox.clone(), mail.clone(), mine.clone()]);
+    // This Pane: Firefox is the same; Mail's shortcut now also has a copy
+    // in every user's Start menu, the user's own staying preferred; Notes
+    // was uninstalled.
+    let shared = shortcut("Mail", ALL_USERS_START_MENU, r"C:\Mail\mail.exe", "");
+    let system = FakeSystem::with(vec![firefox.clone(), shared, mail.clone()]);
     let launcher = dirs.hosting(&system);
     block_on(launcher.resolve_root_home());
 
@@ -364,11 +382,11 @@ fn pins_made_before_identities_resolve_keep_their_slots_and_are_rewritten() {
     let record = dirs.record();
     assert!(record.contains(&firefox.key.id()), "{record}");
     assert!(record.contains(&mail.key.id()), "{record}");
-    assert!(!record.contains(r"C:\\Places\\2\\Firefox.lnk"), "{record}");
+    assert!(!record.contains(r"C:\\Places\\0\\Firefox.lnk"), "{record}");
 
     // Invoked, the carried pin opens the application's preferred source.
     block_on(launcher.activate_quick_slot(1));
-    assert_eq!(system.opened(), std::slice::from_ref(&mine.path));
+    assert_eq!(system.opened(), std::slice::from_ref(&mail.path));
     assert_eq!(shown(&launcher), Status::Idle);
     assert_eq!(launcher.view().query(), Some(""));
 }
@@ -381,9 +399,129 @@ fn the_host_opens_an_application_by_the_path_it_had_before_identities() {
     ]);
     let host = Cached::new(system.clone(), Duration::from_secs(3600));
 
+    // The Desktop shortcut's path opens the application by its Start menu
+    // shortcut, the preferred one.
     host.open(r"C:\Places\2\Tool.lnk").unwrap();
 
     assert_eq!(system.opened(), [r"C:\Places\0\Tool.lnk"]);
+}
+
+#[test]
+fn shortcuts_carrying_one_app_user_model_id_are_one_result_opened_by_the_start_menu_s() {
+    let dirs = Dirs::new();
+    let discord = r"C:\Users\Ann\AppData\Local\Discord\Discord.exe";
+    let aumid = "com.squirrel.Discord.Discord";
+    let system = FakeSystem::with(vec![
+        identified(
+            "Discord",
+            DESKTOP,
+            discord,
+            "--processStart Discord.exe",
+            aumid,
+        ),
+        identified("Discord", START_MENU, discord, "", aumid),
+        // Another program's AppUserModelID is another application, though
+        // it runs the same program.
+        identified(
+            "Discord Canary",
+            START_MENU,
+            discord,
+            "--canary",
+            "Vendor.Canary",
+        ),
+    ]);
+    let launcher = dirs.hosting(&system);
+    install(&launcher, &built("packages/sample-applications-js"));
+
+    search(&launcher, "discord");
+
+    assert_eq!(
+        titles(&launcher),
+        ["Launch Discord", "Launch Discord Canary"]
+    );
+    select_title(&launcher, "Launch Discord");
+    block_on(launcher.activate_selected());
+    assert_eq!(system.opened(), [r"C:\Places\0\Discord.lnk"]);
+}
+
+/// The installed applications as `sources`, each identified by its key's
+/// id: how an earlier Pane listed them, given the keys it gave them.
+struct Earlier(Vec<Source>);
+
+impl Applications for Earlier {
+    fn installed(&self) -> Result<Vec<Application>, String> {
+        Ok(self
+            .0
+            .iter()
+            .map(|source| Application {
+                id: source.key.id(),
+                name: source.name.clone(),
+                location: source.location.clone(),
+                ..Application::default()
+            })
+            .collect())
+    }
+
+    fn open(&self, _id: &str) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[test]
+fn a_pin_and_learned_ranking_carry_over_when_shortcuts_are_keyed_by_their_app_user_model_id() {
+    let dirs = Dirs::new();
+    let discord = r"C:\Users\Ann\AppData\Local\Discord\Discord.exe";
+    let aumid = "com.squirrel.Discord.Discord";
+    let start = "--processStart Discord.exe";
+    let desktop = shortcut("Discord", DESKTOP, discord, start);
+    let menu = shortcut("Discord", START_MENU, discord, "");
+    // An earlier Pane listed Discord twice, keyed by target and arguments:
+    // the user pinned the Desktop's and chose the Start menu's.
+    {
+        let launcher = dirs.launcher(Arc::new(Earlier(vec![desktop.clone(), menu.clone()])));
+        install(&launcher, &built("packages/sample-applications-js"));
+        search(&launcher, "discord");
+        let ids: Vec<String> = launcher
+            .view()
+            .rows
+            .iter()
+            .map(|row| row.id.clone())
+            .collect();
+        let at = |id: &str| ids.iter().position(|row| row.ends_with(id)).unwrap();
+        launcher.select(at(&desktop.key.id()));
+        let target = ids[at(&desktop.key.id())].clone();
+        let (change, recorded) = launcher.change_quick_slots(&target, ResultAction::Pin);
+        assert!(matches!(change, SlotChange::Changed(_)), "{change:?}");
+        block_on(recorded);
+        launcher.select(at(&menu.key.id()));
+        block_on(launcher.activate_selected());
+        assert!(launcher.wait_for_learned_recorded(Duration::from_secs(30)));
+    }
+    let learned = || fs::read_to_string(dirs.data.path().join("extensions/learned.json")).unwrap();
+    assert!(learned().contains(&menu.key.id()), "{}", learned());
+
+    // This Pane keys both by their AppUserModelID: one application.
+    let merged = Key::App(aumid.to_lowercase()).id();
+    let system = FakeSystem::with(vec![
+        identified("Discord", DESKTOP, discord, start, aumid),
+        identified("Discord", START_MENU, discord, "", aumid),
+    ]);
+    let launcher = dirs.hosting(&system);
+    block_on(launcher.resolve_root_home());
+    assert!(launcher.wait_for_learned_recorded(Duration::from_secs(30)));
+
+    // The pin holds the merged result, and so does its record.
+    assert_eq!(pinned_result(&launcher), merged);
+    assert!(launcher.quick_slots()[0].ready());
+    let record = dirs.record();
+    assert!(record.contains(&merged), "{record}");
+    assert!(!record.contains(&desktop.key.id()), "{record}");
+    // What root search learned of the Start menu's moved to it too.
+    let learned = learned();
+    assert!(learned.contains(&merged), "{learned}");
+    assert!(!learned.contains(&menu.key.id()), "{learned}");
+    block_on(launcher.activate_quick_slot(0));
+    assert_eq!(system.opened(), [r"C:\Places\0\Discord.lnk"]);
 }
 
 /// The JavaScript and TypeScript author examples receive the stable ids
@@ -407,7 +545,7 @@ fn a_js_command_opens_an_application_by_its_stable_id(package: &str, language: &
     );
     search(&launcher, "launch fire");
     block_on(launcher.activate_selected());
-    assert_eq!(system.opened(), [r"C:\Places\2\Firefox.lnk"]);
+    assert_eq!(system.opened(), [r"C:\Places\0\Firefox.lnk"]);
 
     // Its command lists the application once and opens it by its id, in
     // the launcher shown again: the open above closed it (#468).
@@ -421,7 +559,7 @@ fn a_js_command_opens_an_application_by_its_stable_id(package: &str, language: &
     assert_eq!(shown(&launcher), Status::Result("Opened Firefox".into()));
     assert_eq!(
         system.opened(),
-        [r"C:\Places\2\Firefox.lnk", r"C:\Places\2\Firefox.lnk"]
+        [r"C:\Places\0\Firefox.lnk", r"C:\Places\0\Firefox.lnk"]
     );
 }
 
