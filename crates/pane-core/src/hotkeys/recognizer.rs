@@ -66,7 +66,8 @@
 //! double tap recognized is reported ([`Recorded`]) for the recorder to
 //! check as the window's own recorder checks a keystroke. Escape and Tab
 //! never reach it: the adapter lets them through, so the recorder's own
-//! cancellation keys work.
+//! cancellation keys work. Backspace and Delete pressed alone pass too,
+//! so the recorder's clearing key works (#494).
 //!
 //! One gap is deliberate: the first release of the Windows key of a
 //! bound double tap — `double:win` without `tap:win` — passes through
@@ -257,6 +258,11 @@ fn is_windows(key: u32) -> bool {
 /// The main Enter's virtual-key code, which the numpad's Enter shares;
 /// the numpad flag tells them apart (`VK_RETURN`).
 const ENTER: u32 = 0x0D;
+
+/// The virtual-key codes of Backspace and Delete (`VK_BACK`,
+/// `VK_DELETE`), which clear a recorder when pressed alone (#494): a
+/// recording session lets them through to the window.
+const CLEAR_KEYS: [u32; 2] = [0x08, 0x2E];
 
 /// One binding as [`Recognizer::add`] takes it: what kind it is, which
 /// modifiers (each any side or a named one, in the order control, alt,
@@ -518,6 +524,16 @@ impl Recognizer {
             // candidacy (#260).
             self.break_taps();
             if self.recording {
+                // Backspace or Delete pressed alone is the recorder's own
+                // key, not a binding: it clears or resets the recorder
+                // (#494), as Raycast's recorders take Backspace. It passes
+                // to the window, as Escape and Tab do; with a modifier
+                // held it is a chord candidate like any other key.
+                if CLEAR_KEYS.contains(&event.key)
+                    && self.modifiers.iter().all(|held| *held == Held::Neither)
+                {
+                    return Decision::Pass;
+                }
                 // A chord candidate for the recorder: the modifiers held,
                 // each any side or the one named, and the key. The
                 // recorder checks it as the window's own recorder checks
@@ -551,6 +567,11 @@ impl Recognizer {
             if self.swallowed == Some((event.key, event.extended)) {
                 self.swallowed = None;
                 return Decision::Swallow;
+            }
+            // The release of Backspace or Delete passes while recording,
+            // so the window that had the lone press has its release too.
+            if self.recording && CLEAR_KEYS.contains(&event.key) {
+                return Decision::Pass;
             }
             self.held_back()
         }

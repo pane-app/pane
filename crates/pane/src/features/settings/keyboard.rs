@@ -282,6 +282,9 @@ pub(crate) struct State {
     /// every recorder; the recording action's holds focus while it
     /// listens.
     focuses: BTreeMap<KeyboardAction, FocusHandle>,
+    /// Each recorder's Reset button's focus: a tab stop while the
+    /// binding is not the default, when the reset is enabled (#494).
+    reset_focuses: BTreeMap<KeyboardAction, FocusHandle>,
     /// The navigation bindings' select.
     navigation: Entity<Select>,
     /// The Game mode section's state (#125): the program field, and what
@@ -298,6 +301,10 @@ impl State {
                 let focus = cx.focus_handle().tab_stop(true);
                 (action, focus)
             })
+            .collect();
+        let reset_focuses = KeyboardAction::ALL
+            .into_iter()
+            .map(|action| (action, cx.focus_handle()))
             .collect();
         let navigation = super::choice_select(
             NAVIGATION_NAME,
@@ -325,6 +332,7 @@ impl State {
             recording: None,
             rejection: None,
             focuses,
+            reset_focuses,
             navigation,
             game: GameState::default(),
         }
@@ -499,8 +507,8 @@ fn render(
         .as_ref()
         .map(|health| hook_section(health, hook_anchor, &theme));
     let focuses = this.keyboard.focuses.clone();
+    let reset_focuses = this.keyboard.reset_focuses.clone();
     let recording = this.keyboard.recording;
-    let defaults = Keyboard::default_for_this_system();
     let game = game_section(this, &view.game, &theme, window, cx);
     compose(
         &view,
@@ -550,15 +558,26 @@ fn render(
                         }
                     }))
             }
+            // A button the keyboard reaches while it is enabled (#494):
+            // Enter and Space press it, as a click does.
             KeyboardControl::Reset(action) => {
-                let default = defaults.binding(action).clone();
-                element.on_click(cx.listener(move |this, _: &gpui::ClickEvent, window, cx| {
-                    // The reset sits inside the recorder: its click is its own.
-                    cx.stop_propagation();
-                    if !keyboard_is_default(action, cx) {
-                        this.keyboard_apply(action, default.clone(), window, cx);
-                    }
-                }))
+                let focus = reset_focuses
+                    .get(&action)
+                    .expect("every action has a reset focus")
+                    .clone()
+                    .tab_stop(!keyboard_is_default(action, cx));
+                super::pressable(
+                    element,
+                    &focus,
+                    controls::focus_ring(&theme),
+                    move |this, window, cx| {
+                        // The reset sits inside the recorder: its press is
+                        // its own.
+                        cx.stop_propagation();
+                        this.keyboard_reset(action, window, cx);
+                    },
+                    cx,
+                )
             }
             KeyboardControl::Escape(escape) => element
                 .anchor_scroll(Some(escape_anchor.clone()))
@@ -1065,12 +1084,61 @@ impl SettingsWindow {
             return;
         };
         cx.stop_propagation();
+        // Backspace alone, the key that clears a recorder (#494): an
+        // action cannot be left without a binding, so it goes back to the
+        // default, as Reset does.
+        if super::clears(&event.keystroke, false) {
+            if keyboard_is_default(action, cx) {
+                let defaults = Keyboard::default_for_this_system();
+                self.keyboard.rejection = Some((
+                    action,
+                    format!(
+                        "{} can't be left without a key. It is already the default, {}.",
+                        action.title(),
+                        defaults.binding(action)
+                    ),
+                ));
+                cx.notify();
+            } else {
+                self.keyboard_reset(action, window, cx);
+            }
+            return;
+        }
         match crate::keyboard::binding_of(&event.keystroke) {
             Ok(binding) => self.keyboard_apply(action, binding, window, cx),
             Err(problem) => {
                 self.keyboard.rejection = Some((action, format!("{problem}.")));
                 cx.notify();
             }
+        }
+    }
+
+    /// Puts `action`'s binding back to the default, through the same
+    /// checks a recording takes: Reset pressed or clicked, or Backspace
+    /// while its recorder listens (#494). A reset the keyboard pressed
+    /// leaves the keyboard on the recorder, since the reset is disabled
+    /// once it lands.
+    fn keyboard_reset(
+        &mut self,
+        action: KeyboardAction,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if keyboard_is_default(action, cx) {
+            return;
+        }
+        let keyboard = self
+            .keyboard
+            .reset_focuses
+            .get(&action)
+            .is_some_and(|focus| focus.is_focused(window));
+        let default = Keyboard::default_for_this_system().binding(action).clone();
+        self.keyboard_apply(action, default, window, cx);
+        if keyboard
+            && self.keyboard.rejection.is_none()
+            && let Some(recorder) = self.keyboard.focuses.get(&action).cloned()
+        {
+            window.focus(&recorder, cx);
         }
     }
 
