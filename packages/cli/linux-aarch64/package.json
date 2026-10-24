@@ -1,6 +1,6 @@
 {
   "name": "@pane-app/cli-linux-aarch64",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Pane's command-line tool for extension authors, for Linux arm64: the pane-ext program and the componentizer a JavaScript or TypeScript package's build runs. One of @pane-app/cli's optional dependencies; npm installs it only on matching systems and the shim runs the program it holds.",
   "homepage": "https://github.com/pane-app/pane/tree/main/packages/cli#readme",
   "bugs": "https://github.com/pane-app/pane/issues",
