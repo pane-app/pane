@@ -55,6 +55,7 @@ mod crash_notice;
 mod create;
 mod designed_list;
 mod designed_views;
+mod eager_indexes;
 
 pub use designed_list::{DesignedDropdown, DesignedList, DesignedRow, GridShape, LOADING_MS};
 mod feedback;
@@ -1109,6 +1110,10 @@ struct State {
     /// The packages whose activation entry point a thread is calling now,
     /// by identity key, so it is not begun twice (see `registered`).
     activating: HashSet<String>,
+    /// Whether the commands that supply indexed results are asked for them
+    /// as soon as they can run, rather than at root search's first use
+    /// (see `eager_indexes`).
+    eager_indexes: bool,
     /// The package whose install preview is shown for Create Extension or
     /// Import Extension (see `create`), which Pane develops once it is
     /// installed: the author confirming the preview. Leaving the preview
@@ -1934,6 +1939,7 @@ impl Launcher {
             registrations: runtime.as_ref().ok().map(Runtime::registrations),
             dynamic: dynamic::Looks::default(),
             activating: HashSet::new(),
+            eager_indexes: false,
             develop_after: None,
         };
         if let (Some(installation), Some(files)) = (&installation, &state.files) {
@@ -4310,6 +4316,10 @@ impl Launcher {
             // runs at (ADR 0041): the screen is not refreshed yet, so it
             // is seen to here.
             self.ensure_activated(state);
+            // Its indexed results are asked for now, if this launcher asks
+            // ahead (see `eager_indexes`): first setup's choice screen
+            // refreshes nothing as each extension lands.
+            self.ask_eagerly(state);
             return false;
         };
         // The replaced copy's code no longer runs: its generation ended
@@ -4340,10 +4350,12 @@ impl Launcher {
         // at (ADR 0041); the code that starts a reload or an update calls
         // it as its own start, and this covers the rest.
         self.ensure_activated(state);
-        // The replaced copy's results are asked for afresh.
+        // The replaced copy's results are asked for afresh: now, if this
+        // launcher asks ahead (see `eager_indexes`).
         state
             .indexes
             .retain(|component| !replaced.iter().any(|old| old == component));
+        self.ask_eagerly(state);
         state
             .open
             .as_ref()
@@ -4581,6 +4593,10 @@ impl Launcher {
         self.ensure_activated(state);
         // The file index runs while a package that uses it may run.
         self.sync_file_index(state);
+        // A command that supplies indexed results and can run now (enabled,
+        // unpaused, set up, no longer waiting) is asked for them, if this
+        // launcher asks ahead (see `eager_indexes`).
+        self.ask_eagerly(state);
         match &state.view.screen {
             Screen::Root { .. } => self.refresh_root(state),
             Screen::Extensions { .. } => self.refresh_extensions(state),

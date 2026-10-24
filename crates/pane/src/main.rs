@@ -374,6 +374,13 @@ fn main() {
             PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/guests/componentizer");
         let toolchains = Toolchains::from_env(Some(componentizer));
         let launcher = launcher.with_development(Arc::new(toolchains), change_sender);
+        // As Raycast does, root search's results supplied ahead of the query
+        // are asked for as soon as their commands can run - now, and once
+        // first setup or an update installs one - rather than at the first
+        // search: the installed applications are listed and their icons
+        // extracted in the background, so even the first search after a
+        // fresh install or an update draws real icons.
+        let launcher = launcher.with_eager_indexed_results();
         // The window takes the launcher; acquiring the default extensions
         // and checking for Pane's own update keep clones, started below
         // once the window exists.

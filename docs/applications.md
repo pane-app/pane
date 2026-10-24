@@ -79,16 +79,20 @@ no capability the host lacks.
 
 ### When Pane looks for applications
 
-Nothing runs at start, at install or for a blank query. The first query
-that is not blank starts the extension, which asks the host for the
-installed applications. They are kept, and every later query ranks them
-at once, so typing never waits for them. The first query lists the
-commands at once and the applications as soon as they are found.
+As Raycast does, Pane looks for them before the first search. The
+extension is started as soon as it can run: as Pane starts, and once it is
+installed (first setup), enabled, updated or reloaded
+([root search](root-search.md#when-they-are-asked)). It asks the host for
+the installed applications, and the icon cache extracts their icons in the
+background ([refreshing](#refreshing)). So even the first search after a
+fresh install or an update lists the applications with their own icons.
+They are kept, and every later query ranks them at once, so typing never
+waits for them.
 
-The extension asks again on the first query after each return to root
-search (at start, after Escape from a command, after an install), and
-whenever the host's [live list](#live-list) changes. It keeps the earlier
-list until the new one arrives.
+Showing root search also asks for them, since the blank query's list
+shows applications. The extension asks again whenever the host's
+[live list](#live-list) changes. It keeps the earlier list until the new
+one arrives.
 
 The host keeps its own list
 ([`Cached`](../crates/pane-core/src/applications/cached.rs)). Only the
@@ -160,7 +164,8 @@ replaced the earlier 10-second rescan. The rules are in
 
 The list is built, and its watchers start, when a running package first
 asks for the installed applications (`installed()`). For the
-Applications extension, that is the first query that is not blank.
+Applications extension, that happens as Pane starts or once the extension is
+installed (see [above](#when-pane-looks-for-applications)).
 
 Each component that asked is noted on its package's generation. Once no
 package that asked can run any more (disabled, uninstalled, paused, its
@@ -720,7 +725,8 @@ adapter differs. An extension receives `application` records and returns
 - Live list through the launcher
   ([`crates/pane-core/tests/application_changes.rs`](../crates/pane-core/tests/application_changes.rs)),
   with the real guest and the host's list over a fake system:
-  - nothing is watched until root search is first used;
+  - for a launcher that does not ask ahead, nothing is watched until root
+    search is first used;
   - an application installed (a program, or a packaged app whose change
     completes later) while root search is on screen appears within about a
     second without leaving it;
@@ -765,6 +771,10 @@ adapter differs. An extension receives `application` records and returns
   extraction:
   - a row shows its application's own icon, and the placeholder until it
     is extracted, decorative;
+  - a launcher asking ahead, as Pane's own program does, extracts the
+    icons before the first search, after an install and as it starts with
+    an empty cache, so the first search draws them at once; one that does
+    not ask ahead extracts nothing before root search is used;
   - a packaged app keeps its light and dark icons, from the package even
     when a shortcut is its primary source;
   - after a restart the kept icon draws without extracting, and an

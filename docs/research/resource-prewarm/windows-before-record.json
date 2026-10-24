@@ -1,0 +1,45 @@
+{
+    "format":  1,
+    "script":  "measure-windows.ps1",
+    "skipped":  [
+
+                ],
+    "date":  "2026-10-24T13:22:10.7148179+07:00",
+    "os":  "Microsoft Windows NT 10.0.26200.0",
+    "windowsBuild":  {
+                         "DisplayVersion":  "25H2",
+                         "CurrentBuild":  "26200",
+                         "UBR":  8737
+                     },
+    "architecture":  "AMD64",
+    "processors":  16,
+    "pane":  {
+                 "path":  "C:\\Users\\ADMIN\\Desktop\\nguyenvu\\prewarm-wt\\target\\debug\\pane-before.exe",
+                 "bytes":  122601472,
+                 "sha256":  "1CD2C8542CE94063C1EB5C89A37021B5ACFE6ADD2217D6A5EF47AB8FB8922CDC",
+                 "profile":  "debug"
+             },
+    "commit":  "13d097f77684f68ebe6267f3ffcca188578a3166",
+    "workload":  {
+                     "hiddenSeconds":  60,
+                     "settleSeconds":  30,
+                     "sampleSeconds":  1,
+                     "setupSeconds":  600,
+                     "defaultExtensions":  [
+                                               "calculator",
+                                               "applications",
+                                               "quicklinks",
+                                               "files",
+                                               "clipboard-history",
+                                               "run",
+                                               "system-commands",
+                                               "switch-windows"
+                                           ]
+                 },
+    "counted":  "context switches of each thread (SYSTEM_THREAD_INFORMATION.ContextSwitches); CPU in 100 ns; rss_kb is the working set",
+    "otherPaneProcesses":  1,
+    "loginRegistered":  false,
+    "loginRegistrationRestored":  false,
+    "hiddenBy":  "posted Escape",
+    "scratchKept":  false
+}
