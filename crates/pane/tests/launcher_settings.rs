@@ -1562,6 +1562,73 @@ fn switch_on(cx: &mut VisualTestContext, title: &str) -> bool {
         .any(|aria| aria["role"] == "Switch" && aria["label"] == title && aria["toggled"] == "True")
 }
 
+/// The Launcher page from the keyboard (#498): Enter on "Reset ranking…"
+/// arms it and takes the keyboard to its Reset; Escape stands it down,
+/// back on the button that armed it, and the page stays; Cancel does the
+/// same. The window mode's segments are tab stops whose Right and Left
+/// choose the next or previous one, the keyboard following the choice,
+/// and Space turns the compact window's switch.
+#[gpui::test]
+fn the_launcher_page_works_from_the_keyboard(cx: &mut TestAppContext) {
+    let data = tempfile::tempdir().unwrap();
+    let placement = Rc::new(FakePlacement::default());
+    placement.layout(Some(Point { x: 100., y: 100. }), Some(DisplayId(1)));
+    let (window, cx) = open(cx, Some(data.path()), &placement);
+    let (_settings, mut sc) = open_launcher_page(cx);
+
+    tab_until(&mut sc, "Reset ranking");
+    sc.simulate_keystrokes("enter");
+    sc.run_until_parked();
+    assert!(sc.debug_bounds("launcher-reset-ranking-reset").is_some());
+    assert_eq!(
+        focused_label(&mut sc).as_deref(),
+        Some("Reset what every result learned")
+    );
+    sc.simulate_keystrokes("escape");
+    sc.run_until_parked();
+    assert!(
+        sc.debug_bounds("launcher-reset-ranking-reset").is_none(),
+        "Escape stood the reset down"
+    );
+    assert!(sc.debug_bounds("launcher").is_some(), "the page stays");
+    assert_eq!(focused_label(&mut sc).as_deref(), Some("Reset ranking"));
+    sc.simulate_keystrokes("enter tab");
+    sc.run_until_parked();
+    assert_eq!(focused_label(&mut sc).as_deref(), Some("Cancel the reset"));
+    sc.simulate_keystrokes("space");
+    sc.run_until_parked();
+    assert!(sc.debug_bounds("launcher-reset-ranking-reset").is_none());
+    assert_eq!(focused_label(&mut sc).as_deref(), Some("Reset ranking"));
+
+    tab_until(&mut sc, "Expanded");
+    sc.simulate_keystrokes("right");
+    until_record_holds(&mut sc, data.path(), "\"windowMode\": \"compact\"");
+    assert_eq!(focused_label(&mut sc).as_deref(), Some("Compact"));
+    sc.simulate_keystrokes("left");
+    sc.run_until_parked();
+    assert_eq!(focused_label(&mut sc).as_deref(), Some("Expanded"));
+
+    tab_until(&mut sc, "Show pinned in compact window mode");
+    sc.simulate_keystrokes("space");
+    until_record_holds(&mut sc, data.path(), "\"compactPinned\": true");
+    let _ = window;
+}
+
+/// Presses Tab until the node labelled `label` has the keyboard, failing
+/// if forty stops never reach it.
+fn tab_until(cx: &mut VisualTestContext, label: &str) {
+    let mut passed = Vec::new();
+    for _ in 0..40 {
+        cx.simulate_keystrokes("tab");
+        cx.run_until_parked();
+        match focused_label(cx) {
+            Some(focused) if focused == label => return,
+            focused => passed.push(focused.unwrap_or_default()),
+        }
+    }
+    panic!("Tab never reached {label:?}; it passed {passed:?}");
+}
+
 #[gpui::test]
 fn the_compact_pinned_switch_is_in_the_layout_card_and_is_saved(cx: &mut TestAppContext) {
     let data = tempfile::tempdir().unwrap();

@@ -49,6 +49,7 @@
 //! and explained as Windows-only elsewhere.
 
 use std::collections::BTreeMap;
+use std::rc::Rc;
 
 use gpui::{
     AnyElement, App, Context, Div, Entity, FocusHandle, Focusable, KeyBinding, KeyDownEvent,
@@ -61,7 +62,7 @@ use pane_core::{
     Binding, EscapeBehavior, GameMode, Keyboard, KeyboardAction, Launcher, NavigationBindings,
 };
 
-use super::{Page, SettingsWindow, search};
+use super::{Page, SegmentChoice, SettingsWindow, pressable, search};
 use crate::ui::controls::{self, status_note as note};
 use crate::ui::icon::Glyph;
 use crate::ui::keycap::KeySequence;
@@ -75,7 +76,11 @@ const RECORDER: &str = "KeyboardRecorder";
 /// A recorder's key context while it rests: a button.
 const RECORDER_IDLE: &str = "KeyboardRecorderIdle";
 
-actions!(keyboard, [ActivateRecorder, CancelRecording]);
+actions!(keyboard, [ActivateRecorder, CancelRecording, AddProgram]);
+
+/// The key context of the game program field: Enter there adds the
+/// program it names, as the Add button beside it does.
+const PROGRAM_CONTEXT: &str = "KeyboardGameProgram";
 
 /// Registers the recorders' key bindings, in their own contexts — deeper
 /// in the focus stack than the sidebar's and the window's keys, so while a
@@ -96,6 +101,7 @@ pub(crate) fn bind_keys(cx: &mut App) {
         KeyBinding::new("escape", CancelRecording, Some(RECORDER)),
         KeyBinding::new("tab", CancelRecording, Some(RECORDER)),
         KeyBinding::new("shift-tab", CancelRecording, Some(RECORDER)),
+        KeyBinding::new("enter", AddProgram, Some(PROGRAM_CONTEXT)),
     ]);
     cx.bind_keys(super::captured_while_recording(RECORDER));
 }
@@ -241,8 +247,8 @@ fn entries(launcher: &Launcher, _cx: &App) -> Vec<search::Entry> {
 /// Each action's recorder takes keyboard focus — the recorders are tab
 /// stops, and Enter on one starts recording — so a jump to an action
 /// focuses its recorder, ready to rebind; a jump to the navigation
-/// bindings focuses their select. Anything else is not focusable here:
-/// `false` falls back to the sidebar.
+/// bindings focuses their select. A jump to anything else reveals it, and
+/// `false` leaves the keyboard on the sidebar.
 fn focus(
     this: &mut SettingsWindow,
     target: &str,
@@ -508,6 +514,20 @@ fn render(
         .map(|health| hook_section(health, hook_anchor, &theme));
     let focuses = this.keyboard.focuses.clone();
     let reset_focuses = this.keyboard.reset_focuses.clone();
+    // The escape behavior's segments as the keyboard walks them, and the
+    // switch's focus.
+    let escapes: Rc<[SegmentChoice]> = ESCAPES
+        .iter()
+        .map(|&(escape, _, selector)| SegmentChoice {
+            focus: this.focuses.get(selector, cx),
+            choose: Rc::new(move |cx: &mut App| {
+                crate::settings::shared(cx).update(cx, |settings, cx| {
+                    settings.set_escape(escape, cx);
+                });
+            }),
+        })
+        .collect();
+    let closes_focus = this.focuses.get("keyboard-escape-closes", cx);
     let recording = this.keyboard.recording;
     let game = game_section(this, &view.game, &theme, window, cx);
     compose(
@@ -560,12 +580,15 @@ fn render(
             }
             // A button the keyboard reaches while it is enabled (#494):
             // Enter and Space press it, as a click does.
+            KeyboardControl::Reset(action) if keyboard_is_default(action, cx) => {
+                super::inert(element)
+            }
             KeyboardControl::Reset(action) => {
                 let focus = reset_focuses
                     .get(&action)
                     .expect("every action has a reset focus")
                     .clone()
-                    .tab_stop(!keyboard_is_default(action, cx));
+                    .tab_stop(true);
                 super::pressable(
                     element,
                     &focus,
@@ -579,22 +602,31 @@ fn render(
                     cx,
                 )
             }
-            KeyboardControl::Escape(escape) => element
-                .anchor_scroll(Some(escape_anchor.clone()))
-                .on_click(cx.listener(move |_, _: &gpui::ClickEvent, _, cx| {
-                    crate::settings::shared(cx).update(cx, |settings, cx| {
-                        settings.set_escape(escape, cx);
-                    });
-                })),
-            KeyboardControl::EscapeCloses => element
-                .anchor_scroll(Some(closes_anchor.clone()))
-                .on_click(cx.listener(|_, _: &gpui::ClickEvent, _, cx| {
+            KeyboardControl::Escape(escape) => {
+                let index = ESCAPES
+                    .iter()
+                    .position(|&(of, ..)| of == escape)
+                    .unwrap_or(0);
+                super::segment(
+                    element.anchor_scroll(Some(escape_anchor.clone())),
+                    index,
+                    &escapes,
+                    controls::segment_focus_shadows(escape == view.escape, &theme),
+                )
+            }
+            KeyboardControl::EscapeCloses => super::pressable(
+                element.anchor_scroll(Some(closes_anchor.clone())),
+                &closes_focus,
+                controls::focus_ring(&theme),
+                |_, _, cx| {
                     let settings = crate::settings::shared(cx);
                     let closes = settings.read(cx).escape_closes_settings();
                     settings.update(cx, |settings, cx| {
                         settings.set_escape_closes_settings(!closes, cx);
                     });
-                })),
+                },
+                cx,
+            ),
         },
     )
     .into_any_element()
@@ -801,6 +833,9 @@ fn game_section(
     cx: &mut Context<SettingsWindow>,
 ) -> AnyElement {
     let mode_anchor = this.search_anchor("keyboard-game-mode");
+    // The section's switch and buttons are tab stops while offered.
+    let ring = controls::focus_ring(theme);
+    let mode_focus = this.focuses.get("keyboard-game-mode", cx);
     let lines = if view.offered {
         vec![
             controls::row_line(
@@ -837,14 +872,20 @@ fn game_section(
         },
         theme,
         |switch| {
-            switch
-                .anchor_scroll(Some(mode_anchor))
-                .when(view.offered && !view.busy, |switch| {
-                    switch.on_click(cx.listener(move |this, _: &gpui::ClickEvent, _, cx| {
-                        let on = !this.launcher.game_mode().on;
-                        game_change(this, move |mode| mode.on = on, cx);
-                    }))
-                })
+            let switch = switch.anchor_scroll(Some(mode_anchor));
+            if !(view.offered && !view.busy) {
+                return switch;
+            }
+            pressable(
+                switch,
+                &mode_focus,
+                ring.clone(),
+                |this, _, cx| {
+                    let on = !this.launcher.game_mode().on;
+                    game_change(this, move |mode| mode.on = on, cx);
+                },
+                cx,
+            )
         },
     )
     .into_any_element();
@@ -853,6 +894,26 @@ fn game_section(
         for program in &view.programs {
             let removed = program.clone();
             let shown = program.clone();
+            let remove = button(
+                format!("keyboard-game-remove-{program}"),
+                "Remove",
+                !view.busy,
+                theme,
+            );
+            let remove = if view.busy {
+                remove
+            } else {
+                let focus = this
+                    .focuses
+                    .get(&format!("keyboard-game-remove-{program}"), cx);
+                pressable(
+                    remove,
+                    &focus,
+                    ring.clone(),
+                    move |this, _, cx| this.remove_game_program(&removed, cx),
+                    cx,
+                )
+            };
             rows.push(
                 controls::setting_row(
                     program.clone(),
@@ -864,19 +925,7 @@ fn game_section(
                     theme,
                 )
                 .debug_selector(move || format!("keyboard-game-program-{shown}"))
-                .child(
-                    button(
-                        format!("keyboard-game-remove-{program}"),
-                        "Remove",
-                        !view.busy,
-                        theme,
-                    )
-                    .when(!view.busy, |button| {
-                        button.on_click(cx.listener(move |this, _: &gpui::ClickEvent, _, cx| {
-                            this.remove_game_program(&removed, cx);
-                        }))
-                    }),
-                )
+                .child(remove)
                 .into_any_element(),
             );
         }
@@ -890,6 +939,13 @@ fn game_section(
             .id("keyboard-game-program")
             .debug_selector(|| "keyboard-game-program-field".into())
             .anchor_scroll(Some(field_anchor))
+            // Enter adds the program, as the Add button does.
+            .key_context(PROGRAM_CONTEXT)
+            .on_action(cx.listener(|this, _: &AddProgram, _, cx| {
+                if !this.keyboard.game.busy {
+                    add_program(this, cx);
+                }
+            }))
             .track_focus(&input.focus_handle(cx))
             .shadow(controls::well_shadows(focused, theme))
             .role(Role::TextInput)
@@ -902,12 +958,27 @@ fn game_section(
                 theme,
             ));
         let offered = !view.busy && !text.trim().is_empty();
-        let add =
-            button("keyboard-game-add".into(), "Add", offered, theme).when(offered, |button| {
-                button.on_click(cx.listener(|this, _: &gpui::ClickEvent, _, cx| {
+        let add = button("keyboard-game-add".into(), "Add", offered, theme);
+        let add = if offered {
+            let focus = this.focuses.get("keyboard-game-add", cx);
+            pressable(
+                add,
+                &focus,
+                ring,
+                |this, window, cx| {
                     add_program(this, cx);
-                }))
-            });
+                    // The field is empty now and the button no longer
+                    // offered: the keyboard goes back to the field, for
+                    // the next program.
+                    if let Some(input) = this.keyboard.game.program.clone() {
+                        window.focus(&input.focus_handle(cx), cx);
+                    }
+                },
+                cx,
+            )
+        } else {
+            add
+        };
         rows.push(
             controls::setting_row(
                 GAME_PROGRAMS_NAME,

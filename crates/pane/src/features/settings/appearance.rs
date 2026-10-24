@@ -25,13 +25,14 @@
 //! cannot provide glass, the material row says so, and the windows render
 //! the solid surface.
 //!
-//! The segments are the keyboard's too: each is a tab stop, and Enter or
-//! Space chooses it as a click does, under Pane's focus ring (the board
-//! draws none). While an override is in force they are drawn at the
+//! The segments are the keyboard's too: each is a tab stop, Enter or
+//! Space chooses it as a click does, and Left and Right choose its
+//! neighbours, under Pane's focus ring (the board draws none). While an override is in force they are drawn at the
 //! board's disabled opacity, and neither take the keyboard nor answer a
 //! click.
 
 use std::collections::HashMap;
+use std::rc::Rc;
 
 use gpui::{
     AnyElement, App, Context, Div, FocusHandle, Hsla, KeyBinding, PathPromptOptions, Role,
@@ -39,17 +40,18 @@ use gpui::{
 };
 use pane_core::{BackgroundEffect, Launcher, MaterialPreference, ThemePreference};
 
-use super::{SettingsWindow, search};
+use super::{SegmentChoice, SettingsWindow, search};
 use crate::ui::controls;
 use crate::ui::theme::Theme;
 
 actions!(appearance, [Choose]);
 
-/// The key context a segment carries while it has the keyboard.
+/// The key context the background row's buttons carry while they have the
+/// keyboard (the segments carry the window's, see [`super::segment`]).
 const CHOICE: &str = "AppearanceChoice";
 
-/// Registers the segments' keys: a segment is a button of a radio group,
-/// so Enter and Space choose it, as a click does.
+/// Registers the background buttons' keys: Enter and Space press them, as
+/// a click does.
 pub(crate) fn bind_keys(cx: &mut App) {
     cx.bind_keys([
         KeyBinding::new("enter", Choose, Some(CHOICE)),
@@ -234,11 +236,14 @@ pub(crate) fn section(this: &mut SettingsWindow, cx: &mut Context<SettingsWindow
     // A choice is offered (focusable, clickable and saved) only where
     // nothing overrides it for this process.
     let offered = view.overrides.is_empty();
+    let themes = group(this, &THEMES, |preference, cx| {
+        crate::settings::shared(cx).update(cx, |settings, cx| settings.set_theme(preference, cx));
+    });
     let theme_segments = THEMES
         .iter()
-        .map(|&(preference, name, selector)| {
+        .enumerate()
+        .map(|(index, &(preference, name, selector))| {
             let anchor = this.search_anchor(selector);
-            let focus = this.appearance.focus(selector);
             segment(
                 Segment {
                     selector,
@@ -247,20 +252,21 @@ pub(crate) fn section(this: &mut SettingsWindow, cx: &mut Context<SettingsWindow
                     offered,
                 },
                 anchor,
-                &focus,
+                index,
+                &themes,
                 &theme,
-                move |cx| {
-                    crate::settings::shared(cx)
-                        .update(cx, |settings, cx| settings.set_theme(preference, cx));
-                },
             )
         })
         .collect();
+    let materials = group(this, &MATERIALS, |preference, cx| {
+        crate::settings::shared(cx)
+            .update(cx, |settings, cx| settings.set_material(preference, cx));
+    });
     let material_segments = MATERIALS
         .iter()
-        .map(|&(preference, name, selector)| {
+        .enumerate()
+        .map(|(index, &(preference, name, selector))| {
             let anchor = this.search_anchor(selector);
-            let focus = this.appearance.focus(selector);
             segment(
                 Segment {
                     selector,
@@ -269,12 +275,9 @@ pub(crate) fn section(this: &mut SettingsWindow, cx: &mut Context<SettingsWindow
                     offered,
                 },
                 anchor,
-                &focus,
+                index,
+                &materials,
                 &theme,
-                move |cx| {
-                    crate::settings::shared(cx)
-                        .update(cx, |settings, cx| settings.set_material(preference, cx));
-                },
             )
         })
         .collect();
@@ -373,11 +376,16 @@ fn background_rows(
                 .child(choose),
         );
     let offered = background.chosen;
+    let effects = group(this, &EFFECTS, |effect, cx| {
+        crate::settings::shared(cx).update(cx, |settings, cx| {
+            settings.set_background_effect(effect, cx)
+        });
+    });
     let segments = EFFECTS
         .iter()
-        .map(|&(effect, name, selector)| {
+        .enumerate()
+        .map(|(index, &(effect, name, selector))| {
             let anchor = this.search_anchor(selector);
-            let focus = this.appearance.focus(selector);
             segment(
                 Segment {
                     selector,
@@ -386,13 +394,9 @@ fn background_rows(
                     offered,
                 },
                 anchor,
-                &focus,
+                index,
+                &effects,
                 theme,
-                move |cx| {
-                    crate::settings::shared(cx).update(cx, |settings, cx| {
-                        settings.set_background_effect(effect, cx)
-                    });
-                },
             )
         })
         .collect();
@@ -544,18 +548,36 @@ struct Segment {
     offered: bool,
 }
 
-/// One segment of a row's choice ([`controls::segment`]) with its
-/// identity and a radio button's semantics. Offered, it is a tab stop
-/// that Enter, Space and a click choose — `choose` reports the choice to
-/// the host settings, which repaint both windows and save — under Pane's
-/// focus ring while the keyboard is on it; not offered, it is neither.
-/// `anchor` is the scroll anchor the search's reveal scrolls to.
+/// A row's segments as the keyboard walks them ([`super::segment`]): each
+/// of `choices` with its focus, choosing it through `choose`, which
+/// reports the choice to the host settings — they repaint both windows
+/// and save.
+fn group<T: Copy + 'static>(
+    this: &SettingsWindow,
+    choices: &[(T, &'static str, &'static str)],
+    choose: fn(T, &mut App),
+) -> Rc<[SegmentChoice]> {
+    choices
+        .iter()
+        .map(|&(choice, _, selector)| SegmentChoice {
+            focus: this.appearance.focus(selector),
+            choose: Rc::new(move |cx: &mut App| choose(choice, cx)),
+        })
+        .collect()
+}
+
+/// The `index`th segment of a row's choice ([`controls::segment`]) with
+/// its identity and a radio button's semantics. Offered, it is a tab stop
+/// of `group` ([`super::segment`]: Enter, Space and a click choose it, Left
+/// and Right its neighbours) under Pane's focus ring while the keyboard is
+/// on it; not offered, it is neither. `anchor` is the scroll anchor the
+/// search's reveal scrolls to.
 fn segment(
     segment: Segment,
     anchor: ScrollAnchor,
-    focus: &FocusHandle,
+    index: usize,
+    group: &Rc<[SegmentChoice]>,
     theme: &Theme,
-    choose: impl Fn(&mut App) + Clone + 'static,
 ) -> Stateful<Div> {
     let Segment {
         selector,
@@ -577,14 +599,12 @@ fn segment(
     if !offered {
         return drawn.aria_disabled(true).cursor_default();
     }
-    let ring = controls::segment_focus_shadows(chosen, theme);
-    let on_click = choose.clone();
-    drawn
-        .key_context(CHOICE)
-        .track_focus(focus)
-        .focus_visible(move |style| style.shadow(ring))
-        .on_action(move |_: &Choose, _, cx| choose(cx))
-        .on_click(move |_: &gpui::ClickEvent, _, cx| on_click(cx))
+    super::segment(
+        drawn,
+        index,
+        group,
+        controls::segment_focus_shadows(chosen, theme),
+    )
 }
 
 /// One row: its label and `lines` at the left, its segmented choice

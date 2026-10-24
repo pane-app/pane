@@ -3226,6 +3226,162 @@ fn the_extensions_group_s_rows_and_buttons_are_tab_stops(cx: &mut TestAppContext
     );
 }
 
+/// Every control on every Settings page that answers a click — a switch,
+/// a button, a segment, a link, a menu item or a checkbox — is one the
+/// keyboard reaches (#498): walking each sidebar entry's page with Tab,
+/// from its first control until the keyboard leaves the page, reaches
+/// each such control, or the list that holds it (an Extensions flow
+/// screen's rows, which the arrows walk). A control added with only a
+/// click handler fails here.
+#[gpui::test]
+fn every_pressable_settings_control_is_a_tab_stop(cx: &mut TestAppContext) {
+    let (sources, data) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let folder = settings_package(&sources.path().join("settings"));
+    let (_launcher, cx) = open_installed(cx, &data, &folder);
+    let mut settings_cx = open_settings(cx);
+    let entries = sidebar_entries(&mut settings_cx);
+    assert!(
+        entries.contains(&"Settings sample".to_owned()),
+        "the extension's page is walked too: {entries:?}"
+    );
+    for (at, entry) in entries.iter().enumerate() {
+        if at > 0 {
+            // The next entry, from wherever the walk left the keyboard;
+            // the sidebar takes it back.
+            settings_cx.simulate_keystrokes("ctrl-tab");
+            settings_cx.run_until_parked();
+        }
+        assert_eq!(&selected_entry(&mut settings_cx), entry);
+        let missed = mouse_only_controls(&mut settings_cx);
+        assert!(
+            missed.is_empty(),
+            "on {entry}, Tab never reaches {missed:?}"
+        );
+    }
+}
+
+/// The roles of the controls a click presses, as GPUI reports them.
+const PRESSABLE_ROLES: [&str; 6] = [
+    "Button",
+    "Switch",
+    "RadioButton",
+    "Link",
+    "MenuItem",
+    "CheckBox",
+];
+
+/// The sidebar's entries in order — each page's, and each installed
+/// extension's — by label, and whether each is selected.
+fn sidebar(cx: &mut VisualTestContext) -> Vec<(String, bool)> {
+    let (_, json) = accessibility(cx);
+    let tree: serde_json::Value = serde_json::from_str(&json).unwrap();
+    let nodes = tree["nodes"].as_object().unwrap();
+    let sections = nodes
+        .values()
+        .find(|node| node["aria"]["label"] == "Settings sections")
+        .expect("the sidebar's sections");
+    sections["children"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|id| &nodes[id.as_str().unwrap()]["aria"])
+        .map(|aria| {
+            (
+                aria["label"].as_str().unwrap_or_default().to_owned(),
+                aria["selected"] == true,
+            )
+        })
+        .collect()
+}
+
+/// The sidebar's entries in order, by label.
+fn sidebar_entries(cx: &mut VisualTestContext) -> Vec<String> {
+    sidebar(cx).into_iter().map(|(label, _)| label).collect()
+}
+
+/// The sidebar's selected entry, by label.
+fn selected_entry(cx: &mut VisualTestContext) -> String {
+    sidebar(cx)
+        .into_iter()
+        .find_map(|(label, selected)| selected.then_some(label))
+        .unwrap_or_default()
+}
+
+/// Walks the shown page with the keyboard: Enter from the sidebar goes to
+/// its first control, and Tab on until the keyboard leaves the page. The
+/// controls on the page (the window's main region) a click presses that
+/// the walk never reached, nor any list holding them, by role and label.
+fn mouse_only_controls(cx: &mut VisualTestContext) -> Vec<String> {
+    // Every node a click presses, by its stable id, and every node the
+    // keyboard reached, with what it holds.
+    let mut pressable = std::collections::BTreeMap::new();
+    let mut reached = std::collections::HashSet::new();
+    cx.simulate_keystrokes("enter");
+    for _ in 0..400 {
+        let (_, json) = accessibility(cx);
+        let tree: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let nodes = tree["nodes"].as_object().unwrap();
+        let main = nodes
+            .iter()
+            .find(|(_, node)| node["aria"]["role"] == "Main")
+            .map(|(id, _)| id.clone())
+            .expect("the page's region");
+        let page = subtree(nodes, &main);
+        for id in &page {
+            let node = &nodes[id];
+            let aria = &node["aria"];
+            let clicked = aria["on_action"]
+                .as_array()
+                .is_some_and(|actions| actions.iter().any(|action| action == "Click"));
+            if clicked && PRESSABLE_ROLES.iter().any(|role| aria["role"] == *role) {
+                pressable.insert(
+                    node["accesskit_id"].as_str().unwrap().to_owned(),
+                    format!(
+                        "{} {:?}",
+                        aria["role"].as_str().unwrap_or_default(),
+                        aria["label"].as_str().unwrap_or_default()
+                    ),
+                );
+            }
+        }
+        let Some(focus) = tree["gpui_focus"].as_str().filter(|id| page.contains(*id)) else {
+            return pressable
+                .into_iter()
+                .filter(|(id, _)| !reached.contains(id))
+                .map(|(_, control)| control)
+                .collect();
+        };
+        reached.extend(
+            subtree(nodes, focus)
+                .iter()
+                .map(|id| nodes[id]["accesskit_id"].as_str().unwrap().to_owned()),
+        );
+        cx.simulate_keystrokes("tab");
+    }
+    panic!("Tab never left the page");
+}
+
+/// The node `root` and every node under it, by their ids in `nodes`.
+fn subtree(
+    nodes: &serde_json::Map<String, serde_json::Value>,
+    root: &str,
+) -> std::collections::HashSet<String> {
+    let mut found = std::collections::HashSet::new();
+    let mut pending = vec![root.to_owned()];
+    while let Some(id) = pending.pop() {
+        if let Some(children) = nodes[&id]["children"].as_array() {
+            pending.extend(
+                children
+                    .iter()
+                    .filter_map(|child| child.as_str())
+                    .map(str::to_owned),
+            );
+        }
+        found.insert(id);
+    }
+    found
+}
+
 /// Whether the switch labelled `label` reads as on, as assistive
 /// technology sees it.
 fn has_node_toggled(cx: &mut VisualTestContext, label: &str) -> bool {

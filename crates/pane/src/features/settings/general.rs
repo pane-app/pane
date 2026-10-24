@@ -457,6 +457,13 @@ fn render(
     let taskbar_anchor = this.search_anchor("show-taskbar");
     let focus = this.general.focus.clone();
     let reset_focus = this.general.reset_focus.clone();
+    // Each switch's focus, and the Windows key choice's: tab stops while
+    // they are offered.
+    let windows_key_focus = this.focuses.get("general-use-windows-key", cx);
+    let login_focus = this.focuses.get("general-launch-at-login", cx);
+    let tray_focus = this.focuses.get("tray-visibility", cx);
+    let taskbar_focus = this.focuses.get("general-show-taskbar", cx);
+    let ring = controls::focus_ring(&theme);
     let focused = focus.is_focused(window);
     let recording = this.general.recording;
     let (resettable, windows_key_offered, login_offered, tray_offered, taskbar_offered) = (
@@ -500,10 +507,10 @@ fn render(
                 })),
             // A button the keyboard reaches while it is enabled (#494):
             // Enter and Space press it, as a click does.
-            GeneralControl::Reset => super::pressable(
+            GeneralControl::Reset if resettable => super::pressable(
                 element.anchor_scroll(Some(reset_anchor.clone())),
-                &reset_focus.clone().tab_stop(resettable),
-                controls::focus_ring(&theme),
+                &reset_focus.clone().tab_stop(true),
+                ring.clone(),
                 |this, window, cx| {
                     // The reset sits inside the recorder: its press is its
                     // own.
@@ -512,65 +519,98 @@ fn render(
                 },
                 cx,
             ),
+            GeneralControl::Reset => {
+                super::inert(element.anchor_scroll(Some(reset_anchor.clone())))
+            }
             GeneralControl::UseWindowsKey => {
-                element
-                    .anchor_scroll(Some(windows_key_anchor.clone()))
-                    .when(windows_key_offered, |row| {
-                        // The choice's click is its own step (#268): through
-                        // the same checks a recording takes, so a refusal
-                        // keeps the binding that works and says why. Where
-                        // the Windows key cannot be taken, the row explains
-                        // and takes no step.
-                        row.on_click(cx.listener(|this, _: &gpui::ClickEvent, window, cx| {
-                            cx.stop_propagation();
-                            this.apply_open_pane(Shortcut::windows_key(), window, cx);
-                        }))
-                    })
+                let element = element.anchor_scroll(Some(windows_key_anchor.clone()));
+                if !windows_key_offered {
+                    // Where the Windows key cannot be taken, the row
+                    // explains and takes no step.
+                    return element;
+                }
+                // The choice is its own step (#268): through the same
+                // checks a recording takes, so a refusal keeps the binding
+                // that works and says why. Taken, the row goes, and the
+                // keyboard moves to the recorder above it.
+                super::pressable(
+                    element,
+                    &windows_key_focus,
+                    ring.clone(),
+                    |this, window, cx| {
+                        cx.stop_propagation();
+                        this.apply_open_pane(Shortcut::windows_key(), window, cx);
+                        let taken = crate::settings::shared(cx).read(cx).open_pane()
+                            == Shortcut::windows_key();
+                        if taken {
+                            window.focus(&this.general.focus, cx);
+                        }
+                    },
+                    cx,
+                )
             }
             GeneralControl::Login => {
-                element
-                    .anchor_scroll(Some(login_anchor.clone()))
-                    .when(login_offered, |switch| {
-                        // The click reports the choice to the host settings: the
-                        // registration is changed, the record written, and the
-                        // switch redrawn with what was actually kept.
-                        switch.on_click(cx.listener(move |_, _: &gpui::ClickEvent, _, cx| {
-                            crate::settings::shared(cx).update(cx, |settings, cx| {
-                                settings.set_launch_at_login(!preference, cx);
-                            });
-                        }))
-                    })
+                let element = element.anchor_scroll(Some(login_anchor.clone()));
+                if !login_offered {
+                    return element;
+                }
+                // The press reports the choice to the host settings: the
+                // registration is changed, the record written, and the
+                // switch redrawn with what was actually kept.
+                super::pressable(
+                    element,
+                    &login_focus,
+                    ring.clone(),
+                    |_, _, cx| {
+                        crate::settings::shared(cx).update(cx, |settings, cx| {
+                            let on = settings.launch_at_login();
+                            settings.set_launch_at_login(!on, cx);
+                        });
+                    },
+                    cx,
+                )
             }
             GeneralControl::Tray => {
-                element
-                    .anchor_scroll(Some(tray_anchor.clone()))
-                    .when(tray_offered, |switch| {
-                        // The click reports the choice to the host settings: the
-                        // native entry is shown or hidden, the record written, and
-                        // the switch redrawn with what was actually kept — the
-                        // preference read as it is now, not as the frame that drew
-                        // the row holds it.
-                        switch.on_click(cx.listener(|this, _: &gpui::ClickEvent, _, cx| {
-                            let visible = crate::settings::shared(cx).read(cx).tray_visible();
-                            this.apply_tray_visible(!visible, cx);
-                        }))
-                    })
+                let element = element.anchor_scroll(Some(tray_anchor.clone()));
+                if !tray_offered {
+                    return element;
+                }
+                // The press reports the choice to the host settings: the
+                // native entry is shown or hidden, the record written, and
+                // the switch redrawn with what was actually kept — the
+                // preference read as it is now, not as the frame that drew
+                // the row holds it.
+                super::pressable(
+                    element,
+                    &tray_focus,
+                    ring.clone(),
+                    |this, _, cx| {
+                        let visible = crate::settings::shared(cx).read(cx).tray_visible();
+                        this.apply_tray_visible(!visible, cx);
+                    },
+                    cx,
+                )
             }
             GeneralControl::Taskbar => {
-                element.anchor_scroll(Some(taskbar_anchor.clone())).when(
-                    taskbar_offered,
-                    |switch| {
-                        // The click reports the choice to the host settings: the
-                        // record is written, and the launcher window — which
-                        // observes the settings — shows the taskbar or puts it
-                        // back at once, for it is open now (#268).
-                        switch.on_click(cx.listener(|_, _: &gpui::ClickEvent, _, cx| {
-                            crate::settings::shared(cx).update(cx, |settings, cx| {
-                                let shown = settings.show_taskbar();
-                                settings.set_show_taskbar(!shown, cx);
-                            });
-                        }))
+                let element = element.anchor_scroll(Some(taskbar_anchor.clone()));
+                if !taskbar_offered {
+                    return element;
+                }
+                // The press reports the choice to the host settings: the
+                // record is written, and the launcher window — which
+                // observes the settings — shows the taskbar or puts it
+                // back at once, for it is open now (#268).
+                super::pressable(
+                    element,
+                    &taskbar_focus,
+                    ring.clone(),
+                    |_, _, cx| {
+                        crate::settings::shared(cx).update(cx, |settings, cx| {
+                            let shown = settings.show_taskbar();
+                            settings.set_show_taskbar(!shown, cx);
+                        });
                     },
+                    cx,
                 )
             }
         },
