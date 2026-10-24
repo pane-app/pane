@@ -165,6 +165,39 @@ fn heading_and_footer_command(cx: &mut VisualTestContext) -> (bool, bool) {
 /// title; Manage extensions is named there too. The core's own screens,
 /// a package's preview and a confirmation, keep the heading that says
 /// what they are about.
+/// A preview's details scroll from the keyboard when they overflow
+/// (#499): Shift+Page Down and Shift+Up scroll them, and the selection
+/// stays on Install.
+#[gpui::test]
+fn shifted_keys_scroll_a_previews_details_and_keep_the_selection(cx: &mut TestAppContext) {
+    let (sources, data) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let folder = package(&sources.path().join("hello"));
+    let (window, cx) = open(cx, &data);
+    // A short window, so the details overflow their share of it.
+    cx.simulate_resize(gpui::size(px(640.), px(170.)));
+    let view = choose_folder(&window, cx, Some(folder));
+    assert!(matches!(view.screen, Screen::Package { .. }));
+    let selected = view.selected;
+    assert!(selected.is_some(), "a choice is selected");
+    let scrolled = |cx: &mut VisualTestContext| {
+        let window = window.clone();
+        cx.update(|frame, cx| window.read(cx).detail_scrolled(frame))
+    };
+    assert_eq!(scrolled(cx), Some(0.), "the details overflow, at their top");
+
+    cx.simulate_keystrokes("shift-pagedown");
+    settle(&window, cx);
+    let paged = scrolled(cx).expect("the details overflow");
+    assert!(paged > 0., "Shift+Page Down scrolled the details: {paged}");
+    cx.simulate_keystrokes("shift-up");
+    settle(&window, cx);
+    let stepped = scrolled(cx).expect("the details overflow");
+    assert!(stepped < paged, "Shift+Up scrolled them back: {stepped}");
+    let view = settle(&window, cx);
+    assert!(matches!(view.screen, Screen::Package { .. }));
+    assert_eq!(view.selected, selected, "the selection stayed");
+}
+
 #[gpui::test]
 fn only_the_cores_own_screens_have_a_heading_line(cx: &mut TestAppContext) {
     let (sources, data) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());

@@ -590,6 +590,55 @@ impl LauncherWindow {
         })
     }
 
+    /// The address of the Markdown link that holds the keyboard, when one
+    /// does: the footer shows it while it is focused (#499).
+    pub(crate) fn focused_link_url(&self, window: &gpui::Window) -> Option<String> {
+        let controls = self.designed.as_ref()?;
+        controls.state.values().find_map(|entry| match &entry.held {
+            Held::Links { focus, urls } => focus
+                .iter()
+                .zip(urls)
+                .find(|(focus, _)| focus.is_focused(window))
+                .and_then(|(_, url)| url.clone()),
+            _ => None,
+        })
+    }
+
+    /// Whether the open designed view holds the keyboard in a control
+    /// that takes the plain arrows for itself — a field, a select or a
+    /// picker, a segmented control, a slider, a canvas, a node that asks
+    /// for keys — which keeps them, so they never scroll the view (#499).
+    /// A button or a link takes only Enter and Space.
+    pub(crate) fn designed_takes_arrows(&self, window: &gpui::Window) -> bool {
+        let Some(controls) = &self.designed else {
+            return false;
+        };
+        self.designed_takes_backspace(window)
+            || controls.state.values().any(|entry| {
+                entry.arrows
+                    && entry
+                        .focus_handle()
+                        .is_some_and(|focus| focus.is_focused(window))
+            })
+    }
+
+    /// The open designed view's own scroll regions — its `scroll` nodes
+    /// and its Detail's content — which the detail's keys scroll when one
+    /// of them is what overflows (#499).
+    pub(crate) fn designed_scroll_regions(&self) -> Vec<gpui::ScrollHandle> {
+        let Some(controls) = &self.designed else {
+            return Vec::new();
+        };
+        controls
+            .state
+            .values()
+            .filter_map(|entry| match &entry.held {
+                Held::Scroll(handle) => Some(handle.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
     /// Test support: what the open designed view's tag picker or picker
     /// of many paths keyed `key` holds — the tags or paths chosen, as a
     /// submission collects them.
@@ -681,6 +730,12 @@ impl LauncherWindow {
         let Some(controls) = &self.designed else {
             return div().into_any_element();
         };
+        // The screen is the tree alone: the keys scroll it, the plain
+        // arrows and pages too (#499).
+        let scroll = self.detail_scroll.region(
+            &format!("view/{:?}", controls.view),
+            crate::features::detail_scroll::Keys::Plain,
+        );
         let visuals = crate::settings::launcher_visuals(cx);
         let theme = visuals.theme;
         let draw = Draw {
@@ -718,6 +773,7 @@ impl LauncherWindow {
             .flex_col()
             .items_start()
             .overflow_y_scroll()
+            .track_scroll(&scroll)
             .px(geometry.search_padding_x)
             .pt(crate::ui::tokens::space(pane_core::Space::S))
             .pb(geometry.list_padding_bottom)

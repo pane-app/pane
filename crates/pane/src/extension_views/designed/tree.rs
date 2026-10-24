@@ -48,6 +48,15 @@ impl Draw<'_> {
         self.state.get(path).and_then(|state| state.focus_handle())
     }
 
+    /// The focus of the link at `place` inside the node at `path` — a
+    /// Markdown link, a text's linked span, a metadata list's linked
+    /// value (#499) — when its state holds one.
+    pub(super) fn link_focus(&self, path: &str, place: usize) -> Option<gpui::FocusHandle> {
+        self.state
+            .get(path)
+            .and_then(|state| state.link_focus(place))
+    }
+
     /// The keyed field at `path`: its editing state, its focus, and the
     /// bookkeeping of its input events.
     pub(super) fn field(
@@ -608,8 +617,14 @@ pub(super) fn draw_node(
         NodeKind::Detail(_) => {
             let own = path.clone();
             let children = children(node, path, inner, cx);
+            // Its position is kept by key, as a scroll region's is: the
+            // keyboard scrolls it through the handle (#499).
+            let tracked = draw.state.get(&own).and_then(|state| match &state.held {
+                Held::Scroll(handle) => Some(handle.clone()),
+                _ => None,
+            });
             let div = apply(
-                scroll(Orientation::Vertical, children, own, None),
+                scroll(Orientation::Vertical, children, own, tracked),
                 node,
                 &draw,
             );

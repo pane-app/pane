@@ -5,7 +5,9 @@
 //! buttons: Tab and Shift+Tab move through them, Enter and Space press
 //! the focused one, and the window shows the tree the view answered with.
 //! Escape stays with Pane, as it does for a custom view: it leaves the
-//! screen.
+//! screen. A Detail's links are tab stops that Enter opens, the footer
+//! showing the focused one's address, and the arrows and pages scroll a
+//! Detail that is the whole screen (#499).
 //!
 //! The Rust designed view sample (`guests/sample-view`) is installed as a
 //! package from `target/guests/packages`, its command declared
@@ -13,6 +15,7 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 
 use gpui::{Entity, TestAppContext, VisualTestContext, prelude::*};
 use pane::LauncherWindow;
@@ -67,6 +70,27 @@ fn open_command<'a>(
     theme: &str,
     typed: &str,
 ) -> (Opened, &'a mut VisualTestContext) {
+    open_command_with(cx, theme, typed, Arc::new(Links::default()))
+}
+
+/// Records the addresses the launcher is asked to open.
+#[derive(Default)]
+struct Links(Mutex<Vec<String>>);
+
+impl pane_core::LinkOpener for Links {
+    fn open(&self, url: &str) -> Result<(), String> {
+        self.0.lock().unwrap().push(url.to_owned());
+        Ok(())
+    }
+}
+
+/// [`open_command`], the links the launcher opens told to `links`.
+fn open_command_with<'a>(
+    cx: &'a mut TestAppContext,
+    theme: &str,
+    typed: &str,
+    links: Arc<Links>,
+) -> (Opened, &'a mut VisualTestContext) {
     let (sources, data) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
     cx.update(|cx| {
         pane::settings::init_with_overrides(
@@ -76,7 +100,8 @@ fn open_command<'a>(
         )
     });
     let launcher =
-        Launcher::with_packages(Runtime::start(), Vec::new(), data.path().join("extensions"));
+        Launcher::with_packages(Runtime::start(), Vec::new(), data.path().join("extensions"))
+            .with_link_opener(links);
     cx.executor().allow_parking();
     cx.update(pane::bind_keys);
     let assembled =
@@ -382,5 +407,116 @@ fn the_open_dropdown_chord_opens_the_lists_dropdown(cx: &mut TestAppContext) {
         cx.debug_bounds(Box::leak(tooltip.clone().into_boxed_str()))
             .is_some(),
         "{tooltip} is drawn"
+    );
+}
+
+/// How far the region the detail's keys scroll is scrolled, from its top;
+/// `None` while nothing they scroll overflows.
+fn detail_scrolled(window: &Entity<LauncherWindow>, cx: &mut VisualTestContext) -> Option<f32> {
+    let window = window.clone();
+    cx.update(|frame, cx| window.read(cx).detail_scrolled(frame))
+}
+
+/// Tabs until the control named `label` holds the keyboard, at most
+/// `most` times: whether it was reached.
+fn tab_to(cx: &mut VisualTestContext, label: &str, most: usize) -> bool {
+    for _ in 0..most {
+        cx.simulate_keystrokes("tab");
+        if a11y::focused_label(cx).as_deref() == Some(label) {
+            return true;
+        }
+    }
+    false
+}
+
+/// A Detail's Markdown link and its metadata panel's link are tab stops
+/// (#499): while the Markdown link is focused the footer shows its
+/// address, and Enter opens it.
+#[gpui::test]
+fn tab_reaches_a_details_links_and_enter_opens_the_markdown_one(cx: &mut TestAppContext) {
+    let links = Arc::new(Links::default());
+    let (opened, cx) = open_command_with(cx, "dark", "detail sample", links.clone());
+    let window = opened.window;
+    until(&window, cx, |view| match &view.screen {
+        Screen::DesignedView(view) => view.list.is_none(),
+        _ => false,
+    });
+    settle(&window, cx);
+    assert!(
+        !drawn(cx, "footer-link-https://example.com/tree"),
+        "no address shows before a link is focused"
+    );
+
+    assert!(tab_to(cx, "the tree", 8), "Tab reached the Markdown link");
+    assert!(
+        drawn(cx, "footer-link-https://example.com/tree"),
+        "the footer shows the focused link's address"
+    );
+
+    // The metadata panel's link is the next stop; an extension's own link
+    // has no address for the footer to show.
+    cx.simulate_keystrokes("tab");
+    assert_eq!(
+        a11y::focused_label(cx).as_deref(),
+        Some("pane"),
+        "Tab reached the metadata link"
+    );
+    assert!(!drawn(cx, "footer-link-https://example.com/tree"));
+
+    // Back on the Markdown link, Enter opens it.
+    cx.simulate_keystrokes("shift-tab");
+    assert_eq!(a11y::focused_label(cx).as_deref(), Some("the tree"));
+    cx.simulate_keystrokes("enter");
+    // The system's handler is asked off the window's thread.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    while links.0.lock().unwrap().is_empty() && std::time::Instant::now() < deadline {
+        settle(&window, cx);
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    assert_eq!(
+        links.0.lock().unwrap().as_slice(),
+        ["https://example.com/tree"],
+        "Enter opened the focused link"
+    );
+}
+
+/// A Detail that is the whole screen scrolls with the plain arrows and
+/// pages, as there is no selection for them to move (#499).
+#[gpui::test]
+fn the_arrows_and_pages_scroll_a_detail_screen(cx: &mut TestAppContext) {
+    let (opened, cx) = open_command(cx, "dark", "detail sample");
+    let window = opened.window;
+    // A short window, so the Detail's content overflows it.
+    cx.simulate_resize(gpui::size(gpui::px(750.), gpui::px(260.)));
+    until(&window, cx, |view| match &view.screen {
+        Screen::DesignedView(view) => view.list.is_none(),
+        _ => false,
+    });
+    settle(&window, cx);
+    assert_eq!(
+        detail_scrolled(&window, cx),
+        Some(0.),
+        "it starts at its top"
+    );
+
+    cx.simulate_keystrokes("down");
+    settle(&window, cx);
+    let stepped = detail_scrolled(&window, cx).expect("the detail overflows");
+    assert!(stepped > 0., "Down scrolled it: {stepped}");
+    cx.simulate_keystrokes("pagedown");
+    settle(&window, cx);
+    let paged = detail_scrolled(&window, cx).expect("the detail overflows");
+    assert!(paged > stepped, "Page Down scrolled further: {paged}");
+    cx.simulate_keystrokes("shift-pageup shift-pageup shift-pageup");
+    settle(&window, cx);
+    assert_eq!(
+        detail_scrolled(&window, cx),
+        Some(0.),
+        "Shift+Page Up scrolled back to the top"
+    );
+    let view = settle(&window, cx);
+    assert!(
+        matches!(view.screen, Screen::DesignedView(_)),
+        "the keys left the screen where it was"
     );
 }

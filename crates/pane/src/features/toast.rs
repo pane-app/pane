@@ -43,8 +43,8 @@
 
 use gpui::{
     AnyElement, App, BoxShadow, ClickEvent, ClipboardItem, Context, Div, FocusHandle, Hsla,
-    KeyBinding, KeyDownEvent, MouseDownEvent, Pixels, Role, Size, Stateful, Subscription, Task,
-    TextStyle, Window, actions, div, prelude::*, px, relative,
+    KeyBinding, KeyDownEvent, MouseDownEvent, Pixels, Role, ScrollHandle, Size, Stateful,
+    Subscription, Task, TextStyle, Window, actions, div, prelude::*, px, relative,
 };
 use pane_core::feedback::TOAST_DURATION;
 use pane_core::{ShownToast, Status, Toast, ToastSlot, ToastStyle};
@@ -188,6 +188,10 @@ pub(crate) struct ToastDetails {
     focus: FocusHandle,
     /// The selected action, an index into the toast's actions.
     selected: usize,
+    /// Where the full text is scrolled: Shift+Up and Shift+Down, Shift+Page
+    /// Up and Shift+Page Down scroll it past its cap, Up and Down still
+    /// choosing the action (#499).
+    scroll: ScrollHandle,
     /// Closes the details when the window loses activation, as native
     /// popovers do; ends with them.
     _deactivation: Subscription,
@@ -480,9 +484,19 @@ impl LauncherWindow {
             toast: shown,
             focus,
             selected: 0,
+            scroll: ScrollHandle::new(),
             _deactivation: deactivation,
         });
         cx.notify();
+    }
+
+    /// Where the open toast details' full text is scrolled, while they are
+    /// open: the detail's keys scroll it (#499).
+    pub(crate) fn toast_details_scroll(&self) -> Option<ScrollHandle> {
+        self.toast
+            .open
+            .as_ref()
+            .map(|details| details.scroll.clone())
     }
 
     /// Closes the toast's details, if they are open, giving the focus
@@ -973,6 +987,7 @@ impl LauncherWindow {
             .w_full()
             .max_h(px(TEXT_MAX))
             .overflow_y_scroll()
+            .track_scroll(&details.scroll)
             .flex()
             .flex_col()
             .gap(theme.geometry.footer_hint_gap)

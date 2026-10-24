@@ -149,6 +149,12 @@ impl LauncherWindow {
             .and_then(|key| item_paths.iter().find(|(held, _)| held == key))
             .map(|(_, path)| format!("{path}/detail"))
             .unwrap_or_else(|| "/detail".into());
+        // Shift+Up and Shift+Down, Shift+Page Up and Shift+Page Down
+        // scroll it, the selection staying where it is; another item's
+        // detail starts at its top (#499).
+        let scroll = self
+            .detail_scroll
+            .region(&path, crate::features::detail_scroll::Keys::Shifted);
         let content = tree::draw_node(detail, &mut path, draw, cx);
         div()
             .id("designed-detail")
@@ -158,6 +164,7 @@ impl LauncherWindow {
             .flex()
             .flex_col()
             .overflow_y_scroll()
+            .track_scroll(&scroll)
             .p(tokens::space(Space::M))
             .child(content)
             .into_any_element()

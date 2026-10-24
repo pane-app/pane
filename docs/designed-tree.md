@@ -531,7 +531,12 @@ resolving per appearance (and over the background image), so the theme
 can change without renaming a token.
 
 Buttons are focusable, in tree order: Tab and Shift+Tab move through
-them, and Enter and Space press the focused one. Escape stays with Pane,
+them, and Enter and Space press the focused one. So are the links inside
+a node's content (#499): a Markdown node's links, in reading order, a
+text's linked spans and a metadata panel's linked values, each a tab
+stop with a focus ring. While a Markdown link has the keyboard, the
+footer shows its address. A view never opens with the keyboard on a link
+inside content. Escape stays with Pane,
 as it does for a custom view. It pops the navigation stack (above), and
 leaves the screen when only the root view is on it.
 
@@ -975,6 +980,21 @@ the key stays the open command's.
 
 `detail` is a scrolled column of what a record or an article is:
 Markdown, a metadata panel, a loading state, actions, as children.
+
+A long detail scrolls from the keyboard too (#499). Raycast documents no
+key for it, so Pane follows the platform's text convention. Beside a
+List, Shift+Up and Shift+Down scroll the detail pane by a step, and
+Shift+Page Up and Shift+Page Down by a page. The selection stays where it
+is; plain Up and Down still move it, and the next item's detail starts at
+its top. A view that is its detail alone, with no List, has no selection,
+so the plain arrows and Page Up and Page Down scroll it as well, unless
+a control that moves with the arrows has the keyboard (a field, a select,
+a segmented control, a slider, a canvas). A field keeps Shift and the arrows
+for its own text. When the detail fits, the keys go on to what they did
+before: a search field's Shift+Up still selects its text. The same keys
+scroll the details of a confirmation, a package preview or the error
+overlay, Clipboard History's and Search Files' previews, and the toast's
+open details.
 
 A Markdown image is the icon model's: `![alt](source =WxH "title")`. Its
 source is a packaged image's path, a web image's URL or inline `data:`,

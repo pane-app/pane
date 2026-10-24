@@ -165,6 +165,7 @@ The keys are the kept items' actions (#150):
 | Ctrl+D | Delete | deletes it |
 | Ctrl+K | the footer's Actions | opens the Actions panel |
 | Ctrl+P | the type dropdown | opens it, its search field taking the keyboard |
+| Shift+Up, Shift+Down, Shift+Page Up, Shift+Page Down | — | scroll a long preview, the selection staying on its record (#499); Search Files' preview scrolls the same way |
 
 The Actions panel holds:
 

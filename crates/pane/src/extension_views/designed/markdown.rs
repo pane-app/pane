@@ -4,6 +4,9 @@
 //! their bullets, numbers and task checkboxes, rules, and GitHub's
 //! tables (#237, ADR 0036). A link is drawn as a link, its address its
 //! tooltip; opening what it names is the standard views' to do (#240).
+//! Each link is a tab stop of its own, in reading order: Enter or Space
+//! opens it, and the footer shows its address while it is focused
+//! (#499).
 //!
 //! Inline content flows as a wrapping row of runs, as a text node's
 //! spans do: prose, code, emphasis, strong text, images and links beside
@@ -12,22 +15,106 @@
 //! size the `=WxH` its source named — and a link is opened by Pane with
 //! the system's handler, as a computed result's is.
 
+use std::cell::Cell;
+
 use gpui::prelude::*;
-use gpui::{AnyElement, ClickEvent, Context, Div, Role, TextAlign, div, px};
+use gpui::{AnyElement, ClickEvent, Context, Div, FocusHandle, Role, TextAlign, div, px};
 
 use pane_core::Space;
 use pane_core::markdown::{Alignment, Block, Inline, Item};
 
 use crate::app::LauncherWindow;
+use crate::ui::controls::focus_ring;
 use crate::ui::tokens;
 use crate::ui::tooltip::{TooltipLook, text_tooltip};
 
 use super::tree::Draw;
+use super::{BUTTON_CONTEXT, Press};
+
+/// The tab stops of one Markdown node's links, handed out in reading
+/// order as its links are drawn: the order [`link_targets`] lists them in.
+struct Links<'a> {
+    node: &'a str,
+    next: Cell<usize>,
+}
+
+impl Links<'_> {
+    /// The next link's tab stop, when the node keeps one for it.
+    fn next(&self, draw: &Draw) -> Option<FocusHandle> {
+        let place = self.next.get();
+        self.next.set(place + 1);
+        draw.link_focus(self.node, place)
+    }
+}
+
+/// The addresses of a Markdown node's links, in reading order — the
+/// order they are drawn and tabbed through in (#499).
+pub(super) fn link_targets(blocks: &[Block]) -> Vec<String> {
+    let mut targets = Vec::new();
+    for block in blocks {
+        block_links(block, &mut targets);
+    }
+    targets
+}
+
+/// The addresses of one block's links, after `targets`.
+fn block_links(block: &Block, targets: &mut Vec<String>) {
+    match block {
+        Block::Heading { inlines, .. } | Block::Paragraph(inlines) => {
+            inline_links(inlines, targets)
+        }
+        Block::Quote(inner) => {
+            for block in inner {
+                block_links(block, targets);
+            }
+        }
+        Block::List { items, .. } => {
+            for block in items.iter().flat_map(|item| &item.blocks) {
+                block_links(block, targets);
+            }
+        }
+        Block::Table { head, rows, .. } => {
+            for cell in head.iter().chain(rows.iter().flatten()) {
+                inline_links(cell, targets);
+            }
+        }
+        Block::Code { .. } | Block::Rule => {}
+    }
+}
+
+/// The addresses of inline content's links, after `targets`.
+fn inline_links(inlines: &[Inline], targets: &mut Vec<String>) {
+    for inline in inlines {
+        match inline {
+            Inline::Emphasis(inner) | Inline::Strong(inner) => inline_links(inner, targets),
+            Inline::Link { text, href } => {
+                targets.push(href.clone());
+                inline_links(text, targets);
+            }
+            Inline::Text(_) | Inline::Code(_) | Inline::Image { .. } | Inline::Break => {}
+        }
+    }
+}
 
 /// The blocks of one markdown node, drawn.
 pub(super) fn blocks(
     blocks: &[Block],
     path: &str,
+    draw: &Draw,
+    cx: &mut Context<LauncherWindow>,
+) -> AnyElement {
+    let links = Links {
+        node: path,
+        next: Cell::new(0),
+    };
+    nested(blocks, path, &links, draw, cx)
+}
+
+/// Blocks drawn in a column: the node's own, or a quote's.
+fn nested(
+    blocks: &[Block],
+    path: &str,
+    links: &Links,
     draw: &Draw,
     cx: &mut Context<LauncherWindow>,
 ) -> AnyElement {
@@ -38,7 +125,13 @@ pub(super) fn blocks(
         .min_w(px(0.))
         .gap(tokens::space(Space::S));
     for (index, block) in blocks.iter().enumerate() {
-        element = element.child(block_element(block, &format!("{path}/{index}"), draw, cx));
+        element = element.child(block_element(
+            block,
+            &format!("{path}/{index}"),
+            links,
+            draw,
+            cx,
+        ));
     }
     element.into_any_element()
 }
@@ -47,6 +140,7 @@ pub(super) fn blocks(
 fn block_element(
     block: &Block,
     path: &str,
+    links: &Links,
     draw: &Draw,
     cx: &mut Context<LauncherWindow>,
 ) -> AnyElement {
@@ -69,7 +163,7 @@ fn block_element(
                 .role(Role::Heading)
                 .map(|heading| heading.aria_label(name))
                 .map(|heading| heading.aria_level(*level))
-                .child(inlines_element(inlines, draw, cx))
+                .child(inlines_element(inlines, links, draw, cx))
                 .into_any_element()
         }
         Block::Paragraph(inlines) => div()
@@ -78,7 +172,7 @@ fn block_element(
             .min_w(px(0.))
             .text_size(theme.typography.row_subtitle_size)
             .text_color(theme.text_body)
-            .child(inlines_element(inlines, draw, cx))
+            .child(inlines_element(inlines, links, draw, cx))
             .into_any_element(),
         Block::Code { language, text } => div()
             .id(path.to_owned())
@@ -109,9 +203,9 @@ fn block_element(
             .pl(tokens::space(Space::S))
             .border_l_2()
             .border_color(theme.hairline)
-            .child(blocks(inner, &format!("{path}/quote"), draw, cx))
+            .child(nested(inner, &format!("{path}/quote"), links, draw, cx))
             .into_any_element(),
-        Block::List { ordered, items } => list(*ordered, items, path, draw, cx),
+        Block::List { ordered, items } => list(*ordered, items, path, links, draw, cx),
         Block::Rule => div()
             .id(path.to_owned())
             .flex_none()
@@ -119,7 +213,7 @@ fn block_element(
             .h(px(1.))
             .bg(theme.hairline_soft)
             .into_any_element(),
-        Block::Table { aligns, head, rows } => table(aligns, head, rows, path, draw, cx),
+        Block::Table { aligns, head, rows } => table(aligns, head, rows, path, links, draw, cx),
     }
 }
 
@@ -129,6 +223,7 @@ fn list(
     ordered: bool,
     items: &[Item],
     path: &str,
+    links: &Links,
     draw: &Draw,
     cx: &mut Context<LauncherWindow>,
 ) -> AnyElement {
@@ -170,7 +265,13 @@ fn list(
                                 .iter()
                                 .enumerate()
                                 .map(|(at, block)| {
-                                    block_element(block, &format!("{path}/{index}/{at}"), draw, cx)
+                                    block_element(
+                                        block,
+                                        &format!("{path}/{index}/{at}"),
+                                        links,
+                                        draw,
+                                        cx,
+                                    )
                                 })
                                 .collect::<Vec<AnyElement>>(),
                         ),
@@ -182,11 +283,13 @@ fn list(
 
 /// One table: a head row, bold with a rule under it, and its body rows,
 /// each column sharing the width.
+#[allow(clippy::too_many_arguments)]
 fn table(
     aligns: &[Alignment],
     head: &[Vec<Inline>],
     rows: &[Vec<Vec<Inline>>],
     path: &str,
+    links: &Links,
     draw: &Draw,
     cx: &mut Context<LauncherWindow>,
 ) -> AnyElement {
@@ -215,7 +318,15 @@ fn table(
                     .zip(aligns.iter().chain(std::iter::repeat(&no_align)))
                     .enumerate()
                     .map(|(at, (cell, align))| {
-                        cell_element(cell, *align, true, &format!("{path}/head/{at}"), draw, cx)
+                        cell_element(
+                            cell,
+                            *align,
+                            true,
+                            &format!("{path}/head/{at}"),
+                            links,
+                            draw,
+                            cx,
+                        )
                     })
                     .collect::<Vec<AnyElement>>(),
             ),
@@ -238,6 +349,7 @@ fn table(
                                 *align,
                                 false,
                                 &format!("{path}/{index}/{at}"),
+                                links,
                                 draw,
                                 cx,
                             )
@@ -255,6 +367,7 @@ fn cell_element(
     align: Alignment,
     head: bool,
     path: &str,
+    links: &Links,
     draw: &Draw,
     cx: &mut Context<LauncherWindow>,
 ) -> AnyElement {
@@ -278,14 +391,19 @@ fn cell_element(
                 cell.text_color(theme.text_body)
             }
         })
-        .child(inlines_element(cell, draw, cx));
+        .child(inlines_element(cell, links, draw, cx));
     element.into_any_element()
 }
 
 /// One run of inline content: prose, code, emphasis, strong text and
 /// links, flowing beside each other and wrapping onto lines as the width
 /// runs out.
-fn inlines_element(inlines: &[Inline], draw: &Draw, cx: &mut Context<LauncherWindow>) -> Div {
+fn inlines_element(
+    inlines: &[Inline],
+    links: &Links,
+    draw: &Draw,
+    cx: &mut Context<LauncherWindow>,
+) -> Div {
     let theme = draw.theme;
     let mut element = div()
         .flex()
@@ -368,7 +486,7 @@ fn inlines_element(inlines: &[Inline], draw: &Draw, cx: &mut Context<LauncherWin
                     .flex_none()
                     .min_w(px(0.))
                     .italic()
-                    .child(inlines_element(inner, draw, cx)),
+                    .child(inlines_element(inner, links, draw, cx)),
             ),
             Inline::Strong(inner) => element.child(
                 div()
@@ -376,14 +494,21 @@ fn inlines_element(inlines: &[Inline], draw: &Draw, cx: &mut Context<LauncherWin
                     .min_w(px(0.))
                     .font_weight(theme.typography.medium)
                     .text_color(theme.text_title)
-                    .child(inlines_element(inner, draw, cx)),
+                    .child(inlines_element(inner, links, draw, cx)),
             ),
             Inline::Link { text, href } => {
                 let label = plain(text);
                 let url = href.clone();
+                let pressed = href.clone();
+                // Its tab stop, taken before its text's, as the links are
+                // listed (#499).
+                let focus = links.next(draw);
+                let ring = focus_ring(theme);
+                let debug = format!("markdown-link-{label}");
                 element.child(
                     div()
                         .id(format!("markdown-link-{href}"))
+                        .debug_selector(move || debug.clone())
                         .flex_none()
                         .min_w(px(0.))
                         .cursor_pointer()
@@ -402,7 +527,17 @@ fn inlines_element(inlines: &[Inline], draw: &Draw, cx: &mut Context<LauncherWin
                         .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
                             this.designed_open_link(&url, window, cx);
                         }))
-                        .child(inlines_element(text, draw, cx)),
+                        // Enter and Space open it while it is focused, as
+                        // they press a link node (#499).
+                        .key_context(BUTTON_CONTEXT)
+                        .when_some(focus, |link, focus| {
+                            link.track_focus(&focus)
+                                .focus(move |link| link.shadow(ring))
+                        })
+                        .on_action(cx.listener(move |this, _: &Press, window, cx| {
+                            this.designed_open_link(&pressed, window, cx);
+                        }))
+                        .child(inlines_element(text, links, draw, cx)),
                 )
             }
             // A hard break wraps the row: a full-width, no-height run.
