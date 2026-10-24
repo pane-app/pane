@@ -572,24 +572,18 @@ failed.
 > **Being replaced.** [ADR 0050](adr/0050-pane-downloads-its-updates-by-itself-and-restarts-into-them.md)
 > (accepted 2026-10-24) makes Pane update the way Raycast does. The check
 > on a schedule, the download by itself and **Check for Pane Updates**
-> have landed ([#502](https://github.com/pane-app/pane/issues/502)) and
-> are described below. Still to come:
->
-> - it lists **Restart to Update Pane** first in root search, with a
->   toast ([#503](https://github.com/pane-app/pane/issues/503));
-> - Enter swaps the program and Pane starts the new version by itself
->   ([#504](https://github.com/pane-app/pane/issues/504));
-> - after the restart, **What's New in Pane <version>** shows the
->   release notes for a day
->   ([#505](https://github.com/pane-app/pane/issues/505)).
->
-> Until those land, the staged update is installed by **Update Pane to
-> <version>**, and the new version is used the next time Pane starts.
+> ([#502](https://github.com/pane-app/pane/issues/502)), and **Restart to
+> Update Pane** with its toast and the restart into the new version
+> ([#503](https://github.com/pane-app/pane/issues/503),
+> [#504](https://github.com/pane-app/pane/issues/504)) have landed and are
+> described below. Still to come: after the restart, **What's New in Pane
+> <version>** shows the release notes for a day
+> ([#505](https://github.com/pane-app/pane/issues/505)).
 
 Pane checks its GitHub releases for a newer version of itself at start,
 every few hours and when the launcher opens after a stale check. It
 downloads, verifies and stages a newer version by itself, quietly, and
-installs it only when the user chooses
+restarts into it only when the user chooses
 ([ADR 0050](adr/0050-pane-downloads-its-updates-by-itself-and-restarts-into-them.md),
 which supersedes US76, decision 17 and Q38 on this).
 [#54](https://github.com/pane-app/pane/issues/54) added the update, and
@@ -723,13 +717,36 @@ whose marker names a version newer than the one running, and removes any
 other: one without a marker (a download that did not end), or one whose
 version is not newer (the setup installed it, say).
 
-### The install
+### Ready: Restart to Update Pane
 
-Once an update is staged, root search lists **Update Pane to 99.0.0**.
-Its subtitle says what installing does: the user's extensions and
-settings are kept, and the new version is used the next time Pane
-starts. Choosing it, or the About page's **Update to 99.0.0**, downloads
-nothing:
+Once an update is staged, root search lists **Restart to Update Pane**,
+with the subtitle "Pane 99.0.0 is ready. Your extensions and settings are
+kept" ([#503](https://github.com/pane-app/pane/issues/503)). It is also
+found by "Update Pane to 99.0.0".
+
+- **For a blank query it comes first of all**, under a section of its own
+  ("Update"), above the pinned home, and it is drawn with the accent: an
+  accent ring inside the row and an accent tile. Being first, it is
+  selected when the launcher opens (and when it is listed while the
+  launcher is open), so Enter restarts, as in Raycast.
+- **In compact mode** the collapsed window shows it under the search
+  field, above the pins, selected: the window is the field's height plus
+  the row's.
+- **For a typed query** it is matched like any root result ("restart",
+  "update"), with no section of its own.
+- **A toast** says "Pane 99.0.0 is ready", with **Restart** as its action,
+  once per update: when it is staged while the launcher is shown, or the
+  next time it is shown. It is never a HUD over other applications, and
+  compact mode, whose toasts are HUDs, waits for the expanded launcher.
+- **While Pane is busy** setting up its default extensions, or installing,
+  updating, reloading or removing an extension, the row is unavailable and
+  says why ("Clipboard History is updating"), and Enter only explains.
+
+### The restart
+
+Enter on the row, the toast's Restart or the About page's **Restart to
+update** downloads nothing
+([#504](https://github.com/pane-app/pane/issues/504)):
 
 1. The staged program is checked against the sha256 its marker names. A
    staged program that changed or went missing is removed, explained,
@@ -738,16 +755,43 @@ nothing:
    `pane.exe.old` on Windows, the bundle's `pane` to `pane.old` on macOS,
    `pane` to `pane.old` on Linux, and an AppImage to `<name>.old`. Every
    system allows renaming a running program; only overwriting one is
-   refused. The staged program takes its name and place, and the staging
-   folder goes.
+   refused. A rename the system refuses for a moment (malware protection
+   scanning the new file) is tried again a few times. The staged program
+   takes its name and place. The Apps entry and the bundle's `Info.plist`
+   are given the new version (see [On each system](#on-each-system)).
+3. The new program is run with `--version` and must answer `Pane 99.0.0`.
+4. It is started with `--updated-from <old version> --wait-pid <this
+   process's id>`, directly on every system (on macOS the bundle's own
+   `Contents/MacOS/pane`, not through Launch Services, so it keeps Pane's
+   environment), with no window of its own on Windows and in a process
+   group of its own elsewhere.
+5. Pane waits up to 20 seconds for it to report that it started: the new
+   process writes `restart-<old process id>.started` in Pane's cache
+   folder first thing. Then the staging folder goes, and Pane quits as the
+   tray's Quit does: hotkeys released, the tray icon removed, the clean
+   quit recorded.
 
-**The new version is used the next time Pane starts**, the user's next
-start, whenever they choose. Pane does not restart itself yet (#504). A
-start removes what earlier updates left: the renamed old program (best
-effort, since another Pane may still run it).
+**The handoff.** The new process, started with `--wait-pid`, reports
+first, then waits up to 30 seconds for the old one to exit before it takes
+anything the old one held: its crash record, the hotkeys and keyboard
+hook, the tray icon, the local channel, the file index's lock and the
+clipboard listener. A process still running after that is ended, but only
+if it still runs the old program (`pane.exe` or `pane.exe.old` in the
+install folder, by its image path), so a process id reused by another
+program is never ended. Then Pane starts as usual, and the first time the
+launcher is shown a toast says "Updated to Pane 99.0.0".
 
-Installing while Pane is being used is fine. Only the last renames touch
-the program's folder, between two of the user's actions.
+**The old program is kept until the new version has settled.** Once a
+start of Pane has its window, hotkeys and tray up, it records that its
+version settled (the `settled` field of `application-update.json`). Only a
+start of that version after that removes the renamed old program, so an
+update whose new version fails before it settles can still be undone by
+hand (rename `pane.exe.old` back). A start removes the staging folder
+whenever it holds nothing newer than the version running.
+
+Restarting while Pane is being used is fine: what an extension is doing
+in the background is waited for (see above), and the restart takes a few
+seconds.
 
 ### What a failure leaves
 
@@ -757,12 +801,29 @@ page shows when and why, and Pane tries again when the next check is due
 (never in a tight loop). Only a check the user asked for explains a
 failure on the status line.
 
-An install that fails explains itself on the status line and leaves
-everything untouched: the program is still the one running, and the
-update is still staged. The row leaves root search while its install
-runs, so it cannot be started twice, and comes back selected once the
-install failed, so Enter tries again
+A restart that fails explains itself on the status line and on the About
+page, and Pane keeps running the version it ran. The row leaves root
+search while the restart runs, so it cannot be started twice, and comes
+back selected once the restart failed, so Enter tries again
 ([#424](https://github.com/pane-app/pane/issues/424)).
+
+- **The swap could not be made** (the old name is held, say): nothing
+  changed, and the update is still staged.
+- **The new version did not start**: it did not answer `--version` with
+  its version, could not be started, exited, or did not report within 20
+  seconds. A new process still running is ended, and the swap is undone:
+  the new program goes back to the staging folder beside its marker, the
+  old one takes its name again, and the Apps entry and `Info.plist` name
+  the old version again. The status line says "Pane 99.0.0 could not
+  start, so Pane stays at 0.1.0: …", and the update is still staged.
+- **The swap could not be undone either** (rare): the new program stays
+  in place, the status line and the About page say so, and the new
+  version is used the next time Pane starts.
+
+A new version that fails after the old one has quit leaves the crash
+notice for its next start, and `pane.exe.old` (or `pane.old`) beside it.
+Pane does not start the old version again by itself (no watchdog, ADR
+0050).
 
 The old version's data is never touched. Pane's data and caches live
 where each system keeps them:
@@ -781,8 +842,8 @@ and enablement are exactly what they were.
 There are two entry points: root search's rows, and the Settings window's
 About page ([#82](https://github.com/pane-app/pane/issues/82)). The page
 reads the same state the rows come from (`Launcher::application_update`),
-so the two cannot disagree, and its "Check for updates" and "Update to
-<version>" buttons run the same check and the same install the root rows
+so the two cannot disagree, and its "Check for updates" and "Restart to
+update" buttons run the same check and the same restart the root rows
 run.
 
 The page also says what the rows stay quiet about:
@@ -794,8 +855,8 @@ The page also says what the rows stay quiet about:
 - that no release source is configured at all (a development build
   without `PANE_RELEASES`, whose page explains the state rather than
   promising a release);
-- why installing the staged update last failed, since it stays, ready to
-  be chosen again.
+- why restarting into the staged update last failed, since it stays,
+  ready to be chosen again.
 
 A check the user asks for from either entry point answers even when there
 is nothing to offer ("Pane is up to date").
@@ -808,8 +869,9 @@ and the diagnostics the page copies name the log's folder.
 
 ### On each system
 
-On every system the install is one call in `pane`'s `main.rs` giving the
-program's own path.
+On every system the update is one call in `pane`'s `main.rs` giving the
+program's own path, and `main.rs` also reads `--updated-from` and
+`--wait-pid` before anything else, for the handoff.
 
 - Windows: the program is at `%LOCALAPPDATA%\Pane\pane.exe`, the setup's
   and the install script's target and the shortcut's, which the swap keeps
@@ -856,8 +918,8 @@ Finder and Launch Services knows. The binary the bundle's
 place.
 
 The old binary is renamed `pane.old` and the staging folder is `update/`,
-both beside the binary in `Contents/MacOS`, and a later start removes
-them. Finder and Launch Services keep opening the same bundle, whose
+both beside the binary in `Contents/MacOS`: the staging folder goes once
+the new version started, and `pane.old` on the start after it settled. Finder and Launch Services keep opening the same bundle, whose
 program answers the new version.
 
 The binary an update installs is one Pane wrote itself, so it carries no
@@ -892,12 +954,13 @@ Everything else in the entry (where Pane is, how it is uninstalled) stays
 true across a swap. The uninstaller also removes the `pane.exe.old` and
 `update\` a swap may have left.
 
-The setup is not what an update runs because running it would mean
-quitting Pane and starting it again, which Pane does not do by itself
-yet (the new version is used the next time the user starts Pane; #504
-adds the restart), and would give
-Windows a second update path that installs made from the zip could not
-take. The swap already works for every install, and the entry's version is
+The setup is not what an update runs: it does not start Pane again when
+it runs silently (`RestartApplications=no`, `skipifsilent`), and it would
+give Windows a second update path that installs made from the zip could
+not take. A Pane restarted into an update runs as `pane.exe` from the
+install folder, so the setup's and the uninstaller's
+`CloseApplicationsFilter` (`*.exe,*.exe.old`) find it as they find any
+Pane. The swap already works for every install, and the entry's version is
 all that the setup knows and the swap would otherwise leave stale.
 
 ## The release source

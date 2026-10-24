@@ -1050,21 +1050,26 @@ Pane downloads an update by itself, and the phase checks that instead of
    took it out of the default set), so an extension the user disabled
    before the update must stay disabled after it.
 4. With the package whole again, Check for Pane Updates downloads it and
-   stages it: "Pane 99.0.0 is ready to install" (frame 601), the marker
-   written in `update\`, and the package downloaded twice in all. Root
-   search then lists Update Pane to 99.0.0, selected (frame 602).
-5. Enter swaps the running `pane.exe` without downloading again. The old
-   program is renamed `pane.exe.old`, the new one takes its place, and
-   the staging folder is gone (frame 603, and hash checks of both
-   programs against the two packages' own files).
-6. The next start runs the new version. It reports `Pane 99.0.0` and
-   removes `pane.exe.old` at start. The calculator still answers "6*7"
-   with 42 from the old version's install (the calculator set up at first
-   setup, from the pinned repositories; frames 604 and 605). The disabled
-   Clipboard History stays disabled, since Pane's data was never touched.
-
-Pane itself was never restarted by the update. The smoke stops the old
-process and starts the new program itself, exactly as the user would.
+   stages it, and its toast says "Pane 99.0.0 is ready" (frame 601); the
+   marker is written in `update\`, and the package downloaded twice in
+   all. A blank root search then lists Restart to Update Pane first,
+   selected (frame 602).
+5. The phase writes the Apps entry the setup would leave
+   (`InstallLocation` the install folder, `DisplayVersion` the old
+   version), since this Pane came from the install script.
+6. Enter restarts into the update without downloading again
+   ([#504](https://github.com/pane-app/pane/issues/504)). The old process
+   exits, and a new `pane.exe` runs from the same path (frame 603, with
+   its "Updated to Pane 99.0.0" toast when the capture is in time). It
+   reports `Pane 99.0.0`, the Apps entry names 99.0.0 (`DisplayVersion`,
+   `MajorVersion` 99, `MinorVersion` 0), `pane.exe.old` holds the old
+   program and the staging folder is gone (hash checks of both programs
+   against the two packages' own files).
+7. The calculator still answers "6*7" with 42 from the old version's
+   install (the calculator set up at first setup, from the pinned
+   repositories; frames 604 and 605). The disabled Clipboard History
+   stays disabled, since Pane's data was never touched.
+8. The new version settled, so the next start removes `pane.exe.old`.
 
 ### What ran locally
 
