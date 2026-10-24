@@ -26,6 +26,8 @@ use pane_core::search_files::FileType;
 use pane_core::{DefaultExtension, Launcher, LinkOpener, Runtime, Screen, Status};
 use tempfile::TempDir;
 
+#[path = "support/a11y.rs"]
+mod a11y;
 // The default extensions' repositories, pane-core's test support.
 #[path = "../../pane-core/tests/support/defaults.rs"]
 mod defaults;
@@ -183,6 +185,46 @@ impl World {
             opener: FakeOpener::default(),
             system: Arc::new(RecordingSystem::default()),
         }
+    }
+
+    /// Pane with Files set up as its default extension and its index
+    /// stopped: a file stands where its cache folder should be, so the
+    /// index cannot be kept (pane-core's `a_stopped_index_says_why…`).
+    fn stopped_launcher(&self, cx: &mut TestAppContext) -> Launcher {
+        fs::write(self.data.path().join("cache"), "not a folder").unwrap();
+        cx.executor().allow_parking();
+        let runtime = Runtime::start().unwrap();
+        runtime.set_applications(self.system.clone());
+        let index = IndexerConfig {
+            first_walk_delay: Duration::from_secs(3600),
+            walk: WalkOptions {
+                background: false,
+                ..WalkOptions::default()
+            },
+            ..IndexerConfig::native(
+                &self.data.path().join("cache"),
+                self.home.clone(),
+                Vec::new(),
+            )
+        };
+        let launcher =
+            Launcher::with_packages(Ok(runtime), vec![], self.data.path().join("extensions"))
+                .with_defaults(vec![self.pin.clone()])
+                .with_link_opener(Arc::new(self.opener.clone()))
+                .with_system(self.system.clone())
+                .with_file_index(index);
+        block_on(launcher.acquire_defaults());
+        let deadline = Instant::now() + Duration::from_secs(60);
+        while launcher.file_index_status().state != pane_core::file_index::IndexState::Stopped {
+            assert!(
+                Instant::now() < deadline,
+                "{:?}",
+                launcher.file_index_status()
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        launcher.show_root_search();
+        launcher
     }
 
     /// Pane with Files set up as its default extension and its index
@@ -488,4 +530,76 @@ fn enter_on_a_program_shows_it_and_the_panel_offers_copy_name(cx: &mut TestAppCo
         other => panic!("{other:?}"),
     }
     assert!(world.opener.take().is_empty(), "nothing ran it");
+}
+
+/// Ctrl+P (Command+P on macOS) opens the type dropdown from the search
+/// field (#497), as Raycast's dropdowns open: its popup takes the
+/// keyboard, and Down and Enter choose a type.
+#[gpui::test]
+fn the_open_dropdown_chord_opens_the_type_dropdown(cx: &mut TestAppContext) {
+    let world = World::new();
+    let launcher = world.launcher(cx);
+    let (window, cx) = open_files(cx, launcher);
+    assert!(cx.debug_bounds("files-type-query").is_none());
+
+    cx.simulate_keystrokes(if cfg!(target_os = "macos") {
+        "cmd-p"
+    } else {
+        "ctrl-p"
+    });
+    settle(&window, cx);
+    assert!(
+        cx.debug_bounds("files-type-query").is_some(),
+        "the type dropdown's popup is open"
+    );
+    // From All Types, Down highlights Folder.
+    cx.simulate_keystrokes("down enter");
+    settle(&window, cx);
+    assert_eq!(
+        cx.read_entity(&window, |window, _| window.search_files_type()),
+        Some(FileType::Folder)
+    );
+    assert!(cx.debug_bounds("files-type-query").is_none());
+}
+
+/// While the index is stopped, the note's "Open File Search Settings"
+/// is reachable without the mouse (#497): Tab reaches it after the type
+/// dropdown, and Enter opens Settings.
+#[gpui::test]
+fn the_settings_link_is_reached_and_followed_from_the_keyboard(cx: &mut TestAppContext) {
+    let world = World::new();
+    let launcher = world.stopped_launcher(cx);
+    cx.update(pane::bind_keys);
+    let (window, cx) = cx.add_window_view(|window, cx| LauncherWindow::new(launcher, window, cx));
+    cx.simulate_input("search files");
+    until(&window, cx, |view| {
+        view.rows.first().is_some_and(|row| row.id == COMMAND)
+    });
+    cx.simulate_keystrokes("enter");
+    until_state(&window, cx, |view| {
+        matches!(view.screen, Screen::CommandSearch { .. })
+    });
+    until_drawn(&window, cx, "files-settings-link", true);
+
+    let mut reached = false;
+    for _ in 0..4 {
+        cx.simulate_keystrokes("tab");
+        if a11y::focused_label(cx).as_deref() == Some("Open File Search Settings") {
+            reached = true;
+            break;
+        }
+    }
+    assert!(reached, "Tab reaches the link");
+    let settings = |cx: &mut VisualTestContext| {
+        cx.update(|_, cx| {
+            cx.windows()
+                .into_iter()
+                .filter_map(|window| window.downcast::<pane::SettingsWindow>())
+                .count()
+        })
+    };
+    assert_eq!(settings(cx), 0);
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    assert_eq!(settings(cx), 1, "Settings opened");
 }

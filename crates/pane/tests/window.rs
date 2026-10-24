@@ -491,10 +491,10 @@ fn tab_and_shift_tab_visit_each_control_once_in_order(cx: &mut TestAppContext) {
     // A full round each way, one stop more than the round: the form's
     // fields in tree order — the name, the secret, the notes, the two
     // date fields, the greeting (the select's trigger, named by its
-    // chosen option), the tags, the file, the folder — then the form's
-    // submit button, and the footer's menu button. The checkbox and the
-    // toggle name no change of their own, so they take no focus. The
-    // cycle repeats from the name.
+    // chosen option), the tags, the file and its "Choose…" (#497), the
+    // folder — then the form's submit button, and the footer's menu
+    // button. The checkbox and the toggle name no change of their own, so
+    // they take no focus. The cycle repeats from the name.
     let stops = [
         "Name",
         "Secret",
@@ -504,6 +504,7 @@ fn tab_and_shift_tab_visit_each_control_once_in_order(cx: &mut TestAppContext) {
         "Hello",
         "Tags",
         "File",
+        "Choose File",
         "Folder",
         "Greet",
         "Pane menu",
@@ -538,6 +539,164 @@ fn tab_and_shift_tab_visit_each_control_once_in_order(cx: &mut TestAppContext) {
         .map(|label| Some(label.to_string()))
         .collect();
     assert_eq!(backward, back);
+}
+
+/// The chord that submits a form from any of its controls (#497):
+/// Raycast's, Command+Enter on macOS and Ctrl+Enter elsewhere.
+const SUBMIT: &str = if cfg!(target_os = "macos") {
+    "cmd-enter"
+} else {
+    "ctrl-enter"
+};
+
+/// Whether the Rust sample's form drew its answer for Ada.
+fn greeted_ada(cx: &mut VisualTestContext) -> bool {
+    let (nodes, _) = accessibility_tree(cx);
+    nodes.contains(&(
+        "Label".into(),
+        "Hello, Ada, from the Rust guest".into(),
+        "".into(),
+    ))
+}
+
+/// What the open form's tag picker or picker of many paths keyed `key`
+/// holds (#497).
+fn chosen(window: &Entity<LauncherWindow>, cx: &mut VisualTestContext, key: &str) -> Vec<String> {
+    cx.read_entity(window, |window, _| window.designed_chosen(key))
+        .expect("the picker exists")
+}
+
+/// Ctrl+Enter submits from a control that is no text field (#497): from
+/// the date field here, as from any of the form's controls.
+#[gpui::test]
+fn the_submit_chord_submits_from_a_date_field(cx: &mut TestAppContext) {
+    let (window, _data, cx) = open_installed(cx, &RUST.component.replace("_", "-"));
+    open_form(&window, cx);
+    cx.simulate_input("Ada");
+    cx.simulate_keystrokes("tab tab tab");
+    assert_eq!(focused_label(cx).as_deref(), Some("Day"));
+    assert!(!greeted_ada(cx));
+
+    cx.simulate_keystrokes(SUBMIT);
+    settle(&window, cx);
+    assert!(greeted_ada(cx), "the form was submitted");
+    assert_eq!(focused_label(cx).as_deref(), Some("Day"));
+}
+
+/// The tag picker from the keyboard (#497): Enter chooses the highlighted
+/// option, Backspace in the empty query removes the last tag (with text
+/// in it, it deletes the text), each chip is a tab stop that Delete or
+/// Backspace removes — the keyboard moving to the next chip, then back to
+/// the query — and the submit chord submits from a chip.
+#[gpui::test]
+fn tags_are_chosen_and_removed_from_the_keyboard(cx: &mut TestAppContext) {
+    let (window, _data, cx) = open_installed(cx, &RUST.component.replace("_", "-"));
+    open_form(&window, cx);
+    cx.simulate_input("Ada");
+    cx.simulate_keystrokes("tab tab tab tab tab tab");
+    assert_eq!(focused_label(cx).as_deref(), Some("Tags"));
+
+    for typed in ["fr", "fam", "col"] {
+        cx.simulate_input(typed);
+        cx.simulate_keystrokes("enter");
+        settle(&window, cx);
+    }
+    assert_eq!(
+        chosen(&window, cx, "tags"),
+        ["friend", "family", "colleague"]
+    );
+
+    // Backspace in the empty query: the last tag goes, and the form stays.
+    cx.simulate_keystrokes("backspace");
+    settle(&window, cx);
+    assert_eq!(chosen(&window, cx, "tags"), ["friend", "family"]);
+    // With text in the query, Backspace is the query's own.
+    cx.simulate_input("x");
+    cx.simulate_keystrokes("backspace");
+    settle(&window, cx);
+    assert_eq!(chosen(&window, cx, "tags"), ["friend", "family"]);
+    assert!(matches!(
+        cx.read_entity(&window, |window, _| window.launcher().view().screen),
+        Screen::DesignedView(_)
+    ));
+
+    // The chips follow the query in the tab order.
+    cx.simulate_keystrokes("tab");
+    assert_eq!(focused_label(cx).as_deref(), Some("Remove friend"));
+    cx.simulate_keystrokes("delete");
+    settle(&window, cx);
+    assert_eq!(chosen(&window, cx, "tags"), ["family"]);
+    assert_eq!(focused_label(cx).as_deref(), Some("Remove family"));
+
+    cx.simulate_keystrokes(SUBMIT);
+    settle(&window, cx);
+    assert!(greeted_ada(cx), "the form was submitted from the chip");
+
+    cx.simulate_keystrokes("backspace");
+    settle(&window, cx);
+    assert!(chosen(&window, cx, "tags").is_empty());
+    assert_eq!(focused_label(cx).as_deref(), Some("Tags"));
+}
+
+/// The path pickers from the keyboard (#497): the single picker's
+/// "Choose…" is a tab stop whose Enter opens the system's dialog, filling
+/// the field; the picker of many's Enter opens it too, its Backspace
+/// removes the last path, and each chip is a tab stop Delete removes.
+#[gpui::test]
+fn paths_are_chosen_and_removed_from_the_keyboard(cx: &mut TestAppContext) {
+    let (window, _data, cx) = open_installed(cx, &RUST.component.replace("_", "-"));
+    open_form(&window, cx);
+    for _ in 0..8 {
+        cx.simulate_keystrokes("tab");
+    }
+    assert_eq!(focused_label(cx).as_deref(), Some("Choose File"));
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    assert!(cx.did_prompt_for_paths(), "the system's dialog opened");
+    let file = std::env::temp_dir().join("chosen.txt");
+    let picked = file.clone();
+    cx.simulate_path_prompt_response(move |_| Some(vec![picked]));
+    settle(&window, cx);
+    assert_eq!(field_value(&window, cx, "file"), file.to_string_lossy());
+
+    cx.simulate_keystrokes("tab");
+    assert_eq!(focused_label(cx).as_deref(), Some("Folder"));
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    assert!(cx.did_prompt_for_paths(), "the system's dialog opened");
+    let (one, two) = (
+        std::env::temp_dir().join("one"),
+        std::env::temp_dir().join("two"),
+    );
+    let picked = vec![one.clone(), two.clone()];
+    cx.simulate_path_prompt_response(move |_| Some(picked));
+    settle(&window, cx);
+    let (one, two) = (
+        one.to_string_lossy().into_owned(),
+        two.to_string_lossy().into_owned(),
+    );
+    assert_eq!(chosen(&window, cx, "folder"), [one.clone(), two.clone()]);
+
+    // Backspace in the well removes the last path.
+    cx.simulate_keystrokes("backspace");
+    settle(&window, cx);
+    assert_eq!(chosen(&window, cx, "folder"), std::slice::from_ref(&one));
+    assert!(matches!(
+        cx.read_entity(&window, |window, _| window.launcher().view().screen),
+        Screen::DesignedView(_)
+    ));
+
+    // The chip is a tab stop after the well; Delete removes it, and the
+    // keyboard goes back to the well.
+    cx.simulate_keystrokes("tab");
+    assert_eq!(
+        focused_label(cx).as_deref(),
+        Some(format!("Remove {one}").as_str())
+    );
+    cx.simulate_keystrokes("delete");
+    settle(&window, cx);
+    assert!(chosen(&window, cx, "folder").is_empty());
+    assert_eq!(focused_label(cx).as_deref(), Some("Folder"));
 }
 
 #[gpui::test]
@@ -4500,6 +4659,36 @@ mod clipboard_split {
         for row in ["clip-alpha", "clip-https://example.com", "clip-#ff8800"] {
             assert!(cx.debug_bounds(row).is_some(), "{row} is listed");
         }
+    }
+
+    /// Ctrl+P (Command+P on macOS) opens the type dropdown from the search
+    /// field (#497), its popup taking the keyboard, as Raycast's dropdowns
+    /// open; Down and Enter choose a type.
+    #[gpui::test]
+    fn the_open_dropdown_chord_opens_the_type_dropdown(cx: &mut TestAppContext) {
+        let world = World::new();
+        let launcher = world.launcher(cx, &["alpha", "https://example.com"]);
+        let (window, cx) = open_history(cx, launcher);
+        assert!(cx.debug_bounds("clipboard-type-query").is_none());
+
+        cx.simulate_keystrokes(if cfg!(target_os = "macos") {
+            "cmd-p"
+        } else {
+            "ctrl-p"
+        });
+        settle(&window, cx);
+        assert!(
+            cx.debug_bounds("clipboard-type-query").is_some(),
+            "the type dropdown's popup is open"
+        );
+        // From All Types, Down highlights Text.
+        cx.simulate_keystrokes("down enter");
+        settle(&window, cx);
+        assert_eq!(
+            cx.read_entity(&window, |window, _| window.clipboard_filter()),
+            Some(pane_core::clipboard_view::ClipboardFilter::Text)
+        );
+        assert!(cx.debug_bounds("clipboard-type-query").is_none());
     }
 
     /// Rows are grouped by day, and the detail shows the selected record's

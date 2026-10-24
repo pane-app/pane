@@ -171,7 +171,13 @@ The type dropdown sits at the search field's right ("Filter by Type"). It
 offers All Types, Folder, Document, Image, Video, Audio, Archive, Text,
 Application and Other (`search_files::FileType`: All Types, Folder, or one
 of the index's categories, whose names it reads). The type stays while
-the text changes.
+the text changes. Ctrl+P (Command+P on macOS) opens it from the search
+field, as Raycast's dropdowns open, and its tooltip names the chord.
+
+While the index is stopped or off, the note over the list (or the empty
+list) links to the File Search page in Settings: "Open File Search
+Settings" is a tab stop after the type dropdown, and Enter or Space
+follows it, as a click does.
 
 Folder keeps folders. The others keep the index's categories, told from
 the name's extension by one table on every system
@@ -365,7 +371,9 @@ The page has these parts:
   Remove, and has Add Folder… (the system's folder picker).
 - **Excluded** lists each excluded folder and pattern with Remove, and has
   Exclude Folder… (the picker) and a field for a pattern in `.gitignore`
-  syntax.
+  syntax. Enter in the field excludes the pattern, as its Exclude button
+  does, and Exclude Folder… and Exclude are tab stops that Enter or Space
+  press.
 - **Rules** has switches for hidden files and folders, ignore files, the
   default exclusions (caches, temporary folders, `node_modules`, `AppData`
   or `~/Library`) and network and removable drives.

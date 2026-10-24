@@ -398,6 +398,14 @@ fn modifier_name(at: usize, macos: bool) -> &'static str {
     }
 }
 
+/// The tooltip of a dropdown beside a search field, `what` it does and
+/// the chord that opens it from anywhere on the screen: "Filter by Type
+/// (Ctrl+P)" (#497).
+pub(crate) fn dropdown_hint(what: &str) -> String {
+    let keys = binding_keys(&pane_core::keyboard::open_dropdown_key());
+    format!("{what} ({})", keys.name())
+}
+
 /// The key's own name, as the binding's text names it ("Enter", "Page
 /// Down", "V"): the binding of the key alone, written out.
 fn key_name(key: &str) -> String {

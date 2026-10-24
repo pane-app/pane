@@ -38,8 +38,8 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use gpui::{
-    AnyElement, App, ClickEvent, Context, Div, Entity, EntityInputHandler, Focusable, Role,
-    SharedString, Task, Window, div, prelude::*, px,
+    AnyElement, App, ClickEvent, Context, Div, Entity, EntityInputHandler, FocusHandle, Focusable,
+    KeyBinding, Role, SharedString, Stateful, Task, Window, actions, div, prelude::*, px,
 };
 use pane_core::file_index::{IndexState, size_words};
 use pane_core::search_files::{FileDetails, FileType, SearchFilesView};
@@ -63,6 +63,49 @@ pub(crate) const PLACEHOLDER: &str = "Search files…";
 /// The type dropdown's debug selector: its trigger is this, a choice's row
 /// `files-type-<id>` (`all`, `folder`, `document`, …).
 pub(crate) const TYPE_SELECT: &str = "files-type";
+
+actions!(search_files, [OpenFileSearchSettings]);
+
+/// The key context of the "Open File Search Settings" link while it holds
+/// the keyboard: Enter and Space follow it, as a click does (#497).
+const LINK_CONTEXT: &str = "FilesSettingsLink";
+
+/// Registers the link's keys (see [`LINK_CONTEXT`]).
+pub(crate) fn bind_keys(cx: &mut App) {
+    cx.bind_keys([
+        KeyBinding::new("enter", OpenFileSearchSettings, Some(LINK_CONTEXT)),
+        KeyBinding::new("space", OpenFileSearchSettings, Some(LINK_CONTEXT)),
+    ]);
+}
+
+/// The "Open File Search Settings" link the note and the empty list show
+/// while the index is stopped or off: a click, or Enter or Space once Tab
+/// has reached it (`focus`), opens the File Search page in Settings.
+fn settings_link(
+    focus: &FocusHandle,
+    theme: &crate::ui::theme::Theme,
+    cx: &Context<LauncherWindow>,
+) -> Stateful<Div> {
+    let ring = crate::ui::controls::focus_ring(theme);
+    div()
+        .id("files-settings-link")
+        .debug_selector(|| "files-settings-link".into())
+        .role(Role::Button)
+        .aria_label("Open File Search Settings")
+        .cursor_pointer()
+        .rounded(px(4.))
+        .text_color(theme.accent_text)
+        .child("Open File Search Settings")
+        .track_focus(focus)
+        .focus(move |link| link.shadow(ring))
+        .key_context(LINK_CONTEXT)
+        .on_action(
+            cx.listener(|this, _: &OpenFileSearchSettings, _, cx| {
+                this.open_file_search_settings(cx)
+            }),
+        )
+        .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.open_file_search_settings(cx)))
+}
 
 /// The title of the File Search page in Settings (#176), where the index's
 /// roots, exclusions and state are: that page's own title, so the link
@@ -130,6 +173,9 @@ pub(crate) struct SearchFiles {
     chosen: Rc<Cell<FileType>>,
     /// The type dropdown at the search field's right.
     types: Entity<Select>,
+    /// The "Open File Search Settings" link's focus: a tab stop after the
+    /// type dropdown while the index is stopped or off (#497).
+    link: FocusHandle,
     /// The list, drawn virtually (#165): only the rows in view are laid
     /// out and painted. Page Down and Up move by its page.
     pub(crate) list: VirtualList,
@@ -206,6 +252,7 @@ impl SearchFiles {
                 window,
                 cx,
             )
+            .hint(crate::keyboard::dropdown_hint("Filter by Type"))
         });
         let watching = cx.spawn(async move |this, cx| {
             let mut seen: Option<Fingerprint> = None;
@@ -238,6 +285,7 @@ impl SearchFiles {
         SearchFiles {
             chosen,
             types,
+            link: cx.focus_handle().tab_stop(true),
             list: {
                 let geometry = &crate::settings::launcher_visuals(cx).theme.geometry;
                 VirtualList::new(geometry.row_min_height + geometry.row_list_gap)
@@ -263,6 +311,24 @@ impl LauncherWindow {
     #[doc(hidden)]
     pub fn search_files_type(&self) -> Option<FileType> {
         self.launcher.search_files_view().map(|view| view.filter)
+    }
+
+    /// Opens the File Search page in Settings, as the note's link does.
+    fn open_file_search_settings(&mut self, cx: &mut Context<Self>) {
+        crate::features::settings::open_at(&self.launcher, FILE_SEARCH_PAGE, "", cx);
+    }
+
+    /// Opens the type dropdown while the view shows (Ctrl+P, #497); `false`
+    /// when it does not.
+    pub(crate) fn open_file_types(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        if self.launcher.search_files_view().is_none() {
+            return false;
+        }
+        let Some(files) = self.files.as_ref() else {
+            return false;
+        };
+        files.types.update(cx, |types, cx| types.open(window, cx));
+        true
     }
 
     /// Makes Search Files' split view follow the launcher's screen: it
@@ -454,6 +520,7 @@ impl LauncherWindow {
         };
         state.frame = Some(Rc::new(frame));
         let types = state.types.clone();
+        let link_focus = state.link.clone();
         let list_state = state.list.state().clone();
 
         // The header: back, root search's own field — the same control
@@ -493,23 +560,9 @@ impl LauncherWindow {
         // then the rows drawn virtually (#165), or why there are none.
         let split = &theme.split;
         let note = files.note().map(|note| {
-            let link = files.needs_settings().then(|| {
-                div()
-                    .id("files-settings-link")
-                    .debug_selector(|| "files-settings-link".into())
-                    .role(Role::Button)
-                    .cursor_pointer()
-                    .text_color(theme.accent_text)
-                    .child("Open File Search Settings")
-                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                        crate::features::settings::open_at(
-                            &this.launcher,
-                            FILE_SEARCH_PAGE,
-                            "",
-                            cx,
-                        );
-                    }))
-            });
+            let link = files
+                .needs_settings()
+                .then(|| settings_link(&link_focus, &theme, cx));
             div()
                 .debug_selector(|| "files-note".into())
                 .flex_none()
@@ -543,23 +596,9 @@ impl LauncherWindow {
             // The note is the empty line itself, with its link.
             let empty = files.empty_note();
             let link = files.needs_settings().then(|| {
-                div()
-                    .id("files-settings-link")
-                    .debug_selector(|| "files-settings-link".into())
-                    .role(Role::Button)
-                    .cursor_pointer()
+                settings_link(&link_focus, &theme, cx)
                     .mt(px(8.))
                     .text_size(split.empty_size)
-                    .text_color(theme.accent_text)
-                    .child("Open File Search Settings")
-                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                        crate::features::settings::open_at(
-                            &this.launcher,
-                            FILE_SEARCH_PAGE,
-                            "",
-                            cx,
-                        );
-                    }))
             });
             list = list.child(
                 div()
@@ -738,6 +777,7 @@ impl LauncherWindow {
             .on_action(cx.listener(Self::return_to_root))
             .on_action(cx.listener(Self::dismiss))
             .on_action(cx.listener(Self::open_settings))
+            .on_action(cx.listener(Self::open_dropdown))
             .on_action(cx.listener(Self::toggle_actions))
             .on_action(cx.listener(Self::open_toast_details))
             // A toast's actions' shortcuts first, then the selected

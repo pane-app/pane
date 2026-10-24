@@ -63,6 +63,7 @@ impl Draw<'_> {
                 editing,
                 focus,
                 events,
+                ..
             } => Some((editing, focus, events)),
             _ => None,
         }

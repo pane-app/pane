@@ -57,6 +57,16 @@ struct Opened {
 /// The launcher window in the `theme` (`light` or `dark`), with the Rust
 /// designed view sample's command open.
 fn open<'a>(cx: &'a mut TestAppContext, theme: &str) -> (Opened, &'a mut VisualTestContext) {
+    open_command(cx, theme, "designed view sample")
+}
+
+/// The launcher window in the `theme`, with the sample's command that
+/// root search finds first for `typed` open.
+fn open_command<'a>(
+    cx: &'a mut TestAppContext,
+    theme: &str,
+    typed: &str,
+) -> (Opened, &'a mut VisualTestContext) {
     let (sources, data) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
     cx.update(|cx| {
         pane::settings::init_with_overrides(
@@ -81,7 +91,7 @@ fn open<'a>(cx: &'a mut TestAppContext, theme: &str) -> (Opened, &'a mut VisualT
     cx.foreground_executor()
         .block_on(launcher.install_package(&folder));
     let (window, cx) = cx.add_window_view(|window, cx| LauncherWindow::new(launcher, window, cx));
-    cx.simulate_input("designed view sample");
+    cx.simulate_input(typed);
     cx.simulate_keystrokes("enter");
     until(&window, cx, |view| {
         matches!(view.screen, Screen::DesignedView(_))
@@ -317,4 +327,60 @@ fn a_click_presses_the_button_under_the_pointer(cx: &mut TestAppContext) {
     wait_for(&window, cx, "Count: 0");
     let view = view(&window, cx);
     assert_eq!(view.status, pane_core::Status::Idle);
+}
+
+/// The chord that opens a List's search-bar dropdown (#497): Raycast's,
+/// Command+P on macOS and Ctrl+P elsewhere, and how its tooltip names it.
+const OPEN_DROPDOWN: (&str, &str) = if cfg!(target_os = "macos") {
+    ("cmd-p", "Command+P")
+} else {
+    ("ctrl-p", "Ctrl+P")
+};
+
+/// Ctrl+P opens the List's search-bar dropdown from the search field, its
+/// popup taking the keyboard: Down and Enter choose an item, which the
+/// view is told. The trigger's tooltip names the chord.
+#[gpui::test]
+fn the_open_dropdown_chord_opens_the_lists_dropdown(cx: &mut TestAppContext) {
+    let (opened, cx) = open_command(cx, "dark", "list sample");
+    let window = opened.window;
+    until(&window, cx, |view| match &view.screen {
+        Screen::DesignedView(view) => view
+            .list
+            .as_ref()
+            .is_some_and(|list| list.dropdown.is_some()),
+        _ => false,
+    });
+    assert!(drawn(cx, "designed-select-select"), "the dropdown is drawn");
+    assert!(!drawn(cx, "designed-select-select-query"));
+
+    let (chord, name) = OPEN_DROPDOWN;
+    cx.simulate_keystrokes(chord);
+    cx.run_until_parked();
+    assert!(
+        drawn(cx, "designed-select-select-query"),
+        "the dropdown's popup is open"
+    );
+    cx.simulate_keystrokes("down enter");
+    until(&window, cx, |view| match &view.screen {
+        Screen::DesignedView(view) => view
+            .list
+            .as_ref()
+            .and_then(|list| list.dropdown.as_ref())
+            .is_some_and(|dropdown| dropdown.value.as_deref() == Some("pinned")),
+        _ => false,
+    });
+    assert!(!drawn(cx, "designed-select-select-query"), "and closed");
+
+    let trigger = bounds(cx, "designed-select-select");
+    cx.simulate_mouse_move(trigger.center(), None, gpui::Modifiers::none());
+    cx.executor()
+        .advance_clock(std::time::Duration::from_millis(700));
+    cx.run_until_parked();
+    let tooltip = format!("tooltip-Filter ({name})");
+    assert!(
+        cx.debug_bounds(Box::leak(tooltip.clone().into_boxed_str()))
+            .is_some(),
+        "{tooltip} is drawn"
+    );
 }

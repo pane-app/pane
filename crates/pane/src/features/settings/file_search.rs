@@ -36,8 +36,8 @@ use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 use gpui::{
-    AnyElement, App, Context, Entity, Focusable, PathPromptOptions, Role, SharedString, Window,
-    div, prelude::*, px,
+    AnyElement, App, Context, Entity, FocusHandle, Focusable, KeyBinding, PathPromptOptions, Role,
+    SharedString, Window, actions, div, prelude::*, px,
 };
 use gpui_elements::editable_text::{EditableTextState, StringStorage, TextChanged, text_input};
 use pane_core::Launcher;
@@ -45,7 +45,7 @@ use pane_core::file_index::{
     CaughtUpBy, IndexState, IndexStatus, Problem, ProblemKind, ScopeRules, UserRules, count_words,
 };
 
-use super::{Page, SettingsWindow, search};
+use super::{Page, SettingsWindow, pressable, search};
 use crate::ui::controls::{self, status_note as note};
 use crate::ui::icon::Glyph;
 use crate::ui::theme::Theme;
@@ -66,6 +66,21 @@ const REBUILD: &str = "file-search-rebuild";
 const ADD_ROOT: &str = "file-search-add-root";
 const EXCLUDE_FOLDER: &str = "file-search-exclude-folder";
 const PATTERN_FIELD: &str = "file-search-pattern-field";
+
+actions!(file_search, [ExcludePattern]);
+
+/// The key context of the pattern field: Enter there excludes the pattern
+/// it holds, as the Exclude button beside it does (#497).
+const PATTERN_CONTEXT: &str = "FileSearchPattern";
+
+/// Registers the page's keys: Enter in the pattern field.
+pub(crate) fn bind_keys(cx: &mut App) {
+    cx.bind_keys([KeyBinding::new(
+        "enter",
+        ExcludePattern,
+        Some(PATTERN_CONTEXT),
+    )]);
+}
 
 /// The switches: id and selector, title, and which rule each changes.
 const SWITCHES: [(&str, &str, Rule); 4] = [
@@ -139,6 +154,10 @@ pub(crate) fn page() -> Page {
 pub(crate) struct State {
     /// The field for a pattern to exclude, created when it first draws.
     pattern: Option<Entity<EditableTextState>>,
+    /// The focus of Exclude Folder… and of the pattern's Exclude, tab
+    /// stops once they first draw (#497).
+    exclude_folder: Option<FocusHandle>,
+    exclude_pattern: Option<FocusHandle>,
     /// A change the page started that has not landed yet.
     busy: bool,
     /// What the last change the page started came to, if it failed.
@@ -720,17 +739,31 @@ fn excluded_section(
         );
     }
     let anchor = this.search_anchor(EXCLUDE_FOLDER);
-    let exclude = button(EXCLUDE_FOLDER.into(), "Exclude Folder…", !busy, theme)
-        .anchor_scroll(Some(anchor))
-        .when(!busy, |button| {
-            button.on_click(cx.listener(|this, _: &gpui::ClickEvent, window, cx| {
+    let exclude =
+        button(EXCLUDE_FOLDER.into(), "Exclude Folder…", !busy, theme).anchor_scroll(Some(anchor));
+    // A tab stop that Enter and Space press while it is offered (#497).
+    let exclude = if busy {
+        exclude
+    } else {
+        let focus = this
+            .file_search
+            .exclude_folder
+            .get_or_insert_with(|| cx.focus_handle().tab_stop(true))
+            .clone();
+        pressable(
+            exclude,
+            &focus,
+            controls::focus_ring(theme),
+            |this, window, cx| {
                 pick_folder(this, "Exclude", window, cx, |rules, folder| {
                     if !rules.excluded_folders.contains(&folder) {
                         rules.excluded_folders.push(folder);
                     }
                 });
-            }))
-        });
+            },
+            cx,
+        )
+    };
     rows.push(
         controls::setting_row(
             "Exclude a folder",
@@ -752,6 +785,13 @@ fn excluded_section(
     let well = controls::well(true, theme)
         .w(px(200.))
         .id(PATTERN_FIELD)
+        // Enter excludes the pattern, as the button does.
+        .key_context(PATTERN_CONTEXT)
+        .on_action(cx.listener(|this, _: &ExcludePattern, _, cx| {
+            if !this.file_search.busy {
+                add_pattern(this, cx);
+            }
+        }))
         .debug_selector(|| PATTERN_FIELD.into())
         .anchor_scroll(Some(anchor))
         .track_focus(&input.focus_handle(cx))
@@ -766,14 +806,32 @@ fn excluded_section(
             theme,
         ));
     let offered = !busy && !text.trim().is_empty();
-    let add = button("file-search-add-pattern".into(), "Exclude", offered, theme).when(
-        offered,
-        |button| {
-            button.on_click(cx.listener(|this, _: &gpui::ClickEvent, _, cx| {
+    let add = button("file-search-add-pattern".into(), "Exclude", offered, theme);
+    // A tab stop that Enter and Space press while it is offered (#497).
+    let add = if offered {
+        let focus = this
+            .file_search
+            .exclude_pattern
+            .get_or_insert_with(|| cx.focus_handle().tab_stop(true))
+            .clone();
+        pressable(
+            add,
+            &focus,
+            controls::focus_ring(theme),
+            |this, window, cx| {
                 add_pattern(this, cx);
-            }))
-        },
-    );
+                // The field is empty now and the button no longer
+                // offered: the keyboard goes back to the field, for the
+                // next pattern.
+                if let Some(input) = this.file_search.pattern.clone() {
+                    window.focus(&input.focus_handle(cx), cx);
+                }
+            },
+            cx,
+        )
+    } else {
+        add
+    };
     rows.push(
         controls::setting_row(
             "Exclude a pattern",
