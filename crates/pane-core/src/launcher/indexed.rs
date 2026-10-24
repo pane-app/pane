@@ -158,6 +158,15 @@ impl Indexes {
         self.commands.retain(|index| keep(&index.component));
     }
 
+    /// Whether the command with component `component` was asked for its
+    /// results since it could run (being asked now, or answered, even if
+    /// they are stale since): one that was not has nothing kept to list.
+    pub(super) fn knows(&self, component: &Path) -> bool {
+        self.commands
+            .iter()
+            .any(|index| index.component == component)
+    }
+
     /// Every kept result, in the order the commands were first asked and
     /// their answers give them.
     pub(super) fn results(&self) -> impl Iterator<Item = &RootResult> {

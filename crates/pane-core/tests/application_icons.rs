@@ -3,7 +3,10 @@
 //! (`target/guests/packages/sample-applications-js`), the host's list of applications
 //! over a fake system, and a fake extraction whose icons, fingerprints and
 //! failures the tests decide: a row shows its application's own icon, and a
-//! neutral placeholder of the same kind until it is extracted; a packaged
+//! neutral placeholder of the same kind until it is extracted; a launcher
+//! asking ahead, as Pane's own program does, extracts the icons of the
+//! applications a new install or a start lists before the first search,
+//! which then draws them at once; a packaged
 //! app keeps its light and dark icons; the cache in Pane's cache folder
 //! draws them at once after a restart and extracts nothing again for an
 //! unchanged application; a changed source (a shortcut whose target was
@@ -329,6 +332,81 @@ fn an_applications_row_shows_its_own_icon_and_a_placeholder_until_it_is_extracte
     assert!(shown.is_decorative(), "read by its title and subtitle only");
     // Extracted from the application's primary source, off the window.
     assert_eq!(icons.extracted(), [EDITOR_LINK]);
+}
+
+/// Waits until `icons` extracted `expected`, in order, with nothing typed.
+fn extracted_by_itself(icons: &FakeIcons, expected: &[&str]) {
+    let deadline = std::time::Instant::now() + PATIENCE;
+    while icons.extracted() != expected {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "extracted {:?} before any search, not {expected:?}",
+            icons.extracted()
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+#[test]
+fn a_launcher_asking_ahead_extracts_a_new_install_s_icons_before_the_first_search() {
+    let dirs = Dirs::new();
+    let icons = FakeIcons::new();
+    let blue = png(256, [0, 0, 255, 255]);
+    icons.draw(EDITOR_LINK, blue.clone(), None);
+    let system = Arc::new(FakeSystem {
+        sources: Mutex::new(vec![shortcut("Editor", EDITOR)]),
+    });
+    // Pane's own program asks ahead, as Raycast does; first setup installs
+    // Applications into it.
+    let launcher = dirs.launcher(&system, &icons).with_eager_indexed_results();
+    install(&launcher, &built("packages/sample-applications-js"));
+
+    // Nothing is typed: the applications are listed and their icons
+    // extracted by themselves.
+    extracted_by_itself(&icons, &[EDITOR_LINK]);
+    settle(&launcher);
+
+    // So the very first search draws the real icon at once, never the
+    // placeholder, and extracts nothing more.
+    search(&launcher, "editor");
+    let shown = row_icon(&launcher, "Launch Editor");
+    let (light, _) = files(&shown).unwrap_or_else(|| panic!("the first search drew {shown:?}"));
+    assert_eq!(fs::read(light).unwrap(), blue);
+    assert_eq!(icons.extracted(), [EDITOR_LINK]);
+}
+
+#[test]
+fn a_launcher_asking_ahead_refills_an_empty_icon_cache_as_it_starts() {
+    let dirs = Dirs::new();
+    let icons = FakeIcons::new();
+    let green = png(256, [0, 200, 0, 255]);
+    icons.draw(EDITOR_LINK, green.clone(), None);
+    {
+        // A launcher that does not ask ahead asks only at root search's
+        // first use: nothing is extracted before it.
+        let launcher = installed(&dirs, vec![shortcut("Editor", EDITOR)], &icons);
+        std::thread::sleep(Duration::from_millis(300));
+        settle(&launcher);
+        assert_eq!(icons.extracted(), Vec::<String>::new());
+        search(&launcher, "editor");
+        drawn(&launcher, "Launch Editor");
+        settle(&launcher);
+    }
+    // The cache is gone, as after a fresh install with the data kept.
+    fs::remove_dir_all(dirs.icons()).unwrap();
+
+    // Pane starts again, asking ahead: the icon is extracted before any
+    // search, and the first one draws it.
+    let system = Arc::new(FakeSystem {
+        sources: Mutex::new(vec![shortcut("Editor", EDITOR)]),
+    });
+    let launcher = dirs.launcher(&system, &icons).with_eager_indexed_results();
+    extracted_by_itself(&icons, &[EDITOR_LINK, EDITOR_LINK]);
+    settle(&launcher);
+    search(&launcher, "editor");
+    let shown = row_icon(&launcher, "Launch Editor");
+    let (light, _) = files(&shown).unwrap_or_else(|| panic!("the first search drew {shown:?}"));
+    assert_eq!(fs::read(light).unwrap(), green);
 }
 
 #[test]

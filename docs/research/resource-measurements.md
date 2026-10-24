@@ -329,6 +329,25 @@ second together, and the file watcher at about 10. The Windows baseline of
 `main` (#189) is therefore the after column above. The other phases have
 no Windows sampler or workload yet.
 
+On 2026-10-24 the hidden phases ran again for the change that asks
+Applications for its results as soon as it can run, rather than at the
+first search ([root search](../root-search.md#when-they-are-asked)), with
+a restart added after `hidden-idle`. The records and the method are in
+[`docs/research/resource-prewarm`](resource-prewarm). The user's own Pane
+and another build were running, so only the working sets are compared:
+
+| Working set max (KiB) | before `13d097f7` | after |
+| --- | --- | --- |
+| `hidden-idle`, the first start after setup | 124,216 | 161,224 |
+| the next start, same profile, hidden idle | 150,372 | 121,920 |
+
+`hidden-idle` grew by about 37 MiB because the applications' scan and
+icon extraction now happen right after setup. Before, they waited for the
+first search or the next start, and that next start paid the same cost
+(150,372). After, the next start extracts nothing and is the lowest of the
+four. The ceilings stay pending; a Windows `hidden-idle` ceiling should be
+proposed from the after column.
+
 ### macOS, and the rest of Windows
 
 Nothing measured, nothing wired for macOS: `/proc` is Linux-only, so its
@@ -377,8 +396,12 @@ not edit the issue.
   start with nine packages installed is part of the `installed-unused` and
   `continuing-work` phases' start, recorded in their samples.
 - `hidden-idle` follows a first setup: the defaults were acquired in the
-  same run, so what a start does once (the applications' icons) may still
-  run after the settling, and is counted there by thread. No update of
+  same run, so what a start does once may still run after the settling,
+  and is counted there by thread. Since Pane asks Applications as soon as
+  it is installed, that includes the applications' scan and the
+  extraction of their icons into an empty cache; its working set is
+  therefore what a Pane holds after its first search, not a Pane that
+  never looked for applications. No update of
   Pane itself is offered there: neither workload's hidden phase names a
   release source, so nothing offers a newer Pane (CI's smoke leaves one in
   the release assets it serves, which the hidden phases never read).

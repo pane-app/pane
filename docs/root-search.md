@@ -1006,6 +1006,22 @@ at once while root search shows a query, listed in place with the selected
 row kept on its result, and otherwise at the next query. So a return that
 changed nothing asks it for nothing (#202).
 
+Pane itself does not wait for root search to be shown, as Raycast does
+not. It asks each command with `indexedResults` that it has not asked yet
+as soon as the command can run: as Pane starts, and once the command is
+installed, enabled, updated, reloaded, set up or no longer waiting. First
+setup or an update in the background therefore lists the installed
+applications, and their icons are extracted into the cache
+([applications](applications.md#refreshing)), before the first search, so
+that search draws real icons rather than placeholders. The answer is kept
+and listed as a query's answer would be. A command whose results are kept
+already, even stale ones, is asked again only as above. The guest call
+runs on the extension runtime like any other, on a thread of its own, and
+the icons are extracted by the cache's own worker at the lowest priority,
+so neither a start nor typing waits for them. Pane's own program turns this
+on (`Launcher::with_eager_indexed_results`); a launcher built without it,
+as most tests build one, asks only when root search is shown or used.
+
 The guest's work is not cancelled; calls run one at a time (#29).
 
 ### How they rank

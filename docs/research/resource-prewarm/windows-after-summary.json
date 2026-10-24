@@ -1,0 +1,730 @@
+{
+  "environment": {
+    "architecture": "AMD64",
+    "commit": "13d097f77684f68ebe6267f3ffcca188578a3166",
+    "counted": "context switches of each thread (SYSTEM_THREAD_INFORMATION.ContextSwitches); CPU in 100 ns; rss_kb is the working set",
+    "date": "2026-10-24T13:25:43.8601832+07:00",
+    "format": 1,
+    "hiddenBy": "posted Escape",
+    "loginRegistered": false,
+    "loginRegistrationRestored": false,
+    "os": "Microsoft Windows NT 10.0.26200.0",
+    "otherPaneProcesses": 1,
+    "pane": {
+      "bytes": 122630144,
+      "path": "C:\\Users\\ADMIN\\Desktop\\nguyenvu\\prewarm-wt\\target\\debug\\pane-after.exe",
+      "profile": "debug",
+      "sha256": "863968F11CADD433576A18EB324946051C124FFA1CA96EC518F4C4B355F2C234"
+    },
+    "processors": 16,
+    "scratchKept": false,
+    "script": "measure-windows.ps1",
+    "skipped": [],
+    "windowsBuild": {
+      "CurrentBuild": "26200",
+      "DisplayVersion": "25H2",
+      "UBR": 8737
+    },
+    "workload": {
+      "defaultExtensions": [
+        "calculator",
+        "applications",
+        "quicklinks",
+        "files",
+        "clipboard-history",
+        "run",
+        "system-commands",
+        "switch-windows"
+      ],
+      "hiddenSeconds": 60,
+      "sampleSeconds": 1,
+      "settleSeconds": 30,
+      "setupSeconds": 600
+    }
+  },
+  "format": 1,
+  "phases": {
+    "hidden-idle": {
+      "cpu_seconds": 1.031,
+      "cpu_share": 0.017,
+      "default_extensions": 8,
+      "growth_kb": -24,
+      "max_processes": 1,
+      "rss_kb": {
+        "max": 161224,
+        "median": 160016,
+        "min": 159944,
+        "p95": 160672
+      },
+      "samples": 43,
+      "seconds": 60.557,
+      "wakeups": {
+        "by_thread": {
+          "DManip Delegate": {
+            "count": 0,
+            "cpu_seconds": 0.0,
+            "per_second": 0.0,
+            "threads": 1
+          },
+          "VSyncProvider": {
+            "count": 26328,
+            "cpu_seconds": 0.953,
+            "per_second": 434.76,
+            "threads": 1
+          },
+          "main": {
+            "count": 0,
+            "cpu_seconds": 0.0,
+            "per_second": 0.0,
+            "threads": 1
+          },
+          "notify-rs windo": {
+            "count": 1183,
+            "cpu_seconds": 0.016,
+            "per_second": 19.54,
+            "threads": 2
+          },
+          "pane-after": {
+            "count": 4277,
+            "cpu_seconds": 0.047,
+            "per_second": 70.63,
+            "threads": 60
+          },
+          "pane-applicatio": {
+            "count": 14,
+            "cpu_seconds": 0.0,
+            "per_second": 0.23,
+            "threads": 1
+          },
+          "pane-clipboard": {
+            "count": 0,
+            "cpu_seconds": 0.0,
+            "per_second": 0.0,
+            "threads": 1
+          },
+          "pane-clipboard-": {
+            "count": 0,
+            "cpu_seconds": 0.0,
+            "per_second": 0.0,
+            "threads": 1
+          },
+          "pane-data-write": {
+            "count": 0,
+            "cpu_seconds": 0.0,
+            "per_second": 0.0,
+            "threads": 1
+          },
+          "pane-extension-": {
+            "count": 0,
+            "cpu_seconds": 0.0,
+            "per_second": 0.0,
+            "threads": 2
+          },
+          "pane-file-index": {
+            "count": 0,
+            "cpu_seconds": 0.0,
+            "per_second": 0.0,
+            "threads": 2
+          },
+          "pane-front": {
+            "count": 0,
+            "cpu_seconds": 0.0,
+            "per_second": 0.0,
+            "threads": 1
+          },
+          "pane-game": {
+            "count": 0,
+            "cpu_seconds": 0.0,
+            "per_second": 0.0,
+            "threads": 1
+          },
+          "pane-hotkeys": {
+            "count": 0,
+            "cpu_seconds": 0.0,
+            "per_second": 0.0,
+            "threads": 1
+          },
+          "pane-pause-reco": {
+            "count": 0,
+            "cpu_seconds": 0.0,
+            "per_second": 0.0,
+            "threads": 1
+          },
+          "pane-runtime-ep": {
+            "count": 0,
+            "cpu_seconds": 0.0,
+            "per_second": 0.0,
+            "threads": 1
+          },
+          "pane-runtime-wa": {
+            "count": 0,
+            "cpu_seconds": 0.0,
+            "per_second": 0.0,
+            "threads": 1
+          },
+          "pane-schedules": {
+            "count": 0,
+            "cpu_seconds": 0.0,
+            "per_second": 0.0,
+            "threads": 1
+          },
+          "pane-services": {
+            "count": 0,
+            "cpu_seconds": 0.0,
+            "per_second": 0.0,
+            "threads": 1
+          },
+          "pane-timers": {
+            "count": 0,
+            "cpu_seconds": 0.0,
+            "per_second": 0.0,
+            "threads": 1
+          },
+          "pane-tray": {
+            "count": 0,
+            "cpu_seconds": 0.0,
+            "per_second": 0.0,
+            "threads": 1
+          },
+          "pane-updates": {
+            "count": 39,
+            "cpu_seconds": 0.0,
+            "per_second": 0.64,
+            "threads": 1
+          },
+          "pane-view-refre": {
+            "count": 0,
+            "cpu_seconds": 0.0,
+            "per_second": 0.0,
+            "threads": 1
+          },
+          "pane-watchers": {
+            "count": 212,
+            "cpu_seconds": 0.0,
+            "per_second": 3.5,
+            "threads": 1
+          }
+        },
+        "counted": "context switches",
+        "names": "cut to 15 bytes, as Linux keeps them",
+        "per_second": 529.3,
+        "total": 32053
+      }
+    },
+    "hidden-setup": {
+      "cpu_seconds": 11.312,
+      "cpu_share": 0.3127,
+      "growth_kb": 71676,
+      "max_processes": 1,
+      "rss_kb": {
+        "max": 190196,
+        "median": 160668,
+        "min": 88340,
+        "p95": 179292
+      },
+      "samples": 35,
+      "seconds": 36.179,
+      "wakeups": {
+        "by_thread": {
+          "DManip Delegate": {
+            "count": 0,
+            "cpu_seconds": 0.0,
+            "per_second": 0.0,
+            "threads": 1
+          },
+          "VSyncProvider": {
+            "count": 16275,
+            "cpu_seconds": 0.297,
+            "per_second": 449.85,
+            "threads": 1
+          },
+          "main": {
+            "count": 284,
+            "cpu_seconds": 0.047,
+            "per_second": 7.85,
+            "threads": 1
+          },
+          "notify-rs windo": {
+            "count": 660,
+            "cpu_seconds": 0.0,
+            "per_second": 18.24,
+            "threads": 2
+          },
+          "pane-after": {
+            "count": 24506,
+            "cpu_seconds": 4.922,
+            "per_second": 677.35,
+            "threads": 65
+          },
+          "pane-applicatio": {
+            "count": 17048,
+            "cpu_seconds": 3.906,
+            "per_second": 471.21,
+            "threads": 2
+          },
+          "pane-clipboard": {
+            "count": 4,
+            "cpu_seconds": 0.0,
+            "per_second": 0.11,
+            "threads": 1
+          },
+          "pane-clipboard-": {
+            "count": 0,
+            "cpu_seconds": 0.0,
+            "per_second": 0.0,
+            "threads": 1
+          },
+          "pane-data-write": {
+            "count": 15,
+            "cpu_seconds": 0.0,
+            "per_second": 0.41,
+            "threads": 1
+          },
+          "pane-extension-": {
+            "count": 793,
+            "cpu_seconds": 0.594,
+            "per_second": 21.92,
+            "threads": 2
+          },
+          "pane-file-index": {
+            "count": 226,
+            "cpu_seconds": 0.016,
+            "per_second": 6.25,
+            "threads": 2
+          },
+          "pane-front": {
+            "count": 0,
+            "cpu_seconds": 0.0,
+            "per_second": 0.0,
+            "threads": 1
+          },
+          "pane-game": {
+            "count": 0,
+            "cpu_seconds": 0.0,
+            "per_second": 0.0,
+            "threads": 1
+          },
+          "pane-hotkeys": {
+            "count": 0,
+            "cpu_seconds": 0.0,
+            "per_second": 0.0,
+            "threads": 1
+          },
+          "pane-pause-reco": {
+            "count": 10,
+            "cpu_seconds": 0.0,
+            "per_second": 0.28,
+            "threads": 1
+          },
+          "pane-runtime-ep": {
+            "count": 75,
+            "cpu_seconds": 0.0,
+            "per_second": 2.07,
+            "threads": 1
+          },
+          "pane-runtime-wa": {
+            "count": 15,
+            "cpu_seconds": 0.0,
+            "per_second": 0.41,
+            "threads": 1
+          },
+          "pane-schedules": {
+            "count": 23,
+            "cpu_seconds": 0.016,
+            "per_second": 0.64,
+            "threads": 1
+          },
+          "pane-services": {
+            "count": 30,
+            "cpu_seconds": 0.0,
+            "per_second": 0.83,
+            "threads": 1
+          },
+          "pane-timers": {
+            "count": 27,
+            "cpu_seconds": 0.0,
+            "per_second": 0.75,
+            "threads": 1
+          },
+          "pane-tray": {
+            "count": 0,
+            "cpu_seconds": 0.0,
+            "per_second": 0.0,
+            "threads": 1
+          },
+          "pane-updates": {
+            "count": 0,
+            "cpu_seconds": 0.0,
+            "per_second": 0.0,
+            "threads": 1
+          },
+          "pane-view-refre": {
+            "count": 0,
+            "cpu_seconds": 0.0,
+            "per_second": 0.0,
+            "threads": 1
+          },
+          "pane-watchers": {
+            "count": 120,
+            "cpu_seconds": 0.016,
+            "per_second": 3.32,
+            "threads": 1
+          },
+          "tokio-rt-worker": {
+            "count": 32,
+            "cpu_seconds": 0.016,
+            "per_second": 0.88,
+            "threads": 1
+          }
+        },
+        "counted": "context switches",
+        "names": "cut to 15 bytes, as Linux keeps them",
+        "per_second": 1662.37,
+        "total": 60143
+      },
+      "window_ms": {
+        "max": 2137,
+        "median": 2137,
+        "runs": 1
+      }
+    },
+    "restart-idle": {
+      "cpu_seconds": 0.469,
+      "cpu_share": 0.0078,
+      "growth_kb": 1068,
+      "max_processes": 1,
+      "rss_kb": {
+        "max": 121920,
+        "median": 120772,
+        "min": 120684,
+        "p95": 121840
+      },
+      "samples": 40,
+      "seconds": 60.337,
+      "wakeups": {
+        "by_thread": {
+          "DManip Delegate": {
+            "count": 0,
+            "cpu_seconds": 0.0,
+            "per_second": 0.0,
+            "threads": 1
+          },
+          "VSyncProvider": {
+            "count": 25739,
+            "cpu_seconds": 0.391,
+            "per_second": 426.59,
+            "threads": 1
+          },
+          "main": {
+            "count": 0,
+            "cpu_seconds": 0.0,
+            "per_second": 0.0,
+            "threads": 1
+          },
+          "notify-rs windo": {
+            "count": 1188,
+            "cpu_seconds": 0.031,
+            "per_second": 19.69,
+            "threads": 2
+          },
+          "pane-after": {
+            "count": 4196,
+            "cpu_seconds": 0.016,
+            "per_second": 69.54,
+            "threads": 43
+          },
+          "pane-applicatio": {
+            "count": 17,
+            "cpu_seconds": 0.0,
+            "per_second": 0.28,
+            "threads": 1
+          },
+          "pane-clipboard": {
+            "count": 0,
+            "cpu_seconds": 0.0,
+            "per_second": 0.0,
+            "threads": 1
+          },
+          "pane-clipboard-": {
+            "count": 0,
+            "cpu_seconds": 0.0,
+            "per_second": 0.0,
+            "threads": 1
+          },
+          "pane-data-write": {
+            "count": 0,
+            "cpu_seconds": 0.0,
+            "per_second": 0.0,
+            "threads": 1
+          },
+          "pane-extension-": {
+            "count": 0,
+            "cpu_seconds": 0.0,
+            "per_second": 0.0,
+            "threads": 2
+          },
+          "pane-file-index": {
+            "count": 0,
+            "cpu_seconds": 0.0,
+            "per_second": 0.0,
+            "threads": 2
+          },
+          "pane-front": {
+            "count": 22,
+            "cpu_seconds": 0.0,
+            "per_second": 0.36,
+            "threads": 1
+          },
+          "pane-game": {
+            "count": 14,
+            "cpu_seconds": 0.0,
+            "per_second": 0.23,
+            "threads": 1
+          },
+          "pane-hotkeys": {
+            "count": 0,
+            "cpu_seconds": 0.0,
+            "per_second": 0.0,
+            "threads": 1
+          },
+          "pane-pause-reco": {
+            "count": 0,
+            "cpu_seconds": 0.0,
+            "per_second": 0.0,
+            "threads": 1
+          },
+          "pane-runtime-ep": {
+            "count": 0,
+            "cpu_seconds": 0.0,
+            "per_second": 0.0,
+            "threads": 1
+          },
+          "pane-runtime-wa": {
+            "count": 0,
+            "cpu_seconds": 0.0,
+            "per_second": 0.0,
+            "threads": 1
+          },
+          "pane-schedules": {
+            "count": 0,
+            "cpu_seconds": 0.0,
+            "per_second": 0.0,
+            "threads": 1
+          },
+          "pane-services": {
+            "count": 0,
+            "cpu_seconds": 0.0,
+            "per_second": 0.0,
+            "threads": 1
+          },
+          "pane-timers": {
+            "count": 0,
+            "cpu_seconds": 0.0,
+            "per_second": 0.0,
+            "threads": 1
+          },
+          "pane-tray": {
+            "count": 0,
+            "cpu_seconds": 0.0,
+            "per_second": 0.0,
+            "threads": 1
+          },
+          "pane-updates": {
+            "count": 25,
+            "cpu_seconds": 0.0,
+            "per_second": 0.41,
+            "threads": 1
+          },
+          "pane-view-refre": {
+            "count": 0,
+            "cpu_seconds": 0.0,
+            "per_second": 0.0,
+            "threads": 1
+          },
+          "pane-watchers": {
+            "count": 187,
+            "cpu_seconds": 0.016,
+            "per_second": 3.1,
+            "threads": 1
+          }
+        },
+        "counted": "context switches",
+        "names": "cut to 15 bytes, as Linux keeps them",
+        "per_second": 520.21,
+        "total": 31388
+      }
+    },
+    "restart-setup": {
+      "cpu_seconds": 0.656,
+      "cpu_share": 0.0216,
+      "growth_kb": -4356,
+      "max_processes": 1,
+      "rss_kb": {
+        "max": 125128,
+        "median": 120996,
+        "min": 120772,
+        "p95": 124376
+      },
+      "samples": 19,
+      "seconds": 30.307,
+      "wakeups": {
+        "by_thread": {
+          "DManip Delegate": {
+            "count": 0,
+            "cpu_seconds": 0.0,
+            "per_second": 0.0,
+            "threads": 1
+          },
+          "VSyncProvider": {
+            "count": 12717,
+            "cpu_seconds": 0.266,
+            "per_second": 419.61,
+            "threads": 1
+          },
+          "main": {
+            "count": 20,
+            "cpu_seconds": 0.016,
+            "per_second": 0.66,
+            "threads": 1
+          },
+          "notify-rs windo": {
+            "count": 588,
+            "cpu_seconds": 0.0,
+            "per_second": 19.4,
+            "threads": 2
+          },
+          "pane-after": {
+            "count": 2180,
+            "cpu_seconds": 0.016,
+            "per_second": 71.93,
+            "threads": 46
+          },
+          "pane-applicatio": {
+            "count": 7,
+            "cpu_seconds": 0.0,
+            "per_second": 0.23,
+            "threads": 1
+          },
+          "pane-clipboard": {
+            "count": 0,
+            "cpu_seconds": 0.0,
+            "per_second": 0.0,
+            "threads": 1
+          },
+          "pane-clipboard-": {
+            "count": 0,
+            "cpu_seconds": 0.0,
+            "per_second": 0.0,
+            "threads": 1
+          },
+          "pane-data-write": {
+            "count": 0,
+            "cpu_seconds": 0.0,
+            "per_second": 0.0,
+            "threads": 1
+          },
+          "pane-extension-": {
+            "count": 0,
+            "cpu_seconds": 0.0,
+            "per_second": 0.0,
+            "threads": 2
+          },
+          "pane-file-index": {
+            "count": 325,
+            "cpu_seconds": 0.359,
+            "per_second": 10.72,
+            "threads": 2
+          },
+          "pane-front": {
+            "count": 0,
+            "cpu_seconds": 0.0,
+            "per_second": 0.0,
+            "threads": 1
+          },
+          "pane-game": {
+            "count": 0,
+            "cpu_seconds": 0.0,
+            "per_second": 0.0,
+            "threads": 1
+          },
+          "pane-hotkeys": {
+            "count": 0,
+            "cpu_seconds": 0.0,
+            "per_second": 0.0,
+            "threads": 1
+          },
+          "pane-pause-reco": {
+            "count": 0,
+            "cpu_seconds": 0.0,
+            "per_second": 0.0,
+            "threads": 1
+          },
+          "pane-runtime-ep": {
+            "count": 0,
+            "cpu_seconds": 0.0,
+            "per_second": 0.0,
+            "threads": 1
+          },
+          "pane-runtime-wa": {
+            "count": 0,
+            "cpu_seconds": 0.0,
+            "per_second": 0.0,
+            "threads": 1
+          },
+          "pane-schedules": {
+            "count": 0,
+            "cpu_seconds": 0.0,
+            "per_second": 0.0,
+            "threads": 1
+          },
+          "pane-services": {
+            "count": 0,
+            "cpu_seconds": 0.0,
+            "per_second": 0.0,
+            "threads": 1
+          },
+          "pane-timers": {
+            "count": 0,
+            "cpu_seconds": 0.0,
+            "per_second": 0.0,
+            "threads": 1
+          },
+          "pane-tray": {
+            "count": 0,
+            "cpu_seconds": 0.0,
+            "per_second": 0.0,
+            "threads": 1
+          },
+          "pane-updates": {
+            "count": 0,
+            "cpu_seconds": 0.0,
+            "per_second": 0.0,
+            "threads": 1
+          },
+          "pane-view-refre": {
+            "count": 0,
+            "cpu_seconds": 0.0,
+            "per_second": 0.0,
+            "threads": 1
+          },
+          "pane-watchers": {
+            "count": 86,
+            "cpu_seconds": 0.0,
+            "per_second": 2.84,
+            "threads": 1
+          }
+        },
+        "counted": "context switches",
+        "names": "cut to 15 bytes, as Linux keeps them",
+        "per_second": 525.39,
+        "total": 15923
+      },
+      "window_ms": {
+        "max": 890,
+        "median": 890,
+        "runs": 1
+      }
+    }
+  },
+  "sample_interval_seconds": 1.017000000050757
+}
