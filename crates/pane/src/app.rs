@@ -3259,8 +3259,10 @@ impl Render for LauncherWindow {
         let confirm =
             matches!(view.screen, Screen::Confirm { .. } | Screen::Crash { .. }) || preview;
         // A preview has one or two rows (Install or Update) and more lines
-        // to read, which may take more of the window than a confirmation's.
-        let details_share = if preview { 0.62 } else { 0.4 };
+        // to read, which may take more of the window than a confirmation's:
+        // what its top bar (#482), 20px taller than a heading, leaves, so
+        // its rows keep the room they had under the heading.
+        let details_share = if preview { 0.55 } else { 0.4 };
         // Shift+Up and Shift+Down, Shift+Page Up and Shift+Page Down
         // scroll them, the selection staying on the choices (#499).
         let details_scroll = (confirm && !view.details().is_empty()).then(|| {
@@ -3688,7 +3690,7 @@ impl Render for LauncherWindow {
             .text_color(theme.text_title)
             .when_some(heading, |content, heading| content.child(heading))
             // A confirmation's, preview's or error overlay's long details
-            // scroll within 40% (a preview's 62%) of the window, leaving the
+            // scroll within 40% (a preview's 55%) of the window, leaving the
             // rest to its choices, which stay visible.
             .when(!details.is_empty(), |content| {
                 content.child(
