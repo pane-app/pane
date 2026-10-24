@@ -657,6 +657,7 @@ fn item(action: ResultAction, available: bool) -> ResultActionItem {
             .expect("a quick slot entry")
             .to_owned(),
         available,
+        reason: None,
     }
 }
 
@@ -713,6 +714,8 @@ fn change(
             | ResultAction::Alias
             | ResultAction::ConfigureCommand
             | ResultAction::ConfigureExtension
+            | ResultAction::DisableCommand
+            | ResultAction::UninstallExtension
             | ResultAction::DismissNotice
             | ResultAction::ResetRanking
     );
@@ -768,6 +771,8 @@ fn change(
         | ResultAction::Alias
         | ResultAction::ConfigureCommand
         | ResultAction::ConfigureExtension
+        | ResultAction::DisableCommand
+        | ResultAction::UninstallExtension
         | ResultAction::DismissNotice
         | ResultAction::ResetRanking => refused,
     }
@@ -940,6 +945,7 @@ impl Launcher {
             action: ResultAction::Invoke,
             label: primary.to_owned(),
             available: shown.ready(),
+            reason: None,
         }];
         items.extend(slot_items(slot, state.quick_slots.chosen.len(), readable));
         Some(ResultActions {

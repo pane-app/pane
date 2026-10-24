@@ -455,7 +455,8 @@ impl Launcher {
 
     /// Ends an uninstall of the packages with `identities` (the one asked
     /// about first) with `status`, shown if the screen is still the one of
-    /// `epoch`: from its confirmation, on the extension list.
+    /// `epoch`: from its confirmation, on the extension list, or on the
+    /// search the Actions panel asked it from.
     fn end_uninstall(
         &self,
         state: &mut State,
@@ -476,11 +477,17 @@ impl Launcher {
                 question: Question::Uninstall(asked) | Question::UninstallDependents(asked),
                 ..
             } if asked == first => {
-                let identity = first.clone();
-                self.show_extensions_at(
-                    state,
-                    |entry| matches!(entry, Entry::AskUninstall(asked) if *asked == identity),
-                );
+                // Asked from root search's Actions panel (#493): back to
+                // that search, without the extension's rows.
+                if self.return_from_actions_flow(state) {
+                    self.refresh(state);
+                } else {
+                    let identity = first.clone();
+                    self.show_extensions_at(
+                        state,
+                        |entry| matches!(entry, Entry::AskUninstall(asked) if *asked == identity),
+                    );
+                }
             }
             _ => self.refresh(state),
         }

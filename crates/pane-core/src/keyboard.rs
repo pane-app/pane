@@ -707,6 +707,31 @@ pub fn toast_key() -> Binding {
     default_binding(&format!("{PIN_MODIFIER}-t"))
 }
 
+/// Root search's chord for the selected command's "Configure Command…"
+/// (#493): Ctrl+Shift+, (Command+Shift+, on macOS), Raycast's. It and the
+/// two below act only on root search's row of an installed command, whose
+/// actions are all Pane's, so no extension's shortcut can meet them there;
+/// in a command's list the keys stay the extension's. Window-local and
+/// fixed, as [`pin_key`] is.
+pub fn configure_command_key() -> Binding {
+    default_binding(&format!("{PIN_MODIFIER}-shift-,"))
+}
+
+/// Root search's chord for "Configure Extension…": Ctrl+Alt+, (Command+
+/// Option+, on macOS), Raycast's. Fixed, as [`configure_command_key`] is.
+pub fn configure_extension_key() -> Binding {
+    default_binding(&format!("{PIN_MODIFIER}-alt-,"))
+}
+
+/// Root search's chord for "Disable Command": Ctrl+Alt+Shift+D (Command+
+/// Option+Shift+D on macOS). Raycast's sources give it as that or as
+/// Ctrl+Shift+D; this one, because Ctrl+Shift+D is a common extension
+/// shortcut (a delete or duplicate) while the fuller chord is free of
+/// Pane's keys and of the field's. Fixed, as [`configure_command_key`] is.
+pub fn disable_command_key() -> Binding {
+    default_binding(&format!("{PIN_MODIFIER}-alt-shift-d"))
+}
+
 /// The local chord that picks what number `number` (0 to 9) names in the
 /// launcher: Ctrl and the digit. Fixed, as [`pin_key`] is.
 pub fn number_key(number: usize) -> Binding {

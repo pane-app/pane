@@ -86,7 +86,7 @@ impl Launcher {
     /// one row per identity with retained data, then one per official
     /// extension not installed (#283), then the global
     /// automatic-update choice, last of all.
-    fn extension_rows(&self, state: &State) -> (Vec<Row>, Vec<Entry>) {
+    pub(super) fn extension_rows(&self, state: &State) -> (Vec<Row>, Vec<Entry>) {
         let developed = |identity: &PackageIdentity| self.is_developed(identity);
         let (mut rows, mut entries): (Vec<Row>, Vec<Entry>) =
             self.runtime_rows().into_iter().unzip();

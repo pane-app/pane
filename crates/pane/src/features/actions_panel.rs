@@ -28,8 +28,14 @@
 //! the result's primary action — the footer's, the same dispatch — then
 //! pinning it (or unpinning it, once it is pinned) and resetting what
 //! root search learned for it (#200), then, for an installed command, its
-//! hotkey and alias configuration. Nothing is listed without
-//! a working operation behind it (#100). Pinning adds the result after the
+//! hotkey and alias configuration, then its extension's entries (#493):
+//! Configure Command… and Configure Extension…, which open Settings, and
+//! Disable Command, each showing its fixed chord, and Uninstall
+//! Extension…, destructive, which opens the launcher's own uninstall
+//! confirmation. Their chords run them from root search with the panel
+//! closed or open ([`LauncherWindow::result_action_chords`]); an entry the
+//! core says cannot run now shows why after its label. Nothing is listed
+//! without a working operation behind it (#100). Pinning adds the result after the
 //! last pin. A quick slot has a panel of its own — opened by a secondary
 //! click on it, or the Open actions binding while it has focus — invoking,
 //! unpinning and moving it (see [`crate::features::quick_slots`]); while
@@ -155,6 +161,8 @@ impl SlotKeys {
             | ResultAction::Alias
             | ResultAction::ConfigureCommand
             | ResultAction::ConfigureExtension
+            | ResultAction::DisableCommand
+            | ResultAction::UninstallExtension
             | ResultAction::ResetRanking
             | ResultAction::DismissNotice => None,
         }
@@ -328,11 +336,15 @@ pub(crate) struct PanelEntry {
     pub(crate) icon: Option<Icon>,
     /// The keys shown at its right, in their caps' style.
     pub(crate) keys: Option<(KeySequence, CapStyle)>,
+    /// Why it cannot run now, shown after its label while it is
+    /// unavailable: "Hello is reloading".
+    pub(crate) reason: Option<String>,
 }
 
 /// `actions`, a result's or a slot's, as the panel's entries: the primary
 /// action with the invoke binding's accent caps, then the rest under
-/// `group`, the slot entries with their keys.
+/// `group`, the slot entries and the chorded ones (#493) with their keys,
+/// Uninstall Extension… in the destructive style.
 fn result_entries(
     actions: &ResultActions,
     kind: Option<RowKind>,
@@ -350,17 +362,24 @@ fn result_entries(
                 kind: EntryKind::Result(item.action),
                 label: item.label.clone(),
                 available: item.available,
-                destructive: false,
+                destructive: item.action.destructive(),
                 submenu: false,
                 section: (!invoking).then(|| group.into()),
                 glyph: action_glyph(item.action, primary),
                 icon: None,
+                reason: item.reason.clone(),
                 keys: if invoking {
                     Some((invoke.clone(), CapStyle::Accent))
                 } else {
                     slot_keys
                         .of(item.action)
-                        .map(|keys| (keys.clone(), CapStyle::Regular))
+                        .cloned()
+                        .or_else(|| {
+                            item.action
+                                .chord()
+                                .map(|chord| crate::keyboard::binding_keys(&chord))
+                        })
+                        .map(|keys| (keys, CapStyle::Regular))
                 },
             }
         })
@@ -393,6 +412,7 @@ fn item_entries(actions: &ItemActions, invoke: &KeySequence) -> Vec<PanelEntry> 
                 section: action.section.clone().map(SharedString::from),
                 glyph: Glyph::ActionRun,
                 icon: action.icon.clone(),
+                reason: None,
                 keys,
             }
         })
@@ -412,6 +432,7 @@ fn submenu_entries(submenu: &OpenSubmenu) -> Vec<PanelEntry> {
         section: None,
         glyph,
         icon: None,
+        reason: None,
         keys: None,
     };
     match &submenu.state {
@@ -429,6 +450,7 @@ fn submenu_entries(submenu: &OpenSubmenu) -> Vec<PanelEntry> {
                 section: entry.section.clone().map(SharedString::from),
                 glyph: Glyph::ActionRun,
                 icon: entry.icon.clone(),
+                reason: None,
                 keys: entry
                     .shortcut
                     .as_ref()
@@ -481,6 +503,7 @@ pub(crate) fn clipboard_entries(
                 section: item.section.clone().map(SharedString::from),
                 glyph,
                 icon: None,
+                reason: None,
                 keys,
             }
         })
@@ -643,6 +666,7 @@ impl LauncherWindow {
                         section: None,
                         glyph: Glyph::Gear,
                         icon: None,
+                        reason: None,
                         keys: Some((invoke_keys(cx), CapStyle::Accent)),
                     }];
                     for action in actions {
@@ -667,6 +691,7 @@ impl LauncherWindow {
                             section: None,
                             glyph,
                             icon: None,
+                            reason: None,
                             keys: None,
                         });
                     }
@@ -679,6 +704,7 @@ impl LauncherWindow {
                         section: None,
                         glyph: Glyph::Clipboard,
                         icon: None,
+                        reason: None,
                         keys: None,
                     });
                     Opened {
@@ -1156,6 +1182,65 @@ impl LauncherWindow {
         }
     }
 
+    /// A chord of one of Pane's own result actions (#493) — Configure
+    /// Command, Configure Extension, Disable Command — pressed on root
+    /// search: it runs that action on the panel's target while the panel
+    /// is open over a result, or else on root search's selected row while
+    /// the query or the window has focus, when the core has it ready
+    /// there. Otherwise the key goes on: in a command's list the same keys
+    /// are the extension's. Once per press.
+    pub(crate) fn result_action_chords(
+        &mut self,
+        event: &KeyDownEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.menu.is_some() || !matches!(self.launcher.screen(), Screen::Root { .. }) {
+            return;
+        }
+        let Some(action) = ResultAction::CHORDED.into_iter().find(|action| {
+            action
+                .chord()
+                .is_some_and(|chord| crate::keyboard::pressed(&event.keystroke, &chord))
+        }) else {
+            return;
+        };
+        let open = self.actions.is_some();
+        let target = if open {
+            match self
+                .actions
+                .as_ref()
+                .and_then(|panel| panel.opened.as_ref())
+            {
+                Some(opened) if opened.subject == Subject::Result => opened.target.clone(),
+                _ => return,
+            }
+        } else {
+            let field = self.query_field().focus_handle(cx).is_focused(window);
+            if !field && !self.focus_handle.is_focused(window) {
+                return;
+            }
+            let Some(actions) = self.launcher.result_actions() else {
+                return;
+            };
+            actions.target
+        };
+        if !self.launcher.result_action_ready(&target, action) {
+            return;
+        }
+        cx.stop_propagation();
+        if event.is_held {
+            return;
+        }
+        // Without the panel, the chord waits for the current query's list
+        // to be published (#203), as Enter does, and is replayed through
+        // this same path.
+        if !open && self.hold_key(event.keystroke.clone(), window, cx) {
+            return;
+        }
+        self.run_result_action(&target, Subject::Result, action, window, cx);
+    }
+
     /// Escape: steps back out of the submenu shown to the level above it,
     /// giving back the filter's text and the selection it had there; from
     /// the item's actions (or a result's), closes the panel.
@@ -1333,6 +1418,21 @@ impl LauncherWindow {
                 return;
             }
         };
+        self.run_result_action(&target, subject, action, window, cx);
+    }
+
+    /// Runs `action`, one of Pane's on the result or the slot `subject`
+    /// says `target` is, if the core has it ready there, closing the
+    /// panel first: what choosing its entry does, and its chord (#493).
+    fn run_result_action(
+        &mut self,
+        target: &str,
+        subject: Subject,
+        action: ResultAction,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let target = target.to_owned();
         let ready = match subject {
             Subject::Result => self.launcher.result_action_ready(&target, action),
             Subject::Slot => self.launcher.quick_slot_action_ready(&target, action),
@@ -1351,34 +1451,53 @@ impl LauncherWindow {
                     _ => self.press_primary_action(window, cx),
                 }
             }
-            ResultAction::Hotkey | ResultAction::Alias => {
+            // The uninstall opens the launcher's own "Uninstall X?"
+            // confirmation (#493), whose rows Enter answers and Escape
+            // leaves, back on this search.
+            ResultAction::Hotkey | ResultAction::Alias | ResultAction::UninstallExtension => {
                 self.close_actions(window, cx);
                 if self.launcher.open_result_action(&target, action) {
                     self.navigate_forward(window, cx);
                 }
             }
             // The extension's card in Settings › Extensions, at the
-            // command's preferences or the package's (#143).
-            ResultAction::ConfigureCommand | ResultAction::ConfigureExtension => {
+            // command's preferences (#143).
+            ResultAction::ConfigureCommand => {
                 self.close_actions(window, cx);
                 if let Some(pane_core::PreferencesTarget { identity, command }) =
                     self.launcher.preferences_target(&target)
                 {
-                    let anchor = match action {
-                        ResultAction::ConfigureCommand => {
-                            crate::features::settings::extensions::command_preferences_anchor(
-                                &identity.key(),
-                                &command,
-                            )
-                        }
-                        _ => identity.key(),
-                    };
+                    let anchor = crate::features::settings::extensions::command_preferences_anchor(
+                        &identity.key(),
+                        &command,
+                    );
                     crate::features::settings::open_at(
                         &self.launcher,
                         crate::features::settings::extensions::TITLE,
                         &anchor,
                         cx,
                     );
+                }
+            }
+            // The extension's page in Settings › Extensions, whether or not
+            // it declares preferences (#493).
+            ResultAction::ConfigureExtension => {
+                self.close_actions(window, cx);
+                if let Some(identity) = self.launcher.extension_of_result(&target) {
+                    crate::features::settings::open_at(
+                        &self.launcher,
+                        crate::features::settings::extensions::TITLE,
+                        &identity.key(),
+                        cx,
+                    );
+                }
+            }
+            // The command's switch, turned off (#493): it leaves root
+            // search at once, and the toast says what was recorded.
+            ResultAction::DisableCommand => {
+                self.close_actions(window, cx);
+                if let Some(recorded) = self.launcher.disable_result_command(&target) {
+                    self.show_until_done(recorded, window, cx);
                 }
             }
             ResultAction::Pin
@@ -1758,6 +1877,8 @@ fn action_glyph(action: ResultAction, primary: Glyph) -> Glyph {
         | ResultAction::MovePinUp
         | ResultAction::MovePinDown => Glyph::ActionPin,
         ResultAction::ConfigureCommand | ResultAction::ConfigureExtension => Glyph::Sliders,
+        ResultAction::DisableCommand => Glyph::Pause,
+        ResultAction::UninstallExtension => Glyph::Delete,
         ResultAction::DismissNotice => Glyph::Delete,
         ResultAction::ResetRanking => Glyph::Reset,
     }
@@ -1829,6 +1950,18 @@ pub(crate) fn action_row(
         (false, true) => Some(OPENS_SUBMENU.to_owned()),
         (false, false) => None,
     };
+    // Why an unavailable entry cannot run, after its label and to
+    // assistive technology after the rest of its description.
+    let reason: Option<SharedString> = entry
+        .reason
+        .clone()
+        .filter(|_| !available)
+        .map(SharedString::from);
+    let description = match (description, &reason) {
+        (Some(description), Some(reason)) => Some(format!("{description}, {reason}")),
+        (None, Some(reason)) => Some(reason.to_string()),
+        (description, None) => description,
+    };
     let debug = format!("action-{label}");
     div()
         .id(("action", index))
@@ -1898,6 +2031,16 @@ pub(crate) fn action_row(
             .into_any_element(),
         })
         .child(div().flex_1().min_w(px(0.)).truncate().child(label))
+        .when_some(reason, |row, reason| {
+            row.child(
+                div()
+                    .flex_none()
+                    .max_w(px(180.))
+                    .truncate()
+                    .text_color(theme.text_muted)
+                    .child(reason),
+            )
+        })
         .when_some(keys, |row, (keys, style)| {
             row.child(key_sequence(keys, style, theme))
         })

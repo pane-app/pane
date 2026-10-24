@@ -1,8 +1,9 @@
 //! The selected result's actions through the launcher's public interface:
 //! what the Actions panel lists for root search's selected row — its
 //! primary action, then the alias and hotkey configuration an installed
-//! command has — and the flows those open, which return to the search they
-//! came from. The commands are real guests (the settings sample from
+//! command has, its extension's page, turning it off and uninstalling its
+//! extension (#493) — and the flows those open, which return to the search
+//! they came from. The commands are real guests (the settings sample from
 //! `cargo xtask guests`); the hotkey system is a fake, so registering is
 //! deterministic.
 
@@ -12,7 +13,8 @@ use std::sync::{Arc, Mutex};
 
 use futures::executor::block_on;
 use pane_core::hotkeys::{HotkeyError, Hotkeys, Shortcut};
-use pane_core::{Launcher, ResultAction, Runtime, Screen, Status};
+use pane_core::keyboard::PaneKeys;
+use pane_core::{Binding, Launcher, PackageIdentity, ResultAction, Runtime, Screen, Status};
 use tempfile::TempDir;
 
 #[derive(Default)]
@@ -139,9 +141,19 @@ fn an_installed_commands_actions_are_its_primary_action_pinning_then_its_hotkey_
             (ResultAction::ResetRanking, "Reset Ranking".into()),
             (ResultAction::Hotkey, "Assign Hotkey…".into()),
             (ResultAction::Alias, "Add Alias…".into()),
+            (
+                ResultAction::ConfigureExtension,
+                "Configure Extension…".into()
+            ),
+            (ResultAction::DisableCommand, "Disable Command".into()),
+            (
+                ResultAction::UninstallExtension,
+                "Uninstall Extension…".into()
+            ),
         ]
     );
     assert!(actions.items.iter().all(|item| item.available));
+    assert!(actions.items.iter().all(|item| item.reason.is_none()));
 }
 
 #[test]
@@ -310,9 +322,214 @@ fn matching_keeps_the_actions_whose_label_has_the_text() {
             .map(|item| item.action)
             .collect()
     };
-    assert_eq!(matching("").len(), 5, "a blank filter keeps them all");
+    assert_eq!(matching("").len(), 8, "a blank filter keeps them all");
     assert_eq!(matching(" PIN"), [ResultAction::Pin]);
     assert_eq!(matching("  HOTKEY "), [ResultAction::Hotkey]);
     assert_eq!(matching("alias"), [ResultAction::Alias]);
     assert!(matching("quit").is_empty());
+}
+
+/// The settings sample's identity in `dirs`.
+fn sample(dirs: &Dirs) -> PackageIdentity {
+    PackageIdentity::local(&dirs.sources.path().join("settings")).unwrap()
+}
+
+#[test]
+fn configure_extension_names_the_extension_whatever_it_declares() {
+    let dirs = Dirs::new();
+    let launcher = dirs.launcher();
+    search_and_select(&launcher, "greet", "Greeting");
+    let target = selected_id(&launcher);
+
+    assert!(launcher.result_action_ready(&target, ResultAction::ConfigureExtension));
+    assert_eq!(launcher.extension_of_result(&target), Some(sample(&dirs)));
+    // The sample's command declares no preferences of its own.
+    assert!(!launcher.result_action_ready(&target, ResultAction::ConfigureCommand));
+    // Not for a row no longer selected.
+    search_and_select(&launcher, "manage", "Manage Extensions");
+    assert_eq!(launcher.extension_of_result(&target), None);
+}
+
+#[test]
+fn disable_command_turns_the_command_off_as_its_switch_does() {
+    let dirs = Dirs::new();
+    let launcher = dirs.launcher();
+    search_and_select(&launcher, "greet", "Greeting");
+    let target = selected_id(&launcher);
+
+    let recorded = launcher
+        .disable_result_command(&target)
+        .expect("the entry is ready");
+    block_on(recorded);
+
+    let view = launcher.view();
+    assert_eq!(
+        view.screen,
+        Screen::Root {
+            query: "greet".into()
+        }
+    );
+    assert!(
+        view.rows.iter().all(|row| row.id != target),
+        "it left root search: {:?}",
+        view.rows
+    );
+    assert_eq!(view.status, Status::Result("Turned off Greeting".into()));
+    let package = launcher
+        .packages()
+        .into_iter()
+        .find(|package| package.identity == sample(&dirs))
+        .expect("still installed");
+    assert!(!package.command_enabled("greeting"));
+    // Gone from the search, it has nothing more to disable.
+    assert!(launcher.disable_result_command(&target).is_none());
+}
+
+#[test]
+fn uninstall_extension_asks_with_the_launchers_confirmation_and_escape_returns_to_the_search() {
+    let dirs = Dirs::new();
+    let launcher = dirs.launcher();
+    search_and_select(&launcher, "greet", "Greeting");
+    let target = selected_id(&launcher);
+
+    assert!(launcher.open_result_action(&target, ResultAction::UninstallExtension));
+    let view = launcher.view();
+    assert!(
+        matches!(&view.screen, Screen::Confirm { .. }),
+        "{:?}",
+        view.screen
+    );
+    assert!(view.title.starts_with("Uninstall "), "{}", view.title);
+    let rows: Vec<&str> = view.rows.iter().map(|row| row.id.as_str()).collect();
+    assert_eq!(rows, ["keep", "delete", "cancel"]);
+
+    // Escape: back on the search, the target still selected, installed.
+    assert!(launcher.back());
+    assert_eq!(
+        launcher.view().screen,
+        Screen::Root {
+            query: "greet".into()
+        }
+    );
+    assert_eq!(selected_id(&launcher), target);
+
+    // Cancel does the same.
+    assert!(launcher.open_result_action(&target, ResultAction::UninstallExtension));
+    launcher.select(2);
+    block_on(launcher.activate_selected());
+    assert_eq!(
+        launcher.view().screen,
+        Screen::Root {
+            query: "greet".into()
+        }
+    );
+    assert_eq!(selected_id(&launcher), target);
+    assert!(
+        launcher
+            .packages()
+            .iter()
+            .any(|package| package.identity == sample(&dirs))
+    );
+}
+
+#[test]
+fn uninstalling_from_actions_returns_to_the_search_without_the_extension() {
+    let dirs = Dirs::new();
+    let launcher = dirs.launcher();
+    search_and_select(&launcher, "greet", "Greeting");
+    let target = selected_id(&launcher);
+
+    assert!(launcher.open_result_action(&target, ResultAction::UninstallExtension));
+    // Enter on the first row: uninstall and keep saved data.
+    block_on(launcher.activate_selected());
+
+    let view = launcher.view();
+    assert_eq!(
+        view.screen,
+        Screen::Root {
+            query: "greet".into()
+        }
+    );
+    assert!(
+        view.rows.iter().all(|row| row.id != target),
+        "{:?}",
+        view.rows
+    );
+    assert!(
+        matches!(view.status, Status::Result(_)),
+        "{:?}",
+        view.status
+    );
+    assert!(
+        launcher
+            .packages()
+            .iter()
+            .all(|package| package.identity != sample(&dirs))
+    );
+}
+
+#[test]
+fn uninstall_extension_is_unavailable_while_the_extension_is_busy_and_says_why() {
+    let dirs = Dirs::new();
+    let launcher = dirs.launcher();
+    search_and_select(&launcher, "greet", "Greeting");
+    let target = selected_id(&launcher);
+    let uninstall = |launcher: &Launcher| {
+        launcher
+            .result_actions()
+            .expect("actions")
+            .items
+            .into_iter()
+            .find(|item| item.action == ResultAction::UninstallExtension)
+            .expect("listed")
+    };
+
+    // A reload begun and not yet finished holds the extension.
+    let reloading = launcher.reload(&sample(&dirs));
+    let item = uninstall(&launcher);
+    assert!(!item.available);
+    let reason = item.reason.expect("a reason");
+    assert!(reason.ends_with("is reloading"), "{reason}");
+    assert!(!launcher.open_result_action(&target, ResultAction::UninstallExtension));
+
+    block_on(reloading);
+    search_and_select(&launcher, "greet", "Greeting");
+    let item = uninstall(&launcher);
+    assert!(item.available);
+    assert_eq!(item.reason, None);
+}
+
+#[test]
+fn the_chords_are_raycasts_and_free_of_panes_own_keys() {
+    let platform = if cfg!(target_os = "macos") {
+        "cmd"
+    } else {
+        "ctrl"
+    };
+    let chord = |action: ResultAction| action.chord().map(|chord| chord.id());
+    let bound = |id: &str| Some(Binding::parse(id).unwrap().id());
+    assert_eq!(
+        chord(ResultAction::ConfigureCommand),
+        bound(&format!("{platform}-shift-,"))
+    );
+    assert_eq!(
+        chord(ResultAction::ConfigureExtension),
+        bound(&format!("{platform}-alt-,"))
+    );
+    assert_eq!(
+        chord(ResultAction::DisableCommand),
+        bound(&format!("{platform}-alt-shift-d"))
+    );
+    assert_eq!(chord(ResultAction::UninstallExtension), None);
+    assert_eq!(chord(ResultAction::Alias), None);
+    assert!(ResultAction::UninstallExtension.destructive());
+    assert!(!ResultAction::DisableCommand.destructive());
+
+    // None is one of Pane's keys: the Keyboard page's defaults (Settings'
+    // Ctrl+, among them), the fixed keys and the action chords.
+    let keys = PaneKeys::default();
+    for action in ResultAction::CHORDED {
+        let chord = action.chord().expect("a chord");
+        assert_eq!(keys.taken(&chord), None, "{chord}");
+    }
 }
