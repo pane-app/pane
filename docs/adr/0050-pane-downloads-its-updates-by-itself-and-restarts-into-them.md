@@ -51,7 +51,7 @@ A background check that fails says nothing. It is written to Pane's log, About s
 
 1. Swaps the program as ADR 0048 says. This includes rewriting the Windows Apps entry's `DisplayVersion`, `MajorVersion` and `MinorVersion`, and the macOS bundle's `Info.plist` version, so Settings → Apps and Finder name the new version.
 2. Runs the new program with `--version` and expects the new version back. If it does not answer, Pane undoes the swap (the old program goes back under its own name), explains what happened, and the row stays.
-3. Starts the new program with `--updated-from <old version> --wait-pid <this process's id>`. On Windows that is `pane.exe` at the install path; on macOS, the bundle through Launch Services (`open -n`); on Linux, the program or the AppImage file.
+3. Starts the new program with `--updated-from <old version> --wait-pid <this process's id>`. On Windows that is `pane.exe` at the install path; on macOS, the bundle's own `Contents/MacOS/pane`, started directly rather than through Launch Services (`open -n`) so it keeps Pane's environment; on Linux, the program or the AppImage file.
 4. Waits up to 20 seconds for the new process to report that it has started. If it does not (it could not be started, or it exited), the old Pane undoes the swap, says "Pane <version> could not start, so Pane stays at <old version>", and keeps running. The row stays, so the user can try again.
 5. Quits cleanly, as the tray's Exit does: it releases its hotkeys and the keyboard hook, removes the tray icon, and records the clean quit.
 
