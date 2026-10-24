@@ -455,7 +455,11 @@ pub(crate) fn search_header(
 
 /// A pushed view's top bar, where it has no search bar (#482): a form, a
 /// detail, a canvas — a designed view whose tree names no List or Grid —
-/// and a form Pane itself asks. It is the search header's row, as
+/// a form Pane itself asks, and Pane's own pages: a package's preview, a
+/// collection's choice, the details, Logs and hotkey screens, as
+/// Raycast's Store page of an extension has its back button (a
+/// confirmation keeps its plain heading, [`crate::ui::shell::screen_heading`]: Raycast
+/// asks with an alert, not a page). It is the search header's row, as
 /// Raycast's top bar is its search bar's: the same 64px, padding, rule
 /// (or frosted pill) and loading bar ([`header_row`]), the back button
 /// ([`back_button`]) in the same place, and the view's `title` where the

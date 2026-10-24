@@ -159,12 +159,6 @@ fn heading_and_footer_command(cx: &mut VisualTestContext) -> (bool, bool) {
     )
 }
 
-/// No heading line above an extension's view or Manage extensions (#162):
-/// an installed command's list starts with its content, and the footer's
-/// left names it by its own icon, as its package ships it, and its
-/// title; Manage extensions is named there too. The core's own screens,
-/// a package's preview and a confirmation, keep the heading that says
-/// what they are about.
 /// A preview's details scroll from the keyboard when they overflow
 /// (#499): Shift+Page Down and Shift+Up scroll them, and the selection
 /// stays on Install.
@@ -198,6 +192,13 @@ fn shifted_keys_scroll_a_previews_details_and_keep_the_selection(cx: &mut TestAp
     assert_eq!(view.selected, selected, "the selection stayed");
 }
 
+/// No heading line above an extension's view or Manage extensions (#162):
+/// an installed command's list starts with its content, and the footer's
+/// left names it by its own icon, as its package ships it, and its
+/// title; Manage extensions is named there too. A package's preview
+/// names itself in its top bar, beside the back button (#482), as
+/// Raycast's Store page does, and a confirmation keeps the plain heading
+/// that says what it asks: Raycast asks with an alert, not a page.
 #[gpui::test]
 fn only_the_cores_own_screens_have_a_heading_line(cx: &mut TestAppContext) {
     let (sources, data) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
@@ -210,12 +211,44 @@ fn only_the_cores_own_screens_have_a_heading_line(cx: &mut TestAppContext) {
         "root search"
     );
 
-    let view = choose_folder(&window, cx, Some(folder));
+    let magnifier = cx
+        .debug_bounds("search-magnifier")
+        .expect("root search shows the magnifier");
+
+    // The preview's top bar: its back button in the magnifier's place, no
+    // plain heading, and the selection on Install, where the keyboard is.
+    let view = choose_folder(&window, cx, Some(folder.clone()));
     assert!(matches!(view.screen, Screen::Package { .. }));
-    assert!(
-        heading_and_footer_command(cx).0,
-        "a package's preview keeps its heading"
+    assert_eq!(
+        heading_and_footer_command(cx),
+        (false, false),
+        "a package's preview has no plain heading"
     );
+    assert!(
+        cx.debug_bounds("top-bar").is_some(),
+        "the preview's top bar"
+    );
+    assert!(cx.debug_bounds("top-bar-title").is_some());
+    let back = cx
+        .debug_bounds("search-back")
+        .expect("the top bar's back button");
+    assert_eq!(back, magnifier, "the button takes the magnifier's place");
+    assert_eq!(
+        view.rows[view.selected.expect("a choice is selected")].title,
+        "Install"
+    );
+
+    // A click goes back one level, as Escape does: root search again.
+    cx.simulate_click(back.center(), Modifiers::none());
+    let view = settle(&window, cx);
+    assert!(
+        matches!(view.screen, Screen::Root { .. }),
+        "{:?}",
+        view.screen
+    );
+    assert!(cx.debug_bounds("top-bar").is_none());
+
+    choose_folder(&window, cx, Some(folder));
     cx.simulate_keystrokes("enter");
     settle(&window, cx);
 
@@ -253,6 +286,10 @@ fn only_the_cores_own_screens_have_a_heading_line(cx: &mut TestAppContext) {
         heading_and_footer_command(cx),
         (true, false),
         "a confirmation keeps its heading"
+    );
+    assert!(
+        cx.debug_bounds("top-bar").is_none() && cx.debug_bounds("search-back").is_none(),
+        "a confirmation has no top bar"
     );
 }
 

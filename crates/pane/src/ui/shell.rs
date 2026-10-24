@@ -80,9 +80,10 @@ pub(crate) fn section_label(label: SharedString, note: Option<SharedString>, the
         })
 }
 
-/// A launcher screen's heading (the core's own screens: a package's
-/// preview, a confirmation, the details and hotkey screens; root search
-/// and an extension's views have none, #162): the
+/// A launcher screen's heading (a confirmation's, and the update results'
+/// above their search bar; the core's other pages have the top bar,
+/// [`crate::features::root_search::top_bar`], and root search and an
+/// extension's views have none, #162): the
 /// screen's `title` in the row title's 14/500, 20px in from either side
 /// and 12px above and below, truncating rather than eating the screen. It
 /// is also the screen's drag region: with the native title bar hidden, it
