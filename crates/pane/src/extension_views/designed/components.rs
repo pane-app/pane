@@ -1826,13 +1826,10 @@ pub(super) fn text_input(
     // The field's commit: Enter runs it (a text area's Enter inserts a
     // newline), as a blur does — and Enter in a field of a form submits
     // the form, which its own commit handler decides (#241). Ctrl+Enter
-    // submits from any field.
+    // submits from any of the form's controls, the whole tree's key.
     let field_path = path.to_owned();
     let commit = cx.listener(move |this, _: &Commit, window, cx| {
         this.designed_field_committed(&field_path, window, cx);
-    });
-    let submit = cx.listener(move |this, _: &super::SubmitForm, window, cx| {
-        this.submit_designed_form(window, cx);
     });
     div()
         .id(path.to_owned())
@@ -1858,7 +1855,6 @@ pub(super) fn text_input(
             theme,
         ))
         .on_action(commit)
-        .on_action(submit)
         .into_any_element()
 }
 

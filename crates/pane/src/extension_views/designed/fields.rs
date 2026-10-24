@@ -13,8 +13,16 @@
 //! chose — and runs the form's `onSubmit` with them; a form Pane itself
 //! asks (the tree's `form` node naming no `onSubmit`) hands its values
 //! to the launcher instead. Enter in a single-line field submits, and
-//! Ctrl+Enter does from a text area, whose Enter inserts a newline; the
-//! form's submit button does the same.
+//! Ctrl+Enter (Command+Enter on macOS) does from any of the form's
+//! controls — a text area, whose Enter inserts a newline, a checkbox, a
+//! select's trigger, a picker (#497); the form's submit button does the
+//! same.
+//!
+//! The pickers are the keyboard's too (#497): a chosen tag's or path's
+//! chip is a tab stop that Delete or Backspace removes, Backspace in a
+//! tag picker's empty query removes the last tag and in a picker of
+//! many's well the last path, and a picker of one path's "Choose…" is a
+//! button Tab reaches, Enter or Space opening the system's dialog.
 
 use std::rc::Rc;
 
@@ -36,10 +44,45 @@ use crate::ui::tokens;
 type Choose =
     Rc<dyn Fn(&mut LauncherWindow, &mut gpui::Window, &mut gpui::Context<LauncherWindow>)>;
 
+/// What removes a chosen chip's tag or path, run by its click and by
+/// Delete or Backspace while it holds the keyboard.
+type Remove =
+    Rc<dyn Fn(&mut LauncherWindow, &mut gpui::Window, &mut gpui::Context<LauncherWindow>)>;
+
 use super::components::{self, FieldKind};
 use super::reconcile::Held;
 use super::tree::Draw;
-use super::{BUTTON_CONTEXT, DATE_CONTEXT, PATHS_CONTEXT, Press, TAGS_CONTEXT};
+use super::{
+    BUTTON_CONTEXT, CHIP_CONTEXT, DATE_CONTEXT, PATHS_CONTEXT, Press, RemoveChip, TAGS_CONTEXT,
+};
+
+/// A chosen tag's or path's chip, `drawn`, made removable: a click
+/// removes it, and so do Delete and Backspace while the keyboard is on it
+/// — each chip is a tab stop (`focus`), ringed while it holds the
+/// keyboard, and named "Remove `label`" for assistive technology (#497).
+fn removable_chip(
+    drawn: gpui::Stateful<gpui::Div>,
+    label: &str,
+    focus: &gpui::FocusHandle,
+    remove: Remove,
+    theme: &Theme,
+    cx: &gpui::Context<LauncherWindow>,
+) -> gpui::Stateful<gpui::Div> {
+    let ring = controls::focus_ring(theme);
+    let clicked = remove.clone();
+    drawn
+        .track_focus(focus)
+        .focus(move |chip| chip.shadow(ring))
+        .key_context(CHIP_CONTEXT)
+        .role(Role::Button)
+        .aria_label(SharedString::from(format!("Remove {label}")))
+        .on_action(cx.listener(move |this, _: &RemoveChip, window, cx| {
+            remove(this, window, cx);
+        }))
+        .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
+            clicked(this, window, cx);
+        }))
+}
 
 /// One field's chrome: its title over `control`, and the note and error
 /// under it — the Settings board's field family, as the typed form's
@@ -180,6 +223,7 @@ pub(super) fn tag_field(
         focus,
         chosen,
         highlighted,
+        chips,
     } = &entry.held
     else {
         return div().into_any_element();
@@ -209,14 +253,14 @@ pub(super) fn tag_field(
         .items_center()
         .gap(tokens::space(pane_core::Space::Xs))
         .px(tokens::space(pane_core::Space::Xs))
-        .children(chosen.iter().map(|tag| {
-            let (path, tag) = (path.to_owned(), tag.clone());
+        .children(chosen.iter().zip(chips).map(|(tag, chip)| {
+            let drawn = components::chosen_chip(tag.as_str(), theme);
+            let (path, label, tag) = (path.to_owned(), tag.clone(), tag.clone());
             let callback = picker.on_change;
-            components::chosen_chip(tag.as_str(), theme).on_click(cx.listener(
-                move |this, _: &ClickEvent, window, cx| {
-                    this.designed_tag_removed(&path, &tag, callback, window, cx);
-                },
-            ))
+            let remove: Remove = Rc::new(move |this, window, cx| {
+                this.designed_tag_removed(&path, &tag, callback, window, cx);
+            });
+            removable_chip(drawn, &label, chip, remove, theme, cx)
         }))
         .child(
             div()
@@ -266,10 +310,17 @@ pub(super) fn tag_field(
             .aria_label("Tags")
             .children(options)
     });
-    // Enter commits the highlighted option.
+    // Enter commits the highlighted option; Backspace in the empty query
+    // removes the last tag, and is the query's own delete otherwise.
     let commit = path.to_owned();
     let enter = cx.listener(move |this, _: &super::CommitTag, window, cx| {
         this.designed_tag_committed(&commit, window, cx);
+    });
+    let (last, callback) = (path.to_owned(), picker.on_change);
+    let backspace = cx.listener(move |this, _: &super::RemoveLastTag, window, cx| {
+        if !this.designed_last_tag_removed(&last, callback, window, cx) {
+            cx.propagate();
+        }
     });
     field_group(
         node.key.as_deref().unwrap_or_default(),
@@ -278,6 +329,7 @@ pub(super) fn tag_field(
         div()
             .key_context(TAGS_CONTEXT)
             .on_action(enter)
+            .on_action(backspace)
             .child(well)
             .children(options),
         theme,
@@ -328,23 +380,43 @@ pub(super) fn path_field(
             multiple: picker.multiple,
         },
     );
+    // A picker of one path's "Choose…" is a tab stop after its field
+    // (#497); a picker of many opens the dialog with Enter in its well.
+    let choose_focus = draw.state.get(path).and_then(|entry| match &entry.held {
+        Held::Field { choose, .. } => choose.clone(),
+        _ => None,
+    });
     let (well, choose): (AnyElement, Choose) = if picker.multiple {
         let Some(entry) = draw.state.get(path) else {
             return div().into_any_element();
         };
-        let Held::Paths { focus, paths } = &entry.held else {
+        let Held::Paths {
+            focus,
+            paths,
+            chips,
+        } = &entry.held
+        else {
             return div().into_any_element();
         };
+        // Each chip removes its own path: a click, or Delete or Backspace
+        // while it holds the keyboard (#497).
         let chips = paths
             .iter()
-            .map(|picked| {
+            .zip(chips)
+            .enumerate()
+            .map(|(at, (picked, chip))| {
                 let path = path.to_owned();
-                let picked = picked.clone();
-                components::chosen_chip(picked.as_str(), theme).on_click(cx.listener(
-                    move |this, _: &ClickEvent, window, cx| {
-                        this.designed_path_removed(&path, window, cx);
-                    },
-                ))
+                let remove: Remove = Rc::new(move |this, window, cx| {
+                    this.designed_path_removed(&path, Some(at), window, cx);
+                });
+                removable_chip(
+                    components::chosen_chip(picked.as_str(), theme),
+                    picked,
+                    chip,
+                    remove,
+                    theme,
+                    cx,
+                )
             })
             .collect::<Vec<_>>();
         let well_id = field_id.clone();
@@ -371,11 +443,19 @@ pub(super) fn path_field(
                     .child("Choose with the button"),
             );
         let (choose_path, choose_id) = (path.to_owned(), field_id.clone());
+        let last = path.to_owned();
         let well = div()
             .key_context(PATHS_CONTEXT)
             .on_action(cx.listener(move |this, _: &super::ChoosePath, window, cx| {
                 this.designed_paths_chosen(&choose_path, &choose_id, pick, window, cx);
             }))
+            // Backspace in the well removes the last path, as an empty tag
+            // query's removes the last tag (#497).
+            .on_action(
+                cx.listener(move |this, _: &super::RemoveLastPath, window, cx| {
+                    this.designed_path_removed(&last, None, window, cx);
+                }),
+            )
             .child(well)
             .into_any_element();
         let (choose_path, choose_id) = (path.to_owned(), field_id.clone());
@@ -422,11 +502,23 @@ pub(super) fn path_field(
         )
     };
     let selector = format!("field-choose-{field_id}");
+    let pressed = choose.clone();
     let button =
         controls::ghost_button(SharedString::from(selector.clone()), "Choose…", true, theme)
             .debug_selector(move || selector.clone())
             .role(Role::Button)
             .map(|button| button.aria_label(format!("Choose {}", label)))
+            // Enter and Space press it, as every designed button's do.
+            .when_some(choose_focus, |button, focus| {
+                let ring = controls::focus_ring(theme);
+                button
+                    .track_focus(&focus)
+                    .focus(move |button| button.shadow(ring))
+                    .key_context(BUTTON_CONTEXT)
+                    .on_action(cx.listener(move |this, _: &Press, window, cx| {
+                        pressed(this, window, cx);
+                    }))
+            })
             .on_click(cx.listener(move |this, _, window, cx| choose(this, window, cx)));
     field_group(
         node.key.as_deref().unwrap_or_default(),

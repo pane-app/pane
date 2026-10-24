@@ -122,7 +122,8 @@ Raycast's does (#166).
 - Header: the back button and the search field ("Type to filter
   entries…", matching the text and the program it was copied from), with
   no badge or chip on it. A type dropdown sits at its right: All Types,
-  Text, Images, Files, Links, Colors.
+  Text, Images, Files, Links, Colors. Ctrl+P (Command+P on macOS) opens
+  it, as Raycast's dropdowns open, and its tooltip names the chord.
 - List: the kept records, newest first, grouped by local day: Today,
   Yesterday, then each earlier day by its date ("Thursday, Oct 1";
   "Wednesday, Dec 31, 2025" for another year).
@@ -163,6 +164,7 @@ The keys are the kept items' actions (#150):
 | Ctrl+Enter | Copy | copies it again, closes the window and shows "Copied to Clipboard" in a HUD, as every Copy action does |
 | Ctrl+D | Delete | deletes it |
 | Ctrl+K | the footer's Actions | opens the Actions panel |
+| Ctrl+P | the type dropdown | opens it, its search field taking the keyboard |
 
 The Actions panel holds:
 

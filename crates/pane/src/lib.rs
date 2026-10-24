@@ -49,7 +49,8 @@ actions!(
         OpenActions,
         ReturnToRoot,
         DismissLauncher,
-        TickChoice
+        TickChoice,
+        OpenDropdown
     ]
 );
 
@@ -85,11 +86,20 @@ pub(crate) fn bind_keys_with(
         // a collection's extensions (#308), whose list alone carries the
         // context.
         KeyBinding::new("space", TickChoice, Some(app::CHOICE_CONTEXT)),
+        // Ctrl+P (Command+P on macOS) opens the dropdown beside the search
+        // field, as Raycast's does (#497); a screen with none leaves the
+        // key to the open command.
+        KeyBinding::new(
+            &pane_core::keyboard::open_dropdown_key().id(),
+            OpenDropdown,
+            Some(app::KEY_CONTEXT),
+        ),
     ]);
     let text_editing = ui::input::bind_text_editing(cx);
     features::root_search::bind_keys(cx, &text_editing, keyboard);
     features::root_search::arguments::bind_keys(cx, &text_editing);
     features::clipboard_history::bind_keys(cx, &text_editing, keyboard);
+    features::search_files::bind_keys(cx);
     features::extension_log::bind_keys(cx);
     features::quick_slots::bind_keys(cx);
     features::footer_menu::bind_keys(cx);

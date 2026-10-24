@@ -680,6 +680,11 @@ The input handlers each name a callback id:
 - `onWheel`, `onDoubleClick`, `onSecondary` (the right button) and
   `onResize`.
 
+No key raises `onSecondary`: the Menu key and Shift+F10 are not
+forwarded as a secondary press. A canvas that offers something on its
+right button should offer it on a key too (an `onKey` binding, or an
+action in the Actions panel), so the keyboard can reach it.
+
 A press outside the drawing area is no press of the canvas. A drag
 continues outside it, and the window's deactivation ends one the window
 can no longer see the release of.
@@ -772,7 +777,10 @@ under the fields.
 The form is submitted by:
 
 - Enter in a single-line field of the form;
-- Ctrl+Enter in a text area (whose Enter inserts a newline);
+- Ctrl+Enter (Command+Enter on macOS), Raycast's, from any of the
+  form's controls: a field, a text area (whose Enter inserts a
+  newline), a checkbox or toggle, a select's trigger, a date field, a
+  tag or path picker or one of its chips;
 - the button;
 - the footer's primary action;
 - the invoke binding.
@@ -818,7 +826,7 @@ The fields:
 
 - `text-input`, `password-input`, `text-area`: as above, wearing the
   field's chrome. `text-area`'s Enter inserts a newline and Ctrl+Enter
-  submits the form.
+  (Command+Enter on macOS) submits the form.
 - `checkbox`, `toggle`: `on`/`checked`, `label` (beside the control),
   `onChange`. A submission carries `true` or `false`.
 - `select`: the searchable dropdown, with `options`' `section` (options
@@ -832,13 +840,18 @@ The fields:
   and Down step a date by a day). Its value is `"YYYY-MM-DD"`.
 - `date-time-picker`: alike, `"YYYY-MM-DD HH:MM"`, stepped by a minute.
 - `tag-picker`: a multi-select of `options`, the chosen `tags` drawn as
-  chips. Enter commits the highlighted matching option, a chip click
-  removes it, and a change tells the extension `{"value": ["…", …]}`. A
+  chips. Enter commits the highlighted matching option. A chip click
+  removes it, and so does Backspace in the empty query (the last tag)
+  or Delete or Backspace on a chip, each chip being a tab stop after
+  the query. A change tells the extension `{"value": ["…", …]}`. A
   submission carries the chosen values.
 - `file-picker`, `folder-picker`: a path typed or chosen with the
-  system's dialog (the "Choose…" button opens it). `multiple` (the SDKs'
-  `allowMultiple`) chooses several paths as chips. A submission carries
-  the path, or the list of them.
+  system's dialog (the "Choose…" button opens it; it is a tab stop
+  after the field, pressed with Enter or Space). `multiple` (the SDKs'
+  `allowMultiple`) chooses several paths as chips: Enter in their well
+  opens the dialog, Backspace there removes the last path, and each
+  chip is a tab stop that a click, Delete or Backspace removes. A
+  submission carries the path, or the list of them.
 - `markdown` is the description between a form's fields (the SDKs'
   `Form.Description`), `divider` its separator and `link` its link. They
   are the shared components they always were.
@@ -954,6 +967,9 @@ no wrap.
 has `items` (`{ "value", "title" }`), the chosen `value`, a
 `placeholder`, and `onChange` (told the chosen item's id). It is the
 searchable select (see `select`), keyed by its place in the tree.
+Ctrl+P (Command+P on macOS), Raycast's, opens it from anywhere on the
+screen, and its tooltip names the chord. On a screen with no dropdown
+the key stays the open command's.
 
 ### The Detail
 

@@ -1125,6 +1125,29 @@ impl LauncherWindow {
         }
     }
 
+    /// Ctrl+P (Command+P on macOS), Raycast's (#497): opens the dropdown
+    /// beside the search field — a designed List's or Grid's, or the
+    /// Clipboard History or Search Files type filter — its popup taking
+    /// the keyboard. An open Actions panel or footer menu keeps the key,
+    /// and a screen with no dropdown hands it on, so an action's own
+    /// shortcut on it still runs.
+    pub(crate) fn open_dropdown(
+        &mut self,
+        _: &crate::OpenDropdown,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.actions.is_some() || self.menu.is_some() {
+            return;
+        }
+        let opened = self.open_designed_dropdown(window, cx)
+            || self.open_clipboard_types(window, cx)
+            || self.open_file_types(window, cx);
+        if !opened {
+            cx.propagate();
+        }
+    }
+
     pub(crate) fn back(&mut self, _: &Back, window: &mut Window, cx: &mut Context<Self>) {
         // The back key's order, as the specification states it: an active
         // IME composition in the focused field is cancelled first, then an
@@ -3569,6 +3592,7 @@ impl Render for LauncherWindow {
             .on_action(cx.listener(Self::open_settings))
             .on_action(cx.listener(Self::toggle_actions))
             .on_action(cx.listener(Self::open_toast_details))
+            .on_action(cx.listener(Self::open_dropdown))
             // The Back-a-level key, beneath every focused control but
             // above the fields' own empty Backspace (#258). It is the
             // first capture listener of them all: the keystroke gate

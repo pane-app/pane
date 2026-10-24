@@ -341,6 +341,54 @@ fn a_pattern_typed_is_excluded_and_its_remove_brings_it_back(cx: &mut TestAppCon
     assert!(!drawn(&mut sc, "file-search-pattern-*.md"));
 }
 
+/// The Excluded card from the keyboard (#497): Enter in the pattern field
+/// excludes the pattern, as its Exclude button does; Exclude, offered
+/// once the field holds text, is a tab stop that Space presses, handing
+/// the keyboard back to the field; and Exclude Folder… is a tab stop
+/// whose Enter opens the system's folder picker.
+#[gpui::test]
+fn the_excluded_card_works_from_the_keyboard(cx: &mut TestAppContext) {
+    let world = World::new();
+    let launcher = world.launcher(true, |_| {});
+    let (_settings, mut sc) = open_page(cx, launcher.clone());
+
+    click(&mut sc, "file-search-pattern-field");
+    sc.simulate_input("*.md");
+    sc.simulate_keystrokes("enter");
+    until(&mut sc, &launcher, |launcher| {
+        launcher.file_search_rules().unwrap().1.excluded_patterns == ["*.md"]
+    });
+    assert!(drawn(&mut sc, "file-search-pattern-*.md"));
+    assert_eq!(
+        a11y::focused_label(&mut sc).as_deref(),
+        Some("Exclude Pattern")
+    );
+
+    sc.simulate_input("build/");
+    sc.run_until_parked();
+    sc.simulate_keystrokes("tab");
+    assert_eq!(a11y::focused_label(&mut sc).as_deref(), Some("Exclude"));
+    sc.simulate_keystrokes("space");
+    until(&mut sc, &launcher, |launcher| {
+        launcher.file_search_rules().unwrap().1.excluded_patterns == ["*.md", "build/"]
+    });
+    assert_eq!(
+        a11y::focused_label(&mut sc).as_deref(),
+        Some("Exclude Pattern")
+    );
+
+    sc.simulate_keystrokes("shift-tab");
+    assert_eq!(
+        a11y::focused_label(&mut sc).as_deref(),
+        Some("Exclude Folder…")
+    );
+    sc.simulate_keystrokes("enter");
+    sc.run_until_parked();
+    assert!(sc.did_prompt_for_paths(), "a folder picker opened");
+    sc.simulate_path_prompt_response(|_| None);
+    sc.run_until_parked();
+}
+
 #[gpui::test]
 fn a_long_list_of_exclusions_draws_only_the_rows_near_the_pages_view(cx: &mut TestAppContext) {
     // Three hundred patterns: the page draws the ones near its view and a

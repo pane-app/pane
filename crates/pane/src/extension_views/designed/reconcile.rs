@@ -483,11 +483,14 @@ pub(super) enum Held {
     },
     /// A text field: GPUI CE's editing state — the text, the caret, the
     /// selection and the input method's composition, with undo and the
-    /// clipboard — and its partially controlled bookkeeping.
+    /// clipboard — and its partially controlled bookkeeping. A picker of
+    /// one path is one too, with the focus of its "Choose…" button, a tab
+    /// stop of its own (#497).
     Field {
         editing: Entity<EditableTextState>,
         focus: FocusHandle,
         events: FieldEvents,
+        choose: Option<FocusHandle>,
     },
     /// A select: the searchable select of `ui::select`, which keeps its
     /// own open state, query and highlight, and the change handler its
@@ -502,17 +505,21 @@ pub(super) enum Held {
         on_input: Option<u32>,
     },
     /// A tag picker: the query its field edits, its focus, the tags
-    /// chosen and the option highlighted (#241).
+    /// chosen and the option highlighted (#241), and each chosen tag's
+    /// chip's focus, by place (#497).
     Tags {
         query: Entity<EditableTextState>,
         focus: FocusHandle,
         chosen: Vec<String>,
         highlighted: Option<usize>,
+        chips: Vec<FocusHandle>,
     },
-    /// A picker of many paths: its focus and the paths chosen (#241).
+    /// A picker of many paths: its focus and the paths chosen (#241), and
+    /// each chosen path's chip's focus, by place (#497).
     Paths {
         focus: FocusHandle,
         paths: Vec<String>,
+        chips: Vec<FocusHandle>,
     },
     /// A scroll region: its position, kept by the handle its drawing
     /// tracks.
@@ -580,10 +587,18 @@ impl Held {
                     },
                 )
                 .detach();
+                // A picker of one path's "Choose…" is a tab stop after its
+                // field (#497).
+                let choose = matches!(
+                    &node.kind,
+                    NodeKind::FilePicker(_) | NodeKind::FolderPicker(_)
+                )
+                .then(|| cx.focus_handle().tab_stop(true));
                 Held::Field {
                     editing,
                     focus,
                     events,
+                    choose,
                 }
             }
             HeldKind::Select => {
@@ -615,10 +630,23 @@ impl Held {
                 let name = select_label(node).unwrap_or_else(|| "select".into());
                 let debug = format!("designed-select-{}", super::components::short(&name));
                 let searching = !matches!(&node.kind, NodeKind::Select(select) if !select.search);
+                // A List's or Grid's search-bar dropdown opens with Ctrl+P
+                // from anywhere on its screen (#497), and its tooltip says
+                // so.
+                let hint = match &node.kind {
+                    NodeKind::ListDropdown(dropdown) => Some(crate::keyboard::dropdown_hint(
+                        dropdown.placeholder.as_deref().unwrap_or("Filter"),
+                    )),
+                    _ => None,
+                };
                 let select = cx.new(|cx| {
                     let select =
                         crate::ui::select::Select::new(name, "", debug, model, commit, window, cx)
                             .on_query(query);
+                    let select = match hint {
+                        Some(hint) => select.hint(hint),
+                        None => select,
+                    };
                     if searching {
                         select
                     } else {
@@ -656,17 +684,27 @@ impl Held {
                     },
                 )
                 .detach();
+                let chosen = tags_of(node);
+                let mut chips = Vec::new();
+                chip_focuses(&mut chips, chosen.len(), cx);
                 Held::Tags {
                     query,
                     focus,
-                    chosen: tags_of(node),
+                    chosen,
                     highlighted: None,
+                    chips,
                 }
             }
-            HeldKind::Paths => Held::Paths {
-                focus: cx.focus_handle().tab_stop(true),
-                paths: paths_of(node),
-            },
+            HeldKind::Paths => {
+                let paths = paths_of(node);
+                let mut chips = Vec::new();
+                chip_focuses(&mut chips, paths.len(), cx);
+                Held::Paths {
+                    focus: cx.focus_handle().tab_stop(true),
+                    paths,
+                    chips,
+                }
+            }
         }
     }
 
@@ -766,6 +804,16 @@ fn place(
         events.pending = None;
     }
     events.rendered = value.to_owned();
+}
+
+/// Keeps one chip focus per chosen tag or path, `len` of them, by place:
+/// a chip removed hands its place's focus to the chip after it, and a new
+/// one gets a tab stop of its own (#497).
+pub(super) fn chip_focuses(chips: &mut Vec<FocusHandle>, len: usize, cx: &App) {
+    chips.truncate(len);
+    while chips.len() < len {
+        chips.push(cx.focus_handle().tab_stop(true));
+    }
 }
 
 /// The tags a tag picker node starts with.

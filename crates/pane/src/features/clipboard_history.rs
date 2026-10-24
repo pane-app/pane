@@ -350,6 +350,7 @@ impl ClipboardHistory {
                 window,
                 cx,
             )
+            .hint(crate::keyboard::dropdown_hint("Filter by Type"))
         });
         let watching = cx.spawn(async move |this, cx| {
             let mut seen: Option<Arc<[ClipboardRecord]>> = None;
@@ -424,6 +425,23 @@ impl LauncherWindow {
     #[doc(hidden)]
     pub fn clipboard_filter(&self) -> Option<ClipboardFilter> {
         self.clipboard.as_ref().map(|history| history.browse.filter)
+    }
+
+    /// Opens the type dropdown while the view shows (Ctrl+P, #497); `false`
+    /// when it does not.
+    pub(crate) fn open_clipboard_types(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if self.launcher.clipboard_history().is_none() {
+            return false;
+        }
+        let Some(history) = self.clipboard.as_ref() else {
+            return false;
+        };
+        history.types.update(cx, |types, cx| types.open(window, cx));
+        true
     }
 
     /// Makes the split view follow the launcher's screen: it opens, with
@@ -1103,6 +1121,7 @@ impl LauncherWindow {
             .on_action(cx.listener(Self::return_to_root))
             .on_action(cx.listener(Self::dismiss))
             .on_action(cx.listener(Self::open_settings))
+            .on_action(cx.listener(Self::open_dropdown))
             .on_action(cx.listener(Self::focus_next))
             .on_action(cx.listener(Self::focus_previous))
             .size_full()

@@ -226,6 +226,7 @@ pub(crate) fn bind_keys(cx: &mut App) {
     search::bind_keys(cx);
     shortcuts::bind_keys(cx);
     keyboard::bind_keys(cx);
+    file_search::bind_keys(cx);
 }
 
 /// The Settings window's root view. One instance exists at most — see

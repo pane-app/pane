@@ -732,6 +732,22 @@ pub fn disable_command_key() -> Binding {
     default_binding(&format!("{PIN_MODIFIER}-alt-shift-d"))
 }
 
+/// The chord that submits a form from any of its fields: Ctrl+Enter
+/// (Command+Enter on macOS), Raycast's. It acts only while a form's field,
+/// picker or button holds the keyboard, so it never meets the secondary
+/// action's Ctrl+Enter, which a list's row runs. Fixed, as [`pin_key`] is.
+pub fn submit_form_key() -> Binding {
+    default_binding(&format!("{PIN_MODIFIER}-enter"))
+}
+
+/// The chord that opens the dropdown beside a search field: a designed
+/// List's or Grid's, and the Clipboard History and Search Files type
+/// filters. Ctrl+P (Command+P on macOS), Raycast's. A screen with no
+/// dropdown leaves the key to the open command. Fixed, as [`pin_key`] is.
+pub fn open_dropdown_key() -> Binding {
+    default_binding(&format!("{PIN_MODIFIER}-p"))
+}
+
 /// The local chord that picks what number `number` (0 to 9) names in the
 /// launcher: Ctrl and the digit. Fixed, as [`pin_key`] is.
 pub fn number_key(number: usize) -> Binding {

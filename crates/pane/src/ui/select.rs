@@ -245,6 +245,9 @@ pub(crate) struct Select {
     /// for one whose search the extension handles, whose popup shows the
     /// choices the extension answered with.
     unfiltered: bool,
+    /// What the trigger's tooltip says, if anything: the chord that opens
+    /// the popup from elsewhere on its screen ("Type (Ctrl+P)").
+    hint: Option<SharedString>,
     /// Whether the popup is open.
     open: bool,
     /// The popup's search field.
@@ -345,6 +348,7 @@ impl Select {
             on_commit,
             on_query: None,
             unfiltered: false,
+            hint: None,
             open: false,
             query,
             _query_changes,
@@ -386,6 +390,21 @@ impl Select {
     pub(crate) fn unfiltered(mut self) -> Self {
         self.unfiltered = true;
         self
+    }
+
+    /// Shows `hint` as the trigger's tooltip: the chord that opens the
+    /// popup from elsewhere on the screen ([`Select::open`]).
+    pub(crate) fn hint(mut self, hint: impl Into<SharedString>) -> Self {
+        self.hint = Some(hint.into());
+        self
+    }
+
+    /// Opens the popup, as the trigger's own keys do, from a chord the
+    /// consumer binds elsewhere on its screen (Ctrl+P beside a search
+    /// field): the popup's field takes the keyboard, and Escape or a
+    /// commit hands it to the trigger.
+    pub(crate) fn open(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.open_popup(window, cx);
     }
 
     /// Test support: the popup's presentation as the last frame drew it
@@ -726,6 +745,8 @@ impl Select {
             controls::select_trigger(committed.clone(), theme).focus(move |row| row.shadow(ring));
         let name = self.name.clone();
         let debug = self.debug.clone();
+        let hint = self.hint.clone();
+        let look = super::tooltip::TooltipLook::of(theme);
         row.id("trigger")
             .debug_selector(move || debug.to_string())
             .key_context(TRIGGER)
@@ -735,6 +756,9 @@ impl Select {
             .aria_value(committed)
             .aria_expanded(self.open)
             .aria_description(self.description.clone())
+            .when_some(hint, |row, hint| {
+                row.tooltip(super::tooltip::text_tooltip(hint, look))
+            })
             .on_action(cx.listener(Self::open_action))
             .capture_any_mouse_down(cx.listener(Self::trigger_pressed))
             .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {

@@ -494,6 +494,44 @@ impl LauncherWindow {
         tree::list_paths(node, &list_path)
     }
 
+    /// Opens the presented list's search-bar dropdown (Ctrl+P, #497), its
+    /// popup taking the keyboard; `false` when the screen shows none.
+    pub(crate) fn open_designed_dropdown(
+        &mut self,
+        window: &mut gpui::Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let pane_core::Screen::DesignedView(view) = self.launcher.screen() else {
+            return false;
+        };
+        if view
+            .list
+            .as_ref()
+            .is_none_or(|list| list.dropdown.is_none())
+        {
+            return false;
+        }
+        let (_, dropdown_path, _) = self.designed_list_paths(&view);
+        let path = dropdown_path.unwrap_or_else(|| "/dropdown".into());
+        let select = self
+            .designed
+            .as_ref()
+            .and_then(|controls| controls.state.get(&path))
+            .and_then(|state| match &state.held {
+                Held::Select { select, .. } => Some(select.clone()),
+                _ => None,
+            });
+        let Some(select) = select else {
+            return false;
+        };
+        // Deferred: the select's model reads this window, which is being
+        // updated while the key's action runs.
+        window.defer(cx, move |window, cx| {
+            select.update(cx, |select, cx| select.open(window, cx));
+        });
+        true
+    }
+
     /// The search-bar dropdown of the presented list, drawn in the header
     /// beside the search field; `None` when the tree names none. The
     /// dropdown is the searchable select, keyed by its place in the tree,

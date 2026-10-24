@@ -107,8 +107,16 @@ const DATE_CONTEXT: &str = "DesignedDate";
 /// highlighted option.
 const TAGS_CONTEXT: &str = "DesignedTags";
 /// The key context of a designed form's picker of many paths: Enter opens
-/// the system's dialog.
+/// the system's dialog, and Backspace removes the last path.
 const PATHS_CONTEXT: &str = "DesignedPaths";
+/// The key context of a tag picker's chosen tag or a picker of many's
+/// chosen path, while it holds the keyboard: Delete and Backspace remove
+/// it (#497).
+const CHIP_CONTEXT: &str = "DesignedChip";
+/// The key context of a whole designed tree: a form's submit chord
+/// (Ctrl+Enter, Command+Enter on macOS) is bound here, so it submits from
+/// whichever of the form's controls holds the keyboard (#497).
+const VIEW_CONTEXT: &str = "DesignedView";
 
 actions!(
     designed,
@@ -122,7 +130,10 @@ actions!(
         StepDateUp,
         StepDateDown,
         CommitTag,
+        RemoveLastTag,
         ChoosePath,
+        RemoveLastPath,
+        RemoveChip,
         Increment,
         Decrement,
         Activate,
@@ -139,10 +150,21 @@ actions!(
 /// button or a link, change a toggle or a checkbox; a segmented
 /// control's and a slider's arrows move them; Enter commits a text
 /// field; Enter in a text area inserts a newline. A form's keys submit:
-/// Ctrl+Enter in any field (#241), and a date field's arrows step the
-/// date, a tag picker's Enter commits its highlighted option, a picker
-/// of many paths' Enter opens the system's dialog.
+/// Ctrl+Enter (Command+Enter on macOS) from any of its controls (#241,
+/// #497), and a date field's arrows step the date, a tag picker's Enter
+/// commits its highlighted option and Backspace in its empty query
+/// removes the last tag, a picker of many paths' Enter opens the system's
+/// dialog and its Backspace removes the last path, and a chosen chip's
+/// Delete or Backspace removes it.
 pub(crate) fn bind_keys(cx: &mut App) {
+    let submit = pane_core::keyboard::submit_form_key().id();
+    // Under the tag picker's own query field, beside its editing keys:
+    // registered after them, Backspace here is tried first, and hands the
+    // key on to the field's own delete while the query holds text.
+    let tag_query = format!(
+        "{TAGS_CONTEXT} > {}",
+        gpui_elements::editable_text::actions::DEFAULT_INPUT_CONTEXT
+    );
     cx.bind_keys([
         KeyBinding::new("enter", Press, Some(BUTTON_CONTEXT)),
         KeyBinding::new("space", Press, Some(BUTTON_CONTEXT)),
@@ -181,12 +203,15 @@ pub(crate) fn bind_keys(cx: &mut App) {
         KeyBinding::new("right", CanvasKeyRight, Some(CANVAS_CONTEXT)),
         KeyBinding::new("home", CanvasKeyHome, Some(CANVAS_CONTEXT)),
         KeyBinding::new("end", CanvasKeyEnd, Some(CANVAS_CONTEXT)),
-        KeyBinding::new("ctrl-enter", SubmitForm, Some(INPUT_CONTEXT)),
-        KeyBinding::new("ctrl-enter", SubmitForm, Some(AREA_CONTEXT)),
+        KeyBinding::new(&submit, SubmitForm, Some(VIEW_CONTEXT)),
         KeyBinding::new("up", StepDateUp, Some(DATE_CONTEXT)),
         KeyBinding::new("down", StepDateDown, Some(DATE_CONTEXT)),
         KeyBinding::new("enter", CommitTag, Some(TAGS_CONTEXT)),
         KeyBinding::new("enter", ChoosePath, Some(PATHS_CONTEXT)),
+        KeyBinding::new("backspace", RemoveLastTag, Some(&tag_query)),
+        KeyBinding::new("backspace", RemoveLastPath, Some(PATHS_CONTEXT)),
+        KeyBinding::new("backspace", RemoveChip, Some(CHIP_CONTEXT)),
+        KeyBinding::new("delete", RemoveChip, Some(CHIP_CONTEXT)),
     ]);
 }
 
@@ -490,6 +515,7 @@ impl LauncherWindow {
                 editing,
                 focus,
                 events,
+                ..
             } => Some((editing.clone(), focus.clone(), events)),
             _ => None,
         }
@@ -547,16 +573,38 @@ impl LauncherWindow {
     /// that takes Backspace for itself — a field or a select, whose
     /// editing keys never reach the window's key handling, and whose
     /// other states (a select's trigger, its popup closed) are guarded
-    /// here: Backspace pops the view only from what does not edit with
-    /// it.
+    /// here; a tag picker's query and a picker of many paths, whose
+    /// Backspace removes the last tag or path; and a chosen chip, which
+    /// it removes (#497): Backspace pops the view only from what does not
+    /// edit with it.
     pub(crate) fn designed_takes_backspace(&self, window: &gpui::Window) -> bool {
         let Some(controls) = &self.designed else {
             return false;
         };
         controls.state.values().any(|entry| match &entry.held {
             Held::Field { focus, .. } | Held::Select { focus, .. } => focus.is_focused(window),
+            Held::Tags { focus, chips, .. } | Held::Paths { focus, chips, .. } => {
+                focus.is_focused(window) || chips.iter().any(|chip| chip.is_focused(window))
+            }
             _ => false,
         })
+    }
+
+    /// Test support: what the open designed view's tag picker or picker
+    /// of many paths keyed `key` holds — the tags or paths chosen, as a
+    /// submission collects them.
+    #[doc(hidden)]
+    pub fn designed_chosen(&self, key: &str) -> Option<Vec<String>> {
+        let controls = self.designed.as_ref()?;
+        let (_, entry) = controls
+            .state
+            .iter()
+            .find(|(path, _)| path.ends_with(&format!("/{key}")))?;
+        match &entry.held {
+            Held::Tags { chosen, .. } => Some(chosen.clone()),
+            Held::Paths { paths, .. } => Some(paths.clone()),
+            _ => None,
+        }
     }
 
     /// The designed view screen for the launcher's snapshot of the view.
@@ -653,7 +701,17 @@ impl LauncherWindow {
         div()
             .id("designed-view")
             .debug_selector(|| "designed-view".into())
-            .key_context("DesignedView")
+            .key_context(VIEW_CONTEXT)
+            // The submit chord, from whichever control holds the keyboard:
+            // a field, a checkbox, a select's trigger, a picker, a chip.
+            // A tree that holds no form hands the key on.
+            .on_action(cx.listener(|this, _: &SubmitForm, window, cx| {
+                if this.collect_form(cx).is_none() {
+                    cx.propagate();
+                    return;
+                }
+                this.submit_designed_form(window, cx);
+            }))
             .flex_1()
             .min_h(px(0.))
             .flex()
@@ -783,13 +841,14 @@ impl LauncherWindow {
     ) {
         let tags = self.designed.as_mut().and_then(|controls| {
             let entry = controls.state.get_mut(path)?;
-            let Held::Tags { chosen, .. } = &mut entry.held else {
+            let Held::Tags { chosen, chips, .. } = &mut entry.held else {
                 return None;
             };
             if chosen.iter().any(|chosen| chosen == value) {
                 return None;
             }
             chosen.push(value.to_owned());
+            reconcile::chip_focuses(chips, chosen.len(), cx);
             Some(chosen.clone())
         });
         let Some(tags) = tags else {
@@ -799,7 +858,9 @@ impl LauncherWindow {
     }
 
     /// Removes the tag `value` from the tag picker at `path`, telling the
-    /// extension what it now holds.
+    /// extension what it now holds. A chip that held the keyboard hands
+    /// it to the chip now in its place, else the one before, else the
+    /// picker's query (#497).
     fn designed_tag_removed(
         &mut self,
         path: &str,
@@ -810,16 +871,56 @@ impl LauncherWindow {
     ) {
         let tags = self.designed.as_mut().and_then(|controls| {
             let entry = controls.state.get_mut(path)?;
-            let Held::Tags { chosen, .. } = &mut entry.held else {
+            let Held::Tags {
+                chosen,
+                chips,
+                focus,
+                ..
+            } = &mut entry.held
+            else {
                 return None;
             };
-            chosen.retain(|chosen| chosen != value);
-            Some(chosen.clone())
+            let at = chosen.iter().position(|chosen| chosen == value)?;
+            let had_focus = chips.get(at).is_some_and(|chip| chip.is_focused(window));
+            chosen.remove(at);
+            reconcile::chip_focuses(chips, chosen.len(), cx);
+            let next = had_focus.then(|| chip_after_removal(chips, at, focus));
+            Some((chosen.clone(), next))
         });
-        let Some(tags) = tags else {
+        let Some((tags, next)) = tags else {
             return;
         };
+        if let Some(next) = next {
+            window.focus(&next, cx);
+        }
         self.designed_tags_changed(path, tags, callback, window, cx);
+    }
+
+    /// Backspace in the tag picker at `path`'s query: with the query
+    /// empty, the last tag chosen goes (#497), and `true` says the key
+    /// acted; with text in it the key is the query's own delete.
+    fn designed_last_tag_removed(
+        &mut self,
+        path: &str,
+        callback: Option<u32>,
+        window: &mut gpui::Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let last = self.designed.as_ref().and_then(|controls| {
+            let entry = controls.state.get(path)?;
+            let Held::Tags { query, chosen, .. } = &entry.held else {
+                return None;
+            };
+            if !query.read(cx).as_str().is_empty() {
+                return None;
+            }
+            chosen.last().cloned()
+        });
+        let Some(last) = last else {
+            return false;
+        };
+        self.designed_tag_removed(path, &last, callback, window, cx);
+        true
     }
 
     /// The tag picker at `path`'s query's Enter: the highlighted option is
@@ -905,24 +1006,43 @@ impl LauncherWindow {
         );
     }
 
-    /// Removes the last path of the picker of many at `path`.
+    /// Removes the path at `at` of the picker of many at `path`, or its
+    /// last path when `at` is `None` (its well's Backspace). A chip that
+    /// held the keyboard hands it to the chip now in its place, else the
+    /// one before, else the picker's well (#497).
     fn designed_path_removed(
         &mut self,
         path: &str,
+        at: Option<usize>,
         window: &mut gpui::Window,
         cx: &mut Context<Self>,
     ) {
-        let _ = window;
         let removed = self.designed.as_mut().and_then(|controls| {
             let entry = controls.state.get_mut(path)?;
-            let Held::Paths { paths, .. } = &mut entry.held else {
+            let Held::Paths {
+                paths,
+                chips,
+                focus,
+            } = &mut entry.held
+            else {
                 return None;
             };
-            (!paths.is_empty()).then(|| paths.pop().expect("just checked"))
+            let at = at.or_else(|| paths.len().checked_sub(1))?;
+            if at >= paths.len() {
+                return None;
+            }
+            let had_focus = chips.get(at).is_some_and(|chip| chip.is_focused(window));
+            paths.remove(at);
+            reconcile::chip_focuses(chips, paths.len(), cx);
+            Some(had_focus.then(|| chip_after_removal(chips, at, focus)))
         });
-        if removed.is_some() {
-            cx.notify();
+        let Some(next) = removed else {
+            return;
+        };
+        if let Some(next) = next {
+            window.focus(&next, cx);
         }
+        cx.notify();
     }
 
     /// The system's dialog for the picker at `path`, choosing what `pick`
@@ -973,30 +1093,32 @@ impl LauncherWindow {
                 _ => None,
             }
         });
-        if let (Some(editing), Some(picked)) = (single, paths.into_iter().next()) {
-            let text = picked.to_string_lossy().into_owned();
+        let picked: Vec<String> = paths
+            .iter()
+            .map(|picked| picked.to_string_lossy().into_owned())
+            .collect();
+        if let (Some(editing), Some(text)) = (single, picked.first()) {
             let len = text.len();
             editing.update(cx, |editing, cx| {
-                editing.emplace(&text, cx);
+                editing.emplace(text, cx);
                 editing.move_to(len, cx);
             });
             cx.notify();
             return;
         }
-        let _ = self.designed.as_mut().and_then(|controls| {
-            let entry = controls.state.get_mut(path)?;
-            let Held::Paths { paths, .. } = &mut entry.held else {
-                return None;
-            };
-            let before = paths.len();
-            let arrived = paths.clone();
-            for text in arrived {
+        // The paths the dialog chose join the picker's, each once: the
+        // dialog's own, not the picker's existing ones read back.
+        if let Some(controls) = self.designed.as_mut()
+            && let Some(entry) = controls.state.get_mut(path)
+            && let Held::Paths { paths, chips, .. } = &mut entry.held
+        {
+            for text in picked {
                 if !paths.contains(&text) {
                     paths.push(text);
                 }
             }
-            (paths.len() != before).then(|| paths.clone())
-        });
+            reconcile::chip_focuses(chips, paths.len(), cx);
+        }
         // The picker's chosen paths are its submission's value; the tree
         // the extension answers names what it draws of them.
         let _ = window;
@@ -1512,6 +1634,21 @@ impl LauncherWindow {
             committed: committed.map(gpui::SharedString::from),
         }
     }
+}
+
+/// Where the keyboard goes when the chip at `at` that held it is removed:
+/// the chip now in its place, else the one before, else the picker's own
+/// `field`, so a run of Delete presses clears the chips one by one.
+fn chip_after_removal(
+    chips: &[gpui::FocusHandle],
+    at: usize,
+    field: &gpui::FocusHandle,
+) -> gpui::FocusHandle {
+    chips
+        .get(at)
+        .or_else(|| at.checked_sub(1).and_then(|before| chips.get(before)))
+        .unwrap_or(field)
+        .clone()
 }
 
 /// The value the tree of the open screen names for the select keyed

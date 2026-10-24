@@ -193,9 +193,14 @@ fn a_text_areas_enter_inserts_a_newline_and_ctrl_enter_submits(cx: &mut TestAppC
     cx.simulate_input("two");
     assert_eq!(field_value(&window, cx, "notes"), "one line\ntwo");
 
-    // Ctrl+Enter submits from the text area, the answer drawn over the
-    // form; the view is still open, so the notes keep their text.
-    cx.simulate_keystrokes("ctrl-enter");
+    // Ctrl+Enter (Command+Enter on macOS, #497) submits from the text
+    // area, the answer drawn over the form; the view is still open, so
+    // the notes keep their text.
+    cx.simulate_keystrokes(if cfg!(target_os = "macos") {
+        "cmd-enter"
+    } else {
+        "ctrl-enter"
+    });
     settle(&window, cx);
     assert!(answer_is(cx, "Hello, Ada, from the Rust guest"));
     assert_eq!(field_value(&window, cx, "notes"), "one line\ntwo");
