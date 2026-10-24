@@ -2979,7 +2979,12 @@ fn escape_on_the_uninstall_confirmation_cancels_it_and_leaves_settings_open(
     );
     assert_eq!(focused(&mut settings_cx), "Actions for Settings sample");
 
-    // With no flow screen showing, Escape is the window's again.
+    // With no flow screen showing, Escape from Actions… gives the keyboard
+    // back to the sidebar (#495), and from there it closes Settings.
+    settings_cx.simulate_keystrokes("escape");
+    settings_cx.run_until_parked();
+    assert_eq!(settings_windows(cx).len(), 1, "Settings stays open");
+    assert_eq!(focused(&mut settings_cx), "Settings sample");
     settings_cx.simulate_keystrokes("escape");
     settings_cx.run_until_parked();
     assert!(settings_windows(cx).is_empty(), "Escape closed Settings");
@@ -3022,8 +3027,13 @@ fn escape_and_tab_close_the_actions_menu_and_leave_settings_open(cx: &mut TestAp
     );
     assert_eq!(focused(&mut settings_cx), "Actions for Settings sample");
 
-    // With no menu open, Escape is the window's again: it closes Settings,
-    // as the Keyboard page's default says.
+    // With no menu open, Escape gives the keyboard back to the sidebar
+    // (#495), and from there it closes Settings, as the Keyboard page's
+    // default says.
+    settings_cx.simulate_keystrokes("escape");
+    settings_cx.run_until_parked();
+    assert_eq!(settings_windows(cx).len(), 1, "Settings stays open");
+    assert_eq!(focused(&mut settings_cx), "Settings sample");
     settings_cx.simulate_keystrokes("escape");
     settings_cx.run_until_parked();
     assert!(settings_windows(cx).is_empty(), "Escape closed Settings");
@@ -6485,4 +6495,112 @@ fn the_taskbar_follows_the_launcher_while_the_choice_is_on(cx: &mut TestAppConte
 
     // The record holds the choice the page leaves.
     until_record_holds(cx, data.path(), "\"showTaskbar\": false");
+}
+
+/// Whether the Settings window `settings` drew Pane's focus ring on its
+/// sidebar's selected entry in its last frame, as it does while the
+/// sidebar has the keyboard. See [`SettingsWindow::sidebar_ringed`].
+fn sidebar_ringed(settings: &WindowHandle<SettingsWindow>, cx: &mut VisualTestContext) -> bool {
+    settings
+        .read_with(cx, |window, _| window.sidebar_ringed())
+        .expect("the Settings window is open")
+}
+
+/// Waits until the node assistive technology treats as focused in the
+/// window `cx` drives is labelled `label` (polled, as [`selected_section`]
+/// is).
+fn until_focused(cx: &mut VisualTestContext, label: &str) {
+    until(cx, |cx| {
+        (focused_label(cx).as_deref() == Some(label)).then_some(())
+    });
+}
+
+#[gpui::test]
+fn enter_goes_into_a_page_and_escape_comes_back_to_the_sidebar(cx: &mut TestAppContext) {
+    let (_launcher, _links, cx) = open_launcher(cx);
+    cx.simulate_keystrokes(settings_shortcut());
+    cx.run_until_parked();
+    let settings = settings_windows(cx).pop().expect("Settings opened");
+    let mut settings_cx = settings_context(&settings, cx);
+    settings_cx.run_until_parked();
+    until_focused(&mut settings_cx, "General");
+
+    // Enter on the sidebar goes into the page: its first control, the
+    // Open Pane recorder, takes the keyboard, and the sidebar's ring goes.
+    settings_cx.simulate_keystrokes("enter");
+    let focused = until(&mut settings_cx, |cx| {
+        focused_label(cx).filter(|label| label != "General")
+    });
+    assert!(focused.starts_with("Open Pane with"), "{focused:?}");
+    assert!(!sidebar_ringed(&settings, &mut settings_cx));
+
+    // Escape from a page control returns the keyboard to the sidebar,
+    // whose selected entry draws the focus ring; the window stays open.
+    settings_cx.simulate_keystrokes("escape");
+    until_focused(&mut settings_cx, "General");
+    assert!(sidebar_ringed(&settings, &mut settings_cx));
+    assert_eq!(settings_windows(&settings_cx).len(), 1, "Settings is open");
+
+    // Right goes into the page as Enter does.
+    settings_cx.simulate_keystrokes("down");
+    selected_section(&mut settings_cx, "Launcher");
+    until_focused(&mut settings_cx, "Launcher");
+    settings_cx.simulate_keystrokes("right");
+    until(&mut settings_cx, |cx| {
+        focused_label(cx).filter(|label| label != "Launcher")
+    });
+    assert!(!sidebar_ringed(&settings, &mut settings_cx));
+    settings_cx.simulate_keystrokes("escape");
+    until_focused(&mut settings_cx, "Launcher");
+    assert_eq!(settings_windows(&settings_cx).len(), 1, "Settings is open");
+
+    // From the sidebar, Escape closes the window.
+    settings_cx.simulate_keystrokes("escape");
+    until(&mut settings_cx, |cx| {
+        settings_windows(cx).is_empty().then_some(())
+    });
+}
+
+#[gpui::test]
+fn the_page_chords_switch_pages_from_anywhere_in_the_window(cx: &mut TestAppContext) {
+    let (_launcher, _links, cx) = open_launcher(cx);
+    cx.simulate_keystrokes(settings_shortcut());
+    cx.run_until_parked();
+    let settings = settings_windows(cx).pop().expect("Settings opened");
+    let mut settings_cx = settings_context(&settings, cx);
+    settings_cx.run_until_parked();
+
+    // From a page control, Ctrl+Tab selects the next sidebar entry, and
+    // the sidebar takes the keyboard.
+    settings_cx.simulate_keystrokes("enter");
+    until(&mut settings_cx, |cx| {
+        focused_label(cx).filter(|label| label != "General")
+    });
+    settings_cx.simulate_keystrokes("ctrl-tab");
+    selected_section(&mut settings_cx, "Launcher");
+    until_focused(&mut settings_cx, "Launcher");
+    assert!(sidebar_ringed(&settings, &mut settings_cx));
+
+    // Ctrl+Page Down too, from the sidebar.
+    settings_cx.simulate_keystrokes("ctrl-pagedown");
+    selected_section(&mut settings_cx, "Shortcuts");
+
+    // From the page's field, Ctrl+Shift+Tab and Ctrl+Page Up go back.
+    settings_cx.simulate_keystrokes("enter");
+    until(&mut settings_cx, |cx| {
+        focused_label(cx).filter(|label| label != "Shortcuts")
+    });
+    settings_cx.simulate_keystrokes("ctrl-shift-tab");
+    selected_section(&mut settings_cx, "Launcher");
+    until_focused(&mut settings_cx, "Launcher");
+    settings_cx.simulate_keystrokes("ctrl-pageup");
+    selected_section(&mut settings_cx, "General");
+
+    // The first entry is where going back stops.
+    settings_cx.simulate_keystrokes("ctrl-pageup");
+    selected_section(&mut settings_cx, "General");
+    assert!(
+        settings_cx.debug_bounds("general").is_some(),
+        "the General page shows"
+    );
 }
