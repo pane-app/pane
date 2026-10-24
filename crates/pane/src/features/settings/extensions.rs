@@ -58,6 +58,18 @@
 //! [`pane_core::Launcher::preview_git`]), and the preview's Install row
 //! installs it.
 //!
+//! **The keyboard.** Every switch, button and row on these pages is a tab
+//! stop that Enter and Space press as a click does, under Pane's focus
+//! ring (ADR 0035): the extension's switch, its automatic updates, each
+//! command's switches, a checkbox preference, Choose…, a requirement's
+//! fix, the group page's rows and buttons. A menu (Actions…, the group's
+//! `+`) opens with Enter, Space or Down on its button, with the keyboard on
+//! its first item that can be chosen; Up, Down, Home and End move between
+//! the items, Enter or Space chooses one, and Escape or Tab closes the
+//! menu and gives the keyboard back to its button, leaving Settings open.
+//! Enter in the install field shows the package. So the user's case — open
+//! an extension's page, Actions…, Uninstall — needs no pointer.
+//!
 //! Synchronization is by reading, not copying: every frame re-reads the
 //! launcher, and wherever the launcher changes — an operation's reply, a
 //! background update, build or runtime restart the changes channel
@@ -73,10 +85,11 @@ use std::pin::Pin;
 use std::rc::Rc;
 
 use gpui::{
-    AnyElement, App, Context, Div, ElementId, Entity, FocusHandle, Focusable, Hsla, MouseDownEvent,
-    PathPromptOptions, Role, ScrollAnchor, SharedString, Stateful, Subscription, Toggled, Window,
-    anchored, deferred, div, prelude::*, px,
+    AnyElement, App, Context, Div, ElementId, Entity, FocusHandle, Focusable, Hsla, KeyBinding,
+    MouseDownEvent, PathPromptOptions, Role, ScrollAnchor, SharedString, Stateful, Subscription,
+    Toggled, Window, actions, anchored, deferred, div, prelude::*, px,
 };
+use gpui_elements::editable_text::actions::DEFAULT_INPUT_CONTEXT;
 use gpui_elements::editable_text::{EditableTextState, StringStorage, TextChanged, text_input};
 use pane_core::clipboard::{Clock as _, SystemClock};
 use pane_core::{
@@ -86,7 +99,7 @@ use pane_core::{
     Status,
 };
 
-use super::{Page, SettingsWindow, search};
+use super::{MENU_BUTTON, Page, SettingsWindow, pressable, pressable_in, search};
 use crate::app::{launcher_changed_outside, row_icon};
 use crate::ui::controls;
 use crate::ui::extension_icon::{RowIcon, row_icon_at};
@@ -95,6 +108,48 @@ use crate::ui::material::popover_shadows;
 use crate::ui::select::{Choice, Model, Select};
 use crate::ui::theme::{Theme, pressed};
 use crate::ui::virtual_list::PageWindow;
+
+actions!(
+    extension_settings,
+    [
+        NextItem,
+        PreviousItem,
+        FirstItem,
+        LastItem,
+        CloseMenu,
+        ShowPackage
+    ]
+);
+
+/// The key context of an open menu (an extension page's Actions…, the
+/// group's +): the arrows move between its items, Enter and Space choose
+/// the one the keyboard is on, and Escape and Tab close it.
+const MENU: &str = "ExtensionMenu";
+
+/// The key context of the field that names an npm package or a Git
+/// repository to install: Enter shows the package, as Show Package does.
+const INSTALL_FIELD: &str = "ExtensionInstallField";
+
+/// Registers the pages' keys. Every switch, button and row is pressable
+/// (Enter and Space, [`super::pressable`]); here are an open menu's keys,
+/// bound deeper than the window's so they never reach its sidebar keys,
+/// focus traversal or Escape — Escape closes the menu, not Settings — and
+/// the install field's Enter.
+pub(crate) fn bind_keys(cx: &mut App) {
+    let field = format!("{INSTALL_FIELD} > {DEFAULT_INPUT_CONTEXT}");
+    cx.bind_keys([
+        KeyBinding::new("down", NextItem, Some(MENU)),
+        KeyBinding::new("up", PreviousItem, Some(MENU)),
+        KeyBinding::new("home", FirstItem, Some(MENU)),
+        KeyBinding::new("end", LastItem, Some(MENU)),
+        KeyBinding::new("enter", super::Press, Some(MENU)),
+        KeyBinding::new("space", super::Press, Some(MENU)),
+        KeyBinding::new("escape", CloseMenu, Some(MENU)),
+        KeyBinding::new("tab", CloseMenu, Some(MENU)),
+        KeyBinding::new("shift-tab", CloseMenu, Some(MENU)),
+        KeyBinding::new("enter", ShowPackage, Some(&field)),
+    ]);
+}
 
 /// What the group's page is, in one line: its sidebar entry's description
 /// in the search.
@@ -219,7 +274,49 @@ pub(crate) struct State {
     /// An extension's long Commands section, drawn only near the page's
     /// view (#165).
     commands_window: PageWindow,
+    /// The focus of each switch, button and row the keyboard presses, by
+    /// the control's key ([`State::focus`]): each a tab stop, made the
+    /// first time its control draws and kept.
+    focuses: HashMap<String, FocusHandle>,
+    /// The open menu's items' focus, by index: the arrows move between
+    /// them, so none is a tab stop.
+    menu_items: Vec<FocusHandle>,
+    /// Which of the open menu's items can be chosen, by index, as it last
+    /// drew them: the ones its arrows stop at.
+    menu_offered: Vec<bool>,
 }
+
+impl State {
+    /// The focus of the control `key` names: a tab stop, made the first
+    /// time the control draws.
+    fn focus(&mut self, key: &str, cx: &mut Context<SettingsWindow>) -> FocusHandle {
+        self.focuses
+            .entry(key.to_owned())
+            .or_insert_with(|| cx.focus_handle().tab_stop(true))
+            .clone()
+    }
+
+    /// The focus of the open menu's `index`th item.
+    fn menu_item(&mut self, index: usize, cx: &mut Context<SettingsWindow>) -> FocusHandle {
+        while self.menu_items.len() <= index {
+            self.menu_items.push(cx.focus_handle());
+        }
+        self.menu_items[index].clone()
+    }
+
+    /// Whether the control `key` names has the keyboard.
+    fn focused(&self, key: &str, window: &Window) -> bool {
+        self.focuses
+            .get(key)
+            .is_some_and(|focus| focus.is_focused(window))
+    }
+}
+
+/// The focus key of the Actions… button on an extension's page.
+const ACTIONS_BUTTON: &str = "actions";
+
+/// The focus key of the group's + button.
+const ADD_BUTTON: &str = "add";
 
 /// The field the group's page shows for an npm package or a Git
 /// repository to install.
@@ -579,7 +676,7 @@ fn description_of(package: &InstalledPackage) -> Option<String> {
 /// entry under it does not take it). `None` where this launcher installs
 /// nothing.
 pub(super) fn add_button(
-    this: &SettingsWindow,
+    this: &mut SettingsWindow,
     theme: &Theme,
     cx: &mut Context<SettingsWindow>,
 ) -> Option<AnyElement> {
@@ -587,48 +684,46 @@ pub(super) fn add_button(
         return None;
     }
     let open = this.extensions.adding;
+    let entries: Vec<MenuEntry> = InstallSource::ALL
+        .into_iter()
+        .map(|source| MenuEntry {
+            label: source.menu_title().into(),
+            selector: format!("extensions-add-{}", source.menu_title()),
+            reason: None,
+            choice: Some(MenuChoice::Install(source)),
+        })
+        .collect();
+    let offered: Vec<bool> = entries.iter().map(MenuEntry::offered).collect();
+    let trigger = this.extensions.focus(ADD_BUTTON, cx);
     let button = controls::icon_button("extensions-add", Glyph::Plus, true, theme)
         .debug_selector(|| "extensions-add".into())
         .role(Role::Button)
         .aria_label("Install an extension")
-        .aria_expanded(open)
-        .on_click(cx.listener(|this, _: &gpui::ClickEvent, _, cx| {
+        .aria_expanded(open);
+    let button = pressable_in(
+        MENU_BUTTON,
+        button,
+        &trigger,
+        controls::focus_ring(theme),
+        move |this, window, cx| {
             cx.stop_propagation();
-            this.extensions.adding = !this.extensions.adding;
-            cx.notify();
-        }));
+            let opening = !this.extensions.adding;
+            close_menus(this, cx);
+            if opening {
+                this.extensions.adding = true;
+                open_menu(this, &offered, window, cx);
+            }
+        },
+        cx,
+    );
     let menu = open.then(|| {
-        let items = InstallSource::ALL
-            .into_iter()
-            .enumerate()
-            .map(|(index, source)| {
-                controls::menu_row(
-                    ("extensions-add-item", index),
-                    source.menu_title(),
-                    None,
-                    (false, false, true),
-                    theme,
-                )
-                .debug_selector(move || format!("extensions-add-{}", source.menu_title()))
-                .role(Role::MenuItem)
-                .aria_label(source.menu_title())
-                .on_click(cx.listener(move |this, _: &gpui::ClickEvent, window, cx| {
-                    cx.stop_propagation();
-                    this.extensions.adding = false;
-                    open_install(this, source, window, cx);
-                }))
-                .into_any_element()
-            })
-            .collect::<Vec<_>>();
-        popover(
+        menu_popover(
+            this,
             "extensions-add-menu",
             "Install an extension",
-            items,
-            cx.listener(|this, _: &MouseDownEvent, _, cx| {
-                this.extensions.adding = false;
-                cx.stop_propagation();
-                cx.notify();
-            }),
+            entries,
+            "extensions-add-item",
+            trigger.clone(),
             theme,
             cx,
         )
@@ -642,19 +737,239 @@ pub(super) fn add_button(
     )
 }
 
+/// One item of a menu on these pages: what it says, its debug selector,
+/// why it cannot be chosen (drawn under it), and what choosing it does —
+/// `None` where nothing does.
+struct MenuEntry {
+    label: String,
+    selector: String,
+    reason: Option<String>,
+    choice: Option<MenuChoice>,
+}
+
+impl MenuEntry {
+    /// Whether the keyboard stops at it: it can be chosen.
+    fn offered(&self) -> bool {
+        self.reason.is_none() && self.choice.is_some()
+    }
+}
+
+/// What a menu item does when it is chosen.
+#[derive(Clone)]
+enum MenuChoice {
+    /// The Actions menu's Check for Update.
+    CheckForUpdate(PackageIdentity),
+    /// One of the launcher's operations for the extension.
+    Run(ExtensionOperation),
+    /// The Actions menu's Show Source Folder.
+    ShowSource(PackageIdentity),
+    /// One of the + menu's install sources.
+    Install(InstallSource),
+}
+
+/// Chooses a menu's item: the menu closes, the keyboard goes back to the
+/// button that opened it (or to what the choice gives it, such as the
+/// install field), and the choice runs.
+fn choose(
+    this: &mut SettingsWindow,
+    choice: &MenuChoice,
+    trigger: &FocusHandle,
+    window: &mut Window,
+    cx: &mut Context<SettingsWindow>,
+) {
+    close_menus(this, cx);
+    window.focus(trigger, cx);
+    match choice {
+        MenuChoice::CheckForUpdate(identity) => check_for_update(this, identity, cx),
+        MenuChoice::Run(operation) => run(this, operation, cx),
+        MenuChoice::ShowSource(identity) => show_source_folder(this, identity, cx),
+        MenuChoice::Install(source) => open_install(this, *source, window, cx),
+    }
+}
+
+/// Closes whichever menu is open.
+fn close_menus(this: &mut SettingsWindow, cx: &mut Context<SettingsWindow>) {
+    this.extensions.menu = false;
+    this.extensions.adding = false;
+    cx.notify();
+}
+
+/// A menu has just opened with its items' `offered` flags: the keyboard
+/// goes to the first item that can be chosen, as a menu's does, so the
+/// arrows, Enter and Escape work at once. The ring shows only where the
+/// keyboard opened it.
+fn open_menu(
+    this: &mut SettingsWindow,
+    offered: &[bool],
+    window: &mut Window,
+    cx: &mut Context<SettingsWindow>,
+) {
+    this.extensions.menu_offered = offered.to_vec();
+    if let Some(first) = offered.iter().position(|&offered| offered) {
+        let item = this.extensions.menu_item(first, cx);
+        window.focus(&item, cx);
+    }
+    cx.notify();
+}
+
+/// Where an arrow key moves in an open menu.
+#[derive(Clone, Copy)]
+enum Step {
+    Next,
+    Previous,
+    First,
+    Last,
+}
+
+/// Moves the keyboard to the open menu's next, previous, first or last
+/// item that can be chosen, stopping at either end.
+fn move_in_menu(
+    this: &mut SettingsWindow,
+    step: Step,
+    window: &mut Window,
+    cx: &mut Context<SettingsWindow>,
+) {
+    let state = &this.extensions;
+    let offered: Vec<usize> = state
+        .menu_offered
+        .iter()
+        .enumerate()
+        .filter_map(|(index, &offered)| offered.then_some(index))
+        .collect();
+    let current = state
+        .menu_items
+        .iter()
+        .take(state.menu_offered.len())
+        .position(|item| item.is_focused(window));
+    let next = match (step, current) {
+        (Step::First, _) | (Step::Next, None) => offered.first(),
+        (Step::Last, _) | (Step::Previous, None) => offered.last(),
+        (Step::Next, Some(at)) => offered.iter().find(|&&index| index > at).or(offered.last()),
+        (Step::Previous, Some(at)) => offered
+            .iter()
+            .rev()
+            .find(|&&index| index < at)
+            .or(offered.first()),
+    };
+    if let Some(item) = next.and_then(|&index| state.menu_items.get(index)).cloned() {
+        window.focus(&item, cx);
+    }
+}
+
+/// A menu's popup holding `entries`, each a menu item `item_id`: Pane's
+/// popover under its trigger (see [`popover`]), taking the keyboard as a
+/// menu does — the arrows move between the items that can be chosen,
+/// Enter or Space chooses one, as a click does, and Escape or Tab closes
+/// it and gives the keyboard back to `trigger`, the button that opened it,
+/// leaving Settings open. A mouse-down outside closes it too.
+#[allow(clippy::too_many_arguments)]
+fn menu_popover(
+    this: &mut SettingsWindow,
+    id: &'static str,
+    label: &'static str,
+    entries: Vec<MenuEntry>,
+    item_id: &'static str,
+    trigger: FocusHandle,
+    theme: &Theme,
+    cx: &mut Context<SettingsWindow>,
+) -> AnyElement {
+    this.extensions.menu_offered = entries.iter().map(MenuEntry::offered).collect();
+    let wash = theme.selection_wash;
+    let items: Vec<AnyElement> = entries
+        .into_iter()
+        .enumerate()
+        .map(|(index, entry)| {
+            let offered = entry.offered();
+            let MenuEntry {
+                label,
+                selector,
+                reason,
+                choice,
+            } = entry;
+            let row = controls::menu_row(
+                (item_id, index),
+                label.clone(),
+                reason.clone().map(SharedString::from),
+                (false, false, reason.is_none()),
+                theme,
+            )
+            .debug_selector(move || selector)
+            .role(Role::MenuItem)
+            .aria_label(label)
+            .when(reason.is_some(), |row| row.aria_disabled(true));
+            let Some(choice) = choice else {
+                return row.into_any_element();
+            };
+            let focus = this.extensions.menu_item(index, cx);
+            let (for_key, for_click) = (choice.clone(), choice);
+            let (trigger_key, trigger_click) = (trigger.clone(), trigger.clone());
+            row
+                // An item the keyboard can reach is focusable, and the
+                // keyboard's item takes the selection wash, as the Actions
+                // panel's highlighted entry does. One that cannot be
+                // chosen keeps its click, which says why.
+                .when(offered, |row| {
+                    row.track_focus(&focus)
+                        .focus_visible(move |style| style.bg(wash))
+                })
+                .on_action(cx.listener(move |this, _: &super::Press, window, cx| {
+                    choose(this, &for_key, &trigger_key, window, cx);
+                }))
+                .on_click(cx.listener(move |this, _: &gpui::ClickEvent, window, cx| {
+                    cx.stop_propagation();
+                    choose(this, &for_click, &trigger_click, window, cx);
+                }))
+                .into_any_element()
+        })
+        .collect();
+    let close = trigger.clone();
+    let keys = div()
+        .key_context(MENU)
+        .on_action(cx.listener(|this, _: &NextItem, window, cx| {
+            move_in_menu(this, Step::Next, window, cx);
+        }))
+        .on_action(cx.listener(|this, _: &PreviousItem, window, cx| {
+            move_in_menu(this, Step::Previous, window, cx);
+        }))
+        .on_action(cx.listener(|this, _: &FirstItem, window, cx| {
+            move_in_menu(this, Step::First, window, cx);
+        }))
+        .on_action(cx.listener(|this, _: &LastItem, window, cx| {
+            move_in_menu(this, Step::Last, window, cx);
+        }))
+        .on_action(cx.listener(move |this, _: &CloseMenu, window, cx| {
+            close_menus(this, cx);
+            window.focus(&close, cx);
+        }));
+    popover(
+        id,
+        label,
+        keys,
+        items,
+        cx.listener(|this, _: &MouseDownEvent, _, cx| {
+            close_menus(this, cx);
+            cx.stop_propagation();
+        }),
+        theme,
+        cx,
+    )
+}
+
 /// A menu's popup: Pane's popover under its trigger, deferred so it paints
-/// over the page, holding `items`; a mouse-down outside it closes it
+/// over the page, holding `items` inside `keys` (the menu's key context
+/// and its keys' handlers); a mouse-down outside it closes it
 /// (`outside`), and is consumed.
 fn popover(
     id: &'static str,
     label: &'static str,
+    keys: Div,
     items: Vec<AnyElement>,
     outside: impl Fn(&MouseDownEvent, &mut Window, &mut App) + 'static,
     theme: &Theme,
     cx: &App,
 ) -> AnyElement {
     let material = crate::settings::visuals(cx).material;
-    let list = div()
+    let list = keys
         .flex()
         .flex_col()
         .p(px(4.))
@@ -1494,21 +1809,26 @@ fn group_page(
             theme,
         );
         let selector = format!("extension-item-{title}");
+        let focus = this.extensions.focus(&format!("item:{key}"), cx);
+        let item = controls::list_item(
+            ("extension-item", index),
+            Some(tile),
+            title.clone(),
+            lines,
+            theme,
+        )
+        .debug_selector(move || selector)
+        .role(Role::Link)
+        .aria_label(title)
+        .anchor_scroll(Some(anchor));
         items.push(
-            controls::list_item(
-                ("extension-item", index),
-                Some(tile),
-                title.clone(),
-                lines,
-                theme,
+            pressable(
+                item,
+                &focus,
+                controls::focus_ring(theme),
+                move |this, _, cx| this.show_extension(Some(key.clone()), cx),
+                cx,
             )
-            .debug_selector(move || selector)
-            .role(Role::Link)
-            .aria_label(title)
-            .anchor_scroll(Some(anchor))
-            .on_click(cx.listener(move |this, _: &gpui::ClickEvent, _, cx| {
-                this.show_extension(Some(key.clone()), cx);
-            }))
             .into_any_element(),
         );
     }
@@ -1563,20 +1883,29 @@ fn group_page(
         let anchor = this.search_anchor(&operation.id);
         let selector = format!("extension-row-{}", operation.title);
         let title = operation.title.clone();
+        let focus = this
+            .extensions
+            .focus(&format!("other:{}", operation.id), cx);
+        let row = list_entry(
+            ("extension-other", others.len()),
+            Some((&icon, title.clone())),
+            &title,
+            reason.clone(),
+            theme,
+        )
+        .debug_selector(move || selector)
+        .when(reason.is_some(), |item| item.aria_disabled(true))
+        .anchor_scroll(Some(anchor));
+        // An unavailable row stays reachable: pressing it says why, as its
+        // click does.
         others.push(
-            list_entry(
-                ("extension-other", others.len()),
-                Some((&icon, title.clone())),
-                &title,
-                reason.clone(),
-                theme,
+            pressable(
+                row,
+                &focus,
+                controls::focus_ring(theme),
+                move |this, _, cx| run(this, &operation, cx),
+                cx,
             )
-            .debug_selector(move || selector)
-            .when(reason.is_some(), |item| item.aria_disabled(true))
-            .anchor_scroll(Some(anchor))
-            .on_click(cx.listener(move |this, _: &gpui::ClickEvent, _, cx| {
-                run(this, &operation, cx);
-            }))
             .into_any_element(),
         );
     }
@@ -1590,6 +1919,7 @@ fn group_page(
     }
     if let Some(operation) = global {
         let anchor = this.search_anchor(&operation.id);
+        let focus = this.extensions.focus("updates", cx);
         let switch = switch_row(
             "extension-updates".into(),
             "Update extensions automatically",
@@ -1597,10 +1927,14 @@ fn group_page(
             operation.on.unwrap_or(false),
             theme,
         )
-        .anchor_scroll(Some(anchor))
-        .on_click(cx.listener(move |this, _: &gpui::ClickEvent, _, cx| {
-            run(this, &operation, cx);
-        }));
+        .anchor_scroll(Some(anchor));
+        let switch = pressable(
+            switch,
+            &focus,
+            controls::focus_ring(theme),
+            move |this, _, cx| run(this, &operation, cx),
+            cx,
+        );
         // Check for updates, beside the choice that governs the automatic
         // ones: the pass the user asked for — the same pass root search's
         // Check for Extension Updates row starts (ADR 0043: two entry
@@ -1613,6 +1947,11 @@ fn group_page(
             .role(Role::Status)
             .aria_label(words)
             .debug_selector(|| "extension-last-checked".into());
+        let focus = this.extensions.focus("check-updates", cx);
+        let button = controls::button("extension-check-updates", "Check for updates", true, theme)
+            .debug_selector(|| "extension-check-updates".into())
+            .role(Role::Button)
+            .aria_label("Check for updates");
         let check = controls::setting_row_with(
             div()
                 .flex()
@@ -1622,16 +1961,16 @@ fn group_page(
             Vec::new(),
             theme,
         )
-        .child(
-            controls::button("extension-check-updates", "Check for updates", true, theme)
-                .debug_selector(|| "extension-check-updates".into())
-                .role(Role::Button)
-                .aria_label("Check for updates")
-                .on_click(cx.listener(|this, _: &gpui::ClickEvent, _, cx| {
-                    this.extensions.outcome = None;
-                    keep_outcome_of(this.launcher.check_extension_updates(), cx);
-                })),
-        )
+        .child(pressable(
+            button,
+            &focus,
+            controls::focus_ring(theme),
+            |this, _, cx| {
+                this.extensions.outcome = None;
+                keep_outcome_of(this.launcher.check_extension_updates(), cx);
+            },
+            cx,
+        ))
         .id("extension-row-Check for updates")
         .debug_selector(|| "extension-row-Check for updates".into());
         content.push(
@@ -1693,10 +2032,25 @@ fn official_section(
         .debug_selector(move || button_selector)
         .role(Role::Button)
         .aria_label(label)
-        .when(!enabled, |button| button.aria_disabled(true))
-        .on_click(cx.listener(move |this, _: &gpui::ClickEvent, _, cx| {
-            run(this, &operation, cx);
-        }));
+        .when(!enabled, |button| button.aria_disabled(true));
+        // An Install that cannot run is no tab stop; its click still says
+        // why.
+        let button = if enabled {
+            let focus = this
+                .extensions
+                .focus(&format!("official:{}", operation.id), cx);
+            pressable(
+                button,
+                &focus,
+                controls::focus_ring(theme),
+                move |this, _, cx| run(this, &operation, cx),
+                cx,
+            )
+        } else {
+            button.on_click(cx.listener(move |this, _: &gpui::ClickEvent, _, cx| {
+                run(this, &operation, cx);
+            }))
+        };
         rows.push(
             controls::setting_row(title, lines, theme)
                 .child(button)
@@ -1731,16 +2085,21 @@ fn install_section(
         let anchor = this.search_anchor(source.target());
         let id = SharedString::from(format!("extension-install-{}", source.target()));
         let selector = format!("extension-install-{}", source.button());
-        buttons.push(
-            controls::button(id, source.button(), true, theme)
-                .debug_selector(move || selector)
-                .role(Role::Button)
-                .aria_label(source.menu_title())
-                .anchor_scroll(Some(anchor))
-                .on_click(cx.listener(move |this, _: &gpui::ClickEvent, window, cx| {
-                    start_install(this, source, window, cx);
-                })),
-        );
+        let focus = this.extensions.focus(source.target(), cx);
+        let button = controls::button(id, source.button(), true, theme)
+            .debug_selector(move || selector)
+            .role(Role::Button)
+            .aria_label(source.menu_title())
+            .anchor_scroll(Some(anchor));
+        buttons.push(pressable(
+            button,
+            &focus,
+            controls::focus_ring(theme),
+            move |this, window, cx| {
+                start_install(this, source, window, cx);
+            },
+            cx,
+        ));
     }
     let row = controls::setting_row("Install from", Vec::new(), theme).child(
         div()
@@ -1750,11 +2109,15 @@ fn install_section(
             .children(buttons),
     );
     let mut rows = vec![row.into_any_element()];
-    if let Some(installing) = &this.extensions.installing {
-        let input = installing.input.clone();
+    let installing = this
+        .extensions
+        .installing
+        .as_ref()
+        .map(|installing| (installing.input.clone(), installing.source));
+    if let Some((input, source)) = installing {
         let focused = input.focus_handle(cx).is_focused(window);
         let text = input.read(cx).as_str().to_owned();
-        let (label, placeholder) = match installing.source {
+        let (label, placeholder) = match source {
             InstallSource::Npm => (
                 "npm package: its name, and a version to install that one",
                 "such as @scope/name or name@1.2.3",
@@ -1768,6 +2131,11 @@ fn install_section(
             .w(px(300.))
             .id("extension-install-field")
             .debug_selector(|| "extension-install-field".into())
+            // Enter shows the package, as Show Package does.
+            .key_context(INSTALL_FIELD)
+            .on_action(cx.listener(|this, _: &ShowPackage, _, cx| {
+                submit_install(this, cx);
+            }))
             .track_focus(&input.focus_handle(cx))
             .shadow(controls::well_shadows(focused, theme))
             .role(Role::TextInput)
@@ -1783,10 +2151,21 @@ fn install_section(
         let show = controls::button("extension-install-show", "Show Package", offered, theme)
             .debug_selector(|| "extension-install-show".into())
             .role(Role::Button)
-            .aria_label("Show Package")
-            .on_click(cx.listener(|this, _: &gpui::ClickEvent, _, cx| {
-                submit_install(this, cx);
-            }));
+            .aria_label("Show Package");
+        // A tab stop while there is a package to show, as an offered
+        // button is.
+        let show = if offered {
+            let focus = this.extensions.focus("install-show", cx);
+            pressable(
+                show,
+                &focus,
+                controls::focus_ring(theme),
+                |this, _, cx| submit_install(this, cx),
+                cx,
+            )
+        } else {
+            show.aria_disabled(true)
+        };
         let row = controls::setting_row(label, Vec::new(), theme).child(
             div()
                 .flex_none()
@@ -2036,27 +2415,42 @@ fn extension_page(
         } else {
             Toggled::False
         })
-        .cursor_pointer()
-        .when_some(enable, |row, operation| {
-            row.on_click(cx.listener(move |this, _: &gpui::ClickEvent, _, cx| {
-                run(this, &operation, cx);
-            }))
-        });
+        .cursor_pointer();
+    // The whole row is the switch, for the keyboard as for the pointer: a
+    // tab stop that Enter and Space turn.
+    let switch = match enable {
+        Some(operation) => {
+            let focus = this.extensions.focus("enable", cx);
+            pressable(
+                switch,
+                &focus,
+                controls::focus_ring(theme),
+                move |this, _, cx| run(this, &operation, cx),
+                cx,
+            )
+        }
+        None => switch,
+    };
     let mut first = vec![switch.into_any_element()];
     if let Some(operation) = auto_update {
         let anchor = this.search_anchor(&operation.id);
+        let focus = this.extensions.focus("auto-update", cx);
+        let row = switch_row(
+            "extension-auto-update".into(),
+            "Update automatically",
+            "extension-auto-update",
+            operation.on.unwrap_or(false),
+            theme,
+        )
+        .anchor_scroll(Some(anchor));
         first.push(
-            switch_row(
-                "extension-auto-update".into(),
-                "Update automatically",
-                "extension-auto-update",
-                operation.on.unwrap_or(false),
-                theme,
+            pressable(
+                row,
+                &focus,
+                controls::focus_ring(theme),
+                move |this, _, cx| run(this, &operation, cx),
+                cx,
             )
-            .anchor_scroll(Some(anchor))
-            .on_click(cx.listener(move |this, _: &gpui::ClickEvent, _, cx| {
-                run(this, &operation, cx);
-            }))
             .into_any_element(),
         );
     }
@@ -2075,7 +2469,7 @@ fn extension_page(
     // each unmet requirement, the chain down to what is actually missing,
     // with the fix row beside it, which applies at once. The rows
     // disappear when the package comes back.
-    if let Some(section) = requirements_section(details.as_ref(), theme, cx) {
+    if let Some(section) = requirements_section(this, details.as_ref(), theme, cx) {
         content.push(section);
     }
 
@@ -2090,10 +2484,12 @@ fn extension_page(
                 (target, anchor)
             })
             .collect();
+        let focuses = preference_focuses(this, &preferences, cx);
         let drawing = PreferenceControls {
             fields: &fields,
             selects: &selects,
             anchors: &anchors,
+            focuses: &focuses,
         };
         let rows = preference_rows(&preferences, &drawing, theme, cx);
         if !rows.is_empty() {
@@ -2132,6 +2528,7 @@ fn extension_page(
 /// which applies at once. Shown only while something is not met; the rows
 /// disappear when what they name comes back.
 fn requirements_section(
+    this: &mut SettingsWindow,
     details: Option<&ExtensionDetails>,
     theme: &Theme,
     cx: &mut Context<SettingsWindow>,
@@ -2152,13 +2549,18 @@ fn requirements_section(
                 let selector = format!("extension-fix-{}", fix.title);
                 let chosen = fix.clone();
                 let id = SharedString::from(selector.clone());
-                controls::button(id, fix.title.clone(), true, theme)
+                let focus = this.extensions.focus(&format!("fix:{}", fix.title), cx);
+                let button = controls::button(id, fix.title.clone(), true, theme)
                     .debug_selector(move || selector)
                     .role(Role::Button)
-                    .aria_label(fix.title.clone())
-                    .on_click(cx.listener(move |this, _: &gpui::ClickEvent, _, cx| {
-                        run_fix(this, &chosen, cx);
-                    }))
+                    .aria_label(fix.title.clone());
+                pressable(
+                    button,
+                    &focus,
+                    controls::focus_ring(theme),
+                    move |this, _, cx| run_fix(this, &chosen, cx),
+                    cx,
+                )
             });
             controls::setting_row_with(label, Vec::new(), theme)
                 .child(div().flex_none().children(fix))
@@ -2386,120 +2788,46 @@ fn header(
 /// operations for the extension, Show Source Folder (the page's own), and
 /// Uninstall last.
 fn actions_menu(
-    this: &SettingsWindow,
+    this: &mut SettingsWindow,
     package: &InstalledPackage,
     operations: &[ExtensionOperation],
     theme: &Theme,
     cx: &mut Context<SettingsWindow>,
 ) -> AnyElement {
     let open = this.extensions.menu;
+    let entries = actions_entries(package, operations);
+    let offered: Vec<bool> = entries.iter().map(MenuEntry::offered).collect();
+    let trigger = this.extensions.focus(ACTIONS_BUTTON, cx);
     let button = controls::ghost_button("extension-menu", "Actions…", true, theme)
         .debug_selector(|| "extension-menu".into())
         .role(Role::Button)
         .aria_label(format!("Actions for {}", package.title()))
-        .aria_expanded(open)
-        .on_click(cx.listener(|this, _: &gpui::ClickEvent, _, cx| {
-            this.extensions.menu = !this.extensions.menu;
-            cx.notify();
-        }));
-    let menu = open.then(|| {
-        let identity = package.identity.clone();
-        let checkable = package.npm.is_some() || package.git.is_some();
-        let mut items: Vec<AnyElement> = Vec::new();
-        let entry = |index: usize, label: &str, selector: String, reason: Option<String>| {
-            controls::menu_row(
-                ("extension-menu-item", index),
-                label.to_owned(),
-                reason.clone().map(SharedString::from),
-                (false, false, reason.is_none()),
-                theme,
-            )
-            .debug_selector(move || selector)
-            .role(Role::MenuItem)
-            .aria_label(label.to_owned())
-            .when(reason.is_some(), |row| row.aria_disabled(true))
-        };
-        // Check for Update: the package's source again, as its preview.
-        let why_not = (!checkable).then(|| {
-            if package.identity.default_id().is_some() {
-                "Pane updates its default extensions itself".to_owned()
-            } else {
-                "A folder's extension updates when you reload it".to_owned()
+        .aria_expanded(open);
+    // A menu button: Enter, Space or Down opens the menu with the keyboard
+    // on its first item, as a click does.
+    let button = pressable_in(
+        MENU_BUTTON,
+        button,
+        &trigger,
+        controls::focus_ring(theme),
+        move |this, window, cx| {
+            let opening = !this.extensions.menu;
+            close_menus(this, cx);
+            if opening {
+                this.extensions.menu = true;
+                open_menu(this, &offered, window, cx);
             }
-        });
-        let for_check = identity.clone();
-        items.push(
-            entry(
-                items.len(),
-                "Check for Update",
-                "extension-menu-Check for Update".into(),
-                why_not,
-            )
-            .when(checkable, |row| {
-                row.on_click(cx.listener(move |this, _: &gpui::ClickEvent, _, cx| {
-                    this.extensions.menu = false;
-                    check_for_update(this, &for_check, cx);
-                }))
-            })
-            .into_any_element(),
-        );
-        let (uninstall, others): (Vec<&ExtensionOperation>, Vec<&ExtensionOperation>) = operations
-            .iter()
-            .partition(|operation| operation.kind == OperationKind::Uninstall);
-        for operation in others {
-            let chosen = operation.clone();
-            items.push(
-                entry(
-                    items.len(),
-                    &operation.label,
-                    format!("extension-row-{}", operation.title),
-                    operation.unavailable.clone(),
-                )
-                .on_click(cx.listener(move |this, _: &gpui::ClickEvent, _, cx| {
-                    this.extensions.menu = false;
-                    run(this, &chosen, cx);
-                }))
-                .into_any_element(),
-            );
-        }
-        items.push(
-            entry(
-                items.len(),
-                "Show Source Folder",
-                "extension-menu-Show Source Folder".into(),
-                None,
-            )
-            .on_click(cx.listener(move |this, _: &gpui::ClickEvent, _, cx| {
-                this.extensions.menu = false;
-                show_source_folder(this, &identity, cx);
-            }))
-            .into_any_element(),
-        );
-        for operation in uninstall {
-            let chosen = operation.clone();
-            items.push(
-                entry(
-                    items.len(),
-                    &operation.label,
-                    format!("extension-row-{}", operation.title),
-                    operation.unavailable.clone(),
-                )
-                .on_click(cx.listener(move |this, _: &gpui::ClickEvent, _, cx| {
-                    this.extensions.menu = false;
-                    run(this, &chosen, cx);
-                }))
-                .into_any_element(),
-            );
-        }
-        popover(
+        },
+        cx,
+    );
+    let menu = open.then(|| {
+        menu_popover(
+            this,
             "extension-menu-popup",
             "Extension actions",
-            items,
-            cx.listener(|this, _: &MouseDownEvent, _, cx| {
-                this.extensions.menu = false;
-                cx.stop_propagation();
-                cx.notify();
-            }),
+            entries,
+            "extension-menu-item",
+            trigger.clone(),
             theme,
             cx,
         )
@@ -2509,6 +2837,50 @@ fn actions_menu(
         .justify_end()
         .child(div().flex_none().child(button).children(menu))
         .into_any_element()
+}
+
+/// The Actions menu's items for `package`, in order: Check for Update (the
+/// page's own: the package's source again, as its preview), the
+/// launcher's `operations` for it, Show Source Folder (the page's own),
+/// and Uninstall last.
+fn actions_entries(
+    package: &InstalledPackage,
+    operations: &[ExtensionOperation],
+) -> Vec<MenuEntry> {
+    let identity = package.identity.clone();
+    let checkable = package.npm.is_some() || package.git.is_some();
+    let why_not = (!checkable).then(|| {
+        if identity.default_id().is_some() {
+            "Pane updates its default extensions itself".to_owned()
+        } else {
+            "A folder's extension updates when you reload it".to_owned()
+        }
+    });
+    let mut entries = vec![MenuEntry {
+        label: "Check for Update".into(),
+        selector: "extension-menu-Check for Update".into(),
+        reason: why_not,
+        choice: checkable.then(|| MenuChoice::CheckForUpdate(identity.clone())),
+    }];
+    let operation_entry = |operation: &ExtensionOperation| MenuEntry {
+        label: operation.label.clone(),
+        selector: format!("extension-row-{}", operation.title),
+        reason: operation.unavailable.clone(),
+        // An unavailable operation keeps its click, which says why.
+        choice: Some(MenuChoice::Run(operation.clone())),
+    };
+    let (uninstall, others): (Vec<&ExtensionOperation>, Vec<&ExtensionOperation>) = operations
+        .iter()
+        .partition(|operation| operation.kind == OperationKind::Uninstall);
+    entries.extend(others.into_iter().map(operation_entry));
+    entries.push(MenuEntry {
+        label: "Show Source Folder".into(),
+        selector: "extension-menu-Show Source Folder".into(),
+        reason: None,
+        choice: Some(MenuChoice::ShowSource(identity)),
+    });
+    entries.extend(uninstall.into_iter().map(operation_entry));
+    entries
 }
 
 /// The page's Commands section: each command with its icon, its title, its
@@ -2565,7 +2937,13 @@ fn commands_section(
     let mut rows = Vec::new();
     for listed in commands {
         let id = listed.registration.id.clone();
-        let kept = active.contains(&id);
+        // A command whose switch has the keyboard is drawn wherever the
+        // page is scrolled, as one being edited is.
+        let kept = active.contains(&id)
+            || this
+                .extensions
+                .focused(&format!("command-toggle:{id}"), window)
+            || this.extensions.focused(&format!("fallback:{id}"), window);
         let row = window_rows.row(count, id, kept, &page, || {
             command_row(this, package, listed, &shortcuts, fallbacks, theme, cx)
         });
@@ -2574,18 +2952,25 @@ fn commands_section(
     for (index, operation) in forget.iter().enumerate() {
         let chosen = operation.clone();
         let selector = format!("extension-row-{}", operation.title);
+        let focus = this
+            .extensions
+            .focus(&format!("forget:{}", operation.id), cx);
+        let row = list_entry(
+            ("extension-forget", index),
+            None,
+            &operation.title,
+            Some("Not active; choose it to forget it".into()),
+            theme,
+        )
+        .debug_selector(move || selector);
         rows.push(
-            list_entry(
-                ("extension-forget", index),
-                None,
-                &operation.title,
-                Some("Not active; click to forget it".into()),
-                theme,
+            pressable(
+                row,
+                &focus,
+                controls::focus_ring(theme),
+                move |this, _, cx| run(this, &chosen, cx),
+                cx,
             )
-            .debug_selector(move || selector)
-            .on_click(cx.listener(move |this, _: &gpui::ClickEvent, _, cx| {
-                run(this, &chosen, cx);
-            }))
             .into_any_element(),
         );
     }
@@ -2672,6 +3057,14 @@ fn command_row(
         let selector = format!("extension-command-fallback-{id}");
         let operation = fallback.clone();
         let on = fallback.on.unwrap_or(false);
+        let focus = this.extensions.focus(&format!("fallback:{id}"), cx);
+        let toggle = controls::toggle(on, theme)
+            .id(SharedString::from(selector.clone()))
+            .debug_selector(move || selector)
+            .role(Role::Switch)
+            .aria_label(format!("Offer {} as a fallback", command.title))
+            .aria_toggled(if on { Toggled::True } else { Toggled::False })
+            .cursor_pointer();
         div()
             .flex_none()
             .flex()
@@ -2679,22 +3072,18 @@ fn command_row(
             .items_center()
             .gap(px(2.))
             .child(controls::caption("Fallback", theme))
-            .child(
-                controls::toggle(on, theme)
-                    .id(SharedString::from(selector.clone()))
-                    .debug_selector(move || selector)
-                    .role(Role::Switch)
-                    .aria_label(format!("Offer {} as a fallback", command.title))
-                    .aria_toggled(if on { Toggled::True } else { Toggled::False })
-                    .cursor_pointer()
-                    .on_click(cx.listener(move |this, _: &gpui::ClickEvent, _, cx| {
-                        run(this, &operation, cx);
-                    })),
-            )
+            .child(pressable(
+                toggle,
+                &focus,
+                controls::focus_ring(theme),
+                move |this, _, cx| run(this, &operation, cx),
+                cx,
+            ))
     });
     let enabled = listed.enabled;
     let switch_selector = format!("extension-command-toggle-{id}");
-    let for_click = id.clone();
+    let for_press = id.clone();
+    let focus = this.extensions.focus(&format!("command-toggle:{id}"), cx);
     let switch = controls::toggle(enabled, theme)
         .id(SharedString::from(switch_selector.clone()))
         .debug_selector(move || switch_selector)
@@ -2705,10 +3094,14 @@ fn command_row(
         } else {
             Toggled::False
         })
-        .cursor_pointer()
-        .on_click(cx.listener(move |this, _: &gpui::ClickEvent, _, cx| {
-            switch_command(this, &for_click, !enabled, cx);
-        }));
+        .cursor_pointer();
+    let switch = pressable(
+        switch,
+        &focus,
+        controls::focus_ring(theme),
+        move |this, _, cx| switch_command(this, &for_press, !enabled, cx),
+        cx,
+    );
     let selector = format!("extension-command-{id}");
     controls::setting_row_with(label, lines, theme)
         .items_start()
@@ -2760,6 +3153,43 @@ struct PreferenceControls<'a> {
     fields: &'a HashMap<String, FieldInput>,
     selects: &'a HashMap<String, Entity<Select>>,
     anchors: &'a HashMap<String, ScrollAnchor>,
+    /// The focus of each checkbox's switch and each path's Choose… button,
+    /// by [`field_key`].
+    focuses: &'a HashMap<String, FocusHandle>,
+}
+
+/// The focus of the switch of each checkbox preference of `preferences`,
+/// and of the Choose… (or Add…) button of each file, folder and
+/// application preference, by [`field_key`]: tab stops, as the text
+/// fields and selects beside them are.
+fn preference_focuses(
+    this: &mut SettingsWindow,
+    preferences: &PackagePreferences,
+    cx: &mut Context<SettingsWindow>,
+) -> HashMap<String, FocusHandle> {
+    let package = preferences.identity.key();
+    let all = preferences.fields.iter().chain(
+        preferences
+            .commands
+            .iter()
+            .flat_map(|command| &command.fields),
+    );
+    let mut focuses = HashMap::new();
+    for field in all {
+        if matches!(
+            field.preference.kind,
+            PreferenceKind::Checkbox
+                | PreferenceKind::File
+                | PreferenceKind::Folder
+                | PreferenceKind::Application
+                | PreferenceKind::Applications
+        ) {
+            let key = field_key(&package, &field.key);
+            let focus = this.extensions.focus(&format!("preference:{key}"), cx);
+            focuses.insert(key, focus);
+        }
+    }
+    focuses
 }
 
 /// The rows of an extension's preferences: the package's, then each
@@ -2840,17 +3270,23 @@ fn preference_row(
                 .clone()
                 .unwrap_or_else(|| preference.title.clone());
             let (owner, saved) = (package.to_owned(), key.clone());
-            controls::toggle(on, theme)
+            let toggle = controls::toggle(on, theme)
                 .id(SharedString::from(selector.clone()))
                 .debug_selector(move || selector)
                 .role(Role::Switch)
                 .aria_label(label)
                 .aria_toggled(if on { Toggled::True } else { Toggled::False })
-                .cursor_pointer()
-                .on_click(cx.listener(move |this, _: &gpui::ClickEvent, _, cx| {
+                .cursor_pointer();
+            pressable(
+                toggle,
+                &drawing.focuses[&field_key(package, &key)],
+                controls::focus_ring(theme),
+                move |this, _, cx| {
                     save_preference(this, &owner, &saved, &(!on).to_string(), cx);
-                }))
-                .into_any_element()
+                },
+                cx,
+            )
+            .into_any_element()
         }
         PreferenceKind::Dropdown => match drawing.selects.get(&field_key(package, &key)) {
             Some(select) => div().flex_none().child(select.clone()).into_any_element(),
@@ -2881,13 +3317,22 @@ fn preference_row(
                 } else {
                     "Choose…"
                 };
-                controls::ghost_button(SharedString::from(selector.clone()), label, true, theme)
-                    .debug_selector(move || selector)
-                    .role(Role::Button)
-                    .aria_label(format!("Choose {}", preference.title))
-                    .on_click(cx.listener(move |this, _: &gpui::ClickEvent, window, cx| {
-                        choose_path(this, &owner, &saved, kind, window, cx);
-                    }))
+                let button = controls::ghost_button(
+                    SharedString::from(selector.clone()),
+                    label,
+                    true,
+                    theme,
+                )
+                .debug_selector(move || selector)
+                .role(Role::Button)
+                .aria_label(format!("Choose {}", preference.title));
+                pressable(
+                    button,
+                    &drawing.focuses[&field_key(package, &key)],
+                    controls::focus_ring(theme),
+                    move |this, window, cx| choose_path(this, &owner, &saved, kind, window, cx),
+                    cx,
+                )
             });
             div()
                 .flex_none()

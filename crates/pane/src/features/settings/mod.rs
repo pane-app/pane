@@ -82,12 +82,28 @@ mod shortcuts;
 
 actions!(
     settings,
-    [NextSection, PreviousSection, CloseSettings, EscapeSettings]
+    [
+        NextSection,
+        PreviousSection,
+        CloseSettings,
+        EscapeSettings,
+        Press
+    ]
 );
 
 /// The id of the window's key context, which the sidebar's keys are bound
 /// to.
 const CONTEXT: &str = "Settings";
+
+/// The key context of a control a page made [`pressable`] — a switch, a
+/// button, a row that opens something — while it has the keyboard: Enter
+/// and Space press it, as a click does.
+const CONTROL: &str = "SettingsControl";
+
+/// The key context of a button that opens a menu (an extension page's
+/// Actions…, the Extensions group's +): Enter and Space press it, and Down
+/// opens it too, as a menu button's does.
+pub(crate) const MENU_BUTTON: &str = "SettingsMenuButton";
 
 /// The window's own keys, bound to [`gpui::NoAction`] in a listening
 /// recorder's `context`: the sidebar's Up and Down, the close shortcut and
@@ -139,10 +155,18 @@ pub(crate) fn bind_keys(cx: &mut App) {
         ),
         // Escape closes the window where the Keyboard page says so; a
         // control that takes Escape itself (a recorder, a select, the
-        // search field) binds it deeper and keeps it.
+        // search field, an open menu) binds it deeper and keeps it.
         KeyBinding::new("escape", EscapeSettings, Some(CONTEXT)),
+        // A pressable control: a switch, a button, a row (see
+        // [`pressable`]).
+        KeyBinding::new("enter", Press, Some(CONTROL)),
+        KeyBinding::new("space", Press, Some(CONTROL)),
+        KeyBinding::new("enter", Press, Some(MENU_BUTTON)),
+        KeyBinding::new("space", Press, Some(MENU_BUTTON)),
+        KeyBinding::new("down", Press, Some(MENU_BUTTON)),
     ]);
     appearance::bind_keys(cx);
+    extensions::bind_keys(cx);
     general::bind_keys(cx);
     search::bind_keys(cx);
     shortcuts::bind_keys(cx);
@@ -508,13 +532,15 @@ impl SettingsWindow {
     /// a query shows, the search's results (see the search module's
     /// docs). The list is the window's keyboard focus, so its keys (see
     /// [`bind_keys`]) drive the window.
-    fn render_sidebar(&self, theme: &ui::theme::Theme, cx: &mut Context<Self>) -> Div {
+    fn render_sidebar(&mut self, theme: &ui::theme::Theme, cx: &mut Context<Self>) -> Div {
         // While a query shows, the list is the search's results; the
         // search module builds those rows (or its no-results line).
         let searching = self.search.searching(cx);
         let rows: Vec<AnyElement> = if searching {
             search::result_rows(self, theme, cx)
         } else {
+            // The Extensions group's + menu, which its entry carries.
+            let mut add = extensions::add_button(self, theme, cx);
             let mut rows = Vec::new();
             for (index, page) in self.pages.iter().enumerate() {
                 let group = page.title == extensions::TITLE;
@@ -564,10 +590,7 @@ impl SettingsWindow {
                 if group {
                     // The group's + menu, and its installed extensions
                     // under it (#168).
-                    rows.push(
-                        row.children(extensions::add_button(self, theme, cx))
-                            .into_any_element(),
-                    );
+                    rows.push(row.children(add.take()).into_any_element());
                     rows.extend(extensions::sidebar_entries(self, index, theme, cx));
                 } else {
                     rows.push(row.into_any_element());
@@ -960,6 +983,45 @@ pub(crate) fn open_at(launcher: &Launcher, page: &str, target: &str, cx: &mut Ap
             settings.show_at(page, target, window, cx);
         })
         .ok();
+}
+
+/// Makes `control` — a switch, a button, a row that opens something — a
+/// control the keyboard reaches and presses (ADR 0035): `focus` is its
+/// focus, Enter and Space press it as a click does (`press` does the
+/// control's work either way), and `ring` — Pane's focus ring, in the
+/// shape the control needs — shows while the keyboard is on it, never for
+/// the pointer. `focus` is a tab stop for a control Tab reaches; a menu's
+/// items, which the arrows move between, are not.
+pub(crate) fn pressable(
+    control: Stateful<Div>,
+    focus: &FocusHandle,
+    ring: Vec<gpui::BoxShadow>,
+    press: impl Fn(&mut SettingsWindow, &mut Window, &mut Context<SettingsWindow>) + 'static,
+    cx: &mut Context<SettingsWindow>,
+) -> Stateful<Div> {
+    pressable_in(CONTROL, control, focus, ring, press, cx)
+}
+
+/// [`pressable`] in the key context `context` (a menu button's, whose Down
+/// presses it too).
+pub(crate) fn pressable_in(
+    context: &'static str,
+    control: Stateful<Div>,
+    focus: &FocusHandle,
+    ring: Vec<gpui::BoxShadow>,
+    press: impl Fn(&mut SettingsWindow, &mut Window, &mut Context<SettingsWindow>) + 'static,
+    cx: &mut Context<SettingsWindow>,
+) -> Stateful<Div> {
+    let press = std::rc::Rc::new(press);
+    let on_click = press.clone();
+    control
+        .key_context(context)
+        .track_focus(focus)
+        .focus_visible(move |style| style.shadow(ring))
+        .on_action(cx.listener(move |this, _: &Press, window, cx| press(this, window, cx)))
+        .on_click(
+            cx.listener(move |this, _: &gpui::ClickEvent, window, cx| on_click(this, window, cx)),
+        )
 }
 
 /// A select of a few fixed choices at a settings row's end: the shared
