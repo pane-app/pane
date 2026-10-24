@@ -432,6 +432,30 @@ impl Launcher {
             .map(|registration| registration.id.clone())
     }
 
+    /// The title of the command whose view is open (see
+    /// [`Launcher::open_command_id`]): what a pushed view's top bar names
+    /// when its tree names no navigation title (#482), as Raycast's names
+    /// the command. `None` while no command is open.
+    pub fn open_command_title(&self) -> Option<String> {
+        let state = self.lock();
+        let component = state.open.as_ref()?;
+        let command = state.open_command.as_deref()?;
+        if let Some(package) = owner(&state.packages, component) {
+            let manifest = package.manifest.as_ref().ok()?;
+            return manifest
+                .commands
+                .iter()
+                .find(|declared| declared.id == command)
+                .map(|declared| declared.title.clone());
+        }
+        self.commands
+            .iter()
+            .find(|registration| {
+                &registration.component == component && registration.manifest_id() == command
+            })
+            .map(|registration| registration.title.clone())
+    }
+
     /// While the open command's package is developed, says in the status
     /// line which of its items have more accessories than a row draws
     /// (`extra`, as [`remember`] answered), when that changed since it last
