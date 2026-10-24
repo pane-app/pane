@@ -99,7 +99,7 @@ fn hand_over(waited: u32) {
     if let Some(cache) = pane::cache_dir()
         && let Err(error) = pane_core::restart::report_started(&cache, waited)
     {
-        eprintln!("Pane could not tell the Pane it replaces that it started: {error}");
+        pane_core::diagnostic!("Pane could not tell the Pane it replaces that it started: {error}");
     }
     let program = pane_core::appimage::running()
         .map(std::path::Path::to_path_buf)
