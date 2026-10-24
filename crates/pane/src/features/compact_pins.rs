@@ -23,6 +23,11 @@
 //!   are the launcher's (see [`crate::features::number_hints::numbered`]): they work collapsed
 //!   as expanded.
 //!
+//! While an update of Pane is ready, Restart to Update Pane shows under the
+//! search field too, above the pins (ADR 0050): the result row root search
+//! lists first for a blank query, selected, so Enter restarts collapsed as
+//! expanded ([`LauncherWindow::render_compact_update`]).
+//!
 //! The row's geometry is kept here rather than among the theme's pinned
 //! tokens: it is this row's own, and no other surface draws it.
 
@@ -64,6 +69,16 @@ const HINT_OVERHANG: f32 = 3.;
 /// The aria label the row carries.
 const ROW_LABEL: &str = "Pinned";
 
+/// The space above and below the update's row under the search field, in
+/// px.
+const UPDATE_INSET: f32 = 6.;
+
+/// The height the update's row adds under the search field, in px: a
+/// result row and the space around it.
+pub(crate) fn update_row_height(theme: &Theme) -> f32 {
+    f32::from(theme.geometry.row_min_height) + 2. * UPDATE_INSET
+}
+
 /// A pin's number hint while Ctrl is held: `number`'s compact cap in the
 /// pin's bottom right corner, rising into place as `look` goes from 0
 /// (hidden) to 1 (shown). The pin is its positioned parent; the row clips
@@ -87,6 +102,29 @@ impl LauncherWindow {
     pub(crate) fn shows_compact_pins(&self, cx: &App) -> bool {
         crate::settings::shared(cx).read(cx).compact_pinned()
             && !self.launcher.quick_slots().is_empty()
+    }
+
+    /// Restart to Update Pane under the collapsed window's search field,
+    /// drawn from `row`, root search's first (ADR 0050): the result row the
+    /// expanded list draws, `selected` as it is there. `None` without a
+    /// row.
+    pub(crate) fn render_compact_update(
+        &self,
+        row: Option<pane_core::Row>,
+        selected: bool,
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> Option<Div> {
+        let row = row?;
+        let shown = self.launcher.present_row(0);
+        Some(
+            div()
+                .flex_none()
+                .h(px(update_row_height(theme)))
+                .py(px(UPDATE_INSET))
+                .px(theme.geometry.list_padding_x)
+                .child(self.render_row(0, row, selected, shown, true, None, cx)),
+        )
     }
 
     /// The collapsed window's row of pins, under the search field, when it

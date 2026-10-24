@@ -206,6 +206,12 @@ impl Acquisitions {
         }
     }
 
+    /// Whether Pane is acquiring a default extension now: a restart into
+    /// Pane's own update waits for it to end.
+    pub(in crate::launcher) fn in_flight(&self) -> bool {
+        self.in_flight
+    }
+
     /// The default extensions that can be tried again, while none is being
     /// acquired, each with its id, title and why it failed.
     pub(in crate::launcher) fn retryable(&self) -> Vec<&FailedAcquisition> {

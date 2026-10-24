@@ -93,9 +93,12 @@ The list holds:
 4. Pane's own rows: "Install extension from folder…", "Install extension
    from npm…" ([npm](npm.md)), "Install extension from Git…" ([Git](git.md)),
    "Check for Extension Updates", "Check for Pane Updates", "Manage
-   Extensions", "Settings…" and "Quit Pane", and "Update Pane to
-   <version>" once an update of Pane is downloaded and ready
-   ([installer](installer.md#updating-pane-itself)).
+   Extensions", "Settings…" and "Quit Pane", and "Restart to Update Pane"
+   once an update of Pane is downloaded and ready
+   ([installer](installer.md#ready-restart-to-update-pane)). For a blank
+   query that row is not ranked: it comes first of all, under its own
+   "Update" section above the pinned home, drawn with the accent and
+   selected, and compact mode shows it under the search field.
 
 Extensions are installed and managed in Settings (#168,
 [ADR 0043](adr/0043-extensions-are-managed-in-settings-one-page-per-extension.md)).

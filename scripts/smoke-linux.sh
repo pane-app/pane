@@ -2504,14 +2504,16 @@ export PANE_DEFAULTS=$no_default_pins
 # tarball's request. The first tarball served is damaged (its bytes do
 # not match the sha256 its .sha256 gives), so that download fails
 # quietly: nothing staged, the program untouched. Check for Pane Updates,
-# once the tarball is whole again, downloads it and stages it; the row
-# Update Pane to 99.0.0 then installs it without downloading again,
-# swapping the running pane — the old one renamed pane.old, removed on a
-# later start — so the new version is used the next time Pane starts.
-# The new Pane, started again, reports 99.0.0, with the old version's
-# data (the calculator set up at first setup, from the pinned
-# repositories) and the extension the user disabled (Clipboard History)
-# kept, and with nothing of the update left in the bin folder.
+# once the tarball is whole again, downloads it and stages it, and its
+# toast says it is ready; a blank root search then lists Restart to
+# Update Pane first, selected. Enter restarts into it without downloading
+# again: the running pane is swapped — the old one renamed pane.old — the
+# new one is checked with --version, started with --updated-from and
+# --wait-pid, and the old Pane quits. A new pane runs from the same path
+# and reports 99.0.0, with the old version's data (the calculator set up
+# at first setup, from the pinned repositories) and the extension the
+# user disabled (Clipboard History) kept, and pane.old stays until the
+# start after the new version settled, which removes it.
 cargo xtask package-linux --dev --package-version 99.0.0 >/dev/null
 newer=$(ls target/dist/pane-99.0.0-linux-*-dev.tar.gz | head -1)
 workspace_version=$(sed -n 's/^version = "\(.*\)"$/\1/p' crates/pane/Cargo.toml | head -1)
@@ -2614,55 +2616,83 @@ wait_for "$update_registry" '"disabled": true' present 600
 close_settings
 
 # The tarball is whole again; Check for Pane Updates checks at once and
-# downloads it, and it is staged.
+# downloads it, and it is staged: the toast says it is ready.
 cp "$newer" "$served"
 "$xdotool" key ctrl+a; "$xdotool" type --delay 50 "check for pane updates"; sleep 1
 "$xdotool" key Return
-capture_until 601-ready.png success 120   # "Pane 99.0.0 is ready to install"
+capture_until 601-ready.png success 120   # the toast "Pane 99.0.0 is ready", with Restart
 wait_for "$update_staged" 99.0.0 present 600
 # The tarball was downloaded once for each attempt: the damaged one and
 # the one staged.
 [ "$(grep -c "\.tar\.gz HTTP" "$update_log")" = 2 ] || { echo "the package was not downloaded exactly twice"; exit 1; }
-"$xdotool" key ctrl+a; "$xdotool" type --delay 50 "update pane"; sleep 1
-capture_until 602-offered.png subtitle 30   # the row: "Your extensions and settings are kept; ..."
+# A blank root search lists Restart to Update Pane first of all, above the
+# pinned home, selected.
+"$xdotool" key ctrl+a BackSpace; sleep 1
+capture_until 602-offered.png subtitle 30   # "Pane 99.0.0 is ready. Your extensions and settings are kept"
 check 602-offered.png selected 3000   # the row, selected
 
-# Enter installs the staged update: the new program takes the old one's
-# name and place, the old one is renamed out of its way.
+# Enter restarts into the update: the new program takes the old one's
+# name and place, answers --version, is started with --updated-from and
+# --wait-pid, reports that it started, and the old Pane quits.
+old_pid=$pane_pid
 "$xdotool" key Return
-for _ in $(seq 1200); do
-  kill -0 "$pane_pid" 2>/dev/null || { echo "Pane exited while updating itself"; exit 1; }
-  [ -e "$update_home/.local/bin/pane.old" ] && break
+exited() {  # whether process $1 has exited (a zombie its shell has not collected counts)
+  local state
+  state=$(ps -o stat= -p "$1" 2>/dev/null | tr -d ' ')
+  [ -z "$state" ] || [ "${state#Z}" != "$state" ]
+}
+for _ in $(seq 600); do exited "$old_pid" && break; sleep 0.1; done
+exited "$old_pid" || { echo "Pane did not quit to restart into the update"; capture 603-not-restarted.png; exit 1; }
+wait "$old_pid" 2>/dev/null || true
+# A new pane runs from the same program, and shows its window.
+pane_pid=
+for _ in $(seq 300); do
+  pane_pid=$(pgrep -f -- "$update_program --updated-from" | head -1)
+  [ -n "$pane_pid" ] && break
+  sleep 0.1
+done
+[ -n "$pane_pid" ] || { echo "no new Pane runs from $update_program after the restart"; exit 1; }
+window=
+for _ in $(seq 150); do
+  window=$("$xdotool" search --onlyvisible --pid "$pane_pid" 2>/dev/null | head -1) && [ -n "$window" ] && break
   sleep 0.2
 done
-[ -e "$update_home/.local/bin/pane.old" ] || { echo "the update was not installed"; exit 1; }
-capture_until 603-installed.png success 30   # "Installed Pane 99.0.0; the new version is used the next time Pane starts"
+[ -n "$window" ] || { echo "the restarted Pane's window did not appear"; exit 1; }
+capture 603-updated.png   # evidence: the toast "Updated to Pane 99.0.0", if in time
+sleep 2
+focus_launcher
+# It is 99.0.0; the old program is kept until the new version has
+# settled, and the staging folder is gone.
+version=$("$update_program" --version) || { echo "the new pane --version failed"; exit 1; }
+[ "$version" = "Pane 99.0.0" ] || { echo "the new program reports the wrong version: $version"; exit 1; }
 cmp -s "$update_program" "$unpack_new/pane/pane" || { echo "the new program was not installed"; exit 1; }
 cmp -s "$update_home/.local/bin/pane.old" "$unpack_old/pane/pane" \
   || { echo "the old program was not kept out of the new one's way"; exit 1; }
-[ ! -e "$update_home/.local/bin/update" ] || { echo "the install left its staging behind"; exit 1; }
-# Installing downloaded nothing more.
-[ "$(grep -c "\.tar\.gz HTTP" "$update_log")" = 2 ] || { echo "the install downloaded the package again"; exit 1; }
-stop_pane
-
-# The next start runs the new version: it reports 99.0.0, removes what
-# the update left, and the old version's data is kept — the calculator
-# answers and Clipboard History stays disabled.
-version=$("$update_program" --version) || { echo "the new pane --version failed"; exit 1; }
-[ "$version" = "Pane 99.0.0" ] || { echo "the new program reports the wrong version: $version"; exit 1; }
-start_update_pane
-focus_launcher
-for _ in $(seq 500); do [ ! -e "$update_home/.local/bin/pane.old" ] && break; sleep 0.2; done
-[ ! -e "$update_home/.local/bin/pane.old" ] || { echo "the old program's file was not removed on the new start"; exit 1; }
+for _ in $(seq 100); do [ ! -e "$update_home/.local/bin/update" ] && break; sleep 0.1; done
+[ ! -e "$update_home/.local/bin/update" ] || { echo "the restart left its staging behind"; exit 1; }
+# Restarting downloaded nothing more.
+[ "$(grep -c "\.tar\.gz HTTP" "$update_log")" = 2 ] || { echo "the restart downloaded the package again"; exit 1; }
+# The old version's data is kept: the calculator answers and Clipboard
+# History stays disabled.
 "$xdotool" key ctrl+a; "$xdotool" type --delay 50 '6*7'
 capture_until 604-answer-after-update.png answer 30   # "42", the calculator's selected answer card
 "$xdotool" key Return
 capture_until 605-copied-after-update.png success 10   # "Copied 42 to the clipboard"
 wait_for "$update_registry" '"disabled": true' present
 python3 "$(dirname "$0")/check_screenshot.py" --distinct \
-  "$out"/{601-ready,602-offered,603-installed,604-answer-after-update}.png
+  "$out"/{601-ready,602-offered,604-answer-after-update}.png
+restarted_pid=$pane_pid
+stop_pane
+# Not this shell's child: its exit is waited for by looking.
+for _ in $(seq 100); do exited "$restarted_pid" && break; sleep 0.1; done
+
+# The next start, after the new version settled, removes the old program.
+start_update_pane
+for _ in $(seq 100); do [ ! -e "$update_home/.local/bin/pane.old" ] && break; sleep 0.1; done
+[ ! -e "$update_home/.local/bin/pane.old" ] \
+  || { echo "the old program's file was not removed on the start after the new version settled"; exit 1; }
 stop_pane
 # The program files go again, as the #53 phase's do.
-rm -f "$update_program" "$unpack_old/pane/pane" "$unpack_new/pane/pane"
+rm -f "$update_program" "$update_home/.local/bin/pane.old" "$unpack_old/pane/pane" "$unpack_new/pane/pane"
 kill "$release_server_pid"; wait "$release_server_pid" 2>/dev/null || true; release_server_pid=
 echo "screenshots in $out"

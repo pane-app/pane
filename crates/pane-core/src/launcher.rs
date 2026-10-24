@@ -141,7 +141,7 @@ use aliases::AliasChoices;
 pub use aliases::AliasFlow;
 pub use aliases::AliasOutcome;
 use application_update::{Application, Updates};
-pub use application_update::{ApplicationUpdate, UpdateChecks};
+pub use application_update::{ApplicationUpdate, RESTART_ROW, UpdateChecks};
 pub use argument_fields::{ArgumentFields, Choice, FieldKind, FormField};
 pub use capability_choices::{Capability, CapabilityProvider};
 pub use choice::{ChoiceExtension, ChoiceOutcome, ChoiceView};
@@ -431,6 +431,10 @@ pub enum Unavailable {
     /// (see `waiting`): the command comes back by itself once what it
     /// needs returns, and nothing of it runs meanwhile.
     Waiting(String),
+    /// Pane is busy with work the row's action would cut short: Restart
+    /// to Update Pane while an extension is being set up, installed,
+    /// updated or removed (ADR 0050). It can run once that work ends.
+    Busy(String),
 }
 
 impl Row {
@@ -495,7 +499,8 @@ impl Unavailable {
         match self {
             Unavailable::OnThisSystem(reason)
             | Unavailable::Paused(reason)
-            | Unavailable::Waiting(reason) => reason,
+            | Unavailable::Waiting(reason)
+            | Unavailable::Busy(reason) => reason,
         }
     }
 }
@@ -1450,9 +1455,9 @@ enum Entry {
     ImportExtension,
     /// Acquire this default extension again, after Pane could not (root).
     Acquire(String),
-    /// Install the staged Pane application update, which the user chose
-    /// (root).
-    InstallUpdate,
+    /// Restart Pane into the staged Pane application update, which the
+    /// user chose (root: Restart to Update Pane).
+    RestartToUpdate,
     /// Check for a Pane application update at once, whatever the schedule
     /// (root: Check for Pane Updates).
     CheckUpdate,
@@ -1666,7 +1671,7 @@ enum Pending {
     /// defaults, then the ticked ones set up.
     FirstSetup(Vec<String>),
     Acquire(String),
-    InstallUpdate,
+    RestartToUpdate,
     CheckUpdate,
     CheckExtensionUpdates,
     OpenLogFolder,
@@ -3799,7 +3804,7 @@ impl Launcher {
                 Pending::ChoiceRun(begun) => launcher.run_choice(epoch, begun).await,
                 Pending::Acquire(id) => launcher.retry_acquiring(&id).await,
                 Pending::FirstSetup(declined) => launcher.finish_first_setup(declined).await,
-                Pending::InstallUpdate => launcher.install_application_update().await,
+                Pending::RestartToUpdate => launcher.restart_to_update().await,
                 Pending::CheckUpdate => launcher.check_application_update_again().await,
                 Pending::CheckExtensionUpdates => launcher.check_extension_updates().await,
                 Pending::OpenLogFolder => launcher.open_log_folder().await,
@@ -4021,11 +4026,11 @@ impl Launcher {
                 };
                 Pending::Acquire(id)
             }
-            Entry::InstallUpdate => {
+            Entry::RestartToUpdate => {
                 state.view.status = Status::Running {
                     since: Instant::now(),
                 };
-                Pending::InstallUpdate
+                Pending::RestartToUpdate
             }
             Entry::CheckUpdate => {
                 state.view.status = Status::Running {
@@ -4858,9 +4863,17 @@ impl Launcher {
             return;
         }
         let (rows, entries) = root_rows(state, &query);
-        let selected = selected_id
-            .and_then(|id| rows.iter().position(|row| row.id == id))
-            .or_else(|| aliases::first_choice(&entries));
+        // Restart to Update Pane, newly listed first (a blank query's),
+        // takes the selection, so Enter restarts (ADR 0050).
+        let restart_arrived = matches!(entries.first(), Some(Entry::RestartToUpdate))
+            && !state.view.rows.iter().any(|row| row.id == RESTART_ROW);
+        let selected = if restart_arrived {
+            Some(0)
+        } else {
+            selected_id
+                .and_then(|id| rows.iter().position(|row| row.id == id))
+                .or_else(|| aliases::first_choice(&entries))
+        };
         state.entries = entries;
         state.view.rows = rows;
         state.view.selected = selected;
@@ -5157,9 +5170,11 @@ impl Launcher {
         }
         // Pane's own update: the check the user can ask for at any time
         // (found by Raycast's name for it too), and the staged update the
-        // user can choose to install (ADR 0050).
+        // user can restart into (ADR 0050), which a blank query lists
+        // first of all (see `rank_statics`).
         if self.application.is_some() {
-            for (row, entry, keywords) in state.updates.rows() {
+            let busy = application_update::busy(state);
+            for (row, entry, keywords) in state.updates.rows(busy) {
                 add(
                     row,
                     entry,
@@ -6184,8 +6199,9 @@ struct Ranked {
     /// [`State::statics`]).
     statics: u64,
     /// The rows that come ahead of the computed results that are not
-    /// files: what the user's alias sends, then the commands the query
-    /// names by their alias, hoisted above every other row.
+    /// files: for a blank query Restart to Update Pane, then what the
+    /// user's alias sends, then the commands the query names by their
+    /// alias, hoisted above every other row.
     before: Vec<StaticRow>,
     /// The rows that come after those and before the computed file
     /// results: the root results matching the query in the comparator's
@@ -6264,11 +6280,18 @@ fn rank_statics(state: &State, query: &str) -> Ranked {
     let keys = |&(result, kind, provider)| candidate(result, kind, provider, &learned);
     let parsed = Query::new(query);
     let named = |index: &usize| parsed.is_alias_of(&candidates[*index].0.keys);
+    // Restart to Update Pane, for a blank query, is pinned first of all
+    // (ADR 0050), above the pinned home: the update the user is to restart
+    // into is selected when the launcher opens. A typed query finds it as
+    // it finds any row.
+    let pinned =
+        |index: &usize| blank && matches!(candidates[*index].0.entry, Entry::RestartToUpdate);
     let matches: Vec<usize> =
         search::ranked_matches(&parsed, candidates.iter().map(keys), state.sensitivity)
             .into_iter()
-            .filter(|index| !named(index))
+            .filter(|index| !named(index) && !pinned(index))
             .collect();
+    let first: Vec<usize> = (0..candidates.len()).filter(pinned).collect();
     // A command the query names by its alias is hoisted above every
     // other row, computed results included.
     let by_alias: Vec<usize> = (0..candidates.len()).filter(named).collect();
@@ -6313,9 +6336,14 @@ fn rank_statics(state: &State, query: &str) -> Ranked {
     Ranked {
         query: query.to_owned(),
         statics: state.statics,
-        before: aliases::rows_sending_after_alias(state, query)
+        before: first
             .into_iter()
-            .map(apart)
+            .map(found)
+            .chain(
+                aliases::rows_sending_after_alias(state, query)
+                    .into_iter()
+                    .map(apart),
+            )
             .chain(by_alias.into_iter().map(by_its_alias))
             .map(into_static)
             .collect(),

@@ -1332,25 +1332,28 @@ Pane downloads an update by itself, and the phase checks that instead of
   only): nothing is staged, and the program is the one installed.
 - With the tarball whole again, **Check for Pane Updates** downloads it,
   unpacks it (the same tar reader npm tarballs are read by, with the
-  application package's own size bound) and stages it: "Pane 99.0.0 is
-  ready to install" (frame 601), the marker written in
-  `~/.local/bin/update/`, and the tarball downloaded twice in all. Root
-  search then lists **Update Pane to 99.0.0**, selected (frame 602).
-- Enter swaps the running program without downloading again. The old
-  `~/.local/bin/pane` is renamed `pane.old` beside it, the new one is put
-  in its place, and the staging folder is gone (frame 603, and byte
-  comparisons of both programs against the two packages' own files).
-- The next start runs the new version. It reports `Pane 99.0.0` and removes
-  `pane.old` at start. The calculator still answers "6*7" with 42 from the
-  old version's install (the calculator set up at first setup, from the
-  pinned repositories; frames 604 and 605). The disabled Clipboard History
-  stays disabled: Pane's data was never touched.
+  application package's own size bound) and stages it, and its toast says
+  "Pane 99.0.0 is ready" (frame 601); the marker is written in
+  `~/.local/bin/update/`, and the tarball downloaded twice in all. A blank
+  root search then lists **Restart to Update Pane** first, selected (frame
+  602).
+- Enter restarts into the update without downloading again
+  ([#504](https://github.com/pane-app/pane/issues/504)). The old
+  `~/.local/bin/pane` is renamed `pane.old` beside it and the new one is
+  put in its place, started with `--updated-from` and `--wait-pid`, and the
+  old process exits. A new `pane` runs from the same path and shows its
+  window (frame 603, evidence), reports `Pane 99.0.0`, and the staging
+  folder is gone (byte comparisons of both programs against the two
+  packages' own files).
+- The calculator still answers "6*7" with 42 from the old version's
+  install (the calculator set up at first setup, from the pinned
+  repositories; frames 604 and 605). The disabled Clipboard History stays
+  disabled: Pane's data was never touched.
+- The new version settled, so the next start removes `pane.old`.
 
 The desktop entry the install script put in `~/.local/share/applications`
 keeps naming the same program file, which the swap leaves in place, so it
-never points anywhere else. Pane itself was never restarted by the update:
-the smoke stops the old process and starts the new program itself, exactly
-as the user would.
+never points anywhere else.
 
 #### What has run
 

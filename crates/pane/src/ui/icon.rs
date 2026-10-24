@@ -273,6 +273,9 @@ pub(crate) enum IconTone {
     Web,
     Folder,
     Command,
+    /// Pane's accent: a row that is to stand out, Restart to Update Pane
+    /// (ADR 0050).
+    Accent,
 }
 
 /// A reference-stated color: `0xRRGGBBAA`.
@@ -288,6 +291,9 @@ fn app_tone(tone: IconTone) -> Option<(Hsla, Hsla, Hsla)> {
         IconTone::Term => (0x4A4D55FF, 0x1C1E22FF, 0xC8F5B4FF),
         IconTone::Web => (0xFFA24DFF, 0xE2530FFF, 0xFFFFFFFF),
         IconTone::Folder => (0x74B6FFFF, 0x2F78DEFF, 0xFFFFFFFF),
+        // The accent fill's lime, darkening down the tile, with the ink an
+        // accent fill carries.
+        IconTone::Accent => (0xD6F48AFF, 0x9CC23CFF, 0x111210FF),
         IconTone::Command => return None,
     };
     Some((color(top), color(bottom), color(glyph)))

@@ -2,7 +2,9 @@
 //! public interface: Pane checks its releases on GitHub for a newer
 //! version of itself — at start, on a schedule, when the launcher is shown
 //! after a stale check, and when the user asks — downloads and stages what
-//! it finds by itself, quietly, and installs it only by the user's choice.
+//! it finds by itself, quietly, and restarts into it only by the user's
+//! choice: Restart to Update Pane, first of all in a blank root search,
+//! or the toast's Restart.
 //!
 //! The checks and downloads run against a stand-in for GitHub on
 //! 127.0.0.1 (`support/releases.rs`; nothing reaches the network or Pane's
@@ -14,18 +16,24 @@
 //! test's own with a program file in it, as `%LOCALAPPDATA%\Pane` holds
 //! `pane.exe` on Windows; the swap an install performs is the same
 //! platform-independent code the Windows smoke runs for real. The
-//! schedule follows the launcher's clock, which the tests move.
+//! schedule follows the launcher's clock, which the tests move. The new
+//! version a restart starts is a stand-in too (`Relauncher`): the program
+//! files hold text, so it reads the version from them, and it reports
+//! that it started, stays silent, exits or cannot start, as a test asks;
+//! the smokes start real programs.
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
 use futures::executor::block_on;
 use pane_core::clipboard::ManualClock;
+use pane_core::restart::{Relaunch, Started};
 use pane_core::{
-    ApplicationUpdate, Launcher, ReleaseSource, Runtime, Status, Target, WindowPresence,
+    ApplicationUpdate, Launcher, ReleaseSource, Runtime, Status, Target, ToastSlot, WindowPresence,
 };
 use tempfile::TempDir;
 
@@ -45,6 +53,122 @@ use defaults::from_sample;
 mod rows;
 
 use rows::{select_title, titles};
+
+#[path = "support/feedback.rs"]
+mod feedback;
+
+use feedback::{RecordingWindow, toast_title};
+
+/// The root row that restarts Pane into the update it staged.
+const RESTART: &str = "Restart to Update Pane";
+
+/// How long the stand-in for a new version has to report that it started.
+const STARTED_WITHIN: Duration = Duration::from_secs(1);
+
+/// What the stand-in for the new version does once started.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Starts {
+    /// Reports that it started, as a new Pane does first thing.
+    Reports,
+    /// Runs, and never reports.
+    Silent,
+    /// Exits at once, without reporting.
+    Exits,
+    /// Cannot be started at all.
+    Refuses,
+}
+
+/// The stand-in for the new version a restart checks and starts: the
+/// program files hold text ("the 99.0.0 program"), whose version it reads
+/// as `--version` would answer; what it does once started is the test's.
+struct Relauncher {
+    /// Where the new version reports that it started: Pane's cache folder.
+    folder: PathBuf,
+    starts: Mutex<Starts>,
+    /// The arguments each start was given.
+    started: Mutex<Vec<Vec<String>>>,
+    /// Whether the restart ended the last program it started.
+    ended: Arc<AtomicBool>,
+}
+
+impl Relauncher {
+    fn new(folder: &Path) -> Arc<Relauncher> {
+        Arc::new(Relauncher {
+            folder: folder.to_path_buf(),
+            starts: Mutex::new(Starts::Reports),
+            started: Mutex::default(),
+            ended: Arc::default(),
+        })
+    }
+
+    fn will(&self, starts: Starts) {
+        *self.starts.lock().unwrap() = starts;
+    }
+
+    fn started(&self) -> Vec<Vec<String>> {
+        self.started.lock().unwrap().clone()
+    }
+}
+
+impl Relaunch for Relauncher {
+    fn version(&self, program: &Path) -> Result<String, String> {
+        let text =
+            String::from_utf8_lossy(&fs::read(program).map_err(|e| e.to_string())?).into_owned();
+        let (_, after) = text
+            .split_once("the ")
+            .ok_or_else(|| "it is no program".to_owned())?;
+        Ok(after.split(' ').next().unwrap_or_default().to_owned())
+    }
+
+    fn start(&self, _program: &Path, arguments: &[String]) -> Result<Box<dyn Started>, String> {
+        self.started.lock().unwrap().push(arguments.to_vec());
+        let starts = *self.starts.lock().unwrap();
+        if starts == Starts::Refuses {
+            return Err("it could not be started: access is denied".into());
+        }
+        if starts == Starts::Reports {
+            let waited = arguments[3].parse().unwrap();
+            pane_core::restart::report_started(&self.folder, waited).unwrap();
+        }
+        self.ended.store(false, Ordering::SeqCst);
+        Ok(Box::new(Child {
+            exited: starts == Starts::Exits,
+            ended: self.ended.clone(),
+        }))
+    }
+}
+
+/// A program the stand-in started.
+struct Child {
+    exited: bool,
+    ended: Arc<AtomicBool>,
+}
+
+impl Started for Child {
+    fn exited(&mut self) -> bool {
+        self.exited || self.ended.load(Ordering::SeqCst)
+    }
+
+    fn end(&mut self) {
+        self.ended.store(true, Ordering::SeqCst);
+    }
+}
+
+/// Asserts that `launcher` restarted into `version`: the new version
+/// reported that it started, and Pane waits to quit.
+fn assert_restarted(launcher: &Launcher, version: &str) {
+    assert_eq!(
+        launcher.view().status,
+        Status::Progress(format!("Restarting into Pane {version}…"))
+    );
+    assert_eq!(
+        launcher.application_update(),
+        ApplicationUpdate::Restarting {
+            version: version.into()
+        }
+    );
+    assert!(!titles(launcher).contains(&RESTART.to_owned()));
+}
 
 /// The root row that checks for a Pane update at once.
 const CHECK_ROW: &str = "Check for Pane Updates";
@@ -71,14 +195,18 @@ struct Dirs {
     runtime: Runtime,
     releases: Releases,
     server: repo_server::Server,
+    /// The stand-in for the new version a restart starts.
+    relaunch: Arc<Relauncher>,
 }
 
 impl Dirs {
     fn new() -> Dirs {
         let cache = tempfile::tempdir().unwrap();
+        let records = tempfile::tempdir().unwrap();
         Dirs {
             install: tempfile::tempdir().unwrap(),
-            records: tempfile::tempdir().unwrap(),
+            relaunch: Relauncher::new(records.path()),
+            records,
             repos: tempfile::tempdir().unwrap(),
             runtime: Runtime::start_with_cache(cache.path().to_path_buf()).unwrap(),
             releases: Releases::start(),
@@ -122,13 +250,19 @@ impl Dirs {
     }
 
     fn launcher_from(&self, launcher: Launcher, version: &str) -> Launcher {
+        self.restarting(launcher.with_application_update(
+            version,
+            ReleaseSource::local(self.releases.url()).unwrap(),
+            self.program(),
+        ))
+    }
+
+    /// `launcher`, keeping its update record in the cache folder and
+    /// restarting into an update through the stand-in.
+    fn restarting(&self, launcher: Launcher) -> Launcher {
         launcher
-            .with_application_update(
-                version,
-                ReleaseSource::local(self.releases.url()).unwrap(),
-                self.program(),
-            )
             .with_application_update_cache(self.records.path())
+            .with_relaunch(self.relaunch.clone(), STARTED_WITHIN)
     }
 
     /// Publishes an application package `version` for this system, holding
@@ -255,7 +389,7 @@ fn wait_until(what: &str, mut done: impl FnMut() -> bool) {
     }
 }
 
-/// The update the launcher holds staged, ready to install.
+/// The update the launcher holds staged, ready to restart into.
 fn ready(version: &str) -> ApplicationUpdate {
     ApplicationUpdate::Ready {
         version: version.into(),
@@ -271,7 +405,7 @@ fn check_now(launcher: &Launcher) {
 }
 
 #[test]
-fn a_newer_version_is_downloaded_by_itself_and_installed_by_choice() {
+fn a_newer_version_is_downloaded_by_itself_and_restarted_into_by_choice() {
     let dirs = Dirs::new();
     dirs.publish_update("99.0.0", b"the 99.0.0 program");
     dirs.running(b"the 0.1.0 program");
@@ -310,56 +444,74 @@ fn a_newer_version_is_downloaded_by_itself_and_installed_by_choice() {
         ]
     );
     assert_eq!(fs::read(dirs.program()).unwrap(), b"the 0.1.0 program");
-    // Root search lists the row that installs it.
+    // Root search lists Restart to Update Pane first of all, above every
+    // other row, selected, under a section of its own and drawn with the
+    // accent.
     let rows = launcher.view().rows;
-    let update = rows
-        .iter()
-        .find(|row| row.title == "Update Pane to 99.0.0")
-        .unwrap_or_else(|| panic!("no update row in {rows:#?}"));
+    assert_eq!(rows[0].title, RESTART, "{rows:#?}");
     assert_eq!(
-        update.subtitle.as_deref(),
-        Some(
-            "Your extensions and settings are kept; the new version is used the next time Pane starts"
-        )
+        rows[0].subtitle.as_deref(),
+        Some("Pane 99.0.0 is ready. Your extensions and settings are kept")
     );
+    let (view, listing) = launcher.presented_list();
+    assert_eq!(view.selected, Some(0));
+    assert_eq!(listing.lead, 1);
+    assert_eq!(listing.sections[0].label, "Update");
+    assert_eq!(listing.sections[0].first, 0);
+    assert_eq!(listing.sections[1].label, "Commands");
+    assert_eq!(listing.sections[1].first, 1);
+    assert!(launcher.present_row(0).highlighted);
+    assert!(!launcher.present_row(1).highlighted);
+    let window = RecordingWindow::attach(&launcher);
 
-    // The user chooses it: the staged program takes the old one's name and
-    // place, the old one is renamed out of its way, and nothing is
-    // downloaded again.
-    select_title(&launcher, "Update Pane to 99.0.0");
+    // The user presses Enter: the staged program takes the old one's name
+    // and place, the old one is renamed out of its way and kept, the new
+    // one answers with its version and is started, told what it replaces
+    // and which process to wait for, and once it reported that it started
+    // the window is asked to quit Pane. Nothing is downloaded again.
     block_on(launcher.activate_selected());
+    assert_restarted(&launcher, "99.0.0");
     assert_eq!(
-        launcher.view().status,
-        Status::Result(
-            "Installed Pane 99.0.0; the new version is used the next time Pane starts".into()
-        )
+        dirs.relaunch.started(),
+        [vec![
+            "--updated-from".to_owned(),
+            "0.1.0".to_owned(),
+            "--wait-pid".to_owned(),
+            std::process::id().to_string(),
+        ]]
     );
-    assert_eq!(
-        launcher.application_update(),
-        ApplicationUpdate::Installed {
-            version: "99.0.0".into(),
-        }
-    );
+    assert_eq!(window.quits(), 1);
     assert_eq!(fs::read(dirs.program()).unwrap(), b"the 99.0.0 program");
     assert_eq!(
         fs::read(dirs.install.path().join("pane.old")).unwrap(),
         b"the 0.1.0 program"
     );
     assert_eq!(dirs.installed(), ["pane", "pane.old"]);
-    assert!(!titles(&launcher).contains(&"Update Pane to 99.0.0".to_owned()));
     assert_eq!(dirs.releases.listed(), 1);
     assert_eq!(dirs.releases.downloaded(".zip"), 1);
     assert_eq!(dirs.releases.downloaded(".zip.sha256"), 1);
 
-    // A Pane starting with the new program removes what the update left,
-    // and its check finds nothing newer and says nothing.
+    // The new version starts: it keeps the old program until it has
+    // settled, says it was updated when it is first shown, and its check
+    // finds nothing newer and says nothing.
     drop(launcher);
-    let launcher = dirs.launcher("99.0.0");
+    let launcher = dirs.launcher("99.0.0").with_updated_from("0.1.0");
+    assert_eq!(dirs.installed(), ["pane", "pane.old"]);
+    launcher.set_window_presence(WindowPresence::Shown);
+    assert_eq!(
+        toast_title(&launcher).as_deref(),
+        Some("Updated to Pane 99.0.0")
+    );
     block_on(launcher.check_application_update());
-    assert_eq!(dirs.installed(), ["pane"]);
-    assert!(!titles(&launcher).contains(&"Update Pane to 99.0.0".to_owned()));
+    assert!(!titles(&launcher).contains(&RESTART.to_owned()));
     assert_eq!(launcher.view().status, Status::Idle);
     assert_eq!(launcher.application_update(), ApplicationUpdate::Current);
+    // Its window, hotkeys and tray are up: it has settled, and the next
+    // start of it removes the old program.
+    launcher.application_update_settled();
+    drop(launcher);
+    let _launcher = dirs.launcher("99.0.0");
+    assert_eq!(dirs.installed(), ["pane"]);
 }
 
 #[test]
@@ -373,22 +525,19 @@ fn the_linux_packages_tarball_is_staged_and_installed() {
     let launcher = dirs.launcher("0.1.0");
     block_on(launcher.check_application_update());
     assert_eq!(launcher.application_update(), ready("99.0.0"));
-    select_title(&launcher, "Update Pane to 99.0.0");
+    select_title(&launcher, RESTART);
 
     block_on(launcher.activate_selected());
 
-    assert_eq!(
-        launcher.view().status,
-        Status::Result(
-            "Installed Pane 99.0.0; the new version is used the next time Pane starts".into()
-        )
-    );
+    assert_restarted(&launcher, "99.0.0");
     assert_eq!(fs::read(dirs.program()).unwrap(), b"the 99.0.0 program");
     assert_eq!(dirs.installed(), ["pane", "pane.old"]);
     assert_eq!(dirs.releases.downloaded(".tar.gz"), 1);
 
-    // A Pane starting with the new program removes what the update left.
+    // A start of the new version after it settled removes what the update
+    // left.
     drop(launcher);
+    dirs.launcher("99.0.0").application_update_settled();
     let launcher = dirs.launcher("99.0.0");
     block_on(launcher.check_application_update());
     assert_eq!(dirs.installed(), ["pane"]);
@@ -422,27 +571,25 @@ fn an_appimage_update_replaces_the_appimage() {
         .path()
         .join(format!("Pane-0.1.0-{arch}.AppImage"));
     fs::write(&path, appimage(b"the 0.1.0 AppImage")).unwrap();
-    let launcher = Launcher::with_packages(Ok(dirs.runtime.clone()), vec![], dirs.packages_dir())
-        .with_appimage_update(
-            "0.1.0",
-            ReleaseSource::local(dirs.releases.url()).unwrap(),
-            path.clone(),
-        );
+    let launcher = dirs.restarting(
+        Launcher::with_packages(Ok(dirs.runtime.clone()), vec![], dirs.packages_dir())
+            .with_appimage_update(
+                "0.1.0",
+                ReleaseSource::local(dirs.releases.url()).unwrap(),
+                path.clone(),
+            ),
+    );
     block_on(launcher.check_application_update());
     assert_eq!(launcher.application_update(), ready("99.0.0"));
-    select_title(&launcher, "Update Pane to 99.0.0");
+    select_title(&launcher, RESTART);
 
     block_on(launcher.activate_selected());
 
-    assert_eq!(
-        launcher.view().status,
-        Status::Result(
-            "Installed Pane 99.0.0; the new version is used the next time Pane starts".into()
-        )
-    );
+    assert_restarted(&launcher, "99.0.0");
     // The AppImage file keeps its path, which the menu's and the autostart
-    // entries name, and holds the new AppImage; the old one is beside it
-    // until the next start, and nothing else is left.
+    // entries name, and holds the new AppImage, which was started; the old
+    // one is beside it until the new version settled, and nothing else is
+    // left.
     assert_eq!(fs::read(&path).unwrap(), appimage(b"the 99.0.0 AppImage"));
     let old = format!("Pane-0.1.0-{arch}.AppImage.old");
     assert_eq!(
@@ -473,7 +620,7 @@ fn a_staged_update_survives_a_restart_and_a_stale_one_is_removed() {
     drop(launcher);
     let launcher = dirs.launcher("0.1.0");
     assert_eq!(launcher.application_update(), ready("99.0.0"));
-    assert!(titles(&launcher).contains(&"Update Pane to 99.0.0".to_owned()));
+    assert!(titles(&launcher).contains(&RESTART.to_owned()));
     assert_eq!(dirs.releases.listed(), 1);
     assert_eq!(dirs.releases.downloaded(".zip"), 1);
 
@@ -483,7 +630,7 @@ fn a_staged_update_survives_a_restart_and_a_stale_one_is_removed() {
     let launcher = dirs.launcher("99.0.0");
     assert_eq!(dirs.installed(), ["pane"]);
     assert_eq!(launcher.application_update(), ApplicationUpdate::Unchecked);
-    assert!(!titles(&launcher).contains(&"Update Pane to 99.0.0".to_owned()));
+    assert!(!titles(&launcher).contains(&RESTART.to_owned()));
 
     // So is a staging folder whose marker was never written: a download
     // that did not end.
@@ -524,7 +671,7 @@ fn a_check_is_made_at_start_and_then_by_the_schedule() {
     assert_eq!(dirs.releases.listed(), 2);
     assert_eq!(dirs.releases.downloaded(".zip"), 1);
     assert_eq!(launcher.view().status, Status::Idle);
-    assert!(titles(&launcher).contains(&"Update Pane to 99.0.0".to_owned()));
+    assert!(titles(&launcher).contains(&RESTART.to_owned()));
 }
 
 #[test]
@@ -709,7 +856,7 @@ fn a_download_shows_its_progress_to_the_about_page_alone() {
     assert!(progress.contains("% of "), "{progress}");
     assert_eq!(launcher.view().status, Status::Idle);
     assert!(titles(&launcher).contains(&"Install extension from folder…".to_owned()));
-    assert!(!titles(&launcher).contains(&"Update Pane to 99.0.0".to_owned()));
+    assert!(!titles(&launcher).contains(&RESTART.to_owned()));
     // Typing in root search still works while the package arrives.
     block_on(launcher.set_query("nothing matches this"));
     assert_eq!(titles(&launcher), Vec::<String>::new());
@@ -735,7 +882,7 @@ fn a_damaged_download_fails_quietly_and_a_check_downloads_it_again() {
     // page reads why, and the record keeps it, for the log and the next
     // start.
     assert_eq!(launcher.view().status, Status::Idle);
-    assert!(!titles(&launcher).contains(&"Update Pane to 99.0.0".to_owned()));
+    assert!(!titles(&launcher).contains(&RESTART.to_owned()));
     assert!(
         matches!(
             launcher.application_update(),
@@ -755,8 +902,8 @@ fn a_damaged_download_fails_quietly_and_a_check_downloads_it_again() {
     dirs.publish_update("99.0.0", b"the 99.0.0 program");
     check_now(&launcher);
     assert_eq!(
-        launcher.view().status,
-        Status::Result("Pane 99.0.0 is ready to install".into())
+        toast_title(&launcher).as_deref(),
+        Some("Pane 99.0.0 is ready")
     );
     assert_eq!(launcher.application_update(), ready("99.0.0"));
     assert_eq!(launcher.application_update_checks().failure, None);
@@ -764,7 +911,7 @@ fn a_damaged_download_fails_quietly_and_a_check_downloads_it_again() {
 }
 
 #[test]
-fn an_install_that_cannot_be_made_keeps_the_update_and_enter_tries_again() {
+fn a_swap_that_cannot_be_made_keeps_the_update_and_enter_tries_again() {
     let dirs = Dirs::new();
     dirs.publish_update("99.0.0", b"the 99.0.0 program");
     dirs.running(b"the 0.1.0 program");
@@ -776,10 +923,10 @@ fn an_install_that_cannot_be_made_keeps_the_update_and_enter_tries_again() {
     let blocked = dirs.install.path().join("pane.old");
     fs::create_dir_all(&blocked).unwrap();
 
-    // The user chooses the update among root search's other rows. The row
-    // leaves the list while the install runs, so it cannot be started
-    // twice, and the selection moves to another row meanwhile.
-    select_title(&launcher, "Update Pane to 99.0.0");
+    // The user chooses the update. The row leaves the list while the
+    // restart runs, so it cannot be started twice, and the selection moves
+    // to another row meanwhile.
+    select_title(&launcher, RESTART);
     block_on(launcher.activate_selected());
 
     // The failure is explained, and nothing changed: the program is still
@@ -809,17 +956,12 @@ fn an_install_that_cannot_be_made_keeps_the_update_and_enter_tries_again() {
     assert!(dirs.install.path().join("update").join("pane").is_file());
     let view = launcher.view();
     let selected = view.selected.map(|index| view.rows[index].title.clone());
-    assert_eq!(selected.as_deref(), Some("Update Pane to 99.0.0"));
+    assert_eq!(selected.as_deref(), Some(RESTART));
 
-    // The name is free again; Enter alone installs, with no new download.
+    // The name is free again; Enter alone restarts, with no new download.
     fs::remove_dir_all(&blocked).unwrap();
     block_on(launcher.activate_selected());
-    assert_eq!(
-        launcher.view().status,
-        Status::Result(
-            "Installed Pane 99.0.0; the new version is used the next time Pane starts".into()
-        )
-    );
+    assert_restarted(&launcher, "99.0.0");
     assert_eq!(fs::read(dirs.program()).unwrap(), b"the 99.0.0 program");
     assert_eq!(dirs.releases.downloaded(".zip"), 1);
 }
@@ -838,7 +980,7 @@ fn a_staged_program_that_changed_is_downloaded_again() {
     )
     .unwrap();
 
-    select_title(&launcher, "Update Pane to 99.0.0");
+    select_title(&launcher, RESTART);
     block_on(launcher.activate_selected());
 
     // Not installed: explained, and downloaded again by itself, so the row
@@ -848,7 +990,7 @@ fn a_staged_program_that_changed_is_downloaded_again() {
     assert_eq!(fs::read(dirs.program()).unwrap(), b"the 0.1.0 program");
     assert_eq!(launcher.application_update(), ready("99.0.0"));
     assert_eq!(dirs.releases.downloaded(".zip"), 2);
-    select_title(&launcher, "Update Pane to 99.0.0");
+    select_title(&launcher, RESTART);
     block_on(launcher.activate_selected());
     assert_eq!(fs::read(dirs.program()).unwrap(), b"the 99.0.0 program");
 }
@@ -950,10 +1092,10 @@ fn a_check_the_source_answers_with_an_error_is_tried_again_by_the_user() {
     dirs.releases.stop_failing(releases::LISTING);
     check_now(&launcher);
     assert_eq!(
-        launcher.view().status,
-        Status::Result("Pane 99.0.0 is ready to install".into())
+        toast_title(&launcher).as_deref(),
+        Some("Pane 99.0.0 is ready")
     );
-    assert!(titles(&launcher).contains(&"Update Pane to 99.0.0".to_owned()));
+    assert!(titles(&launcher).contains(&RESTART.to_owned()));
 }
 
 #[test]
@@ -995,8 +1137,8 @@ fn a_used_up_rate_limit_is_waited_out() {
     clock.advance(Duration::from_secs(6 * 60));
     check_now(&launcher);
     assert_eq!(
-        launcher.view().status,
-        Status::Result("Pane 99.0.0 is ready to install".into())
+        toast_title(&launcher).as_deref(),
+        Some("Pane 99.0.0 is ready")
     );
     assert_eq!(dirs.releases.listed(), 2);
 }
@@ -1023,7 +1165,7 @@ fn a_release_without_its_checksum_is_not_downloaded() {
         "{:?}",
         launcher.application_update()
     );
-    assert!(!titles(&launcher).contains(&"Update Pane to 99.0.0".to_owned()));
+    assert!(!titles(&launcher).contains(&RESTART.to_owned()));
     assert_eq!(dirs.releases.downloaded(".zip"), 0);
 }
 
@@ -1136,7 +1278,7 @@ fn a_listing_pane_cannot_take_is_noted_and_the_defaults_are_set_up() {
 }
 
 #[test]
-fn an_install_keeps_pane_s_data() {
+fn a_restart_keeps_pane_s_data() {
     let dirs = Dirs::new();
     dirs.publish_update("99.0.0", b"the 99.0.0 program");
     dirs.running(b"the 0.1.0 program");
@@ -1144,13 +1286,15 @@ fn an_install_keeps_pane_s_data() {
     // Pane's data folder under the install folder, exactly as the Windows
     // install keeps it.
     let sample = dirs.sample();
-    let launcher = Launcher::with_packages(Ok(dirs.runtime.clone()), vec![], dirs.packages_dir())
-        .with_defaults(vec![sample])
-        .with_application_update(
-            "0.1.0",
-            ReleaseSource::local(dirs.releases.url()).unwrap(),
-            dirs.program(),
-        );
+    let launcher = dirs.restarting(
+        Launcher::with_packages(Ok(dirs.runtime.clone()), vec![], dirs.packages_dir())
+            .with_defaults(vec![sample])
+            .with_application_update(
+                "0.1.0",
+                ReleaseSource::local(dirs.releases.url()).unwrap(),
+                dirs.program(),
+            ),
+    );
     block_on(launcher.acquire_defaults());
     assert_eq!(
         launcher
@@ -1163,24 +1307,19 @@ fn an_install_keeps_pane_s_data() {
     let data = read_all(&dirs.install.path().join("data"));
     block_on(launcher.check_application_update());
 
-    // The user chooses to install; Pane keeps running; its data — the
-    // installed extension and its record — is untouched by the swap,
-    // which changes only the program.
-    select_title(&launcher, "Update Pane to 99.0.0");
+    // The user restarts into it; its data — the installed extension and its
+    // record — is untouched by the swap, which changes only the program.
+    select_title(&launcher, RESTART);
     block_on(launcher.activate_selected());
-    assert_eq!(
-        launcher.view().status,
-        Status::Result(
-            "Installed Pane 99.0.0; the new version is used the next time Pane starts".into()
-        )
-    );
+    assert_restarted(&launcher, "99.0.0");
     assert_eq!(data, read_all(&dirs.install.path().join("data")));
     assert_eq!(dirs.top_level(), ["data", "pane", "pane.old"]);
 
     // A Pane starting with the new program still has its extensions: the
-    // sample is installed, its record where it was, and nothing of
-    // the update is left in the install folder.
+    // sample is installed, its record where it was, and once it settled,
+    // nothing of the update is left in the install folder.
     drop(launcher);
+    dirs.launcher("99.0.0").application_update_settled();
     let launcher = dirs.launcher("99.0.0");
     assert_eq!(
         launcher
@@ -1194,6 +1333,183 @@ fn an_install_keeps_pane_s_data() {
     // The sample still answers.
     block_on(launcher.set_query("reverse 42"));
     assert_eq!(titles(&launcher), ["24"]);
+}
+
+#[test]
+fn a_new_version_that_does_not_report_is_ended_and_the_swap_undone() {
+    let dirs = Dirs::new();
+    dirs.publish_update("99.0.0", b"the 99.0.0 program");
+    dirs.running(b"the 0.1.0 program");
+    let launcher = dirs.launcher("0.1.0");
+    block_on(launcher.check_application_update());
+    let window = RecordingWindow::attach(&launcher);
+    // The new version starts, but never says so.
+    dirs.relaunch.will(Starts::Silent);
+
+    select_title(&launcher, RESTART);
+    block_on(launcher.activate_selected());
+
+    // It was ended, the old program has its name back, Pane keeps running
+    // and says why, and the update stays staged, its row back and
+    // selected, so Enter tries again.
+    assert!(dirs.relaunch.ended.load(Ordering::SeqCst));
+    assert_eq!(window.quits(), 0);
+    let error = error_of(&launcher);
+    assert!(
+        error.starts_with("Pane 99.0.0 could not start, so Pane stays at 0.1.0: ")
+            && error.contains("did not report that it started"),
+        "{error}"
+    );
+    assert!(
+        matches!(
+            launcher.application_update(),
+            ApplicationUpdate::Ready { failure: Some(why), .. } if why == error
+        ),
+        "{:?}",
+        launcher.application_update()
+    );
+    assert_eq!(fs::read(dirs.program()).unwrap(), b"the 0.1.0 program");
+    assert_eq!(
+        dirs.installed(),
+        [
+            "pane",
+            "update/.pane-staged.json",
+            "update/README.txt",
+            "update/pane"
+        ]
+    );
+    let view = launcher.view();
+    assert_eq!(view.selected, Some(0));
+    assert_eq!(view.rows[0].title, RESTART);
+
+    // It reports this time: Pane restarts, with nothing downloaded again.
+    dirs.relaunch.will(Starts::Reports);
+    block_on(launcher.activate_selected());
+    assert_restarted(&launcher, "99.0.0");
+    assert_eq!(window.quits(), 1);
+    assert_eq!(fs::read(dirs.program()).unwrap(), b"the 99.0.0 program");
+    assert_eq!(dirs.releases.downloaded(".zip"), 1);
+}
+
+#[test]
+fn a_new_version_that_exits_cannot_start_or_is_another_is_undone() {
+    for (starts, said) in [
+        (Starts::Exits, "it exited as it started"),
+        (Starts::Refuses, "it could not be started: access is denied"),
+    ] {
+        let dirs = Dirs::new();
+        dirs.publish_update("99.0.0", b"the 99.0.0 program");
+        dirs.running(b"the 0.1.0 program");
+        let launcher = dirs.launcher("0.1.0");
+        block_on(launcher.check_application_update());
+        dirs.relaunch.will(starts);
+        select_title(&launcher, RESTART);
+        block_on(launcher.activate_selected());
+        let error = error_of(&launcher);
+        assert_eq!(
+            error,
+            format!("Pane 99.0.0 could not start, so Pane stays at 0.1.0: {said}")
+        );
+        assert_eq!(fs::read(dirs.program()).unwrap(), b"the 0.1.0 program");
+        assert!(!dirs.install.path().join("pane.old").exists());
+        assert_eq!(launcher.view().rows[0].title, RESTART);
+    }
+
+    // A program that answers with another version than the release named
+    // is not started at all.
+    let dirs = Dirs::new();
+    dirs.publish_update("99.0.0", b"the 98.0.0 program");
+    dirs.running(b"the 0.1.0 program");
+    let launcher = dirs.launcher("0.1.0");
+    block_on(launcher.check_application_update());
+    select_title(&launcher, RESTART);
+    block_on(launcher.activate_selected());
+    let error = error_of(&launcher);
+    assert!(
+        error.ends_with(": the new program says it is Pane 98.0.0"),
+        "{error}"
+    );
+    assert!(dirs.relaunch.started().is_empty());
+    assert_eq!(fs::read(dirs.program()).unwrap(), b"the 0.1.0 program");
+    // And one that does not run at all is not either.
+    let dirs = Dirs::new();
+    dirs.publish_update("99.0.0", b"not a program");
+    dirs.running(b"the 0.1.0 program");
+    let launcher = dirs.launcher("0.1.0");
+    block_on(launcher.check_application_update());
+    select_title(&launcher, RESTART);
+    block_on(launcher.activate_selected());
+    let error = error_of(&launcher);
+    assert!(
+        error.ends_with(": the new program does not run: it is no program"),
+        "{error}"
+    );
+    assert!(dirs.relaunch.started().is_empty());
+}
+
+#[test]
+fn the_toast_says_an_update_is_ready_once_and_restarts_into_it() {
+    let dirs = Dirs::new();
+    dirs.publish_update("99.0.0", b"the 99.0.0 program");
+    dirs.running(b"the 0.1.0 program");
+    let launcher = dirs.launcher("0.1.0");
+    // Hidden while the update is staged: nothing is said then, never as a
+    // HUD over other applications.
+    let window = RecordingWindow::attach(&launcher);
+    launcher.set_window_presence(WindowPresence::Hidden);
+    block_on(launcher.check_application_update());
+    assert_eq!(launcher.toast(), None);
+    assert!(window.huds().is_empty());
+    // Collapsed to its search field, the launcher shows the row, and says
+    // nothing either: the toast would be a HUD.
+    launcher.set_window_presence(WindowPresence::Compact);
+    assert_eq!(launcher.toast(), None);
+    assert!(window.huds().is_empty());
+    // Shown expanded, the toast says it once.
+    launcher.set_window_presence(WindowPresence::Shown);
+    let toast = launcher.toast().expect("the ready toast");
+    assert_eq!(toast.toast.title, "Pane 99.0.0 is ready");
+    assert_eq!(toast.toast.primary.as_ref().unwrap().title, "Restart");
+    launcher.toast_left(toast.id, toast.revision);
+    launcher.set_window_presence(WindowPresence::Hidden);
+    launcher.set_window_presence(WindowPresence::Shown);
+    assert_eq!(launcher.toast(), None);
+
+    // Its Restart restarts, as the row does. (The toast is shown again for
+    // the test to choose it.)
+    let toast = {
+        drop(launcher);
+        let launcher = dirs.launcher("0.1.0");
+        let window = RecordingWindow::attach(&launcher);
+        launcher.set_window_presence(WindowPresence::Shown);
+        let toast = launcher.toast().expect("the ready toast after a restart");
+        block_on(launcher.run_toast_action(toast.id, ToastSlot::Primary));
+        assert_restarted(&launcher, "99.0.0");
+        assert_eq!(window.quits(), 1);
+        toast
+    };
+    assert_eq!(toast.toast.title, "Pane 99.0.0 is ready");
+}
+
+#[test]
+fn a_typed_query_finds_the_restart_among_the_results() {
+    let dirs = Dirs::new();
+    dirs.publish_update("99.0.0", b"the 99.0.0 program");
+    dirs.running(b"the 0.1.0 program");
+    let launcher = dirs.launcher("0.1.0");
+    block_on(launcher.check_application_update());
+    for query in ["restart", "update", "update pane to 99"] {
+        block_on(launcher.set_query(query));
+        assert!(titles(&launcher).contains(&RESTART.to_owned()), "{query}");
+        // Found as any row is: no section of its own, nothing above the
+        // pinned home, which a query hides anyway.
+        let (_, listing) = launcher.presented_list();
+        assert_eq!(listing.lead, 0, "{query}");
+        assert_ne!(listing.sections[0].label, "Update", "{query}");
+    }
+    // Blank again, it is first of all.
+    block_on(launcher.set_query(""));
+    assert_eq!(titles(&launcher)[0], RESTART);
 }
 
 /// Every file under `folder`, by its path and contents.

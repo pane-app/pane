@@ -51,6 +51,7 @@ mod programs;
 mod protection;
 mod registrations;
 pub mod releases;
+pub mod restart;
 pub mod run;
 mod runtime;
 pub mod schema;
@@ -100,11 +101,11 @@ pub use launcher::{
     LogNotice, MANAGE_EXTENSIONS, OfficialExtension, OpenSubmenu, OperationKind,
     PackagePreferences, PaneForm, PaneFormField, PathPick, PinTarget, PreferenceField,
     PreferencesTarget, Presentation, ProvidedCapability, QUIT_PANE, Question, QuickSlot,
-    RequirementCycle, RequirementFix, ResultAction, ResultActionItem, ResultActions, Row, RowKind,
-    RowPresentation, Screen, Section, SelectedAction, SettingsTarget, ShortcutCatalog,
-    ShortcutCommand, ShortcutGroup, SlotChange, Status, SubmenuState, UNEXPECTED_QUIT, Unavailable,
-    UnboundShortcut, UnmetRequirement, UpdateChecks, UpdateHold, UpdateResult, UpdateResults,
-    UpdateResultsAction, answer_sections, root_sections,
+    RESTART_ROW, RequirementCycle, RequirementFix, ResultAction, ResultActionItem, ResultActions,
+    Row, RowKind, RowPresentation, Screen, Section, SelectedAction, SettingsTarget,
+    ShortcutCatalog, ShortcutCommand, ShortcutGroup, SlotChange, Status, SubmenuState,
+    UNEXPECTED_QUIT, Unavailable, UnboundShortcut, UnmetRequirement, UpdateChecks, UpdateHold,
+    UpdateResult, UpdateResults, UpdateResultsAction, answer_sections, root_sections,
 };
 pub use links::LinkOpener;
 pub use operations::{MAX_CALL_DEPTH, MAX_OPERATION_JSON};

@@ -86,6 +86,9 @@ pub struct RowPresentation {
     /// `None` for Pane's own rows, which keep their tiles, and an item
     /// without one.
     pub icon: Option<Icon>,
+    /// Whether the row is drawn with the accent so that it stands out:
+    /// Restart to Update Pane (ADR 0050).
+    pub highlighted: bool,
     /// Shown when the pointer rests on the row's title (an item's).
     pub title_tooltip: Option<String>,
     /// Shown when the pointer rests on the row's subtitle (an item's).
@@ -153,6 +156,10 @@ pub struct ListPresentation {
     /// Whether a row shows a date accessory, which the window keeps
     /// current while the list is open.
     pub shows_a_date: bool,
+    /// How many of the first rows, with their section, are drawn above
+    /// the pinned home on root search's blank query: Restart to Update
+    /// Pane, which comes first of all (ADR 0050), or none.
+    pub lead: usize,
 }
 
 /// Whether `state`'s rows are an opened command's own list or a designed
@@ -200,6 +207,7 @@ pub(super) fn list_presentation(state: &State) -> ListPresentation {
         sections: sections(state),
         only_fallbacks,
         shows_a_date,
+        lead: lead(state),
     }
 }
 
@@ -305,8 +313,22 @@ pub(super) fn row_presentation(state: &State, index: usize) -> RowPresentation {
         answer: answer(state, row, entry),
         needs_setup: matches!(entry, Entry::Open(_)) && state.setup_needed.contains(&row.id),
         icon: icon(state, row, entry),
+        highlighted: matches!(entry, Entry::RestartToUpdate),
         ..RowPresentation::default()
     }
+}
+
+/// How many of root search's first rows come above its pinned home (see
+/// [`ListPresentation::lead`]): Restart to Update Pane, when a blank query
+/// lists it first.
+fn lead(state: &State) -> usize {
+    let blank = matches!(&state.view.screen, Screen::Root { .. })
+        && state.published.as_str().trim().is_empty();
+    usize::from(
+        blank
+            && !state.view.rows.is_empty()
+            && matches!(state.entries.first(), Some(Entry::RestartToUpdate)),
+    )
 }
 
 /// Starts loading what the icons of `state`'s row at `index` need (#142),
@@ -415,7 +437,24 @@ fn sections(state: &State) -> Vec<Section> {
             _ => None,
         })
         .collect();
-    answer_sections(query, &answers, first_fallback)
+    let mut sections = answer_sections(query, &answers, first_fallback);
+    // Restart to Update Pane, first for a blank query, is under a section
+    // of its own (ADR 0050); the rest stay under theirs.
+    if lead(state) > 0 {
+        for section in &mut sections {
+            section.first += 1;
+        }
+        sections.retain(|section| section.first < shown);
+        sections.insert(
+            0,
+            Section {
+                label: super::application_update::UPDATE_SECTION.into(),
+                note: None,
+                first: 0,
+            },
+        );
+    }
+    sections
 }
 
 /// The update results view's sections (see [`sections`]): each group's
@@ -543,7 +582,7 @@ pub(super) fn kind(entry: &Entry) -> Option<RowKind> {
         | Entry::Acquire(_)
         | Entry::FirstSetup
         | Entry::InstallOfficial(_)
-        | Entry::InstallUpdate
+        | Entry::RestartToUpdate
         | Entry::CheckUpdate
         | Entry::CheckExtensionUpdates
         | Entry::OpenLogFolder

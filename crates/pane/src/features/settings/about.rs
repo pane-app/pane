@@ -10,16 +10,16 @@
 //! same records root search's update rows and the status line come from),
 //! and its rows run the same check
 //! ([`pane_core::Launcher::check_application_update_again`]) and the same
-//! install ([`pane_core::Launcher::install_application_update`]) the root
-//! rows run, so the two entry points cannot disagree — whichever found
-//! the offer, both show it, and installing from either swaps the same
-//! program the same way. Pane checks and downloads a newer version by
-//! itself (ADR 0050), quietly: this page is where that work shows — the
-//! check running, the download's progress, the update ready to install,
-//! when Pane last checked and the last check or download that failed.
-//! Only the user's choice installs, the new version is used the next time
-//! Pane starts, and where no release source is configured the page says
-//! so instead of promising one.
+//! restart ([`pane_core::Launcher::restart_to_update`]) the root rows run,
+//! so the two entry points cannot disagree — whichever found the update,
+//! both show it, and restarting from either swaps the same program the
+//! same way. Pane checks and downloads a newer version by itself (ADR
+//! 0050), quietly: this page is where that work shows — the check
+//! running, the download's progress, the update ready, when Pane last
+//! checked and the last check or download that failed. Only the user's
+//! choice restarts Pane into it ("Restart to update"), and where no
+//! release source is configured the page says so instead of promising
+//! one.
 //!
 //! The documentation entry opens Pane's repository with the link opener
 //! the app gave the launcher — the same handler quicklinks open with, not
@@ -80,6 +80,7 @@ pub(crate) const CRASH_NOTICE: &str = pane_core::diagnostics::CRASH_NOTICE;
 
 /// The buttons' labels.
 pub(crate) const CHECK_LABEL: &str = "Check for updates";
+pub(crate) const RESTART_LABEL: &str = "Restart to update";
 pub(crate) const DOCUMENTATION_LABEL: &str = "Open";
 pub(crate) const DIAGNOSTICS_LABEL: &str = "Copy";
 pub(crate) const LOG_FOLDER_LABEL: &str = "Open log folder";
@@ -142,8 +143,8 @@ pub(crate) struct State {
 pub(crate) enum Started {
     /// "Check for updates", clicked.
     Check,
-    /// "Update Pane to <version>", clicked.
-    Install,
+    /// "Restart to update", clicked.
+    Restart,
 }
 
 impl State {
@@ -172,12 +173,12 @@ fn render(
     // When Pane last checked, and the last check or download that failed,
     // as its update record keeps them.
     let checks = this.launcher.application_update_checks();
-    // Whether a check or an install is running: the launcher's own state
+    // Whether a check or a restart is running: the launcher's own state
     // for one it began, or this page's word for the one it just started.
     let checking = started == Some(Started::Check) || matches!(update, ApplicationUpdate::Checking);
-    let installing =
-        started == Some(Started::Install) || matches!(update, ApplicationUpdate::Installing { .. });
-    // While an install runs, the status line is its progress — the same
+    let restarting =
+        started == Some(Started::Restart) || matches!(update, ApplicationUpdate::Restarting { .. });
+    // While a restart runs, the status line is its progress — the same
     // line the launcher window shows — so the page follows it.
     let status = this.launcher.view().status;
 
@@ -214,18 +215,16 @@ fn render(
             theme.warning,
             Action::None,
         ),
-        // An install running: the status line's own progress, and what
-        // the install is doing before the first bytes of its package
-        // arrive.
-        ApplicationUpdate::Installing { version } => (
-            install_progress(&status, version),
+        // A restart running: the status line's own progress.
+        ApplicationUpdate::Restarting { version } => (
+            restart_progress(&status, version),
             theme.warning,
             Action::None,
         ),
         // The update this page's clicked button named, before the
-        // launcher has begun installing it.
-        ApplicationUpdate::Ready { version, .. } if installing => (
-            install_progress(&status, version),
+        // launcher has begun restarting into it.
+        ApplicationUpdate::Ready { version, .. } if restarting => (
+            restart_progress(&status, version),
             theme.warning,
             Action::None,
         ),
@@ -253,24 +252,28 @@ fn render(
             ),
         },
         // The staged update: the same version, and the same explanation of
-        // what installing does, the root row offers — with why installing
-        // it last failed, if it did, since it stays, ready to be chosen
-        // again.
+        // what restarting does, the root row offers — with why restarting
+        // into it last failed, if it did, since it stays, ready to be
+        // chosen again.
         ApplicationUpdate::Ready { version, failure } => match failure {
             Some(why) => (
                 format!("Couldn't update to {version}: {why}").into(),
                 theme.danger,
-                Action::Update(version.clone()),
+                Action::Restart,
             ),
             None => (
-                format!("Pane {version} is ready to install").into(),
+                format!("Pane {version} is ready").into(),
                 theme.success,
-                Action::Update(version.clone()),
+                Action::Restart,
             ),
         },
+        // The one state a restart leaves without an action: the new
+        // version could not start, and the swap could not be undone, so
+        // the next start runs it. The status line says why.
         ApplicationUpdate::Installed { version } => (
-            format!("Pane {version} is installed and starts next time").into(),
-            theme.success,
+            format!("Pane {version} could not start now; it starts the next time Pane starts")
+                .into(),
+            theme.warning,
             Action::None,
         ),
     };
@@ -325,10 +328,10 @@ fn render(
                 run(this.launcher.check_application_update_again(), cx);
             }))
         }
-        AboutControl::Update => {
+        AboutControl::Restart => {
             element.on_click(cx.listener(move |this, _: &gpui::ClickEvent, _, cx| {
-                this.about.started = Some(Started::Install);
-                run(this.launcher.install_application_update(), cx);
+                this.about.started = Some(Started::Restart);
+                run(this.launcher.restart_to_update(), cx);
             }))
         }
         AboutControl::Documentation => {
@@ -429,8 +432,8 @@ fn log_view(notice: pane_core::LogNotice) -> LogView {
 pub(crate) enum AboutControl {
     /// "Check for updates".
     Check,
-    /// "Update Pane to <version>".
-    Update,
+    /// "Restart to update".
+    Restart,
     /// The documentation's button.
     Documentation,
     /// "Copy diagnostics".
@@ -479,18 +482,15 @@ pub(crate) fn compose(
                 theme,
             ),
         )),
-        Action::Update(version) => {
-            let title = format!("Update to {version}");
-            Some(attach(
-                AboutControl::Update,
-                action_button(
-                    "about-update",
-                    &title,
-                    "Keeps your extensions and settings. The new version starts next time.",
-                    theme,
-                ),
-            ))
-        }
+        Action::Restart => Some(attach(
+            AboutControl::Restart,
+            action_button(
+                "about-update",
+                RESTART_LABEL,
+                "Restarts Pane into the new version. Your extensions and settings are kept.",
+                theme,
+            ),
+        )),
     };
     let status = status_note(
         "about-update-status",
@@ -608,9 +608,9 @@ pub(crate) enum Action {
     None,
     /// "Check for updates": the check the user asks for.
     Check,
-    /// "Update Pane to <version>", the staged update the user chooses to
-    /// install.
-    Update(String),
+    /// "Restart to update": restarts Pane into the staged update, as the
+    /// user chooses.
+    Restart,
 }
 
 /// Runs the update action `pending` the page's row started: the launcher
@@ -638,13 +638,12 @@ fn checking_text() -> SharedString {
     "Checking for updates…".into()
 }
 
-/// What the page says while an update installs: the status line's own
-/// progress — the same line the launcher window shows — with what the
-/// install is doing before the first bytes of its package arrive.
-fn install_progress(status: &Status, version: &str) -> SharedString {
+/// What the page says while Pane restarts into an update: the status
+/// line's own progress — the same line the launcher window shows.
+fn restart_progress(status: &Status, version: &str) -> SharedString {
     match status {
         Status::Progress(work) => work.clone().into(),
-        _ => format!("Downloading Pane {version}…").into(),
+        _ => format!("Restarting to update Pane to {version}…").into(),
     }
 }
 
@@ -714,14 +713,14 @@ fn update_line(update: &ApplicationUpdate) -> String {
         ApplicationUpdate::Ready {
             version,
             failure: None,
-        } => format!("Pane {version} is ready to install"),
+        } => format!("Pane {version} is ready"),
         ApplicationUpdate::Ready {
             version,
             failure: Some(why),
-        } => format!("Pane {version} is ready to install; installing it failed: {why}"),
-        ApplicationUpdate::Installing { version } => format!("installing Pane {version}"),
+        } => format!("Pane {version} is ready; restarting into it failed: {why}"),
+        ApplicationUpdate::Restarting { version } => format!("restarting into Pane {version}"),
         ApplicationUpdate::Installed { version } => {
-            format!("installed Pane {version}; used the next time Pane starts")
+            format!("installed Pane {version}, which could not start; it starts next time")
         }
         ApplicationUpdate::Failed(why) => format!("could not check: {why}"),
     }

@@ -67,7 +67,7 @@ impl RecordingWindow {
             .iter()
             .filter_map(|request| match request {
                 WindowRequest::Hud(hud) => Some(hud.clone()),
-                WindowRequest::Hide | WindowRequest::Confirmation => None,
+                WindowRequest::Hide | WindowRequest::Confirmation | WindowRequest::Quit => None,
             })
             .collect()
     }
@@ -80,6 +80,16 @@ impl RecordingWindow {
             .unwrap()
             .iter()
             .filter(|request| **request == WindowRequest::Confirmation)
+            .count()
+    }
+
+    /// How many times the window was asked to quit Pane so far.
+    pub fn quits(&self) -> usize {
+        self.requests
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|request| **request == WindowRequest::Quit)
             .count()
     }
 
@@ -111,5 +121,9 @@ impl WindowControl for RecordingWindow {
             .lock()
             .unwrap()
             .push(WindowRequest::Confirmation);
+    }
+
+    fn quit(&self) {
+        self.requests.lock().unwrap().push(WindowRequest::Quit);
     }
 }

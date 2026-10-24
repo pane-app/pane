@@ -255,6 +255,9 @@ impl Launcher {
             // HUD.
             if presence == WindowPresence::Shown {
                 self.announce_update_failures(&mut state);
+                // So is what Pane's own update has to say: that it was
+                // updated, or that an update is ready (ADR 0050).
+                self.announce_application_update(&mut state);
             }
             if same {
                 return;
@@ -394,6 +397,7 @@ impl Launcher {
     ) -> impl Future<Output = ()> + Send + 'static {
         let mut state = self.lock();
         let mut run = None;
+        let mut restart = false;
         let chosen = state
             .feedback
             .toast
@@ -414,6 +418,9 @@ impl Launcher {
             Some((_, _, ToastDoes::ShowUpdateResults)) => {
                 self.show_update_results(&mut state);
             }
+            // Pane's own Restart, on the toast saying an update is ready:
+            // the restart the row runs.
+            Some((_, _, ToastDoes::RestartToUpdate)) => restart = true,
             Some((owner, command, ToastDoes::Copy(_))) => {
                 let copied = Toast::new(ToastStyle::Success, "Copied the error to the clipboard");
                 self.put_toast(&mut state, owner, command, copied);
@@ -437,6 +444,9 @@ impl Launcher {
                 launcher
                     .run_toast_callback(epoch, owner, command, callback, data)
                     .await;
+            }
+            if restart {
+                launcher.restart_to_update().await;
             }
         }
     }

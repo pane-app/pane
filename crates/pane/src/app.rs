@@ -628,6 +628,12 @@ impl LauncherWindow {
             }
             WindowRequest::Hud(hud) => self.show_hud(hud, window, cx),
             WindowRequest::Confirmation => self.sync_confirmation(window, cx),
+            // A restart into Pane's own update: the new version has started
+            // and waits for this one to exit (ADR 0050).
+            WindowRequest::Quit => {
+                self.quit(cx);
+                return;
+            }
         }
         self.sync_screen(window, cx);
         cx.notify();
@@ -1849,10 +1855,12 @@ impl LauncherWindow {
     }
 
     /// Quits Pane explicitly: the tray's Quit and root search's Quit Pane
-    /// (#496) both end here. Pane's own resources are removed deliberately
-    /// — a quit that ended the process might never run a destructor — and
-    /// then the same quit path closing the launcher's window is taken,
-    /// whose hooks stop the runtime's helpers and the development watches.
+    /// (#496) both end here, and so does a restart into Pane's own update
+    /// once the new version has started (ADR 0050). Pane's own resources
+    /// are removed deliberately — a quit that ended the process might never
+    /// run a destructor — and then the same quit path closing the launcher's
+    /// window is taken, whose hooks stop the runtime's helpers and the
+    /// development watches.
     pub(crate) fn quit(&mut self, cx: &mut Context<Self>) {
         crate::settings::shared(cx).update(cx, |settings, _| settings.release_tray());
         self.launcher.release_hotkeys();
@@ -2506,7 +2514,7 @@ impl LauncherWindow {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn render_row(
+    pub(crate) fn render_row(
         &self,
         index: usize,
         row: Row,
@@ -2534,6 +2542,9 @@ impl LauncherWindow {
         // A command whose required preferences are unset says so, in the
         // kind's place and to assistive technology (#143).
         let needs_setup = shown.needs_setup;
+        // Restart to Update Pane stands out (ADR 0050): an accent ring
+        // inside the row, over its washes, and its accent tile.
+        let highlighted = shown.highlighted;
         let description = match (description, needs_setup) {
             (Some(description), true) => Some(format!("{description}. {NEEDS_SETUP}")),
             (None, true) => Some(NEEDS_SETUP.to_owned()),
@@ -2620,6 +2631,13 @@ impl LauncherWindow {
             theme,
         )
         .id(("row", index))
+        .when(highlighted, |row| {
+            row.shadow(vec![
+                gpui::BoxShadow::new(px(0.), px(0.), crate::ui::theme::faded(theme.accent, 0.55))
+                    .spread_radius(px(1.))
+                    .inset(),
+            ])
+        })
         // The row reports the pointer's arrivals and departures for its
         // wash (see `crate::app::hover_wash`): where hovering moves the
         // selection — root search's free rows — the wash never shows, so
@@ -3044,9 +3062,16 @@ impl LauncherWindow {
     /// compared, so a size another view gave it (Clipboard History's) is
     /// fitted too, and so is a collapsed height the switch or the pins no
     /// longer call for. Whether it is collapsed.
-    fn fit_window_mode(&mut self, view: &LauncherView, window: &mut Window, cx: &App) -> bool {
+    fn fit_window_mode(
+        &mut self,
+        view: &LauncherView,
+        update: bool,
+        window: &mut Window,
+        cx: &App,
+    ) -> bool {
         let collapsed = self.collapses(view, cx);
-        let bar = crate::settings::visuals(cx).theme.geometry.search_height;
+        let theme = crate::settings::visuals(cx).theme;
+        let bar = theme.geometry.search_height;
         let (width, height) = shell::LAUNCHER_CLIENT;
         let resize = self.presence.fit(Fit {
             collapses: collapsed,
@@ -3054,6 +3079,8 @@ impl LauncherWindow {
             shows_pins: collapsed && self.shows_compact_pins(cx),
             bar: f32::from(bar),
             pin_row: compact_pins::ROW_HEIGHT,
+            shows_update: update,
+            update_row: compact_pins::update_row_height(&theme),
             current: window_size(window.viewport_size()),
             default_expanded: WindowSize { width, height },
         });
@@ -3100,8 +3127,9 @@ impl Render for LauncherWindow {
             return split.children(asked);
         }
         // The compact window mode shows only the search field until
-        // something is typed.
-        let collapsed = self.fit_window_mode(&view, window, cx);
+        // something is typed — and Restart to Update Pane under it, while
+        // an update is ready (ADR 0050).
+        let collapsed = self.fit_window_mode(&view, listing.lead > 0, window, cx);
         // Collapsed to its search field, the launcher has no footer for a
         // toast: one shown is a HUD (#141).
         if !self.presence.hidden() {
@@ -3318,9 +3346,18 @@ impl Render for LauncherWindow {
         // into the list (#132).
         let followed = self.followed_list(&view, &sections, notice.is_some(), cx);
         let rows = std::mem::take(&mut view.rows);
+        // The compact window's update row, drawn from the row the list
+        // holds first (ADR 0050).
+        let compact_update = rows.first().cloned().filter(|_| listing.lead > 0);
+        let compact_selected = view.selected == Some(0);
         let rows_changed = self.results.show(result_list::ListFrame {
             view: view.clone(),
-            children: crate::ui::virtual_list::children(head, rows.len(), &sections),
+            children: crate::ui::virtual_list::children_led(
+                head,
+                listing.lead,
+                rows.len(),
+                &sections,
+            ),
             rows,
             sections,
             root,
@@ -3430,9 +3467,20 @@ impl Render for LauncherWindow {
             // Collapsed, root search is its search field alone — with the
             // pins' row under it, where the Launcher page shows them.
             Screen::Root { query } if collapsed => {
+                let update = (listing.lead > 0)
+                    .then(|| {
+                        self.render_compact_update(compact_update, compact_selected, &theme, cx)
+                    })
+                    .flatten();
                 let pins = self.render_compact_pins(numbers, &theme, cx);
                 let placeholder = self.search_placeholder();
-                self.render_search(query, &placeholder, loading.bar, div().children(pins), cx)
+                self.render_search(
+                    query,
+                    &placeholder,
+                    loading.bar,
+                    div().children(update).children(pins),
+                    cx,
+                )
             }
             Screen::Root { query } => {
                 let results = actions_panel::dimmed(
@@ -3891,6 +3939,7 @@ pub(crate) fn row_icon(id: &str) -> (IconTone, Glyph) {
         "pane.settings" => (IconTone::Command, Glyph::Gear),
         pane_core::QUIT_PANE => (IconTone::Command, Glyph::Power),
         pane_core::UNEXPECTED_QUIT => (IconTone::Folder, Glyph::Folder),
+        pane_core::RESTART_ROW => (IconTone::Accent, Glyph::Reset),
         _ => (IconTone::Command, Glyph::Prompt),
     }
 }

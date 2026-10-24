@@ -890,21 +890,24 @@ Pane downloads an update by itself, and the phase checks that instead of
    took it out of the default set), so an extension the user disabled
    before the update must stay disabled after it.
 4. With the package whole again, Check for Pane Updates downloads it and
-   stages it: "Pane 99.0.0 is ready to install" (frame 601), the marker
-   written in `Contents/MacOS/update/`, and the package downloaded twice
-   in all. Root search then lists Update Pane to 99.0.0, selected (frame
-   602).
-5. Enter swaps the running binary inside the bundle without downloading
-   again. The old `Contents/MacOS/pane` is renamed `pane.old` beside it,
-   the new one takes its place, and the staging folder is gone (frame
-   603, and byte comparisons of both binaries against the two packages'
-   own files).
-6. The next start runs the new version. It reports `Pane 99.0.0` and
-   removes `pane.old` at start. The calculator still answers "6*7" with 42
-   from the old version's install (the calculator set up at first setup,
-   from the pinned repositories; frames 604 and 605), and the pasteboard
-   holds 42. The disabled Clipboard History stays disabled, since Pane's
-   data was never touched.
+   stages it, and its toast says "Pane 99.0.0 is ready" (frame 601); the
+   marker is written in `Contents/MacOS/update/`, and the package
+   downloaded twice in all. A blank root search then lists Restart to
+   Update Pane first, selected (frame 602).
+5. Enter restarts into the update without downloading again
+   ([#504](https://github.com/pane-app/pane/issues/504)). The old
+   `Contents/MacOS/pane` is renamed `pane.old` beside it and the new one
+   takes its place; the new one is started directly (not through Launch
+   Services) with `--updated-from` and `--wait-pid`, and the old process
+   exits. A new `pane` runs from the same binary (frame 603, evidence),
+   reports `Pane 99.0.0`, and the staging folder is gone (byte
+   comparisons of both binaries against the two packages' own files).
+6. The calculator still answers "6*7" with 42 from the old version's
+   install (the calculator set up at first setup, from the pinned
+   repositories; frames 604 and 605), and the pasteboard holds 42. The
+   disabled Clipboard History stays disabled, since Pane's data was never
+   touched.
+7. The new version settled, so the next start removes `pane.old`.
 
 The bundle itself is never replaced: the same `Pane.app` keeps its
 identity. Since [#455](https://github.com/pane-app/pane/issues/455) the
