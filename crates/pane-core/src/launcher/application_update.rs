@@ -1,7 +1,8 @@
 //! Pane's own updates in the launcher (#54, ADR 0050): when Pane checks
 //! for one, what it does with what it finds, and the rows and words that
 //! tell the user (see `application_update`, where the check, the
-//! download, the staging and the swap are).
+//! download, the staging and the swap are, and `restart`, where the new
+//! version is started).
 //!
 //! **When Pane checks.** At start, then every [`CHECK_EVERY`] while it
 //! runs, each scheduled check a random moment of up to a sixteenth of
@@ -16,22 +17,41 @@
 //!
 //! **What a check does.** A newer version it finds is downloaded at once,
 //! in the background, checked against its sha256 and staged, with no row
-//! and no word on the status line meanwhile (About shows the progress).
-//! Once it is staged, root search lists "Update Pane to <version>", which
-//! installs it for the next start of Pane; nothing is downloaded again. A
+//! and no word on the status line meanwhile (About shows the progress). A
 //! background check or download that fails says nothing either: it is
 //! written to Pane's log and the update record, About shows when and why,
 //! and the next check that is due tries again. A check the user asked for
 //! answers on the status line, even when there is nothing to tell.
 //!
+//! **Ready.** Once an update is staged, root search lists **Restart to
+//! Update Pane** ([`RESTART_TITLE`]): first of all for a blank query, under
+//! a section of its own, drawn with the accent, so it is selected when the
+//! launcher opens and Enter restarts. A toast says "Pane <version> is
+//! ready", with Restart as its action, once: when the update is staged
+//! while the launcher is shown expanded, or else the next time it is. While
+//! Pane sets up, installs, updates or removes an extension, the row is
+//! unavailable and says why.
+//!
+//! **Restart.** Enter on the row, the toast's Restart or About's button
+//! swaps the program, checks that the new one answers `--version` with its
+//! version, starts it with `--updated-from` and `--wait-pid`, and waits for
+//! it to report that it started (see `restart`); then Pane quits cleanly,
+//! through the window ([`crate::feedback::WindowControl::quit`]). A new
+//! version that does not answer, does not start or does not report in time
+//! is ended, the swap is undone, the status line and About say what
+//! happened, and the row stays to try again.
+//!
+//! **After the restart.** The new version, started with `--updated-from`
+//! ([`Launcher::with_updated_from`]), says "Updated to Pane <version>" the
+//! first time the launcher is shown. Once its window, hotkeys and tray are
+//! up it records that it settled ([`Launcher::application_update_settled`]),
+//! and only a start after that removes the old program the swap kept.
+//!
 //! The Settings window's About page (#82) is a second view of the same
 //! flow, not a second flow: `Launcher::application_update` reads the
 //! same state the rows come from, and its buttons run the same check
-//! (`Launcher::check_application_update_again`) and the same install
-//! (`Launcher::install_application_update`) the root rows run.
-//!
-//! Pane does not restart itself yet: an install replaces the program so
-//! the new version is used the next time Pane starts, as the row says.
+//! (`Launcher::check_application_update_again`) and the same restart
+//! (`Launcher::restart_to_update`) the root rows run.
 
 use std::future::Future;
 use std::hash::BuildHasher;
@@ -39,14 +59,16 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, Weak};
 use std::time::Duration;
 
-use super::{Launcher, Screen, State, Status, WeakLauncher, off_thread};
+use super::{Changing, Launcher, Screen, State, Status, Unavailable, WeakLauncher, off_thread};
 use crate::Target;
 use crate::application_update::{
     self, Found, InstallFailure, Offer, Program, Record, RecordedFailure, Staged,
 };
+use crate::feedback::{Toast, ToastAction, ToastDoes, ToastStyle, WindowPresence};
 use crate::launcher::Entry;
 use crate::launcher::Row;
 use crate::releases::ReleaseSource;
+use crate::restart::{self, Relaunch};
 
 /// How often Pane checks for a newer version of itself while it runs, and
 /// how old the last check may be before showing the launcher checks again
@@ -65,6 +87,20 @@ const MIN_WAIT: Duration = Duration::from_secs(1);
 /// Raycast gives the same command, which finds it too.
 const CHECK_TITLE: &str = "Check for Pane Updates";
 const CHECK_ALTERNATE: &str = "Check for Updates";
+
+/// The root row that restarts Pane into the update it staged, as Raycast
+/// names its own.
+pub const RESTART_TITLE: &str = "Restart to Update Pane";
+
+/// The id of the row that restarts Pane into its update.
+pub const RESTART_ROW: &str = "pane.update";
+
+/// The label of the section the restart row is listed under, first of
+/// all, for a blank query.
+pub const UPDATE_SECTION: &str = "Update";
+
+/// The title of the action of the toast that says an update is ready.
+const RESTART_ACTION: &str = "Restart";
 
 /// This launcher's application: the version of Pane it runs, where its
 /// updates come from (the releases of Pane's repository on GitHub, or a
@@ -89,19 +125,20 @@ pub(in crate::launcher) struct Updates {
     checking: bool,
     /// The update being downloaded now, with its progress.
     downloading: Option<Downloading>,
-    /// The staged update is being installed now: its row is not listed
-    /// meanwhile.
-    installing: bool,
-    /// Why the last check failed, if it did; cleared by one that answers.
+    /// Pane is restarting into the staged update now: its row is not
+    /// listed meanwhile, and once the new version started, it stays so
+    /// until Pane has quit.
+    restarting: bool,
+    /// Why checking failed last, if it did; cleared by one that answers.
     check_failed: Option<String>,
     /// Why downloading the update found last failed, if it did; cleared
     /// when a download begins again.
     download_failed: Option<String>,
-    /// Why installing the staged update last failed, if it did: the
+    /// Why restarting into the staged update failed last, if it did: the
     /// update stays staged, ready to be chosen again, and the About page
     /// shows the failure beside it, as the status line does. Cleared when
-    /// a new install of it begins and when one succeeds.
-    install_failed: Option<String>,
+    /// a new restart begins and when an update is staged anew.
+    restart_failed: Option<String>,
     /// What Pane keeps of its checks across restarts, and where
     /// ([`Launcher::with_application_update_cache`]); `None` keeps it for
     /// this run only.
@@ -117,6 +154,16 @@ pub(in crate::launcher) struct Updates {
     /// ([`Launcher::start_application_update_checks`]); it stops when this
     /// state goes with the launcher.
     schedule: Option<Arc<Schedule>>,
+    /// How the new version is checked and started, and how long it has to
+    /// report that it started: the system's own and
+    /// [`restart::STARTED_LIMIT`], unless a test gave another
+    /// ([`Launcher::with_relaunch`]).
+    relaunch: Option<(Arc<dyn Relaunch>, Duration)>,
+    /// The version whose toast saying it is ready was shown: once each.
+    announced_ready: Option<String>,
+    /// The version this run was restarted from, while the toast saying so
+    /// waits for the launcher to be shown ([`Launcher::with_updated_from`]).
+    updated_from: Option<String>,
 }
 
 /// What the checks found, and what became of it.
@@ -131,12 +178,13 @@ enum Notice {
     /// or its download failed and the next check tries again. No row is
     /// listed for it (ADR 0050).
     Offered(Offer),
-    /// A newer version, downloaded, checked and staged: the row installs
-    /// it.
+    /// A newer version, downloaded, checked and staged: the row restarts
+    /// into it.
     Ready(Staged),
-    /// The staged update was installed: its version, which the next start
-    /// of Pane runs. No row is listed for it, as nothing is left to
-    /// choose; the status line and the About page say what happened.
+    /// The update was installed but its new version could not be started,
+    /// and the swap could not be undone either: its version, which the
+    /// next start of Pane runs. The status line and the About page say
+    /// what happened; nothing is left to choose.
     Installed(String),
 }
 
@@ -182,17 +230,18 @@ pub enum ApplicationUpdate {
         bytes: u64,
         total: u64,
     },
-    /// A newer version is downloaded, checked and staged, ready to be
-    /// installed by the user's choice: its version, with why installing
-    /// it last failed, if it did — it stays staged, ready to be chosen
+    /// A newer version is downloaded, checked and staged, ready for the
+    /// user to restart into: its version, with why restarting into it
+    /// last failed, if it did — it stays staged, ready to be chosen
     /// again.
     Ready {
         version: String,
         failure: Option<String>,
     },
-    /// The staged update is being installed now.
-    Installing { version: String },
-    /// The staged update was installed: its version, which the next start
+    /// Pane is restarting into the staged update now.
+    Restarting { version: String },
+    /// The update was installed, but its new version could not be started
+    /// and the swap could not be undone: its version, which the next start
     /// of Pane runs.
     Installed { version: String },
     /// The last check failed: why. The next check that is due tries
@@ -226,6 +275,25 @@ impl ApplicationUpdate {
     }
 }
 
+/// What a restart into the staged update came to.
+enum Restarted {
+    /// The new version started and reported so: this Pane quits.
+    HandedOff,
+    /// The swap could not be made; nothing changed, and the update stays
+    /// staged.
+    Kept(String),
+    /// The staged program was gone or changed; it was removed, to be
+    /// downloaded again.
+    Restage(String),
+    /// The new version did not start (why), and the swap was undone: the
+    /// update stays staged.
+    Undone(String),
+    /// The new version did not start (the first), and the swap could not
+    /// be undone either (the second): the new program stays in place,
+    /// which the next start of Pane runs.
+    Stuck(String, String),
+}
+
 impl Updates {
     /// How often Pane checks.
     fn interval(&self) -> Duration {
@@ -250,34 +318,35 @@ impl Updates {
         after.max(self.record.limited_until.unwrap_or(0))
     }
 
-    /// The staged update the row installs, when it is not being installed
-    /// and no newer one is being staged in its place.
+    /// The staged update the row restarts into, when Pane is not
+    /// restarting into it already and no newer one is being staged in its
+    /// place.
     fn ready(&self) -> Option<Staged> {
-        match (&self.found, self.installing, &self.downloading) {
+        match (&self.found, self.restarting, &self.downloading) {
             (Notice::Ready(staged), false, None) => Some(staged.clone()),
             _ => None,
         }
     }
 
     /// The rows root search lists of Pane's own update, each with the
-    /// other names it is found by: the staged update the user can choose
-    /// to install, and the check the user can ask for at any time.
-    pub(in crate::launcher) fn rows(&self) -> Vec<(Row, Entry, Vec<String>)> {
+    /// other names it is found by: the staged update the user can restart
+    /// into — unavailable, saying why, while Pane is `busy` with an
+    /// extension — and the check the user can ask for at any time.
+    pub(in crate::launcher) fn rows(&self, busy: Option<String>) -> Vec<(Row, Entry, Vec<String>)> {
         let mut rows = Vec::new();
         if let Some(staged) = self.ready() {
             rows.push((
                 Row {
-                    id: "pane.update".into(),
-                    title: format!("Update Pane to {}", staged.version),
-                    subtitle: Some(
-                        "Your extensions and settings are kept; the new version is used the \
-                         next time Pane starts"
-                            .into(),
-                    ),
-                    unavailable: None,
+                    id: RESTART_ROW.into(),
+                    title: RESTART_TITLE.into(),
+                    subtitle: Some(format!(
+                        "Pane {} is ready. Your extensions and settings are kept",
+                        staged.version
+                    )),
+                    unavailable: busy.map(Unavailable::Busy),
                 },
-                Entry::InstallUpdate,
-                Vec::new(),
+                Entry::RestartToUpdate,
+                vec![format!("Update Pane to {}", staged.version)],
             ));
         }
         rows.push((
@@ -306,6 +375,23 @@ impl Updates {
             self.record.save(path);
         }
     }
+
+    /// How the new version is checked and started, and how long it has to
+    /// report that it started.
+    fn relaunch(&self) -> (Arc<dyn Relaunch>, Duration) {
+        self.relaunch
+            .clone()
+            .unwrap_or_else(|| (Arc::new(restart::Native), restart::STARTED_LIMIT))
+    }
+
+    /// Where the new version reports that it started: Pane's cache folder,
+    /// where the record is kept, as the new process names it too.
+    fn report_folder(&self) -> PathBuf {
+        self.record_path
+            .as_deref()
+            .and_then(Path::parent)
+            .map_or_else(std::env::temp_dir, Path::to_path_buf)
+    }
 }
 
 impl Drop for Updates {
@@ -316,13 +402,27 @@ impl Drop for Updates {
     }
 }
 
+/// Why Pane cannot restart into its update now, if it cannot: it is
+/// setting up its default extensions, or installing, updating, reloading
+/// or removing an extension, which a restart would cut short.
+pub(in crate::launcher) fn busy(state: &State) -> Option<String> {
+    if state.acquisitions.in_flight() {
+        return Some("Pane is setting up its extensions".into());
+    }
+    state
+        .changing
+        .iter()
+        .find(|(_, what)| !matches!(what, Changing::Recording))
+        .map(|(identity, what)| format!("{} {}", state.title_of(identity), what.doing()))
+}
+
 impl Launcher {
     /// What Pane knows of its own update, read without entering any flow
     /// and without listing any row: the same state root search's update
     /// rows come from, as a second surface of it (the Settings About page)
     /// shows. Whether a release source is configured at all, what the
     /// checks found — a newer version being downloaded or ready to
-    /// install, that this Pane is new enough, or why the last check
+    /// restart into, that this Pane is new enough, or why the last check
     /// failed — and what is running now. Nothing here checks, downloads
     /// or installs anything.
     pub fn application_update(&self) -> ApplicationUpdate {
@@ -331,18 +431,18 @@ impl Launcher {
         }
         let state = self.lock();
         let updates = &state.updates;
-        // An install in flight comes first: the update it installs is
-        // still the found notice, but what the page shows is the install.
+        // A restart in flight comes first: the update it restarts into is
+        // still the found notice, but what the page shows is the restart.
         if let Notice::Ready(staged) = &updates.found {
-            if updates.installing {
-                return ApplicationUpdate::Installing {
+            if updates.restarting {
+                return ApplicationUpdate::Restarting {
                     version: staged.version.clone(),
                 };
             }
             if updates.downloading.is_none() {
                 return ApplicationUpdate::Ready {
                     version: staged.version.clone(),
-                    failure: updates.install_failed.clone(),
+                    failure: updates.restart_failed.clone(),
                 };
             }
         }
@@ -389,11 +489,13 @@ impl Launcher {
 
     /// This launcher checking for Pane application updates: the version
     /// `version` of Pane it runs, updated from `source`, replacing the
-    /// program at `program` when the user chooses to install. What an
-    /// earlier update left in the program's folder also goes, which a
-    /// Pane starting does — except an update staged of a newer version,
-    /// which is ready to install at once. A path that names no program
-    /// file wires no updater at all.
+    /// program at `program` when the user chooses to restart into an
+    /// update. What an earlier update left in the program's folder also
+    /// goes, which a Pane starting does — except an update staged of a
+    /// newer version, which is ready at once, and the old program an
+    /// update kept, until this version has settled
+    /// ([`Launcher::application_update_settled`]). A path that names no
+    /// program file wires no updater at all.
     pub fn with_application_update(
         self,
         version: &str,
@@ -424,8 +526,10 @@ impl Launcher {
         program: Result<Program, String>,
     ) -> Self {
         let application = program.ok().map(|program| {
-            if let Some(staged) = program.clean_install_folder(version) {
-                self.lock().updates.found = Notice::Ready(staged);
+            let mut state = self.lock();
+            let settled = state.updates.record.settled.as_deref() == Some(version);
+            if let Some(staged) = program.clean_install_folder(version, settled) {
+                state.updates.found = Notice::Ready(staged);
             }
             Application {
                 version: version.to_owned(),
@@ -447,14 +551,21 @@ impl Launcher {
     /// Keeps Pane's update record in the cache folder `cache`
     /// (`application-update.json`), reading what it holds now: when Pane
     /// last checked, the listing it read and its `ETag`, when GitHub's
-    /// rate limit lifts, and the last failure. Without it, what a check
-    /// learns lasts only while this launcher runs.
+    /// rate limit lifts, the last failure, and the version that last
+    /// settled — once it is this one, the old program an update kept goes.
+    /// Without it, what a check learns lasts only while this launcher
+    /// runs.
     pub fn with_application_update_cache(self, cache: &Path) -> Self {
         {
             let path = cache.join(application_update::RECORD);
             let mut state = self.lock();
             state.updates.record = Record::open(&path);
             state.updates.record_path = Some(path);
+            if let Some(application) = &self.application
+                && state.updates.record.settled.as_deref() == Some(application.version.as_str())
+            {
+                application.program.remove_old();
+            }
         }
         self
     }
@@ -467,6 +578,41 @@ impl Launcher {
     pub fn with_application_update_interval(self, interval: Duration) -> Self {
         self.lock().updates.interval = Some(interval);
         self
+    }
+
+    /// Checks and starts the new version of a restart with `relaunch`,
+    /// giving it `started_within` to report that it started, instead of
+    /// the system's own processes and twenty seconds: for tests, whose
+    /// programs are stand-ins that cannot run.
+    #[doc(hidden)]
+    pub fn with_relaunch(self, relaunch: Arc<dyn Relaunch>, started_within: Duration) -> Self {
+        self.lock().updates.relaunch = Some((relaunch, started_within));
+        self
+    }
+
+    /// This run of Pane was restarted from version `previous` into the one
+    /// it runs, by a restart into an update (`--updated-from`): the first
+    /// time the launcher is shown, a toast says "Updated to Pane
+    /// <version>".
+    pub fn with_updated_from(self, previous: &str) -> Self {
+        self.lock().updates.updated_from = Some(previous.to_owned());
+        self
+    }
+
+    /// Records that this version of Pane has settled: its window, hotkeys
+    /// and tray icon are up. The next start of it removes the old program
+    /// an update kept until then (ADR 0050). Called once a start has set
+    /// those up.
+    pub fn application_update_settled(&self) {
+        let Some(application) = &self.application else {
+            return;
+        };
+        let mut state = self.lock();
+        let updates = &mut state.updates;
+        if updates.record.settled.as_deref() != Some(application.version.as_str()) {
+            updates.record.settled = Some(application.version.clone());
+            updates.save();
+        }
     }
 
     /// Starts checking for Pane updates by the schedule: at once if a
@@ -530,11 +676,54 @@ impl Launcher {
         }
     }
 
+    /// Says what Pane's own update has to say, while the launcher is shown
+    /// expanded (never as a HUD over other applications): "Updated to Pane
+    /// <version>" once, after a restart into an update, and "Pane
+    /// <version> is ready" once for each update staged, with Restart as
+    /// its action. Called when the launcher is shown, and when an update
+    /// is staged.
+    pub(in crate::launcher) fn announce_application_update(&self, state: &mut State) {
+        if state.feedback.presence != WindowPresence::Shown {
+            return;
+        }
+        let Some(application) = &self.application else {
+            return;
+        };
+        if state.updates.updated_from.take().is_some() {
+            let toast = Toast::new(
+                ToastStyle::Success,
+                format!("Updated to Pane {}", application.version),
+            );
+            self.show_own_toast(state, toast);
+            return;
+        }
+        let Some(staged) = state.updates.ready() else {
+            return;
+        };
+        if state.updates.announced_ready.as_deref() == Some(staged.version.as_str()) {
+            return;
+        }
+        state.updates.announced_ready = Some(staged.version.clone());
+        let toast = Toast {
+            style: ToastStyle::Success,
+            title: format!("Pane {} is ready", staged.version),
+            message: Some("Restart to update".into()),
+            primary: Some(ToastAction {
+                title: RESTART_ACTION.into(),
+                shortcut: None,
+                unbound: None,
+                does: ToastDoes::RestartToUpdate,
+            }),
+            secondary: None,
+        };
+        self.show_own_toast(state, toast);
+    }
+
     /// Checks Pane's releases for a newer version of Pane at once, as a
     /// scheduled check does: quietly, with no row and no word on the
     /// status line unless an update is staged, which lists the row that
-    /// installs it. A newer version found is downloaded and staged before
-    /// the returned future ends. Runs in the background; await the
+    /// restarts into it. A newer version found is downloaded and staged
+    /// before the returned future ends. Runs in the background; await the
     /// returned future to apply the result. Calling it again while a check
     /// runs does nothing.
     pub fn check_application_update(&self) -> impl Future<Output = ()> + Send + 'static {
@@ -615,10 +804,10 @@ impl Launcher {
                     matches!(&updates.found, Notice::Ready(staged) if staged.version == version);
                 if staged {
                     // Already downloaded: nothing to do but say so.
-                    asked.then(|| Status::Result(format!("Pane {version} is ready to install")))
-                } else if updates.downloading.is_some() || updates.installing {
-                    // Another download, or an install, is running: the
-                    // next check takes this one up.
+                    asked.then(|| Status::Result(format!("Pane {version} is ready")))
+                } else if updates.downloading.is_some() || updates.restarting {
+                    // Another download, or a restart, is running: the next
+                    // check takes this one up.
                     asked.then(|| Status::Result(format!("Pane {version} is available")))
                 } else {
                     if !matches!(updates.found, Notice::Ready(_)) {
@@ -664,8 +853,9 @@ impl Launcher {
 
     /// Downloads, checks and stages `offer`, which a check just found,
     /// telling the About page its progress (and the status line, when the
-    /// user asked for the check). A failure is noted for About and the log,
-    /// and the next check tries again. Blocks on the network.
+    /// user asked for the check). Once it is staged, the toast says it is
+    /// ready, if the launcher is shown. A failure is noted for About and
+    /// the log, and the next check tries again. Blocks on the network.
     fn download(&self, application: &Application, offer: Offer, asked: bool) {
         let version = offer.version.clone();
         let (state, changes) = (self.state.clone(), self.developing.changes());
@@ -693,12 +883,15 @@ impl Launcher {
         let now = state.clock.now();
         let updates = &mut state.updates;
         updates.downloading = None;
+        let ready = staged.is_ok();
         let status = match staged {
             Ok(staged) => {
                 updates.found = Notice::Ready(staged);
-                updates.install_failed = None;
+                updates.restart_failed = None;
                 updates.record.failure = None;
-                asked.then(|| Status::Result(format!("Pane {version} is ready to install")))
+                // The toast below says it, where the launcher is shown;
+                // the status line goes back to rest.
+                asked.then_some(Status::Idle)
             }
             Err(why) => {
                 updates.download_failed = Some(why.clone());
@@ -711,73 +904,118 @@ impl Launcher {
             state.view.status = status;
         }
         self.refresh(&mut state);
+        if ready {
+            self.announce_application_update(&mut state);
+        }
         drop(state);
         self.changed();
     }
 
-    /// Installs the staged update, as the user chose it: the root result
-    /// "Update Pane to <version>" is one choice, and the Settings About
-    /// page's button is another. The staged program is checked again and
-    /// replaces the running one, which the new version is used by the next
-    /// time Pane starts; nothing is downloaded. On failure everything is
-    /// as it was, explained, and the update stays to try again — or, when
-    /// the staged program changed or went, it is downloaded again in the
-    /// background. Runs in the background; await the returned future to
-    /// apply the result, as the window that offered the row does.
-    pub fn install_application_update(&self) -> impl Future<Output = ()> + Send + 'static {
+    /// Restarts Pane into the staged update, as the user chose it: the
+    /// root result "Restart to Update Pane" is one choice, the toast's
+    /// Restart another, and the Settings About page's button a third. The
+    /// staged program is checked again and replaces the running one, the
+    /// new program is checked and started, and once it reports that it
+    /// started, the window is asked to quit Pane. Nothing is downloaded.
+    /// While Pane is busy with an extension, nothing happens but saying
+    /// so. On failure the running program is the one it was, explained,
+    /// and the update stays to try again — or, when the staged program
+    /// changed or went, it is downloaded again in the background. Runs in
+    /// the background; await the returned future to apply the result, as
+    /// the window that offered the row does.
+    pub fn restart_to_update(&self) -> impl Future<Output = ()> + Send + 'static {
         let launcher = self.clone();
-        async move { launcher.install_chosen_update().await }
+        async move { launcher.restart_chosen_update().await }
     }
 
-    /// The install the user chose; see
-    /// [`Launcher::install_application_update`].
-    async fn install_chosen_update(&self) {
+    /// The restart the user chose; see [`Launcher::restart_to_update`].
+    async fn restart_chosen_update(&self) {
         let Some(application) = self.application.clone() else {
             return;
         };
-        let staged = {
+        let (staged, relaunch, folder) = {
             let mut state = self.lock();
             let Some(staged) = state.updates.ready() else {
                 return;
             };
-            state.updates.installing = true;
+            if let Some(busy) = busy(&state) {
+                state.view.status = Status::Error(format!(
+                    "Pane can restart to update once this is done: {busy}"
+                ));
+                drop(state);
+                self.changed();
+                return;
+            }
+            state.updates.restarting = true;
             // A new attempt begins: whatever the last one failed with is
             // no longer the word on it.
-            state.updates.install_failed = None;
-            state.view.status = Status::Progress(format!("Installing Pane {}…", staged.version));
+            state.updates.restart_failed = None;
+            state.view.status =
+                Status::Progress(format!("Restarting to update Pane to {}…", staged.version));
             self.refresh(&mut state);
-            staged
+            (
+                staged,
+                state.updates.relaunch(),
+                state.updates.report_folder(),
+            )
         };
         self.changed();
         let version = staged.version.clone();
-        let for_swap = staged.clone();
-        let installed =
-            off_thread(move || application_update::install(&for_swap, &application.program)).await;
+        let restarting = application.clone();
+        let restarted =
+            off_thread(move || restart_into(&staged, &restarting, relaunch, &folder)).await;
         let restage = {
             let mut state = self.lock();
-            state.updates.installing = false;
-            match installed {
-                Ok(()) => {
-                    state.updates.found = Notice::Installed(version.clone());
-                    state.view.status = Status::Result(format!(
-                        "Installed Pane {version}; the new version is used the next time Pane \
-                         starts"
-                    ));
+            let previous = &application.version;
+            match restarted {
+                Restarted::HandedOff => {
+                    // The new version runs and waits for this one to exit:
+                    // the restart stays in flight until Pane has quit.
+                    state.view.status =
+                        Status::Progress(format!("Restarting into Pane {version}…"));
                     self.refresh(&mut state);
+                    state.feedback.window.quit();
                     false
                 }
-                Err(InstallFailure::Kept(why)) => {
-                    // The update stays staged; the reason is kept with it (see
-                    // [`Updates::install_failed`]), so the Settings About page
-                    // shows it beside the button that tries again.
-                    state.updates.install_failed = Some(why.clone());
+                Restarted::Kept(why) => {
+                    state.updates.restarting = false;
+                    state.updates.restart_failed = Some(why.clone());
                     state.view.status =
                         Status::Error(format!("Could not update Pane to {version}: {why}"));
                     self.refresh(&mut state);
                     select_offer(&mut state);
                     false
                 }
-                Err(InstallFailure::Restage(why)) => {
+                Restarted::Undone(why) => {
+                    // The update stays staged; the reason is kept with it
+                    // (see [`Updates::restart_failed`]), so the Settings
+                    // About page shows it beside the button that tries
+                    // again.
+                    let said = format!(
+                        "Pane {version} could not start, so Pane stays at {previous}: {why}"
+                    );
+                    crate::diagnostic!("Pane's own update: {said}");
+                    state.updates.restarting = false;
+                    state.updates.restart_failed = Some(said.clone());
+                    state.view.status = Status::Error(said);
+                    self.refresh(&mut state);
+                    select_offer(&mut state);
+                    false
+                }
+                Restarted::Stuck(why, undo) => {
+                    let said = format!(
+                        "Pane {version} could not start ({why}), and Pane could not go back to \
+                         {previous}: {undo}. Pane {version} is used the next time Pane starts"
+                    );
+                    crate::diagnostic!("Pane's own update: {said}");
+                    state.updates.restarting = false;
+                    state.updates.found = Notice::Installed(version.clone());
+                    state.view.status = Status::Error(said);
+                    self.refresh(&mut state);
+                    false
+                }
+                Restarted::Restage(why) => {
+                    state.updates.restarting = false;
                     state.updates.found = Notice::None;
                     state.view.status =
                         Status::Error(format!("Could not update Pane to {version}: {why}"));
@@ -810,6 +1048,53 @@ impl Launcher {
         let now = state.clock.now();
         Duration::from_millis(state.updates.due(true).saturating_sub(now))
     }
+}
+
+/// Restarts into `staged`: swaps `application`'s program for it, checks
+/// that the new program answers with its version, starts it and waits for
+/// its report in `folder` (see `restart`). A new version that does not
+/// answer, start or report is ended, and the swap undone. Blocks: run it
+/// off the window's thread.
+fn restart_into(
+    staged: &Staged,
+    application: &Application,
+    relaunch: (Arc<dyn Relaunch>, Duration),
+    folder: &Path,
+) -> Restarted {
+    let (relaunch, started_within) = relaunch;
+    let program = &application.program;
+    match application_update::install(staged, program) {
+        Ok(()) => {}
+        Err(InstallFailure::Kept(why)) => return Restarted::Kept(why),
+        Err(InstallFailure::Restage(why)) => return Restarted::Restage(why),
+    }
+    let not_started = |why: String| match application_update::undo(program, &application.version) {
+        Ok(()) => Restarted::Undone(why),
+        Err(undo) => Restarted::Stuck(why, undo),
+    };
+    let path = program.path();
+    match relaunch.version(&path) {
+        Ok(version) if version == staged.version => {}
+        Ok(version) => {
+            return not_started(format!("the new program says it is Pane {version}"));
+        }
+        Err(why) => return not_started(format!("the new program does not run: {why}")),
+    }
+    let own = std::process::id();
+    restart::forget_report(folder, own);
+    let arguments = restart::arguments(&application.version, own);
+    let mut started = match relaunch.start(&path, &arguments) {
+        Ok(started) => started,
+        Err(why) => return not_started(why),
+    };
+    if let Err(why) = restart::wait_for_started(folder, own, started.as_mut(), started_within) {
+        started.end();
+        return not_started(why);
+    }
+    // The new version runs: the swap stays, and nothing of the staging
+    // folder is needed any more.
+    program.remove_staging();
+    Restarted::HandedOff
 }
 
 /// A random delay of up to a sixteenth of `interval` (fifteen minutes of
@@ -906,9 +1191,9 @@ fn poking(weak: Weak<Schedule>) -> impl Fn() + Send + Sync + 'static {
     }
 }
 
-/// Selects the update's row in root search, if it is listed, so Enter
-/// tries a failed install again (#424). The row left the list while the
-/// install ran, so it could not be started twice, and the selection moved
+/// Selects the restart row in root search, if it is listed, so Enter
+/// tries a failed restart again (#424). The row left the list while the
+/// restart ran, so it could not be started twice, and the selection moved
 /// to another row meanwhile; without this, it would stay there when the
 /// row came back, and Enter would run that row instead.
 fn select_offer(state: &mut State) {
@@ -918,7 +1203,7 @@ fn select_offer(state: &mut State) {
     if let Some(at) = state
         .entries
         .iter()
-        .position(|entry| matches!(entry, Entry::InstallUpdate))
+        .position(|entry| matches!(entry, Entry::RestartToUpdate))
     {
         state.view.selected = Some(at);
     }

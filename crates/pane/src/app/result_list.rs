@@ -15,7 +15,9 @@
 //! The list's children are, in order: the head — the pinned home over a
 //! blank query, root search's notice that nothing matched, or a screen's
 //! line when none of its rows is selected — when it shows; then the rows,
-//! each section's label ahead of its first row. A row is still the
+//! each section's label ahead of its first row. A blank query's Restart to
+//! Update Pane, with its section's label, comes ahead of the head (ADR
+//! 0050). A row is still the
 //! accessible list's option it always was, now also saying where it is in
 //! the whole list and how long that is, since the options out of view are
 //! not drawn.
@@ -153,10 +155,23 @@ impl ResultList {
         }
     }
 
-    /// The list's child that shows row `row` of the frame laid out.
+    /// The list's child that shows row `row` of the frame laid out: past
+    /// the head and every label at or before it, or, for a row that leads
+    /// the head (root search's Restart to Update Pane), where it is.
     fn child_of_row(&self, row: usize) -> Option<usize> {
         let frame = self.frame.as_ref()?;
-        let head = frame.children.first() == Some(&ListChild::Head);
+        let head = frame.children.contains(&ListChild::Head);
+        let leads = frame
+            .children
+            .iter()
+            .take_while(|child| **child != ListChild::Head)
+            .any(|child| *child == ListChild::Row(row));
+        if head && leads {
+            return frame
+                .children
+                .iter()
+                .position(|child| *child == ListChild::Row(row));
+        }
         Some(virtual_list::child_of_row(head, &frame.sections, row))
     }
 }

@@ -1655,9 +1655,11 @@ fn application_update_note(launcher: &Launcher) -> String {
     match launcher.application_update() {
         ApplicationUpdate::Offered { version, .. }
         | ApplicationUpdate::Downloading { version, .. }
-        | ApplicationUpdate::Ready { version, .. }
-        | ApplicationUpdate::Installing { version } => {
-            format!(". Pane {version} is available: update Pane itself.")
+        | ApplicationUpdate::Restarting { version } => {
+            format!(". Pane {version} is available: Pane is updating itself.")
+        }
+        ApplicationUpdate::Ready { version, .. } => {
+            format!(". Pane {version} is ready: choose Restart to Update Pane.")
         }
         ApplicationUpdate::Installed { version } => {
             format!(". Pane {version} runs from the next start.")

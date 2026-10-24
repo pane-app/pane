@@ -1354,6 +1354,40 @@ struct UpdateDirs {
     releases: Releases,
 }
 
+/// The new version a restart starts, standing in for a real program (the
+/// program files hold text): it answers with the version the file names
+/// ("the 99.0.0 program") and reports at once that it started, in Pane's
+/// cache folder, as a new Pane does first thing.
+struct Reporting(PathBuf);
+
+impl pane_core::restart::Relaunch for Reporting {
+    fn version(&self, program: &Path) -> Result<String, String> {
+        let text = fs::read_to_string(program).map_err(|error| error.to_string())?;
+        Ok(text.split(' ').nth(1).unwrap_or_default().to_owned())
+    }
+
+    fn start(
+        &self,
+        _program: &Path,
+        arguments: &[String],
+    ) -> Result<Box<dyn pane_core::restart::Started>, String> {
+        let waited = arguments[3].parse().unwrap();
+        pane_core::restart::report_started(&self.0, waited).map_err(|error| error.to_string())?;
+        Ok(Box::new(Running))
+    }
+}
+
+/// The program [`Reporting`] started, still running.
+struct Running;
+
+impl pane_core::restart::Started for Running {
+    fn exited(&mut self) -> bool {
+        false
+    }
+
+    fn end(&mut self) {}
+}
+
 impl UpdateDirs {
     fn new() -> UpdateDirs {
         UpdateDirs {
@@ -1390,8 +1424,8 @@ impl UpdateDirs {
 /// releases for updates of the version `version` it runs from
 /// `dirs`' program file — the same wiring the binary's is, including the
 /// changes channel whose other end the window follows, so background
-/// changes (a check's answer, an install's progress) redraw the windows
-/// as they do in the app.
+/// changes (a check's answer, a restart's progress) redraw the windows
+/// as they do in the app. A restart starts a stand-in ([`Reporting`]).
 fn open_updating_launcher<'a>(
     cx: &'a mut TestAppContext,
     dirs: &UpdateDirs,
@@ -1407,6 +1441,11 @@ fn open_updating_launcher<'a>(
         version,
         ReleaseSource::local(dirs.releases.url()).unwrap(),
         dirs.program(),
+    )
+    .with_application_update_cache(dirs.data.path())
+    .with_relaunch(
+        Arc::new(Reporting(dirs.data.path().to_path_buf())),
+        Duration::from_secs(10),
     )
     .with_development(Arc::new(Toolchains::from_env(None)), sender);
     cx.executor().allow_parking();
@@ -1481,7 +1520,7 @@ fn a_check_from_the_page_that_finds_nothing_newer_says_pane_is_up_to_date(cx: &m
     // only the check the user can ask for again.
     let rows = titles(&launcher, cx);
     assert!(
-        !rows.contains(&"Update Pane to 99.0.0".to_owned()),
+        !rows.contains(&"Restart to Update Pane".to_owned()),
         "{rows:?}"
     );
     assert!(
@@ -1545,13 +1584,13 @@ fn a_failed_check_is_tried_again_from_the_page_and_finds_the_update(cx: &mut Tes
     dirs.releases.stop_failing(releases::LISTING);
     dirs.publish_update("99.0.0", b"the 99.0.0 program");
     click_row(&mut settings_cx, "about-check-update");
-    until_text(&mut settings_cx, "Pane 99.0.0 is ready to install");
+    until_text(&mut settings_cx, "Pane 99.0.0 is ready");
     assert!(settings_cx.debug_bounds("about-update").is_some());
-    assert!(titles(&launcher, cx).contains(&"Update Pane to 99.0.0".to_owned()));
+    assert!(titles(&launcher, cx).contains(&"Restart to Update Pane".to_owned()));
 }
 
 #[gpui::test]
-fn the_page_offers_the_update_and_installs_it_by_the_users_choice(cx: &mut TestAppContext) {
+fn the_page_offers_the_update_and_restarts_into_it_by_the_users_choice(cx: &mut TestAppContext) {
     let dirs = UpdateDirs::new();
     dirs.publish_update("99.0.0", b"the 99.0.0 program");
     dirs.running(b"the 0.1.0 program");
@@ -1571,45 +1610,41 @@ fn the_page_offers_the_update_and_installs_it_by_the_users_choice(cx: &mut TestA
     until_text(&mut settings_cx, "Downloading Pane 99.0.0: ");
     // Mid-download there is no button to click.
     assert!(settings_cx.debug_bounds("about-update").is_none());
-    until_text(&mut settings_cx, "Pane 99.0.0 is ready to install");
+    until_text(&mut settings_cx, "Pane 99.0.0 is ready");
     let (_, json) = accessibility(&mut settings_cx);
-    assert!(json.contains("Update to 99.0.0"), "{json}");
+    assert!(json.contains("Restart to update"), "{json}");
     assert!(
-        json.contains("Keeps your extensions and settings. The new version starts next time."),
-        "the button says what installing does, {json}"
+        json.contains("Restarts Pane into the new version. Your extensions and settings are kept."),
+        "the button says what restarting does, {json}"
     );
     assert!(
-        titles(&launcher, cx).contains(&"Update Pane to 99.0.0".to_owned()),
+        titles(&launcher, cx).contains(&"Restart to Update Pane".to_owned()),
         "root search holds the same offer"
     );
 
-    // Installing is the user's choice, the button clicked: the page says
-    // when it lands, and nothing is downloaded again.
+    // Restarting is the user's choice, the button clicked: the page says
+    // so once the new version has started, and nothing is downloaded
+    // again.
     click_row(&mut settings_cx, "about-update");
-    until_text(
-        &mut settings_cx,
-        "Pane 99.0.0 is installed and starts next time",
-    );
+    until_text(&mut settings_cx, "Restarting into Pane 99.0.0…");
     assert_eq!(dirs.releases.downloaded(".zip"), 1);
 
     // The program was swapped: the new one in place, the old one renamed
-    // out of its way, nothing else in the install folder.
+    // out of its way and kept until the new version has settled.
     assert_eq!(fs::read(dirs.program()).unwrap(), b"the 99.0.0 program");
     assert_eq!(
         fs::read(dirs.install.path().join("pane.old")).unwrap(),
         b"the 0.1.0 program"
     );
-    // The launcher's status line said the same thing, and the offer is
-    // gone from both entry points.
+    // The launcher's status line says the same thing, and the update is
+    // gone from both entry points while Pane quits.
     let view = cx.read_entity(&launcher, |window, _| window.launcher().view());
     assert_eq!(
         view.status,
-        Status::Result(
-            "Installed Pane 99.0.0; the new version is used the next time Pane starts".into()
-        )
+        Status::Progress("Restarting into Pane 99.0.0…".into())
     );
     assert!(settings_cx.debug_bounds("about-update").is_none());
-    assert!(!titles(&launcher, cx).contains(&"Update Pane to 99.0.0".to_owned()));
+    assert!(!titles(&launcher, cx).contains(&"Restart to Update Pane".to_owned()));
 }
 
 #[gpui::test]
@@ -1636,7 +1671,7 @@ fn a_failed_download_is_explained_and_a_check_tries_it_again(cx: &mut TestAppCon
         "the check is offered again"
     );
     assert_eq!(fs::read(dirs.program()).unwrap(), b"the 0.1.0 program");
-    assert!(!titles(&launcher, cx).contains(&"Update Pane to 99.0.0".to_owned()));
+    assert!(!titles(&launcher, cx).contains(&"Restart to Update Pane".to_owned()));
     let view = cx.read_entity(&launcher, |window, _| window.launcher().view());
     assert!(
         matches!(&view.status, Status::Error(text) if text.starts_with(
@@ -1646,16 +1681,13 @@ fn a_failed_download_is_explained_and_a_check_tries_it_again(cx: &mut TestAppCon
         view.status
     );
 
-    // The source works again; the check downloads it, and the update is
-    // installed by the user's choice.
+    // The source works again; the check downloads it, and Pane restarts
+    // into it by the user's choice.
     dirs.publish_update("99.0.0", b"the 99.0.0 program");
     click_row(&mut settings_cx, "about-check-update");
-    until_text(&mut settings_cx, "Pane 99.0.0 is ready to install");
+    until_text(&mut settings_cx, "Pane 99.0.0 is ready");
     click_row(&mut settings_cx, "about-update");
-    until_text(
-        &mut settings_cx,
-        "Pane 99.0.0 is installed and starts next time",
-    );
+    until_text(&mut settings_cx, "Restarting into Pane 99.0.0…");
     assert_eq!(fs::read(dirs.program()).unwrap(), b"the 99.0.0 program");
 }
 
@@ -1677,12 +1709,9 @@ fn an_interrupted_download_from_the_page_is_tried_again_and_lands(cx: &mut TestA
         .drop_after(&releases::asset_path(&file), 16, 1);
 
     click_row(&mut settings_cx, "about-check-update");
-    until_text(&mut settings_cx, "Pane 99.0.0 is ready to install");
+    until_text(&mut settings_cx, "Pane 99.0.0 is ready");
     click_row(&mut settings_cx, "about-update");
-    until_text(
-        &mut settings_cx,
-        "Pane 99.0.0 is installed and starts next time",
-    );
+    until_text(&mut settings_cx, "Restarting into Pane 99.0.0…");
     assert_eq!(fs::read(dirs.program()).unwrap(), b"the 99.0.0 program");
     assert_eq!(
         fs::read(dirs.install.path().join("pane.old")).unwrap(),
@@ -1692,17 +1721,15 @@ fn an_interrupted_download_from_the_page_is_tried_again_and_lands(cx: &mut TestA
     // retry that landed.
     let downloads = dirs.releases.downloaded(".zip");
     assert_eq!(downloads, 2, "the interrupted download was retried");
-    // The status line answered the same landing, and neither entry
-    // point offers the update any more.
+    // The status line says the same, and neither entry point offers the
+    // update any more.
     let view = cx.read_entity(&launcher, |window, _| window.launcher().view());
     assert_eq!(
         view.status,
-        Status::Result(
-            "Installed Pane 99.0.0; the new version is used the next time Pane starts".into()
-        )
+        Status::Progress("Restarting into Pane 99.0.0…".into())
     );
     assert!(settings_cx.debug_bounds("about-update").is_none());
-    assert!(!titles(&launcher, cx).contains(&"Update Pane to 99.0.0".to_owned()));
+    assert!(!titles(&launcher, cx).contains(&"Restart to Update Pane".to_owned()));
 }
 
 #[gpui::test]
@@ -1731,12 +1758,16 @@ fn leaving_the_page_while_a_check_runs_cancels_nothing(cx: &mut TestAppContext) 
     // what it found, and its answer is where both entry points read it —
     // the launcher's state and status line, with the root row listed.
     until(cx, |cx| {
-        cx.read_entity(&launcher, |window, _| window.launcher().view())
-            .status
-            .eq(&Status::Result("Pane 99.0.0 is ready to install".into()))
-            .then_some(())
+        cx.read_entity(&launcher, |window, _| {
+            window.launcher().application_update()
+        })
+        .eq(&pane_core::ApplicationUpdate::Ready {
+            version: "99.0.0".into(),
+            failure: None,
+        })
+        .then_some(())
     });
-    assert!(titles(&launcher, cx).contains(&"Update Pane to 99.0.0".to_owned()));
+    assert!(titles(&launcher, cx).contains(&"Restart to Update Pane".to_owned()));
 
     // Back on the About page, the same state: the update, with the button
     // that installs it.
@@ -1745,7 +1776,7 @@ fn leaving_the_page_while_a_check_runs_cancels_nothing(cx: &mut TestAppContext) 
         .expect("the About section");
     settings_cx.simulate_click(about.center(), Modifiers::none());
     settings_cx.run_until_parked();
-    until_text(&mut settings_cx, "Pane 99.0.0 is ready to install");
+    until_text(&mut settings_cx, "Pane 99.0.0 is ready");
     assert!(settings_cx.debug_bounds("about-update").is_some());
 }
 
@@ -1757,7 +1788,7 @@ fn the_page_copies_the_diagnostics_to_the_clipboard_locally(cx: &mut TestAppCont
     let (_launcher, cx) = open_updating_launcher(cx, &dirs, "0.1.0");
     let (_settings, mut settings_cx) = open_about(cx);
     click_row(&mut settings_cx, "about-check-update");
-    until_text(&mut settings_cx, "Pane 99.0.0 is ready to install");
+    until_text(&mut settings_cx, "Pane 99.0.0 is ready");
 
     // The copy is the user's explicit click, and its completion is the
     // page's own status.
@@ -1782,7 +1813,7 @@ fn the_page_copies_the_diagnostics_to_the_clipboard_locally(cx: &mut TestAppCont
     );
     assert!(report.contains("Data folder: "), "{report}");
     assert!(
-        report.contains("Update check: Pane 99.0.0 is ready to install"),
+        report.contains("Update check: Pane 99.0.0 is ready"),
         "{report}"
     );
     // No keyboard hook is in use — this launcher has no adapter that

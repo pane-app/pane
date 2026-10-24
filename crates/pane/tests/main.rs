@@ -50,6 +50,7 @@ mod npm;
 mod open_pane;
 mod preferences;
 mod repositories;
+mod restart_row;
 mod runtime_crash;
 mod search_files;
 mod selection;

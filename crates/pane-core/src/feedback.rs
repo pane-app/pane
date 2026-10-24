@@ -140,7 +140,9 @@ impl ToastAction {
     pub fn copies(&self) -> Option<&str> {
         match &self.does {
             ToastDoes::Copy(text) => Some(text),
-            ToastDoes::Callback(_) | ToastDoes::ShowUpdateResults => None,
+            ToastDoes::Callback(_) | ToastDoes::ShowUpdateResults | ToastDoes::RestartToUpdate => {
+                None
+            }
         }
     }
 }
@@ -155,6 +157,9 @@ pub(crate) enum ToastDoes {
     /// Opens the update results screen: Pane's own "View Details" on a
     /// pass's failure announcement.
     ShowUpdateResults,
+    /// Restarts Pane into the update it staged: Pane's own "Restart" on
+    /// the announcement that an update is ready (ADR 0050).
+    RestartToUpdate,
 }
 
 /// The toast the launcher shows now, as the window reads it.
@@ -312,6 +317,9 @@ pub trait WindowControl: Send + Sync {
     /// dropped): the window draws [`crate::Launcher::confirmation`] as it
     /// is now, showing itself first while one is asked and it is hidden.
     fn confirmation(&self) {}
+    /// Quits Pane cleanly, as the tray's Quit does: a restart into an
+    /// update asks it once the new version has started (ADR 0050).
+    fn quit(&self) {}
 }
 
 /// A launcher with no window: nothing is hidden or shown.
@@ -329,6 +337,8 @@ pub enum WindowRequest {
     Hud(Hud),
     /// See [`WindowControl::confirmation`].
     Confirmation,
+    /// See [`WindowControl::quit`].
+    Quit,
 }
 
 /// A [`WindowControl`] that sends its requests to the window, and the
@@ -351,6 +361,10 @@ impl WindowControl for Sender {
 
     fn confirmation(&self) {
         let _ = self.0.send(WindowRequest::Confirmation);
+    }
+
+    fn quit(&self) {
+        let _ = self.0.send(WindowRequest::Quit);
     }
 }
 

@@ -2323,13 +2323,16 @@ export PANE_DEFAULTS=$no_default_pins
 # first package served is damaged (its bytes do not match the sha256 its
 # .sha256 gives), so that download fails quietly: nothing staged, the
 # program untouched. Check for Pane Updates, once the package is whole
-# again, downloads it and stages it; the row Update Pane to 99.0.0 then
-# installs it without downloading again, swapping the running binary —
-# the old one renamed pane.old beside it in Contents/MacOS, removed on a
-# later start — so the new version is used the next time Pane starts.
-# The new Pane, started again, reports 99.0.0, with the old version's
-# data (the calculator set up at first setup) and the extension the user
-# disabled kept, and with nothing of the update left in the bundle.
+# again, downloads it and stages it, and its toast says it is ready; a
+# blank root search then lists Restart to Update Pane first, selected.
+# Enter restarts into it without downloading again: the running binary is
+# swapped — the old one renamed pane.old beside it in Contents/MacOS — the
+# new one is checked with --version, started directly with --updated-from
+# and --wait-pid, and the old Pane quits. A new pane runs from the same
+# binary and reports 99.0.0, the bundle's Info.plist names 99.0.0, the old
+# version's data (the calculator set up at first setup) and the extension
+# the user disabled are kept, and pane.old stays until the start after the
+# new version settled, which removes it.
 update_server_pid=
 # Every server's arm again, plus this phase's own: nothing is lost
 # whatever order the phases run in.
@@ -2446,37 +2449,60 @@ grep -q '"disabled": true' "$update_registry" || { echo "Clipboard History was n
 close_settings
 
 # The package is whole again; Check for Pane Updates checks at once and
-# downloads it, and it is staged.
+# downloads it, and it is staged: the toast says it is ready.
 cp "$newer" "$served"
 command_key a; type_text "check for pane updates"; sleep 1
 key 36
-capture_until 601-ready.png success 120   # "Pane 99.0.0 is ready to install"
+capture_until 601-ready.png success 120   # the toast "Pane 99.0.0 is ready", with Restart
 for _ in $(seq 600); do grep -q 99.0.0 "$update_staged" 2>/dev/null && break; sleep 0.1; done
 grep -q 99.0.0 "$update_staged" || { echo "the update was not staged"; record_update_state; exit 1; }
 # The package was downloaded once for each attempt: the damaged one and
 # the one staged.
 [ "$(grep -c "\.zip HTTP" "$out/update-release-server.log")" = 2 ] \
   || { echo "the package was not downloaded exactly twice"; exit 1; }
-command_key a; type_text "update pane"; sleep 1
+# A blank root search lists Restart to Update Pane first of all, above the
+# pinned home, selected.
+command_key a; key 51; sleep 1   # 51: Delete
 capture 602-offered.png
-check 602-offered.png subtitle   # the row: "Your extensions and settings are kept; ..."
+check 602-offered.png subtitle   # "Pane 99.0.0 is ready. Your extensions and settings are kept"
 check 602-offered.png selected 3000   # the row, selected
 
-# Enter installs the staged update: the new binary takes the old one's
-# name and place inside the bundle, the old one renamed out of its way.
+# Enter restarts into the update: the new binary takes the old one's name
+# and place inside the bundle, answers --version, is started with
+# --updated-from and --wait-pid, reports that it started, and the old
+# Pane quits.
+old_pid=$pid
 key 36
-for _ in $(seq 1200); do
-  [ -e "$binary.old" ] && break
-  kill -0 "$pid" 2>/dev/null || { echo "Pane exited while updating itself"; exit 1; }
-  sleep 0.2
+exited() {  # whether process $1 has exited (a zombie its shell has not collected counts)
+  local state
+  state=$(ps -o stat= -p "$1" 2>/dev/null | tr -d ' ')
+  [ -z "$state" ] || [ "${state#Z}" != "$state" ]
+}
+for _ in $(seq 600); do exited "$old_pid" && break; sleep 0.1; done
+exited "$old_pid" || { echo "Pane did not quit to restart into the update"; capture 603-not-restarted.png; record_update_state; exit 1; }
+wait "$old_pid" 2>/dev/null || true
+# A new pane runs from the same binary.
+pid=
+for _ in $(seq 300); do
+  pid=$(pgrep -f -- "$binary --updated-from" | head -1)
+  [ -n "$pid" ] && break
+  sleep 0.1
 done
-[ -e "$binary.old" ] || { echo "the update was not installed"; exit 1; }
-sleep 2
-capture 603-installed.png
-check 603-installed.png success   # "Installed Pane 99.0.0; the new version is used the next time Pane starts"
+[ -n "$pid" ] || { echo "no new Pane runs from $binary after the restart"; record_update_state; exit 1; }
+sleep 1
+capture 603-updated.png   # evidence: the toast "Updated to Pane 99.0.0", if in time
+sleep 7
+focus_pane
+# It is 99.0.0, and the bundle says so; the old binary is kept until the
+# new version has settled, and the staging folder is gone.
+env -i HOME="$update_home" PATH="/usr/bin:/bin" "$binary" --version >"$out/update-version.txt" 2>>"$out/update-stderr.log" \
+  || { echo "the new pane --version failed"; exit 1; }
+[ "$(cat "$out/update-version.txt")" = "Pane 99.0.0" ] \
+  || { echo "the new program reports the wrong version"; exit 1; }
 cmp -s "$binary" "$unpack_new/pane/pane" || { echo "the new program was not installed"; exit 1; }
 cmp -s "$binary.old" "$unpack_old/pane/pane" || { echo "the old program was not kept out of the new one's way"; exit 1; }
-[ -e "$(dirname "$binary")/update" ] && { echo "the install left its staging behind"; exit 1; }
+for _ in $(seq 100); do [ ! -e "$(dirname "$binary")/update" ] && break; sleep 0.1; done
+[ -e "$(dirname "$binary")/update" ] && { echo "the restart left its staging behind"; exit 1; }
 # The bundle's Info.plist names the new version too (#455): only its
 # version keys changed, so it is now the new package's own plist, and
 # macOS reads the new version from it.
@@ -2484,21 +2510,11 @@ cmp -s "$bundle_plist" "$unpack_new/pane/Info.plist" || { echo "the bundle's Inf
 [ "$(plutil -extract CFBundleShortVersionString raw -o - "$bundle_plist")" = "99.0.0" ] \
   || { echo "macOS does not read 99.0.0 from the bundle's Info.plist"; exit 1; }
 [ -e "$bundle_plist.update" ] && { echo "the Info.plist rewrite left its file behind"; exit 1; }
-# Installing downloaded nothing more.
+# Restarting downloaded nothing more.
 [ "$(grep -c "\.zip HTTP" "$out/update-release-server.log")" = 2 ] \
-  || { echo "the install downloaded the package again"; exit 1; }
-stop_pane
-
-# The next start runs the new version: it reports 99.0.0, removes what
-# the update left, and the old version's data is kept — the calculator
-# answers and Clipboard History stays disabled.
-env -i HOME="$update_home" PATH="/usr/bin:/bin" "$binary" --version >"$out/update-version.txt" 2>>"$out/update-stderr.log" \
-  || { echo "the new pane --version failed"; exit 1; }
-[ "$(cat "$out/update-version.txt")" = "Pane 99.0.0" ] \
-  || { echo "the new program reports the wrong version"; exit 1; }
-start_updated
-for _ in $(seq 100); do [ ! -e "$binary.old" ] && break; sleep 0.1; done
-[ ! -e "$binary.old" ] || { echo "the old program's file was not removed on the new start"; exit 1; }
+  || { echo "the restart downloaded the package again"; exit 1; }
+# The old version's data is kept: the calculator answers and Clipboard
+# History stays disabled.
 command_key a; type_text '6*7'; sleep 2
 capture 604-answer-after-update.png
 check 604-answer-after-update.png answer   # "42", the calculator's selected answer card
@@ -2507,7 +2523,16 @@ capture 605-copied-after-update.png
 check 605-copied-after-update.png success   # "Copied 42 to the clipboard"
 [ "$(pbpaste)" = "42" ] || { echo "the pasteboard holds: $(pbpaste)"; exit 1; }
 grep -q '"disabled": true' "$update_registry" || { echo "the disabled extension did not stay disabled"; exit 1; }
-python3 "$(dirname "$0")/check_screenshot.py" --distinct "$out"/{601-ready,602-offered,603-installed,604-answer-after-update}.png
+python3 "$(dirname "$0")/check_screenshot.py" --distinct "$out"/{601-ready,602-offered,604-answer-after-update}.png
+restarted_pid=$pid
+stop_pane
+# Not this shell's child: its exit is waited for by looking.
+for _ in $(seq 100); do exited "$restarted_pid" && break; sleep 0.1; done
+
+# The next start, after the new version settled, removes the old binary.
+start_updated
+for _ in $(seq 100); do [ ! -e "$binary.old" ] && break; sleep 0.1; done
+[ ! -e "$binary.old" ] || { echo "the old program's file was not removed on the start after the new version settled"; exit 1; }
 stop_pane
 kill "$update_server_pid"; wait "$update_server_pid" 2>/dev/null || true; update_server_pid=
 # The program files go again, as the #52 phase's do: the evidence is the

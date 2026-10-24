@@ -2870,14 +2870,17 @@ try {
 # (its bytes do not match the sha256 its .sha256 gives), so that download
 # fails quietly: nothing staged, the program untouched, no row. Check for
 # Pane Updates, once the package is whole again, downloads it and stages
-# it; the row Update Pane to 99.0.0 then installs it without downloading
-# again, swapping the running pane.exe — the old one renamed
-# pane.exe.old, removed on a later start — so the new version is used the
-# next time Pane starts. The new Pane, started again, reports 99.0.0,
-# with the old version's data (the calculator set up at first setup, from
-# the pinned repositories) and the extension the user disabled (Clipboard
-# History) kept, and with nothing of the update left in the install
-# folder.
+# it, and its toast says it is ready; a blank root search then lists
+# Restart to Update Pane first, selected. Enter restarts into it without
+# downloading again: the running pane.exe is swapped — the old one renamed
+# pane.exe.old — the new one is checked with --version, started with
+# --updated-from and --wait-pid, and the old Pane quits. A new pane.exe
+# runs from the same path and reports 99.0.0, the Apps entry (made by hand
+# here, as the setup would leave it) names 99.0.0, the old version's data
+# (the calculator set up at first setup, from the pinned repositories) and
+# the extension the user disabled (Clipboard History) are kept, and
+# pane.exe.old stays until the start after the new version settled, which
+# removes it.
 cargo xtask package-windows --dev --package-version 99.0.0
 if ($LASTEXITCODE -ne 0) { throw "the update package was not built" }
 $workspaceVersion = (Select-String -Path crates/pane/Cargo.toml -Pattern '^version = "(.*)"$').Matches[0].Groups[1].Value
@@ -2974,65 +2977,113 @@ try {
     Close-Settings
 
     # The package is whole again; Check for Pane Updates checks at once
-    # and downloads it, and it is staged.
+    # and downloads it, and it is staged: the toast says it is ready.
     Copy-Item $newer.FullName $served -Force
     Send "^a"; Send "check for pane updates"; Start-Sleep -Seconds 1
     Send "{ENTER}"
-    Capture-Until "601-ready.png" "success" 120   # "Pane 99.0.0 is ready to install"
+    Capture-Until "601-ready.png" "success" 120   # the toast "Pane 99.0.0 is ready", with Restart
     Wait-For $staged "99.0.0" $true 600
     # The package was downloaded once for each attempt: the damaged one
     # and the one staged.
     if ((Select-String -SimpleMatch ".zip HTTP" $serverLog).Count -ne 2) { throw "the package was not downloaded exactly twice" }
-    Send "^a"; Send "update pane"; Start-Sleep -Seconds 1
+    # A blank root search lists Restart to Update Pane first of all, above
+    # the pinned home, selected.
+    Send "^a"; Send "{BACKSPACE}"; Start-Sleep -Seconds 1
     Capture "602-offered.png"
-    Check "602-offered.png" "subtitle"   # the row: "Your extensions and settings are kept; ..."
+    Check "602-offered.png" "subtitle"   # "Pane 99.0.0 is ready. Your extensions and settings are kept"
     Check "602-offered.png" "selected" 3000   # the row, selected
 
-    # Enter installs the staged update: the new program takes the old
-    # one's name and place, the old one is renamed out of its way.
-    Send "{ENTER}"
-    for ($i = 0; $i -lt 1200 -and -not (Test-Path (Join-Path $install "pane.exe.old")); $i++) {
-        if ($process.HasExited) { throw "Pane exited while updating itself" }
-        Start-Sleep -Milliseconds 200
-    }
-    if (-not (Test-Path (Join-Path $install "pane.exe.old"))) { throw "the update was not installed" }
-    Capture-Until "603-installed.png" "success" 30   # "Installed Pane 99.0.0; the new version is used the next time Pane starts"
-    if ((Get-FileHash $installed).Hash -ne (Get-FileHash (Join-Path $unpackNew "pane\pane.exe")).Hash) {
-        throw "the new program was not installed"
-    }
-    if ((Get-FileHash (Join-Path $install "pane.exe.old")).Hash -ne (Get-FileHash (Join-Path $unpackOld "pane\pane.exe")).Hash) {
-        throw "the old program was not kept out of the new one's way"
-    }
-    if (Test-Path (Join-Path $install "update")) { throw "the install left its staging behind" }
-    # Installing downloaded nothing more.
-    if ((Select-String -SimpleMatch ".zip HTTP" $serverLog).Count -ne 2) { throw "the install downloaded the package again" }
-    Stop-Pane $process
+    # The Apps entry Pane's setup leaves (#463), made here by hand for
+    # this Pane the install script installed, naming the old version as
+    # the setup would: the restart gives it the new one.
+    $appsKey = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\{0737054E-4FDB-4FAD-8AD1-20C980B0C16E}_is1"
+    $workspaceParts = $workspaceVersion.Split(".")
+    New-Item -Force -Path $appsKey | Out-Null
+    New-ItemProperty -Force -Path $appsKey -Name InstallLocation -Value ([IO.Path]::GetFullPath($install) + "\") | Out-Null
+    New-ItemProperty -Force -Path $appsKey -Name DisplayVersion -Value $workspaceVersion | Out-Null
+    New-ItemProperty -Force -Path $appsKey -Name MajorVersion -PropertyType DWord -Value ([int]$workspaceParts[0]) | Out-Null
+    New-ItemProperty -Force -Path $appsKey -Name MinorVersion -PropertyType DWord -Value ([int]$workspaceParts[1]) | Out-Null
 
-    # The next start runs the new version: it reports 99.0.0, removes what
-    # the update left, and the old version's data is kept — the
-    # calculator answers and Clipboard History stays disabled.
+    # Enter restarts into the update: the new program takes the old one's
+    # name and place, answers --version, is started with --updated-from
+    # and --wait-pid, reports that it started, and the old Pane quits.
+    Send "{ENTER}"
+    for ($i = 0; $i -lt 600 -and -not $process.HasExited; $i++) { Start-Sleep -Milliseconds 100 }
+    if (-not $process.HasExited) { Capture "603-not-restarted.png"; throw "Pane did not quit to restart into the update" }
+    # A new pane.exe runs from the same path, and shows its window.
+    $installedPath = [IO.Path]::GetFullPath($installed)
+    $restarted = $null
+    for ($i = 0; $i -lt 300 -and -not $restarted; $i++) {
+        $restarted = Get-Process pane -ErrorAction SilentlyContinue |
+            Where-Object { $_.Id -ne $process.Id -and $_.Path -eq $installedPath } | Select-Object -First 1
+        if (-not $restarted) { Start-Sleep -Milliseconds 100 }
+    }
+    if (-not $restarted) { throw "no new Pane runs from $installedPath after the restart" }
+    for ($i = 0; $i -lt 300 -and $restarted.MainWindowHandle -eq 0; $i++) {
+        if ($restarted.HasExited) { throw "the restarted Pane exited" }
+        Start-Sleep -Milliseconds 100; $restarted.Refresh()
+    }
+    if ($restarted.MainWindowHandle -eq 0) { throw "the restarted Pane's window did not appear" }
+    # Its toast, "Updated to Pane 99.0.0", leaves 3 seconds after it shows:
+    # evidence, captured while it shows if the capture is in time.
+    $updatedShown = $false
+    for ($i = 0; $i -lt 20 -and -not $updatedShown; $i++) {
+        Capture "603-updated.png"
+        & {
+            $ErrorActionPreference = "Continue"
+            python "$PSScriptRoot/check_screenshot.py" (Join-Path $OutDir "603-updated.png") "success" 20 *> $null
+        }
+        $updatedShown = $LASTEXITCODE -eq 0
+        if (-not $updatedShown) { Start-Sleep -Milliseconds 250 }
+    }
+    if (-not $updatedShown) { Write-Output "warning: the toast Updated to Pane 99.0.0 was not captured (see 603-updated.png)" }
+    Start-Sleep -Seconds 2
+    Focus-Pane $restarted
+    # It is 99.0.0, and Settings > Apps says so; the old program is kept
+    # until the new version has settled, and the staging folder is gone.
     $version = Join-Path $OutDir "update-version.txt"
     $check = Start-Process -FilePath $installed -ArgumentList "--version" -Wait -PassThru -RedirectStandardOutput $version
     if ($check.ExitCode -ne 0) { throw "the new pane.exe --version failed" }
     if (((Get-Content $version) -join "") -ne "Pane 99.0.0") { throw "the new program reports the wrong version" }
-    $env:PATH = $cleanBin
-    $process = Start-Pane "update-stderr-99.0.0.log" @() $installed
-    $env:PATH = $realPath
-    Wait-For (Join-Path $install "pane.exe.old") "x" $false 100
-    if (Test-Path (Join-Path $install "pane.exe.old")) { throw "the old program's file was not removed on the new start" }
+    if ((Get-FileHash $installed).Hash -ne (Get-FileHash (Join-Path $unpackNew "pane\pane.exe")).Hash) {
+        throw "the new program was not installed"
+    }
+    $entry = Get-ItemProperty -Path $appsKey
+    if ($entry.DisplayVersion -ne "99.0.0" -or $entry.MajorVersion -ne 99 -or $entry.MinorVersion -ne 0) {
+        throw "the Apps entry names $($entry.DisplayVersion) ($($entry.MajorVersion).$($entry.MinorVersion)), not 99.0.0"
+    }
+    if ((Get-FileHash (Join-Path $install "pane.exe.old")).Hash -ne (Get-FileHash (Join-Path $unpackOld "pane\pane.exe")).Hash) {
+        throw "the old program was not kept out of the new one's way"
+    }
+    for ($i = 0; $i -lt 100 -and (Test-Path (Join-Path $install "update")); $i++) { Start-Sleep -Milliseconds 100 }
+    if (Test-Path (Join-Path $install "update")) { throw "the restart left its staging behind" }
+    # Restarting downloaded nothing more.
+    if ((Select-String -SimpleMatch ".zip HTTP" $serverLog).Count -ne 2) { throw "the restart downloaded the package again" }
+    # The old version's data is kept: the calculator answers, and
+    # Clipboard History stays disabled.
     Send "^a"; Send "6*7"
     Capture-Until "604-answer-after-update.png" "answer" 30   # "42", the calculator's selected answer card
     Send "{ENTER}"
     Capture-Until "605-copied-after-update.png" "success" 10   # "Copied 42 to the clipboard"
     Wait-For $registry '"disabled": true' $true
-    $shots = "601-ready", "602-offered", "603-installed", "604-answer-after-update" |
+    $shots = "601-ready", "602-offered", "604-answer-after-update" |
         ForEach-Object { Join-Path $OutDir "$_.png" }
     python "$PSScriptRoot/check_screenshot.py" --distinct @shots
     if ($LASTEXITCODE -ne 0) { throw "screenshot check failed: the update changed nothing" }
+    Stop-Pane $restarted
+
+    # The next start, after the new version settled, removes the old
+    # program.
+    $env:PATH = $cleanBin
+    $process = Start-Pane "update-stderr-99.0.0.log" @() $installed
+    $env:PATH = $realPath
+    for ($i = 0; $i -lt 100 -and (Test-Path (Join-Path $install "pane.exe.old")); $i++) { Start-Sleep -Milliseconds 100 }
+    if (Test-Path (Join-Path $install "pane.exe.old")) { throw "the old program's file was not removed on the start after the new version settled" }
     Stop-Pane $process
     # The program files go again, as the #51 phase's do.
     Remove-Item -Force $installed
 } finally {
+    Remove-Item -Force -ErrorAction SilentlyContinue "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\{0737054E-4FDB-4FAD-8AD1-20C980B0C16E}_is1"
     Stop-Process -Id $server.Id -ErrorAction SilentlyContinue
     Stop-Process -Id $defaultsServer.Id -ErrorAction SilentlyContinue
     Remove-Item Env:PANE_RELEASES -ErrorAction SilentlyContinue

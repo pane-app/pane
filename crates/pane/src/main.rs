@@ -30,7 +30,8 @@ enum ToPreview {
 /// or a repository's, before any `@<reference>`; without one, a folder or
 /// repository holding a collection opens the choice of its extensions
 /// (#308). `pane --version` prints Pane's version and exits without opening
-/// a window, so an installation can check what it installed.
+/// a window, so an installation can check what it installed, as a restart
+/// into an update checks the program it swapped in.
 /// `pane --launch-at-login` turns on Settings' "Launch Pane at login" as Pane
 /// starts (see [`launch_at_login_asked`]).
 fn package_to_preview() -> Option<ToPreview> {
@@ -59,6 +60,58 @@ fn package_to_preview() -> Option<ToPreview> {
         }
     }
     None
+}
+
+/// What a restart into an update started this Pane with (ADR 0050): the
+/// version it was updated from (`--updated-from <version>`) and the
+/// process of the Pane that started it, which it waits for
+/// (`--wait-pid <process id>`). Both are Pane's own, given by the Pane it
+/// replaces, never by the user.
+struct Restarted {
+    updated_from: Option<String>,
+    wait_pid: Option<u32>,
+}
+
+fn restart_asked() -> Restarted {
+    let mut restarted = Restarted {
+        updated_from: None,
+        wait_pid: None,
+    };
+    let mut args = std::env::args().skip(1);
+    while let Some(arg) = args.next() {
+        if arg == pane_core::restart::UPDATED_FROM {
+            restarted.updated_from = args.next();
+        } else if arg == pane_core::restart::WAIT_PID {
+            restarted.wait_pid = args.next().and_then(|pid| pid.parse().ok());
+        }
+    }
+    restarted
+}
+
+/// The new process's half of a restart into an update (see
+/// [`pane_core::restart`]): reports to the Pane that started it that it
+/// started, then waits for that Pane to exit before anything it held — a
+/// hotkey, the keyboard hook, the tray icon, the local channel, the file
+/// index's lock, the clipboard listener, its crash record — is taken. A
+/// Pane that outlives the wait is ended, if it still runs the old program
+/// the update left in the install folder.
+fn hand_over(waited: u32) {
+    if let Some(cache) = pane::cache_dir()
+        && let Err(error) = pane_core::restart::report_started(&cache, waited)
+    {
+        eprintln!("Pane could not tell the Pane it replaces that it started: {error}");
+    }
+    let program = pane_core::appimage::running()
+        .map(std::path::Path::to_path_buf)
+        .or_else(|| std::env::current_exe().ok());
+    let programs: Vec<PathBuf> = program
+        .map(|program| {
+            let mut old = program.clone().into_os_string();
+            old.push(".old");
+            vec![program, PathBuf::from(old)]
+        })
+        .unwrap_or_default();
+    pane_core::restart::wait_for_previous(waited, &programs, pane_core::restart::PREVIOUS_LIMIT);
 }
 
 /// Whether Pane was started with `--launch-at-login`: Pane's Windows setup
@@ -121,6 +174,13 @@ fn main() {
     unsafe { pane_core::appimage::adopt() };
     let preview = package_to_preview();
     let launch_at_login = launch_at_login_asked();
+    // A restart into an update: the Pane this one replaces is waited for
+    // first of all, before its crash record or anything else it held is
+    // touched.
+    let restarted = restart_asked();
+    if let Some(waited) = restarted.wait_pid {
+        hand_over(waited);
+    }
     // Pane's own log and crash record (#133), before anything else can
     // write a diagnostic or panic: the log keeps what standard error says,
     // and the record tells whether the run before ended unexpectedly.
@@ -276,7 +336,7 @@ fn main() {
         // machinery. Pane checks at start, then every four hours and when
         // the launcher is shown after a stale check, keeping what it learns
         // in its cache folder; it downloads and stages a newer version by
-        // itself, and only the user's choice installs it (ADR 0050). A
+        // itself, and only the user's choice restarts into it (ADR 0050). A
         // development build can check more often (PANE_UPDATE_INTERVAL,
         // in seconds), as the smokes do. A release build reads
         // Pane's published releases; a development build only where
@@ -316,6 +376,12 @@ fn main() {
         };
         let launcher = match pane::cache_dir() {
             Some(cache) => launcher.with_application_update_cache(&cache),
+            None => launcher,
+        };
+        // Restarted into an update, Pane says so the first time the
+        // launcher is shown.
+        let launcher = match &restarted.updated_from {
+            Some(previous) => launcher.with_updated_from(previous),
             None => launcher,
         };
         #[cfg(debug_assertions)]
@@ -536,11 +602,15 @@ fn main() {
             acquiring.first_setup().await;
         })
         .detach();
+        // Pane's window, hotkeys and tray are up: this version has settled,
+        // and the next start of it removes the old program an update kept
+        // until now (ADR 0050).
+        checking.application_update_settled();
         // Checking for a Pane application update does too, on a schedule
         // of its own: at once if a check is due, then every few hours. A
         // newer version is downloaded and staged quietly, and root search
-        // lists the row that installs it once it is ready. (A Pane that
-        // wires no updater checks for nothing.)
+        // lists Restart to Update Pane once it is ready. (A Pane that wires
+        // no updater checks for nothing.)
         checking.start_application_update_checks();
         cx.activate(true);
     });

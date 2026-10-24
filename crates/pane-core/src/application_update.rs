@@ -20,13 +20,16 @@
 //! would replace: the new program is staged in the install folder and the
 //! running one renamed out of its way, which every system allows of a
 //! running program, so the new file takes the old one's name and place
-//! while Pane keeps running — **the new version is used the next time
-//! Pane starts**. The renamed old program is removed on a later start, and
-//! Pane's data (its installed extensions, their settings and everything
-//! else it keeps) lives beside the program, untouched by the swap. A
-//! staged update survives a restart: its marker, written last, names the
-//! version and the staged program's digest, which is checked again before
-//! the swap.
+//! while Pane keeps running, and Pane then restarts into it (see
+//! [`crate::restart`]). A swap whose new program does not start is undone
+//! ([`undo`]): the old program takes its name again and the update stays
+//! staged. The renamed old program is kept until the new version has
+//! settled — its window, hotkeys and tray icon up — and removed by a start
+//! after that, so a failed update can still be undone by hand. Pane's data
+//! (its installed extensions, their settings and everything else it keeps)
+//! lives beside the program, untouched by the swap. A staged update
+//! survives a restart: its marker, written last, names the version and the
+//! staged program's digest, which is checked again before the swap.
 //!
 //! The package installed is the release's package for this Pane's
 //! system, named as `cargo xtask package-*` names it
@@ -154,13 +157,14 @@ impl Program {
     }
 
     /// The program file, in the install folder.
-    fn path(&self) -> PathBuf {
+    pub(crate) fn path(&self) -> PathBuf {
         self.folder.join(&self.name)
     }
 
     /// The name of the file the running program is renamed to when an
-    /// update replaces it: the old program, removed on a later start.
-    fn old(&self) -> PathBuf {
+    /// update replaces it: the old program, removed by a start after the
+    /// new version settled.
+    pub(crate) fn old(&self) -> PathBuf {
         let mut name = self.name.clone();
         name.push_str(".old");
         self.folder.join(name)
@@ -191,16 +195,17 @@ impl Program {
     }
 
     /// Removes what earlier updates left in the install folder, as Pane
-    /// starts: the program an update renamed out of its way, and a staging
-    /// folder a Pane stopped mid-download or mid-install left. A staged
-    /// update of a version newer than `running`, its marker written, is
-    /// kept and returned: it is ready to install. The old program may
-    /// still be running (another Pane that has not exited yet), and the
-    /// staging folder may belong to another Pane staging now, so both are
-    /// removed best effort: what cannot go now goes on a later start.
-    pub(crate) fn clean_install_folder(&self, running: &str) -> Option<Staged> {
-        if self.old().is_file() {
-            let _ = fs::remove_file(self.old());
+    /// starts: a staging folder a Pane stopped mid-download or mid-install
+    /// left, or an update's, once it is installed; and, when the version
+    /// `running` has `settled` in an earlier run, the program an update
+    /// renamed out of its way ([`Program::remove_old`]). A staged update of
+    /// a version newer than `running`, its marker written, is kept and
+    /// returned: it is ready to restart into. The staging folder may belong to
+    /// another Pane staging now, so it is removed best effort: what cannot
+    /// go now goes on a later start.
+    pub(crate) fn clean_install_folder(&self, running: &str, settled: bool) -> Option<Staged> {
+        if settled {
+            self.remove_old();
         }
         match self.staged() {
             Some(staged) if newer(&staged.version, running) == Ok(true) => Some(staged),
@@ -211,12 +216,30 @@ impl Program {
         }
     }
 
+    /// Removes the program an update renamed out of its way, once the
+    /// version that replaced it has settled: kept until then, a failed
+    /// update can still be undone by hand. It may still be running (the
+    /// Pane a restart replaced, not yet exited), so it is removed best
+    /// effort: what cannot go now goes on a later start.
+    pub(crate) fn remove_old(&self) {
+        if self.old().is_file() {
+            let _ = fs::remove_file(self.old());
+        }
+    }
+
     /// The update staged in the install folder, when its marker is written
     /// and the program it names is there.
     pub(crate) fn staged(&self) -> Option<Staged> {
         let text = fs::read(self.staging().join(MARKER)).ok()?;
         let staged: Staged = serde_json::from_slice(&text).ok()?;
         self.staging().join(&self.name).is_file().then_some(staged)
+    }
+
+    /// Removes the staging folder, once the update it held is installed
+    /// and its new version started: its marker is all that is left there,
+    /// kept until then so the swap could be undone ([`undo`]).
+    pub(crate) fn remove_staging(&self) {
+        let _ = fs::remove_dir_all(self.staging());
     }
 }
 
@@ -265,6 +288,11 @@ pub(crate) struct Record {
     /// and the next check that is due tries again.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) failure: Option<RecordedFailure>,
+    /// The last version of Pane that settled — its window, hotkeys and
+    /// tray icon up — in a run: a start of that version removes the old
+    /// program an update renamed out of its way, kept until then.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) settled: Option<String>,
 }
 
 /// A check or download that failed, as the [`Record`] keeps it.
@@ -564,7 +592,7 @@ fn sha256_of(text: &[u8]) -> Option<String> {
 
 /// Unpacks the downloaded and checked `package` into the staging folder
 /// (an AppImage is staged as it came), where it waits for the user's
-/// choice to install it ([`install`]), and writes its marker last. An
+/// choice to restart into it ([`install`]), and writes its marker last. An
 /// update staged before goes first: a newer release replaces it. On
 /// failure nothing is left behind.
 pub(crate) fn stage(package: &[u8], offer: &Offer, program: &Program) -> Result<Staged, String> {
@@ -651,15 +679,16 @@ fn digest_of(path: &Path) -> std::io::Result<String> {
 
 /// Swaps the running program for the update `staged` names: the staged
 /// program is checked against its digest again, the old program is renamed
-/// out of its way, the new one takes its name, and the staging folder
-/// goes. The new version is used the next time Pane starts; nothing of
-/// Pane's data is touched. For a program inside a macOS `Pane.app`, the
-/// bundle's `Info.plist` is then given the new version, and for a Windows
-/// program Pane's setup installed, its entry in Settings > Apps. On
-/// failure the running program is the one it was: a swap that could not
-/// be made keeps the staged update, so the user can try again, while a
-/// staged program that is gone or changed is removed, to be downloaded
-/// again ([`InstallFailure::Restage`]).
+/// out of its way, and the new one takes its name. The staging folder
+/// keeps its marker, so the swap can be undone ([`undo`]) until the new
+/// version has started ([`Program::remove_staging`]); nothing of Pane's
+/// data is touched. For a program inside a macOS `Pane.app`, the bundle's
+/// `Info.plist` is then given the new version, and for a Windows program
+/// Pane's setup installed, its entry in Settings > Apps. On failure the
+/// running program is the one it was: a swap that could not be made keeps
+/// the staged update, so the user can try again, while a staged program
+/// that is gone or changed is removed, to be downloaded again
+/// ([`InstallFailure::Restage`]).
 pub(crate) fn install(staged: &Staged, program: &Program) -> Result<(), InstallFailure> {
     let staging = program.staging();
     let new = staging.join(&program.name);
@@ -668,7 +697,8 @@ pub(crate) fn install(staged: &Staged, program: &Program) -> Result<(), InstallF
     if !intact {
         let _ = fs::remove_dir_all(&staging);
         return Err(InstallFailure::Restage(format!(
-            "the downloaded Pane {} changed or went missing since it was checked, so Pane              downloads it again",
+            "the downloaded Pane {} changed or went missing since it was checked, so Pane \
+             downloads it again",
             staged.version
         )));
     }
@@ -680,9 +710,9 @@ pub(crate) fn install(staged: &Staged, program: &Program) -> Result<(), InstallF
             fs::remove_file(program.old())
                 .map_err(|error| why_files("the previous version's program", error))?;
         }
-        fs::rename(program.path(), program.old())
+        rename(&program.path(), &program.old())
             .map_err(|error| why_files("the running program", error))?;
-        match fs::rename(&new, program.path()) {
+        match rename(&new, &program.path()) {
             Ok(()) => Ok(()),
             // The new program could not take the old one's place: put the
             // old one back, exactly as it was. If even that fails, the old
@@ -690,10 +720,11 @@ pub(crate) fn install(staged: &Staged, program: &Program) -> Result<(), InstallF
             // rather than silently leaving no program at all.
             Err(error) => {
                 let why = why_files("the new program", error);
-                match fs::rename(program.old(), program.path()) {
+                match rename(&program.old(), &program.path()) {
                     Ok(()) => Err(why),
                     Err(also) => Err(format!(
-                        "{why}; the previous version's program could not be put back either                          ({}), so it is left as {}, which can be renamed to {} by hand",
+                        "{why}; the previous version's program could not be put back either \
+                         ({}), so it is left as {}, which can be renamed to {} by hand",
                         why_files("the previous version's program", also),
                         program.old().display(),
                         program.path().display(),
@@ -703,28 +734,83 @@ pub(crate) fn install(staged: &Staged, program: &Program) -> Result<(), InstallF
         }
     };
     swap().map_err(InstallFailure::Kept)?;
-    let _ = fs::remove_dir_all(&staging);
+    name_version(program, &staged.version);
+    Ok(())
+}
+
+/// Undoes [`install`] when the new version did not start: the new program
+/// goes back to the staging folder, beside its marker, so the update stays
+/// staged and the user can try again, and the old program, renamed out of
+/// its way, takes its own name again; the bundle's `Info.plist` and the
+/// Apps entry name `previous` again. If the old program cannot take its
+/// name back, the new one is put back in its place rather than leaving no
+/// program at all, and the failure says so.
+pub(crate) fn undo(program: &Program, previous: &str) -> Result<(), String> {
+    let staged = program.staging().join(&program.name);
+    rename(&program.path(), &staged).map_err(|error| {
+        format!(
+            "the new program could not be moved out of the way to put the previous version \
+             back: {error}"
+        )
+    })?;
+    if let Err(error) = rename(&program.old(), &program.path()) {
+        let _ = rename(&staged, &program.path());
+        return Err(format!(
+            "the previous version's program could not be put back ({error}), so {} is left in \
+             place, and {} can be renamed to {} by hand",
+            program.path().display(),
+            program.old().display(),
+            program.path().display(),
+        ));
+    }
+    name_version(program, previous);
+    Ok(())
+}
+
+/// Names `version` where the system shows the version of the program
+/// installed: a macOS bundle's `Info.plist`, and the Apps entry of a
+/// Windows Pane the setup installed. Neither undoes the swap when it
+/// cannot be written: it then keeps naming the version before.
+fn name_version(program: &Program, version: &str) {
     // On macOS the program is replaced inside its `Pane.app`, whose
     // `Info.plist` names the version Finder's "Get Info" shows: it is given
-    // the new version too, so the bundle and its program agree. The new
-    // program is already in place, so a plist that cannot be rewritten
-    // does not undo the update; it keeps naming the old version until the
+    // the new version too, so the bundle and its program agree. A plist
+    // that cannot be rewritten keeps naming the old version until the
     // bundle is reinstalled from a package.
     if let Some(info) = program.bundle_info() {
-        let _ = set_bundle_version(&info, &staged.version);
+        let _ = set_bundle_version(&info, version);
     }
     // On Windows, a Pane the setup installed has an entry in Settings >
     // Apps naming the version the setup installed (#463): it is given the
     // new version too, when the entry is this program's (a zip copy
     // elsewhere leaves the setup's entry alone), so Apps names the version
-    // that runs. As with the plist, an entry that cannot be rewritten does
-    // not undo the update.
+    // that runs.
     #[cfg(windows)]
-    let _ = apps_entry::set_version(apps_entry::KEY, &program.folder, &staged.version);
-    Ok(())
+    let _ = apps_entry::set_version(apps_entry::KEY, &program.folder, version);
+    #[cfg(not(windows))]
+    let _ = &program.folder;
 }
 
-/// Why installing a staged update failed, and what became of it.
+/// Renames `from` to `to`, trying again a few times, a moment apart, if
+/// the system refuses: a program written a moment ago may still be held
+/// open by the system's malware protection while it scans it (a sharing
+/// violation on Windows).
+fn rename(from: &Path, to: &Path) -> std::io::Result<()> {
+    let mut wait = std::time::Duration::from_millis(100);
+    for _ in 0..5 {
+        match fs::rename(from, to) {
+            // A file that is not there will not be there a moment later.
+            Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
+                std::thread::sleep(wait);
+                wait *= 2;
+            }
+            done => return done,
+        }
+    }
+    fs::rename(from, to)
+}
+
+// Why installing a staged update failed, and what became of it.
 #[derive(Debug)]
 pub(crate) enum InstallFailure {
     /// The swap could not be made; the update stays staged, to try again.
@@ -734,14 +820,17 @@ pub(crate) enum InstallFailure {
     Restage(String),
 }
 
-/// Stages `package` and installs it at once: the two steps an update
+/// Stages `package`, installs it at once and lets its staging folder go,
+/// as a restart whose new version started does: the steps an update
 /// takes, for the tests of the swap.
 #[cfg(test)]
 fn swap(package: &[u8], offer: &Offer, program: &Program) -> Result<(), String> {
     let staged = stage(package, offer, program)?;
     install(&staged, program).map_err(|failure| match failure {
         InstallFailure::Kept(why) | InstallFailure::Restage(why) => why,
-    })
+    })?;
+    program.remove_staging();
+    Ok(())
 }
 
 /// Whether an Apps entry whose `InstallLocation` is `location` is the one
@@ -934,9 +1023,12 @@ mod tests {
         fs::create_dir_all(program.staging()).unwrap();
         fs::write(program.staging().join("pane.exe"), b"the new program").unwrap();
         // A staging folder with no marker is a download that did not end.
-        assert_eq!(program.clean_install_folder("0.1.0"), None);
-        assert!(!program.old().exists());
+        // The old program stays until the version running has settled.
+        assert_eq!(program.clean_install_folder("0.1.0", false), None);
+        assert!(program.old().exists());
         assert!(!program.staging().exists());
+        assert_eq!(program.clean_install_folder("0.1.0", true), None);
+        assert!(!program.old().exists());
     }
 
     /// A package holding `program` as `pane/pane.exe`: a gzipped tarball,
@@ -979,12 +1071,15 @@ mod tests {
         let staged = stage(&package(b"the 0.2.0 program"), &offer("0.2.0"), &program).unwrap();
         assert_eq!(staged.version, "0.2.0");
         assert_eq!(program.staged(), Some(staged.clone()));
-        // A start of 0.1.0 keeps it: it is ready to install.
-        assert_eq!(program.clean_install_folder("0.1.0"), Some(staged.clone()));
+        // A start of 0.1.0 keeps it: it is ready to restart into.
+        assert_eq!(
+            program.clean_install_folder("0.1.0", true),
+            Some(staged.clone())
+        );
         assert!(program.staging().join("pane.exe").is_file());
         // A start of 0.2.0 (the update was installed another way) or of a
         // newer version removes it.
-        assert_eq!(program.clean_install_folder("0.2.0"), None);
+        assert_eq!(program.clean_install_folder("0.2.0", false), None);
         assert!(!program.staging().exists());
     }
 
@@ -998,7 +1093,30 @@ mod tests {
         assert_eq!(program.staged(), Some(newer.clone()));
         install(&newer, &program).unwrap();
         assert_eq!(fs::read(program.path()).unwrap(), b"the 0.3.0 program");
+        // Only the marker is left of it, until the new version started.
+        assert_eq!(program.staged(), None);
+        assert!(program.staging().join(MARKER).is_file());
+        // A start of the new version removes it.
+        assert_eq!(program.clean_install_folder("0.3.0", false), None);
         assert!(!program.staging().exists());
+    }
+
+    #[test]
+    fn a_swap_whose_new_version_did_not_start_is_undone() {
+        let folder = tempfile::tempdir().unwrap();
+        let program = Program::at(folder.path().join("pane.exe")).unwrap();
+        fs::write(program.path(), b"the 0.1.0 program").unwrap();
+        let staged = stage(&package(b"the 0.2.0 program"), &offer("0.2.0"), &program).unwrap();
+        install(&staged, &program).unwrap();
+        assert_eq!(fs::read(program.old()).unwrap(), b"the 0.1.0 program");
+        undo(&program, "0.1.0").unwrap();
+        // The old program has its name back, and the update is staged
+        // again, ready to try once more.
+        assert_eq!(fs::read(program.path()).unwrap(), b"the 0.1.0 program");
+        assert!(!program.old().exists());
+        assert_eq!(program.staged(), Some(staged.clone()));
+        install(&staged, &program).unwrap();
+        assert_eq!(fs::read(program.path()).unwrap(), b"the 0.2.0 program");
     }
 
     #[test]
@@ -1322,7 +1440,7 @@ mod tests {
         }
         // A later start removes the old AppImage, and never the user's
         // folder.
-        program.clean_install_folder("0.2.0");
+        program.clean_install_folder("0.2.0", true);
         assert!(!program.old().exists());
         assert_eq!(
             fs::read(folder.path().join("update/notes.txt")).unwrap(),

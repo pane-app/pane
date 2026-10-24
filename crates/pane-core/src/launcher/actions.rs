@@ -608,7 +608,7 @@ pub(in crate::launcher) fn selected_action(state: &State) -> SelectedAction {
         (_, Some(Entry::CreateExtension)) => acting("Create Extension"),
         (_, Some(Entry::ImportExtension)) => acting("Import Extension"),
         (_, Some(Entry::Acquire(_))) => acting("Set up extension"),
-        (_, Some(Entry::InstallUpdate)) => acting("Install update"),
+        (_, Some(Entry::RestartToUpdate)) => acting("Restart to update"),
         (_, Some(Entry::CheckUpdate)) => acting("Check for update"),
         (_, Some(Entry::CheckExtensionUpdates)) => acting("Check for updates"),
         (_, Some(Entry::OpenLogFolder)) => acting("Open log folder"),

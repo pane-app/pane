@@ -44,6 +44,11 @@ pub(crate) struct Fit {
     pub(crate) bar: f32,
     /// The pins' row's height, added under the bar while it shows.
     pub(crate) pin_row: f32,
+    /// Whether the collapsed window shows Restart to Update Pane under its
+    /// search field (ADR 0050); asked only while it collapses.
+    pub(crate) shows_update: bool,
+    /// That row's height, added under the bar while it shows.
+    pub(crate) update_row: f32,
     /// The window's size now.
     pub(crate) current: WindowSize,
     /// The size expanding gives back when no expanded size was kept.
@@ -171,17 +176,27 @@ impl Presence {
     /// fitted too, and so is a collapsed height the switch or the pins no
     /// longer call for.
     pub(crate) fn fit(&mut self, fit: Fit) -> Option<WindowSize> {
-        let with_pins = fit.bar + fit.pin_row;
-        // The collapsed height this frame calls for.
-        let target = if fit.collapses && fit.shows_pins {
-            with_pins
-        } else {
-            fit.bar
-        };
+        // The collapsed height this frame calls for: the bar, and under it
+        // the update's row and the pins' row while each shows.
+        let target = fit.bar
+            + if fit.collapses && fit.shows_update {
+                fit.update_row
+            } else {
+                0.
+            }
+            + if fit.collapses && fit.shows_pins {
+                fit.pin_row
+            } else {
+                0.
+            };
         let size = fit.current;
         let near = |height: f32| (size.height - height).abs() < 1.;
-        // Either collapsed height: a size never to keep as the expanded one.
-        let is_bar = near(fit.bar) || near(with_pins);
+        // Any collapsed height: a size never to keep as the expanded one.
+        let is_bar = [0., fit.update_row].into_iter().any(|update| {
+            [0., fit.pin_row]
+                .into_iter()
+                .any(|pins| near(fit.bar + update + pins))
+        });
         let resize = if fit.collapses && !near(target) {
             if !is_bar {
                 self.expanded_size = Some(size);
@@ -206,6 +221,7 @@ mod tests {
 
     const BAR: f32 = 64.;
     const PIN_ROW: f32 = 48.;
+    const UPDATE_ROW: f32 = 60.;
     const EXPANDED: WindowSize = WindowSize {
         width: 760.,
         height: 518.,
@@ -221,6 +237,8 @@ mod tests {
             shows_pins,
             bar: BAR,
             pin_row: PIN_ROW,
+            shows_update: false,
+            update_row: UPDATE_ROW,
             current,
             default_expanded: DEFAULT,
         }
@@ -347,6 +365,34 @@ mod tests {
         assert_eq!(
             presence.fit(fit(true, false, size(BAR + PIN_ROW))),
             Some(size(BAR))
+        );
+    }
+
+    #[test]
+    fn a_ready_update_adds_its_row_under_the_bar() {
+        let mut presence = Presence::default();
+        let with_update = |shows_pins, current| Fit {
+            shows_update: true,
+            ..fit(true, shows_pins, current)
+        };
+        assert_eq!(
+            presence.fit(with_update(false, EXPANDED)),
+            Some(size(BAR + UPDATE_ROW))
+        );
+        // Above the pins' row, when it shows too.
+        assert_eq!(
+            presence.fit(with_update(true, size(BAR + UPDATE_ROW))),
+            Some(size(BAR + UPDATE_ROW + PIN_ROW))
+        );
+        // The update gone (Pane restarted into it, say): the bar and the
+        // pins again, and no collapsed height is kept as the expanded one.
+        assert_eq!(
+            presence.fit(fit(true, true, size(BAR + UPDATE_ROW + PIN_ROW))),
+            Some(size(BAR + PIN_ROW))
+        );
+        assert_eq!(
+            presence.fit(fit(false, false, size(BAR + PIN_ROW))),
+            Some(EXPANDED)
         );
     }
 

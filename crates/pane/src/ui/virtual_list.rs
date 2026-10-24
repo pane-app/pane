@@ -352,18 +352,34 @@ pub(crate) enum ListChild {
 /// `rows` rows with each of `sections`' labels ahead of its first row, as
 /// the sections are ordered. A label past the last row is not shown.
 pub(crate) fn children(head: bool, rows: usize, sections: &[SectionLabel]) -> Vec<ListChild> {
+    children_led(head, 0, rows, sections)
+}
+
+/// A list's children as [`children`] lays them out, with the first `lead`
+/// rows and their labels ahead of the head: root search's Restart to
+/// Update Pane, above its pinned home (ADR 0050).
+pub(crate) fn children_led(
+    head: bool,
+    lead: usize,
+    rows: usize,
+    sections: &[SectionLabel],
+) -> Vec<ListChild> {
+    let lead = lead.min(rows);
     let mut children = Vec::with_capacity(usize::from(head) + rows + sections.len());
-    if head {
-        children.push(ListChild::Head);
-    }
     let mut next = sections.iter().enumerate().peekable();
     for row in 0..rows {
+        if head && row == lead {
+            children.push(ListChild::Head);
+        }
         while let Some((index, section)) = next.next_if(|(_, section)| section.first <= row) {
             if section.first == row {
                 children.push(ListChild::Label(index));
             }
         }
         children.push(ListChild::Row(row));
+    }
+    if head && lead == rows {
+        children.push(ListChild::Head);
     }
     children
 }
@@ -408,6 +424,31 @@ mod tests {
                 ListChild::Row(row)
             );
         }
+    }
+
+    #[test]
+    fn the_rows_that_lead_come_with_their_label_ahead_of_the_head() {
+        let sections = [label(0), label(1)];
+        assert_eq!(
+            children_led(true, 1, 3, &sections),
+            [
+                ListChild::Label(0),
+                ListChild::Row(0),
+                ListChild::Head,
+                ListChild::Label(1),
+                ListChild::Row(1),
+                ListChild::Row(2),
+            ]
+        );
+        // Leading every row, the head comes last; leading none, first.
+        assert_eq!(
+            children_led(true, 1, 1, &sections[..1]),
+            [ListChild::Label(0), ListChild::Row(0), ListChild::Head]
+        );
+        assert_eq!(
+            children_led(true, 0, 1, &sections[..1]),
+            children(true, 1, &sections[..1])
+        );
     }
 
     #[test]
