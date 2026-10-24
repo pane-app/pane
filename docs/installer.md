@@ -578,13 +578,19 @@ failed.
 > [#504](https://github.com/pane-app/pane/issues/504)), and, after an
 > update, **What's New in Pane <version>** with the release's notes for a
 > day ([#505](https://github.com/pane-app/pane/issues/505)).
+> [ADR 0051](adr/0051-pane-restarts-into-its-update-by-itself-while-it-is-not-in-use.md)
+> (accepted 2026-10-25) adds the restart by itself while Pane is not in
+> use.
 
 Pane checks its GitHub releases for a newer version of itself at start,
 every few hours and when the launcher opens after a stale check. It
 downloads, verifies and stages a newer version by itself, quietly, and
-restarts into it only when the user chooses
+restarts into it when the user chooses
 ([ADR 0050](adr/0050-pane-downloads-its-updates-by-itself-and-restarts-into-them.md),
-which supersedes US76, decision 17 and Q38 on this).
+which supersedes US76, decision 17 and Q38 on this), or by itself once
+the launcher has been hidden for ten minutes with nothing running
+([ADR 0051](adr/0051-pane-restarts-into-its-update-by-itself-while-it-is-not-in-use.md),
+see [Restarting by itself](#restarting-by-itself)).
 [#54](https://github.com/pane-app/pane/issues/54) added the update, and
 [#55](https://github.com/pane-app/pane/issues/55) wired the macOS half.
 The check, the download, the verification and the swap are
@@ -791,6 +797,33 @@ whenever it holds nothing newer than the version running.
 Restarting while Pane is being used is fine: what an extension is doing
 in the background is waited for (see above), and the restart takes a few
 seconds.
+
+### Restarting by itself
+
+Pane also restarts into a staged update without the Enter, as Raycast
+installs its updates in the background
+([ADR 0051](adr/0051-pane-restarts-into-its-update-by-itself-while-it-is-not-in-use.md)).
+It does so once the launcher has been hidden for 10 minutes. Showing it,
+expanded or collapsed, starts the 10 minutes over. It waits while any of
+these holds:
+
+- a screen other than root search is left on display (a command, a form,
+  a preview, the extension list or the hotkey screen);
+- a command the user ran, or a launch an extension asked for, is still
+  running;
+- Pane is setting up, installing, enabling, disabling, reloading,
+  updating or removing an extension;
+- clipboard history waits to be written;
+- the Settings window is open.
+
+It looks again within a minute of the last of these ending. The restart
+is the one above, step for step, with one more argument: `--hidden`. The
+new version starts with its launcher hidden and does not take the focus.
+The next time the launcher opens, it says "Updated to Pane 99.0.0" and
+lists What's New. A restart by itself that fails is undone like any
+other. Pane does not try that version again by itself while it runs, and
+the row stays, saying why. No setting turns this off: Raycast documents
+none.
 
 ### After an update: What's New
 

@@ -65,17 +65,21 @@ fn package_to_preview() -> Option<ToPreview> {
 /// What a restart into an update started this Pane with (ADR 0050): the
 /// version it was updated from (`--updated-from <version>`) and the
 /// process of the Pane that started it, which it waits for
-/// (`--wait-pid <process id>`). Both are Pane's own, given by the Pane it
-/// replaces, never by the user.
+/// (`--wait-pid <process id>`), and whether it starts with its launcher
+/// hidden (`--hidden`), as a restart Pane made by itself while the user
+/// was not using it asks (ADR 0051). All are Pane's own, given by the Pane
+/// it replaces, never by the user.
 struct Restarted {
     updated_from: Option<String>,
     wait_pid: Option<u32>,
+    hidden: bool,
 }
 
 fn restart_asked() -> Restarted {
     let mut restarted = Restarted {
         updated_from: None,
         wait_pid: None,
+        hidden: false,
     };
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
@@ -83,6 +87,8 @@ fn restart_asked() -> Restarted {
             restarted.updated_from = args.next();
         } else if arg == pane_core::restart::WAIT_PID {
             restarted.wait_pid = args.next().and_then(|pid| pid.parse().ok());
+        } else if arg == pane_core::restart::HIDDEN {
+            restarted.hidden = true;
         }
     }
     restarted
@@ -498,7 +504,11 @@ fn main() {
         // material's background (acrylic behind the glass panel, opaque
         // otherwise), no native title bar, and no taskbar button or
         // window-switcher entry (see `pane::open_launcher_window`).
-        let window = pane::open_launcher_window(cx, |window, cx| {
+        // A restart Pane made by itself, while the launcher was hidden,
+        // starts it hidden (ADR 0051): the next summon shows it, saying
+        // Pane was updated.
+        let shown = !restarted.hidden;
+        let window = pane::open_launcher_window_shown(cx, shown, |window, cx| {
             cx.new(|cx| {
                 let mut launcher = LauncherWindow::new(launcher, window, cx);
                 launcher.follow_changes(changes, window, cx);
@@ -515,6 +525,11 @@ fn main() {
             })
         })
         .expect("failed to open the Pane window");
+        if !shown {
+            window
+                .update(cx, |launcher, window, cx| launcher.start_hidden(window, cx))
+                .ok();
+        }
         // The setup's "Start Pane when I sign in" (`--launch-at-login`),
         // taken once the window exists: its constructor attached the
         // launcher to the settings, resolving a fresh data folder's Open
@@ -633,6 +648,8 @@ fn main() {
         // lists Restart to Update Pane once it is ready. (A Pane that wires
         // no updater checks for nothing.)
         checking.start_application_update_checks();
-        cx.activate(true);
+        if shown {
+            cx.activate(true);
+        }
     });
 }

@@ -41,6 +41,17 @@
 //! is ended, the swap is undone, the status line and About say what
 //! happened, and the row stays to try again.
 //!
+//! **Restart by itself** (ADR 0051). Once the launcher has been hidden for
+//! [`IDLE_BEFORE_RESTART`] with an update staged, and nothing is running
+//! that a restart would cut short, Pane restarts into it by itself, the
+//! same way Enter does, and starts the new version hidden (`--hidden`).
+//! It waits while root search is not the screen left on display, while a
+//! command runs or an extension is set up, installed, updated, reloaded
+//! or removed, while clipboard history waits to be written, and while
+//! anything holds it ([`Launcher::hold_restart_by_itself`]: the Settings
+//! window, while it is open). A restart by itself that fails is not tried
+//! again by itself: the row stays for the user to choose.
+//!
 //! **After the restart.** The new version, started with `--updated-from`
 //! ([`Launcher::with_updated_from`]), says "Updated to Pane <version>" the
 //! first time the launcher is shown. Once its window, hotkeys and tray are
@@ -56,6 +67,7 @@
 use std::future::Future;
 use std::hash::BuildHasher;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, Weak};
 use std::time::Duration;
 
@@ -82,6 +94,14 @@ const MAX_WAIT: Duration = Duration::from_secs(3600);
 
 /// The shortest the schedule waits before it looks again.
 const MIN_WAIT: Duration = Duration::from_secs(1);
+
+/// How long the launcher stays hidden, with an update staged, before Pane
+/// restarts into it by itself (ADR 0051).
+const IDLE_BEFORE_RESTART: Duration = Duration::from_secs(10 * 60);
+
+/// How soon the schedule looks again while a restart by itself is due but
+/// waits for something running to end, which says nothing when it ends.
+const HELD_LOOK: Duration = Duration::from_secs(60);
 
 /// The root row that checks for a Pane update at once, and the name
 /// Raycast gives the same command, which finds it too.
@@ -164,6 +184,28 @@ pub(in crate::launcher) struct Updates {
     /// The version this run was restarted from, while the toast saying so
     /// waits for the launcher to be shown ([`Launcher::with_updated_from`]).
     updated_from: Option<String>,
+    /// Since when the launcher is hidden, by the launcher's clock: `None`
+    /// while it is shown, expanded or collapsed. A restart by itself is due
+    /// [`IDLE_BEFORE_RESTART`] after it.
+    hidden_since: Option<u64>,
+    /// How many holds keep Pane from restarting by itself now
+    /// ([`Launcher::hold_restart_by_itself`]).
+    holds: Arc<AtomicUsize>,
+    /// The version a restart by itself failed to start, which Pane does not
+    /// try again by itself: the row stays for the user to choose.
+    by_itself_failed: Option<String>,
+}
+
+/// Keeps Pane from restarting into its update by itself while it is kept
+/// ([`Launcher::hold_restart_by_itself`]); the restart the user chooses is
+/// not held.
+#[must_use = "the restart by itself is held only while this is kept"]
+pub struct RestartHold(Arc<AtomicUsize>);
+
+impl Drop for RestartHold {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::SeqCst);
+    }
 }
 
 /// What the checks found, and what became of it.
@@ -275,6 +317,10 @@ impl ApplicationUpdate {
     }
 }
 
+/// How the new version of a restart is checked and started, and how long
+/// it has to report that it started.
+type Relaunching = (Arc<dyn Relaunch>, Duration);
+
 /// What a restart into the staged update came to.
 enum Restarted {
     /// The new version started and reported so: this Pane quits.
@@ -347,6 +393,19 @@ impl Updates {
             (Notice::Ready(staged), false, None) => Some(staged.clone()),
             _ => None,
         }
+    }
+
+    /// When Pane restarts into its staged update by itself, by the
+    /// launcher's clock: [`IDLE_BEFORE_RESTART`] after the launcher was
+    /// hidden. `None` while it is shown, while nothing is ready, and for
+    /// an update a restart by itself already failed to start.
+    fn restart_due(&self) -> Option<u64> {
+        let staged = self.ready()?;
+        if self.by_itself_failed.as_deref() == Some(staged.version.as_str()) {
+            return None;
+        }
+        let idle = u64::try_from(IDLE_BEFORE_RESTART.as_millis()).unwrap_or(u64::MAX);
+        Some(self.hidden_since?.saturating_add(idle))
     }
 
     /// The rows root search lists of Pane's own update, each with the
@@ -435,6 +494,23 @@ pub(in crate::launcher) fn busy(state: &State) -> Option<String> {
         .iter()
         .find(|(_, what)| !matches!(what, Changing::Recording))
         .map(|(identity, what)| format!("{} {}", state.title_of(identity), what.doing()))
+}
+
+/// Whether Pane waits to restart into its update by itself, by what
+/// `state` shows: a restart would cut short what is running, or lose a
+/// screen the user left on display (ADR 0051). Clipboard history waiting
+/// to be written is told apart ([`Launcher::clipboard_waits_to_be_written`]).
+fn held_by_state(launcher: &Launcher, state: &State) -> bool {
+    busy(state).is_some()
+        || !state.changing.is_empty()
+        || !matches!(state.view.screen, Screen::Root { .. })
+        || matches!(state.view.status, Status::Running { .. })
+        || state.launches.running()
+        || state.designed_events.running()
+        || state.updates.holds.load(Ordering::SeqCst) > 0
+        || launcher
+            .runtime()
+            .is_ok_and(|runtime| !runtime.busy().is_empty())
 }
 
 impl Launcher {
@@ -618,6 +694,54 @@ impl Launcher {
     pub fn with_updated_from(self, previous: &str) -> Self {
         self.lock().updates.note_updated(previous);
         self
+    }
+
+    /// Keeps Pane from restarting into its update by itself until the
+    /// returned hold is dropped (ADR 0051): the Settings window holds it
+    /// while it is open, so a restart never closes it under the user. The
+    /// restart the user chooses is not held.
+    pub fn hold_restart_by_itself(&self) -> RestartHold {
+        let holds = self.lock().updates.holds.clone();
+        holds.fetch_add(1, Ordering::SeqCst);
+        RestartHold(holds)
+    }
+
+    /// Whether Pane would wait now to restart into an update by itself,
+    /// were one due: something runs that a restart would cut short, a
+    /// screen other than root search is left on display, or something
+    /// holds it ([`Launcher::hold_restart_by_itself`]). For tests.
+    #[doc(hidden)]
+    pub fn restart_by_itself_held(&self) -> bool {
+        self.clipboard_waits_to_be_written() || held_by_state(self, &self.lock())
+    }
+
+    /// Whether clipboard history waits in a batch to be written (#192): a
+    /// restart by itself waits for the write.
+    fn clipboard_waits_to_be_written(&self) -> bool {
+        self.installation
+            .as_ref()
+            .is_some_and(|installation| installation.data.clipboard_history().batch_waits())
+    }
+
+    /// The window says it is shown or hidden: a launcher hidden starts the
+    /// time after which Pane restarts into a staged update by itself, and
+    /// one shown ends it (ADR 0051).
+    pub(in crate::launcher) fn application_update_presence(
+        &self,
+        state: &mut State,
+        presence: WindowPresence,
+    ) {
+        let now = state.clock.now();
+        let updates = &mut state.updates;
+        if presence != WindowPresence::Hidden {
+            updates.hidden_since = None;
+        } else if updates.hidden_since.is_none() {
+            updates.hidden_since = Some(now);
+            // The schedule learns when the restart is due.
+            if let Some(schedule) = &updates.schedule {
+                schedule.poke();
+            }
+        }
     }
 
     /// Records that this version of Pane has settled: its window, hotkeys
@@ -960,39 +1084,96 @@ impl Launcher {
         let Some(application) = self.application.clone() else {
             return;
         };
-        let (staged, relaunch, folder) = {
-            let mut state = self.lock();
-            let Some(staged) = state.updates.ready() else {
-                return;
-            };
-            if let Some(busy) = busy(&state) {
-                state.view.status = Status::Error(format!(
-                    "Pane can restart to update once this is done: {busy}"
-                ));
-                drop(state);
-                self.changed();
-                return;
-            }
-            state.updates.restarting = true;
-            // A new attempt begins: whatever the last one failed with is
-            // no longer the word on it.
-            state.updates.restart_failed = None;
-            state.view.status =
-                Status::Progress(format!("Restarting to update Pane to {}…", staged.version));
-            self.refresh(&mut state);
-            (
-                staged,
-                state.updates.relaunch(),
-                state.updates.report_folder(),
-            )
+        let Some((staged, relaunch, folder)) = self.begin_restart(false) else {
+            return;
         };
-        self.changed();
         let version = staged.version.clone();
         let restarting = application.clone();
         let restarted =
-            off_thread(move || restart_into(&staged, &restarting, relaunch, &folder)).await;
+            off_thread(move || restart_into(&staged, &restarting, relaunch, &folder, false)).await;
+        if self.end_restart(&application, &version, restarted, false) {
+            off_thread({
+                let launcher = self.clone();
+                move || launcher.check_by_itself()
+            })
+            .await;
+        }
+    }
+
+    /// The restart Pane makes by itself once the launcher has been hidden
+    /// long enough and nothing runs (ADR 0051): the restart the user
+    /// chooses, starting the new version hidden. Blocks: the schedule's
+    /// thread runs it.
+    fn restart_by_itself(&self) {
+        let Some(application) = self.application.clone() else {
+            return;
+        };
+        let Some((staged, relaunch, folder)) = self.begin_restart(true) else {
+            return;
+        };
+        let version = staged.version.clone();
+        crate::diagnostic!("Pane restarts into Pane {version} by itself, while it is not in use");
+        let restarted = restart_into(&staged, &application, relaunch, &folder, true);
+        if self.end_restart(&application, &version, restarted, true) {
+            self.check_by_itself();
+        }
+    }
+
+    /// Begins a restart into the staged update, `by_itself` or as the user
+    /// chose it: the update it restarts into, how, and where the new
+    /// version reports, or `None` when none can begin. Pane busy with an
+    /// extension says so to the user's choice; a restart by itself looks
+    /// again whether anything holds it, under the same lock that begins it.
+    fn begin_restart(&self, by_itself: bool) -> Option<(Staged, Relaunching, PathBuf)> {
+        let mut state = self.lock();
+        let staged = state.updates.ready()?;
+        if by_itself {
+            if held_by_state(self, &state) {
+                return None;
+            }
+        } else if let Some(busy) = busy(&state) {
+            state.view.status = Status::Error(format!(
+                "Pane can restart to update once this is done: {busy}"
+            ));
+            drop(state);
+            self.changed();
+            return None;
+        }
+        state.updates.restarting = true;
+        // A new attempt begins: whatever the last one failed with is no
+        // longer the word on it.
+        state.updates.restart_failed = None;
+        state.view.status =
+            Status::Progress(format!("Restarting to update Pane to {}…", staged.version));
+        self.refresh(&mut state);
+        let begun = (
+            staged,
+            state.updates.relaunch(),
+            state.updates.report_folder(),
+        );
+        drop(state);
+        self.changed();
+        Some(begun)
+    }
+
+    /// Ends a restart into `version` with what it came to, `by_itself` or
+    /// as the user chose it: Pane quits once the new version started, and
+    /// otherwise says why it did not. A restart by itself that failed is
+    /// not tried again by itself. Returns whether the staged program went
+    /// and is to be downloaded again.
+    fn end_restart(
+        &self,
+        application: &Application,
+        version: &str,
+        restarted: Restarted,
+        by_itself: bool,
+    ) -> bool {
+        let version = version.to_owned();
         let restage = {
             let mut state = self.lock();
+            if by_itself && !matches!(restarted, Restarted::HandedOff) {
+                state.updates.by_itself_failed = Some(version.clone());
+            }
             let previous = &application.version;
             match restarted {
                 Restarted::HandedOff => {
@@ -1052,17 +1233,12 @@ impl Launcher {
             }
         };
         self.changed();
-        if restage {
-            off_thread({
-                let launcher = self.clone();
-                move || launcher.check_by_itself()
-            })
-            .await;
-        }
+        restage
     }
 
-    /// One look of the schedule: a check when one is due, and how long
-    /// until the next is.
+    /// One look of the schedule: a check when one is due, a restart by
+    /// itself when the launcher has been hidden long enough and nothing
+    /// holds it, and how long until the next look.
     fn scheduled_look(&self) -> Duration {
         let due = {
             let state = self.lock();
@@ -1071,22 +1247,42 @@ impl Launcher {
         if due {
             self.check_by_itself();
         }
+        let restart = {
+            // Asked before the launcher's lock is taken: the history has a
+            // lock of its own.
+            let writing = self.clipboard_waits_to_be_written();
+            let state = self.lock();
+            let now = state.clock.now();
+            state.updates.restart_due().is_some_and(|due| now >= due)
+                && !writing
+                && !held_by_state(self, &state)
+        };
+        if restart {
+            self.restart_by_itself();
+        }
         let state = self.lock();
         let now = state.clock.now();
-        Duration::from_millis(state.updates.due(true).saturating_sub(now))
+        let check = Duration::from_millis(state.updates.due(true).saturating_sub(now));
+        match state.updates.restart_due() {
+            Some(due) if due > now => check.min(Duration::from_millis(due - now)),
+            // Due, and waiting for what holds it to end.
+            Some(_) => check.min(HELD_LOOK),
+            None => check,
+        }
     }
 }
 
 /// Restarts into `staged`: swaps `application`'s program for it, checks
-/// that the new program answers with its version, starts it and waits for
-/// its report in `folder` (see `restart`). A new version that does not
-/// answer, start or report is ended, and the swap undone. Blocks: run it
-/// off the window's thread.
+/// that the new program answers with its version, starts it (`hidden`, for
+/// a restart by itself) and waits for its report in `folder` (see
+/// `restart`). A new version that does not answer, start or report is
+/// ended, and the swap undone. Blocks: run it off the window's thread.
 fn restart_into(
     staged: &Staged,
     application: &Application,
     relaunch: (Arc<dyn Relaunch>, Duration),
     folder: &Path,
+    hidden: bool,
 ) -> Restarted {
     let (relaunch, started_within) = relaunch;
     let program = &application.program;
@@ -1109,7 +1305,7 @@ fn restart_into(
     }
     let own = std::process::id();
     restart::forget_report(folder, own);
-    let arguments = restart::arguments(&application.version, own);
+    let arguments = restart::arguments(&application.version, own, hidden);
     let mut started = match relaunch.start(&path, &arguments) {
         Ok(started) => started,
         Err(why) => return not_started(why),

@@ -1394,6 +1394,12 @@ impl HistoryStore {
         first
     }
 
+    /// Whether changes wait in a batch to be written: a restart Pane makes
+    /// by itself waits for the write (ADR 0051).
+    pub(crate) fn batch_waits(&self) -> bool {
+        self.lock().due.is_some()
+    }
+
     /// Writes the batch, if its time came; returns when the batch waiting
     /// then is due, if one is.
     fn write_due(&self) -> Option<Instant> {

@@ -54,6 +54,11 @@ pub const UPDATED_FROM: &str = "--updated-from";
 /// The argument naming the process a restart waits for.
 pub const WAIT_PID: &str = "--wait-pid";
 
+/// The argument a restart Pane made by itself, while the user was not
+/// using it, adds (ADR 0051): the new process starts with its launcher
+/// hidden, as the old one was.
+pub const HIDDEN: &str = "--hidden";
+
 /// How Pane checks and starts the program an update swapped in: the
 /// system's own processes ([`Native`]), or a test's.
 pub trait Relaunch: Send + Sync {
@@ -175,14 +180,19 @@ fn reported_version(answer: &str) -> Option<String> {
 }
 
 /// The arguments the new program is started with: the version it was
-/// updated from, and the process it waits for.
-pub fn arguments(updated_from: &str, waited: u32) -> Vec<String> {
-    vec![
+/// updated from, the process it waits for, and, for a restart Pane made by
+/// itself, that it starts hidden.
+pub fn arguments(updated_from: &str, waited: u32, hidden: bool) -> Vec<String> {
+    let mut arguments = vec![
         UPDATED_FROM.to_owned(),
         updated_from.to_owned(),
         WAIT_PID.to_owned(),
         waited.to_string(),
-    ]
+    ];
+    if hidden {
+        arguments.push(HIDDEN.to_owned());
+    }
+    arguments
 }
 
 /// The file in `folder` the process a restart started writes, as the old
@@ -447,8 +457,12 @@ mod tests {
     #[test]
     fn the_arguments_name_the_old_version_and_the_process_waited_for() {
         assert_eq!(
-            arguments("0.1.0", 42),
+            arguments("0.1.0", 42, false),
             ["--updated-from", "0.1.0", "--wait-pid", "42"]
+        );
+        assert_eq!(
+            arguments("0.1.0", 42, true),
+            ["--updated-from", "0.1.0", "--wait-pid", "42", "--hidden"]
         );
     }
 

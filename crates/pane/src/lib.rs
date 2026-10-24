@@ -225,6 +225,16 @@ pub fn open_launcher_window<V: 'static + gpui::Render>(
     cx: &mut App,
     build: impl FnOnce(&mut Window, &mut App) -> gpui::Entity<V>,
 ) -> gpui::Result<gpui::WindowHandle<V>> {
+    open_launcher_window_shown(cx, true, build)
+}
+
+/// As [`open_launcher_window`], `shown` or not: a Pane that restarted into
+/// its update by itself opens its launcher's window hidden (ADR 0051).
+pub fn open_launcher_window_shown<V: 'static + gpui::Render>(
+    cx: &mut App,
+    shown: bool,
+    build: impl FnOnce(&mut Window, &mut App) -> gpui::Entity<V>,
+) -> gpui::Result<gpui::WindowHandle<V>> {
     let bounds = gpui::Bounds::centered(None, launcher_client_size(), cx);
     let options = gpui::WindowOptions {
         window_bounds: Some(gpui::WindowBounds::Windowed(bounds)),
@@ -234,7 +244,7 @@ pub fn open_launcher_window<V: 'static + gpui::Render>(
             appears_transparent: true,
             ..Default::default()
         }),
-        show: !cfg!(target_os = "windows"),
+        show: shown && !cfg!(target_os = "windows"),
         app_id: Some(APP_ID.into()),
         ..Default::default()
     };
@@ -254,7 +264,9 @@ pub fn open_launcher_window<V: 'static + gpui::Render>(
     })?;
     // Shown as GPUI shows a window it opens visible, taking the focus.
     #[cfg(target_os = "windows")]
-    window.update(cx, |_, window, _| window.set_visible(true))?;
+    if shown {
+        window.update(cx, |_, window, _| window.set_visible(true))?;
+    }
     Ok(window)
 }
 

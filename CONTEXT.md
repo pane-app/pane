@@ -29,7 +29,7 @@ Where Pane reads its own application updates: the GitHub releases of `pane-app/p
 _Avoid_: Artifact source (Pane's own downloads host, never deployed and replaced by GitHub Releases), registry (npm's), repository (Git's)
 
 **Acquired artifact**:
-Pane's own application-update package, downloaded only when the user chooses the update: the release asset named for this system (`pane-<version>-<os>-<arch>.zip` or `.tar.gz`), checked against the sha256 of the `.sha256` asset beside it and unpacked by the same strict readers an npm package's tarball is, then swapped for the running program, so the new version is used the next start. It is not cached between attempts.
+Pane's own application-update package, downloaded by itself once a check finds a newer version (ADR 0050): the release asset named for this system (`pane-<version>-<os>-<arch>.zip` or `.tar.gz`), checked against the sha256 of the `.sha256` asset beside it and unpacked by the same strict readers an npm package's tarball is, staged, then swapped for the running program when Pane restarts into it, by the user's Enter or by itself while Pane is not in use (ADR 0051).
 _Avoid_: Installer payload (the installer carries none), bundled feature, default extension's payload (a default is fetched from its pinned commit)
 
 **Disabled extension**:
@@ -369,7 +369,7 @@ Pane's own copy of an installed package's manifest and components, kept in Pane'
 _Avoid_: Cache (it is not disposable)
 
 **Application update**:
-A newer version of Pane itself, which Pane finds out about from its release source by checking at start, every few hours and when the launcher opens after a stale check, and downloads and verifies in the background without asking (ADR 0050). Once it is ready, root search lists Restart to Update Pane first, and the user's Enter on it installs it: the program in the install folder is replaced (the running one renamed aside and kept until the new version has settled), and Pane starts the new version and quits once the new one reports that it started, so the new version runs at once; a new version that does not start is ended and the replacement undone. Pane never installs one without that Enter. Pane's data, and the extensions it installed, are untouched by one. Check for Pane Updates checks at once.
+A newer version of Pane itself, which Pane finds out about from its release source by checking at start, every few hours and when the launcher opens after a stale check, and downloads and verifies in the background without asking (ADR 0050). Once it is ready, root search lists Restart to Update Pane first, and the user's Enter on it installs it: the program in the install folder is replaced (the running one renamed aside and kept until the new version has settled), and Pane starts the new version and quits once the new one reports that it started, so the new version runs at once; a new version that does not start is ended and the replacement undone. Pane also restarts into it by itself, the same way, once the launcher has been hidden for ten minutes with nothing running and the Settings window closed, starting the new version hidden (ADR 0051). Pane's data, and the extensions it installed, are untouched by one. Check for Pane Updates checks at once.
 _Avoid_: Self-update, auto-update (the install waits for the user), app update
 
 **What's New item**:
