@@ -966,8 +966,9 @@ impl Runtime {
     }
 
     /// Starts the runtime thread, keeping compiled extension code in
-    /// `cache_dir` so later runtimes load it instead of recompiling. The
-    /// directory holds only disposable data.
+    /// `cache_dir`'s `code` folder so later runtimes load it instead of
+    /// recompiling. The directory holds only disposable data, and Pane's
+    /// other caches beside the code are left alone.
     pub fn start_with_cache(cache_dir: PathBuf) -> Result<Runtime, CallError> {
         Runtime::start_with(Some(cache_dir))
     }
@@ -2108,9 +2109,33 @@ fn shared_code_cache() -> Option<PathBuf> {
         .map(PathBuf::from)
 }
 
+/// The folder in the runtime's cache folder that holds its compiled
+/// extension code, and nothing else: Wasmtime takes the folder it is given
+/// as wholly its own. Each time it keeps newly compiled code, at most once
+/// an hour, it cleans that folder up and deletes every file it does not
+/// recognize as its own. Given the cache folder itself, it deleted the
+/// application icons' cache and the file index kept beside its code
+/// whenever an extension was installed or updated.
+const CODE_CACHE: &str = "code";
+
+/// Where the runtime whose cache folder is `cache_dir` keeps compiled code
+/// ([`CODE_CACHE`]). The code an earlier Pane kept in the cache folder
+/// itself (Wasmtime's `modules` folder) is moved in, so nothing is compiled
+/// again; if it cannot be moved, it is compiled again as needed.
+fn code_cache(cache_dir: &Path) -> PathBuf {
+    let code = cache_dir.join(CODE_CACHE);
+    let earlier = cache_dir.join("modules");
+    if earlier.is_dir() && !code.join("modules").exists() {
+        let _ = std::fs::create_dir_all(&code)
+            .and_then(|()| std::fs::rename(&earlier, code.join("modules")));
+    }
+    code
+}
+
 /// The engine every runtime thread runs guests with: WASI 0.3 and
-/// component-model async, keeping compiled code in `cache_dir`, if given
-/// (or in the shared cache [`SHARED_CODE_CACHE`] names).
+/// component-model async, keeping compiled code in `cache_dir`'s
+/// [`CODE_CACHE`] folder, if given (or in the shared cache
+/// [`SHARED_CODE_CACHE`] names).
 fn engine(cache_dir: Option<PathBuf>) -> Result<Engine, CallError> {
     let mut config = Config::new();
     config
@@ -2119,7 +2144,8 @@ fn engine(cache_dir: Option<PathBuf>) -> Result<Engine, CallError> {
         // Every guest yields to the runtime thread at each tick (see
         // `deadlines`), so none holds it by computing.
         .epoch_interruption(true);
-    if let Some(dir) = shared_code_cache().or(cache_dir) {
+    let own = cache_dir.map(|dir| code_cache(&dir));
+    if let Some(dir) = shared_code_cache().or(own) {
         let mut cache = CacheConfig::new();
         cache.with_directory(dir);
         let cache = Cache::new(cache).map_err(unavailable)?;

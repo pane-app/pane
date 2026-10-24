@@ -175,6 +175,14 @@ impl Launcher {
         self
     }
 
+    /// Reads the installed applications' kept icons in the background now,
+    /// as Pane starts, so root search's first rows draw them at once.
+    pub fn prepare_application_icons(&self) {
+        if let Some(cache) = self.application_icons() {
+            cache.prepare();
+        }
+    }
+
     /// The cache of the installed applications' icons this launcher keeps,
     /// if it keeps one: for tests, which wait on it and bound it.
     #[doc(hidden)]

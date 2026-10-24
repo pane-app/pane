@@ -693,8 +693,9 @@ fn rows_on_screen_are_extracted_before_the_background_refresh() {
     let order = icons.extracted();
     assert_eq!(order.len(), ids.len(), "{order:?}");
     let at = order.iter().position(|id| id == "app19").unwrap();
-    // At most the batch already taken goes before it.
-    assert!(at <= BATCH, "{order:?}");
+    // At most the icon being extracted when the row wanted it goes before
+    // it, not the rest of a batch.
+    assert!(at <= 1, "{order:?}");
     assert!(cache.shown("app19").is_some());
 }
 

@@ -538,18 +538,41 @@ is extracted again. An index of version 3 from before extraction times
 were recorded is read as it is, every picture in it old, so nothing is
 lost and it is not rebuilt. Images the index does not name are removed.
 
+The compiled extension code is kept in a folder of its own beside it,
+`code` (Wasmtime's cache). Wasmtime takes the folder it is given as wholly
+its own. Whenever it keeps newly compiled code (at most once an hour), it
+cleans that folder up and deletes every file it does not recognize.
+
+Pane 0.1.1 and earlier gave Wasmtime the cache folder itself. Installing or
+updating an extension then deleted this cache and the file index, so every
+icon was extracted again while the file index was rebuilt. Pane moves the
+code such a Pane kept, in `modules`, into `code` as it starts.
+
 The cache holds at most 64 MiB and 10,000 icons, the least recently drawn
 going first. Deleting it loses nothing but the time to extract the icons
 again.
 
 ### Refreshing
 
-A single worker thread at low priority looks at eight icons at a time.
-Low priority is Windows' background mode, a lower `nice` on Linux, and
-the utility quality-of-service class on macOS. macOS's background band is
-not used: it throttles a thread's processor and disk for as long as
-anything else is busy, which held the worker, and an icon a row on screen
-was waiting for, for half a minute on a loaded Mac.
+A single worker thread at low priority looks at the icons one at a time
+and writes the index after every eight. Low priority is for the processor
+only: Windows' lowest thread priority, a lower `nice` on Linux, and the
+utility quality-of-service class on macOS.
+
+The background modes that also lower a thread's disk priority are not used.
+macOS's background band throttles a thread's processor and disk for as
+long as anything else is busy, which held the worker, and an icon a row on
+screen was waiting for, for half a minute on a loaded Mac. Windows'
+background mode (`THREAD_MODE_BACKGROUND_BEGIN`) gives the thread very low
+disk and memory priority. While Pane rebuilt its file index, single icons
+took 10 to 27 seconds instead of 50 milliseconds.
+
+On Windows the worker holds COM for its whole life. If each extraction
+started and ended COM, every shell handler an icon loaded would be unloaded
+after it (`CoUninitialize`) and loaded again for the next icon. Images are
+written without being flushed to disk, since each flush waited behind every
+other write on a busy disk. An image a crash left empty is dropped when
+the index is read, and extracted again.
 
 After each start the worker looks once at every application root search
 lists. It extracts an icon again only when it is missing, its fingerprint
@@ -557,9 +580,13 @@ changed, or its picture is older than the refresh age, 7 days (to catch a
 change no fingerprint sees). An unchanged, younger icon is drawn from the
 cache and not extracted.
 
-An icon a row on screen wants goes first. It is drawn from the cache at
-once when its fingerprint has not changed (an old one is then extracted
-again in the background), and extracted at once when it has.
+An icon a row on screen wants goes first. The worker takes each icon as
+the one before it ends, so a row waits for the icon being extracted at
+most. It is drawn from the cache at once when its fingerprint has not
+changed (an old one is then extracted again in the background), and
+extracted at once when it has. Each icon extracted is drawn as soon as it
+is there. Pane reads the cache's index as it starts, so root search's
+first rows draw the icons kept from before.
 
 The worker rests after each background batch, including one that only
 read fingerprints, so the start's look at every application is not a busy

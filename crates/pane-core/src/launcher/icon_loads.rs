@@ -87,6 +87,9 @@ struct Loads {
     web: HashMap<(String, String), Load>,
     /// System icons by path.
     system: HashMap<PathBuf, Load>,
+    /// The icon extracted this session for each file type whose files all
+    /// show one ([`shared_icon_type`]), by type.
+    types: HashMap<String, PathBuf>,
     queue: VecDeque<Job>,
     /// Threads loading now.
     workers: usize,
@@ -146,7 +149,9 @@ impl IconLoads {
     /// those extracted before.
     pub(super) fn set_system_icons(&self, system_icons: Arc<dyn SystemIcons>) {
         *lock(&self.shared.system_icons) = system_icons;
-        self.shared.lock().system.clear();
+        let mut state = self.shared.lock();
+        state.system.clear();
+        state.types.clear();
     }
 
     /// Draws installed applications' own icons from `cache` from now on
@@ -240,7 +245,10 @@ impl IconLoads {
         let shared = self.shared.clone();
         let started = std::thread::Builder::new()
             .name("pane-icon-loads".into())
-            .spawn(move || shared.work());
+            .spawn(move || {
+                let _apartment = crate::system_icons::ThreadApartment::hold();
+                shared.work();
+            });
         if let Err(error) = started {
             state.workers -= 1;
             crate::diagnostic!("pane: could not start a thread loading icons: {error}");
@@ -485,10 +493,20 @@ impl Shared {
             .system_folder
             .as_ref()
             .ok_or("this launcher keeps no system icons")?;
+        let metadata = std::fs::metadata(path).ok();
+        // A file of a type whose files all show one icon shows the one
+        // extracted for another file of its type this session.
+        let kind = metadata
+            .as_ref()
+            .and_then(|metadata| shared_icon_type(path, metadata));
+        if let Some(kind) = &kind
+            && let Some(file) = self.lock().types.get(kind).filter(|file| file.is_file())
+        {
+            return Ok(file.clone());
+        }
         // Keyed by the path and the file's version: a changed application
         // is extracted again.
-        let modified = std::fs::metadata(path)
-            .ok()
+        let modified = metadata
             .map(|metadata| {
                 let at = metadata
                     .modified()
@@ -500,20 +518,63 @@ impl Shared {
             .unwrap_or_default();
         let key = format!("{}\n{modified}", path.display());
         let file = folder.join(format!("{}.png", web_image_stem(&key)));
-        if file.is_file() {
-            return Ok(file);
-        }
-        let system_icons = lock(&self.system_icons).clone();
-        match system_icons.icon(path) {
-            Ok(SystemIcon::File(image)) => Ok(image),
-            Ok(SystemIcon::Png(png)) => {
-                crate::atomic::write_atomically(&file, &png, crate::atomic::Readers::Default)
-                    .map_err(|error| format!("cannot keep it: {error}"))?;
-                Ok(file)
+        let kept = std::fs::metadata(&file).is_ok_and(|kept| kept.is_file() && kept.len() > 0);
+        let extracted = if kept {
+            file
+        } else {
+            let system_icons = lock(&self.system_icons).clone();
+            match system_icons.icon(path)? {
+                SystemIcon::File(image) => image,
+                SystemIcon::Png(png) => {
+                    // Not flushed to disk, as the applications' icons are
+                    // not: an image a crash left empty is extracted again.
+                    crate::atomic::write_cache_file(&file, &png)
+                        .map_err(|error| format!("cannot keep it: {error}"))?;
+                    file
+                }
             }
-            Err(why) => Err(why),
+        };
+        if let Some(kind) = kind {
+            self.lock().types.insert(kind, extracted.clone());
         }
+        Ok(extracted)
     }
+}
+
+/// File types whose files each show an icon of their own on Windows: the
+/// type's icon is `%1` (the file itself, as a program's or an icon file's)
+/// or an icon handler draws each file's (a shortcut's, an internet
+/// shortcut's, a ClickOnce reference's, a management console's).
+const OWN_ICONS: [&str; 12] = [
+    "exe",
+    "lnk",
+    "url",
+    "ico",
+    "cur",
+    "ani",
+    "msc",
+    "appref-ms",
+    "website",
+    "library-ms",
+    "scr",
+    "cpl",
+];
+
+/// The type of the file at `path` (its extension, in lowercase) when every
+/// file of that type shows the same icon, so that one file's icon is drawn
+/// for the others without asking the system again: on Windows, a file
+/// (not a folder) whose type has no icon of each file's own ([`OWN_ICONS`]),
+/// the system icons being drawn icon only, never a thumbnail of the file.
+/// `None` for anything else, and on the other systems.
+fn shared_icon_type(path: &Path, metadata: &std::fs::Metadata) -> Option<String> {
+    if !cfg!(windows) || !metadata.is_file() {
+        return None;
+    }
+    let kind = path.extension()?.to_str()?.to_ascii_lowercase();
+    if OWN_ICONS.contains(&kind.as_str()) {
+        return None;
+    }
+    Some(kind)
 }
 
 #[cfg(test)]
@@ -522,6 +583,61 @@ mod tests {
 
     fn loads() -> IconLoads {
         IconLoads::new(None, None, Arc::new(|| {}))
+    }
+
+    /// The system's icons stood in for: one PNG for any path, counting the
+    /// paths asked for.
+    #[cfg(windows)]
+    #[derive(Default)]
+    struct CountingIcons(std::sync::atomic::AtomicUsize);
+
+    #[cfg(windows)]
+    impl SystemIcons for CountingIcons {
+        fn icon(&self, _path: &Path) -> Result<SystemIcon, String> {
+            self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(SystemIcon::Png(
+                crate::icons::encode_png(1, 1, &[0, 0, 0, 255]).unwrap(),
+            ))
+        }
+    }
+
+    /// Search Files lists many files of one type (`chrome.go` in a dozen
+    /// worktrees): on Windows their one icon is extracted once a session,
+    /// while a program, a shortcut or a folder still shows its own.
+    #[cfg(windows)]
+    #[test]
+    fn files_of_a_type_with_one_icon_share_it_and_programs_keep_their_own() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = |name: &str| {
+            let path = dir.path().join(name);
+            std::fs::write(&path, name).unwrap();
+            path
+        };
+        let icons = Arc::new(CountingIcons::default());
+        let shared = Shared {
+            data: None,
+            system_folder: Some(dir.path().join(SYSTEM_ICONS_DIR)),
+            network: None,
+            changed: Arc::new(|| {}),
+            system_icons: Mutex::new(icons.clone()),
+            applications: Mutex::new(None),
+            state: Mutex::default(),
+        };
+        let asked = || icons.0.load(std::sync::atomic::Ordering::SeqCst);
+
+        let first = shared.extract(&file("a.go")).unwrap();
+        assert_eq!(shared.extract(&file("b.GO")).unwrap(), first);
+        assert_eq!(shared.extract(&file("c.go")).unwrap(), first);
+        assert_eq!(asked(), 1);
+
+        let one = shared.extract(&file("one.exe")).unwrap();
+        let two = shared.extract(&file("two.exe")).unwrap();
+        assert_ne!(one, two);
+        shared.extract(&file("Editor.lnk")).unwrap();
+        let folder = dir.path().join("folder.go");
+        std::fs::create_dir(&folder).unwrap();
+        assert_ne!(shared.extract(&folder).unwrap(), first);
+        assert_eq!(asked(), 5);
     }
 
     /// A web image an extension built from the user's query fails: the

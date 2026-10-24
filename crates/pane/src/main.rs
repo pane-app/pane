@@ -197,6 +197,9 @@ fn main() {
         // What commands list of the open windows and which one they bring
         // to the front reaches the system's own windows (#263).
         .with_switch_windows(pane_core::switch_windows::native());
+        // The applications' icons kept from before are read now, off this
+        // thread, so root search's first rows draw them at once (#172).
+        launcher.prepare_application_icons();
         // That Pane quit unexpectedly last time, told in root search and on
         // the About page; a clean quit removes this run's marker.
         let launcher = match crash_record.clone() {
