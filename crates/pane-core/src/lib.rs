@@ -99,12 +99,12 @@ pub use launcher::{
     HotkeyOutcome, ItemAction, ItemActions, LOADING_MS, Launcher, LauncherView, ListPresentation,
     LogNotice, MANAGE_EXTENSIONS, OfficialExtension, OpenSubmenu, OperationKind,
     PackagePreferences, PaneForm, PaneFormField, PathPick, PinTarget, PreferenceField,
-    PreferencesTarget, Presentation, ProvidedCapability, Question, QuickSlot, RequirementCycle,
-    RequirementFix, ResultAction, ResultActionItem, ResultActions, Row, RowKind, RowPresentation,
-    Screen, Section, SelectedAction, SettingsTarget, ShortcutCatalog, ShortcutCommand,
-    ShortcutGroup, SlotChange, Status, SubmenuState, UNEXPECTED_QUIT, Unavailable, UnboundShortcut,
-    UnmetRequirement, UpdateChecks, UpdateHold, UpdateResult, UpdateResults, UpdateResultsAction,
-    answer_sections, root_sections,
+    PreferencesTarget, Presentation, ProvidedCapability, QUIT_PANE, Question, QuickSlot,
+    RequirementCycle, RequirementFix, ResultAction, ResultActionItem, ResultActions, Row, RowKind,
+    RowPresentation, Screen, Section, SelectedAction, SettingsTarget, ShortcutCatalog,
+    ShortcutCommand, ShortcutGroup, SlotChange, Status, SubmenuState, UNEXPECTED_QUIT, Unavailable,
+    UnboundShortcut, UnmetRequirement, UpdateChecks, UpdateHold, UpdateResult, UpdateResults,
+    UpdateResultsAction, answer_sections, root_sections,
 };
 pub use links::LinkOpener;
 pub use operations::{MAX_CALL_DEPTH, MAX_OPERATION_JSON};

@@ -72,6 +72,7 @@ MAPPING = {
     "plus": ("Plus", "O"),
     "reset": ("RotateLeft", "O"),
     "record": ("Keyboard", "O"),
+    "power": ("Power", "O"),
 }
 
 LICENSE = """MIT License

@@ -548,7 +548,8 @@ pub(super) fn kind(entry: &Entry) -> Option<RowKind> {
         | Entry::CheckExtensionUpdates
         | Entry::OpenLogFolder
         | Entry::Manage
-        | Entry::Settings => Some(RowKind::Command),
+        | Entry::Settings
+        | Entry::Quit => Some(RowKind::Command),
         _ => None,
     }
 }

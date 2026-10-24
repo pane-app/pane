@@ -29,6 +29,7 @@ re-run it rather than editing these files.
 | `monitor.svg` | [Monitor](https://reicon.dev/icons/monitor) | Outline |
 | `pause.svg` | [Pause](https://reicon.dev/icons/pause) | Outline |
 | `plus.svg` | [Plus](https://reicon.dev/icons/plus) | Outline |
+| `power.svg` | [Power](https://reicon.dev/icons/power) | Outline |
 | `prompt.svg` | [TerminalSquare](https://reicon.dev/icons/terminal-square) | Outline |
 | `record.svg` | [Keyboard](https://reicon.dev/icons/keyboard) | Outline |
 | `reset.svg` | [RotateLeft](https://reicon.dev/icons/rotate-left) | Outline |

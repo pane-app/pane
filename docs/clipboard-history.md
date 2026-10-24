@@ -603,8 +603,8 @@ waited, since a failure to write is reported to them.
 
 What waits is written first on:
 
-- a clean quit (the tray's or menu bar's Quit, closing the launcher's
-  window);
+- a clean quit (the tray's or menu bar's Quit, root search's Quit Pane,
+  closing the launcher's window);
 - the system ending the session (`WM_ENDSESSION` on Windows, the
   termination notification on macOS, SIGTERM, SIGHUP or SIGINT on Linux
   and macOS);
