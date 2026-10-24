@@ -569,6 +569,26 @@ failed.
 
 ## Updating Pane itself
 
+> **Being replaced.** [ADR 0050](adr/0050-pane-downloads-its-updates-by-itself-and-restarts-into-them.md)
+> (accepted 2026-10-24) makes Pane update the way Raycast does:
+>
+> - it checks at start, every 4 hours, and when the launcher opens after
+>   a stale check, remembering the last check and its `ETag` across
+>   restarts;
+> - it downloads and verifies a newer release in the background without
+>   asking;
+> - it lists **Restart to Update Pane** first in root search, with a
+>   toast;
+> - Enter swaps the program and Pane starts the new version by itself;
+> - after the restart, **What's New in Pane <version>** shows the
+>   release notes for a day;
+> - **Check for Pane Updates** checks at once.
+>
+> This supersedes "Pane never downloads, installs or restarts itself
+> unprompted" (US76, decision 17, Q38) and the once-per-start check
+> below. Until the build lands, the rest of this section describes
+> Pane 0.1.1, and each part is rewritten as its piece ships.
+
 Pane checks its GitHub releases for a newer version of itself when it
 starts and tells the user, who alone chooses whether to download and
 install it. Pane never downloads, installs or restarts itself unprompted
@@ -1150,14 +1170,17 @@ with `&`).
 
 ### Updates
 
-- The update's cadence is provisional. Pane checks when it starts and at
-  no interval; how often a running Pane rechecks (and whether a check
-  that failed retries quietly) is a choice recorded for the user.
-  Extension updates and application updates stay separate, as the
-  specification requires. Extension updates have their own controls (npm
-  packages update automatically since #49, tracked Git branches since
-  #50); the application update has none, only the user's choice, every
-  time.
+- The update's cadence is decided:
+  [ADR 0050](adr/0050-pane-downloads-its-updates-by-itself-and-restarts-into-them.md)
+  checks at start, every 4 hours and when the launcher opens after a
+  stale check, and a background check that fails retries quietly at the
+  next one. Until that is built, Pane 0.1.1 checks when it starts and at
+  no interval.
+  Extension updates and application updates stay separate. Extension
+  updates have their own controls (npm packages update automatically
+  since #49, tracked Git branches since #50). The application update
+  downloads by itself under ADR 0050, but is installed only by the
+  user's Enter on Restart to Update Pane.
 - Every system's wiring exists. The check, download, verification and
   swap are platform-independent `pane-core` code, and the Windows, macOS
   and Linux builds each wire them to their own program. The swap is
