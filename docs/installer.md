@@ -1010,7 +1010,8 @@ with `&`).
   five that run everywhere on Linux and macOS, all eight on Windows) and
   answers "6*7" with 42. The smoke's own setup clones the repositories at
   those commits and serves them on 127.0.0.1, so the Pane under test
-  reaches no network address.
+  reaches no network address for them (the calculator's own refresh
+  still fetches its exchange rates from the web, #475).
 
   A helper running from an acquired revision is `installer.rs`'s, above;
   the smokes run the helper sample installed with `--install`. The
