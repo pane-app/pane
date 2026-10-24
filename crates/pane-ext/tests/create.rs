@@ -34,7 +34,7 @@ fn pack(destination: &Path) -> PathBuf {
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
-    let tarball = destination.join("pane-app-create-0.1.0.tgz");
+    let tarball = destination.join("pane-app-create-0.1.1.tgz");
     assert!(tarball.is_file(), "npm packed no {}", tarball.display());
     tarball
 }
