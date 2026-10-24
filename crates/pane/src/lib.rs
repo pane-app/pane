@@ -148,8 +148,8 @@ pub const APP_ID: &str = "pane";
 /// The committed pins name the eight repositories under
 /// `https://github.com/pane-app/<id>`, each at the commit of its
 /// repository's release for extension API 0.2 (ADR 0046), built from the
-/// published `pane-extension` crate (#287) — v0.6.3 for the calculator
-/// (#472), v0.6.1 for applications and quicklinks, v0.9.1 for files,
+/// published `pane-extension` crate (#287) — v0.6.4 for the calculator
+/// (#472, #475), v0.6.1 for applications and quicklinks, v0.9.1 for files,
 /// v0.7.1 for the clipboard history (#279, #282), v0.3.2 for Run and
 /// v0.2.2 for System Commands (#471), and v0.2.1 for Switch Windows
 /// (#301). A release's pins are what a fresh
