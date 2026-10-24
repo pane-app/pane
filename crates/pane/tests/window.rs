@@ -863,9 +863,10 @@ fn the_focused_submit_button_submits_with_space(cx: &mut TestAppContext) {
     open_form(&window, cx);
     cx.simulate_input("Ada");
 
-    // Tab through the form's controls to its submit button: Space on the
-    // focused button submits, as Enter does from a field.
-    for _ in 0..9 {
+    // Tab through the form's controls to its submit button (past the file
+    // picker's "Choose…", #497): Space on the focused button submits, as
+    // Enter does from a field.
+    for _ in 0..10 {
         cx.simulate_keystrokes("tab");
     }
     assert_eq!(focused_label(cx).as_deref(), Some("Greet"));
