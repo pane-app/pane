@@ -91,6 +91,10 @@ fn an_alias_and_a_fallback_set_in_the_window_send_the_typed_text_to_the_command(
     let view = press_enter_on(&window, cx, "Alias for Echo");
     assert_eq!(view.title, "Alias for Echo");
     assert!(matches!(view.screen, Screen::PaneForm(_)));
+    // Pane's own form has no search bar: its top bar names it, with the
+    // back button (#482).
+    assert!(cx.debug_bounds("search-back").is_some());
+    assert!(a11y::headings(cx).contains(&"Alias for Echo".to_owned()));
     cx.simulate_input("ec");
     cx.simulate_keystrokes("enter");
     // The outcome is a toast in the footer, not the status line (#141).

@@ -3343,7 +3343,9 @@ impl Render for LauncherWindow {
         // form or a designed view of it) nor the extension list the tests
         // show (Pane's own extensions are managed in Settings): they start
         // with their content, as Raycast's do, and the footer's left names
-        // the open command instead (#162). The core's own screens (a
+        // the open command instead (#162). A form's or a designed view's
+        // content has the top bar above it, its search bar's place (#482),
+        // drawn with the body below. The core's own screens (a
         // package's preview, a confirmation, the details and hotkey
         // screens) keep their heading, which says what they are about. The
         // heading and the footer's command are computed before the body
@@ -3372,8 +3374,13 @@ impl Render for LauncherWindow {
         // above the results and outside the moving area, so the field
         // never moves while the list below it arrives.
         let body = match view.screen {
+            // A pushed view with no search bar has a top bar in its place
+            // (#482): the back button and the view's title, above the
+            // content that arrives.
             Screen::PaneForm(form) => {
-                motion::arriving(self.render_pane_form(form, cx), arriving).into_any_element()
+                let form =
+                    motion::arriving(self.render_pane_form(form, cx), arriving).into_any_element();
+                self.render_top_bar_view(view.title.clone(), loading.bar, form, cx)
             }
             // A designed view whose tree names a List or Grid: the
             // header's search field above the launcher's own rows list (or
@@ -3394,8 +3401,11 @@ impl Render for LauncherWindow {
                     )
                     .into_any_element()
                 }
-                None => motion::arriving(self.render_designed_view(designed, cx), arriving)
-                    .into_any_element(),
+                None => {
+                    let tree = motion::arriving(self.render_designed_view(designed, cx), arriving)
+                        .into_any_element();
+                    self.render_top_bar_view(view.title.clone(), loading.bar, tree, cx)
+                }
             },
             // While the Actions panel is open, its dimmer lies over the
             // results — between the search header and the footer — and

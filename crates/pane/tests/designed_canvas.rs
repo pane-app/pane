@@ -225,16 +225,19 @@ fn the_canvas_is_one_node_with_a_role_a_label_and_a_value(cx: &mut TestAppContex
     );
     // The canvas, the tree's column, the menu button, the window's scroll
     // container, the status line, the announcer and the window, as the
-    // window's own count of a designed view reads them (#121): the
-    // drawing adds no nodes of its own beside its one canvas node.
+    // window's own count of a designed view reads them (#121), and the
+    // top bar's back button and heading (#482): the drawing adds no
+    // nodes of its own beside its one canvas node.
     let mut sorted = roles.clone();
     sorted.sort();
     assert_eq!(
         sorted,
         [
             "Button",
+            "Button",
             "GenericContainer",
             "Group",
+            "Heading",
             "Label",
             "Slider",
             "Status",

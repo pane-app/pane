@@ -460,7 +460,8 @@ Every node has a `type`, and may have:
   and ignored on any other node. It is the screen's title, shown where a
   screen's title is: the footer's left names it as it names a custom
   view's, and the search header, once the List's search field owns it
-  (#240).
+  (#240), or, on a view with no List or Grid, the top bar beside its
+  back button (#482), which names the command when the tree names none.
 - `focus`: `true` asks for the keyboard. An ask that is new (the tree the
   user saw did not name it) focuses the node, so a view's opening ask is
   an auto-focus and a later one a focus moved from code. An unchanged ask

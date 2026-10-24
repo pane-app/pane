@@ -583,6 +583,45 @@ impl LauncherWindow {
         self.render_designed_tree(&form.tree, render, cx)
     }
 
+    /// A pushed view with no search bar of its own — a designed view
+    /// whose tree names no List or Grid (a form, a detail, a canvas), or
+    /// a form Pane itself asks — under its top bar (#482): the back
+    /// button and `title`, the view's navigation title, or the open
+    /// command's title when its tree names none, as Raycast's top bar
+    /// names it. `body` is the content that arrives with a view
+    /// transition, wrapped by the caller; the bar above it stays put, as
+    /// the search header does on the search screens. `loading` is the
+    /// loading bar's frame, drawn along the bar's rule as along the
+    /// search header's (#248): a form's submission running past its
+    /// threshold shows it there.
+    pub(crate) fn render_top_bar_view(
+        &self,
+        title: String,
+        loading: Option<crate::features::loading::LoadingBar>,
+        body: AnyElement,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let title = if title.is_empty() {
+            self.launcher.open_command_title().unwrap_or_default()
+        } else {
+            title
+        };
+        let theme = crate::settings::launcher_visuals(cx).theme;
+        div()
+            .flex_1()
+            .min_h(px(0.))
+            .flex()
+            .flex_col()
+            .child(crate::features::root_search::top_bar(
+                title.into(),
+                loading,
+                &theme,
+                cx,
+            ))
+            .child(body)
+            .into_any_element()
+    }
+
     /// One designed tree, drawn with the keyed state the window keeps for
     /// it.
     fn render_designed_tree(
@@ -613,6 +652,7 @@ impl LauncherWindow {
         let geometry = &theme.geometry;
         div()
             .id("designed-view")
+            .debug_selector(|| "designed-view".into())
             .key_context("DesignedView")
             .flex_1()
             .min_h(px(0.))
