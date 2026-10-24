@@ -33,6 +33,22 @@
 //! from the presentation on screen. Nothing resizes the window, and
 //! reduced motion draws every switch settled.
 //!
+//! ## Keyboard
+//!
+//! The sidebar's list has the keyboard when the window opens, and draws
+//! Pane's focus ring on its selected entry while it does. Up and Down
+//! walk its entries; Enter or Right go into the selected page, to its
+//! first control. Ctrl+Tab and Ctrl+Page Down select the next entry, and
+//! Ctrl+Shift+Tab and Ctrl+Page Up the previous, from anywhere in the
+//! window, giving the keyboard back to the sidebar; a listening recorder
+//! takes them as the keys it records. Escape is layered, the innermost
+//! thing first: a control that takes it itself (a recorder, a select, the
+//! search field, an open menu) keeps it, an Extensions flow screen takes it
+//! next, then any other control gives the keyboard back to the sidebar,
+//! and only from the sidebar does it close the window (where the Keyboard
+//! page says Escape closes Settings). Raycast documents no page-switching
+//! keys, so the chords are the platforms' tabbed-window ones (#495).
+//!
 //! ## Page registration
 //!
 //! A page is one [`Page`]: its sidebar entry (title, description, glyph),
@@ -85,6 +101,7 @@ actions!(
     [
         NextSection,
         PreviousSection,
+        EnterPage,
         CloseSettings,
         EscapeSettings,
         Press
@@ -94,6 +111,11 @@ actions!(
 /// The id of the window's key context, which the sidebar's keys are bound
 /// to.
 const CONTEXT: &str = "Settings";
+
+/// The key context of the sidebar's sections list, while it has the
+/// keyboard: Up and Down walk its entries, and Enter or Right go into the
+/// selected page.
+const SECTIONS: &str = "SettingsSections";
 
 /// The key context of a control a page made [`pressable`] — a switch, a
 /// button, a row that opens something — while it has the keyboard: Enter
@@ -106,23 +128,34 @@ const CONTROL: &str = "SettingsControl";
 pub(crate) const MENU_BUTTON: &str = "SettingsMenuButton";
 
 /// The window's own keys, bound to [`gpui::NoAction`] in a listening
-/// recorder's `context`: the sidebar's Up and Down, the close shortcut and
-/// the find shortcut. Bindings win over a key handler, so without these
-/// the window would act on them; with them, they reach the recorder as the
-/// combination being recorded.
-pub(crate) fn captured_while_recording(context: &'static str) -> [KeyBinding; 4] {
+/// recorder's `context`: the close shortcut, the find shortcut and the
+/// page-switching chords ([`PAGE_KEYS`]). Bindings win over a key handler,
+/// so without these the window would act on them; with them, they reach
+/// the recorder as the combination being recorded.
+pub(crate) fn captured_while_recording(context: &'static str) -> Vec<KeyBinding> {
     let (close, find) = if cfg!(target_os = "macos") {
         ("cmd-w", "cmd-f")
     } else {
         ("ctrl-w", "ctrl-f")
     };
-    [
-        KeyBinding::new("down", gpui::NoAction, Some(context)),
-        KeyBinding::new("up", gpui::NoAction, Some(context)),
-        KeyBinding::new(close, gpui::NoAction, Some(context)),
-        KeyBinding::new(find, gpui::NoAction, Some(context)),
-    ]
+    [close, find]
+        .into_iter()
+        .chain(PAGE_KEYS.iter().map(|(keys, _)| *keys))
+        .map(|keys| KeyBinding::new(keys, gpui::NoAction, Some(context)))
+        .collect()
 }
+
+/// The chords that select the next or previous sidebar entry from anywhere
+/// in the window, `true` for the next: Ctrl+Tab and Ctrl+Shift+Tab, and
+/// Ctrl+Page Down and Ctrl+Page Up, as a tabbed window's are on every
+/// platform. Raycast documents no page-switching keys, so these follow
+/// the platforms' norm.
+const PAGE_KEYS: [(&str, bool); 4] = [
+    ("ctrl-tab", true),
+    ("ctrl-shift-tab", false),
+    ("ctrl-pagedown", true),
+    ("ctrl-pageup", false),
+];
 
 /// Whether `keystroke`, pressed while a recorder listens, is the
 /// recorder's clearing key (#494): Backspace with no modifier held, as
@@ -135,15 +168,25 @@ pub(crate) fn clears(keystroke: &gpui::Keystroke, delete: bool) -> bool {
 }
 
 /// Registers the Settings window's key bindings: the sidebar's navigation
-/// keys, the window's focus traversal and the platform's close-window
-/// shortcut, which apply only while the Settings window is focused. Enter
-/// is left unbound: the sidebar's selection already shows the page Enter
-/// would choose, so the key does nothing, and later pages' controls bind
-/// it for their own submitting.
+/// keys, the page-switching chords, the window's focus traversal and the
+/// platform's close-window shortcut, which apply only while the Settings
+/// window is focused.
 pub(crate) fn bind_keys(cx: &mut App) {
+    cx.bind_keys(PAGE_KEYS.iter().map(|&(keys, next)| {
+        if next {
+            KeyBinding::new(keys, NextSection, Some(CONTEXT))
+        } else {
+            KeyBinding::new(keys, PreviousSection, Some(CONTEXT))
+        }
+    }));
     cx.bind_keys([
-        KeyBinding::new("down", NextSection, Some(CONTEXT)),
-        KeyBinding::new("up", PreviousSection, Some(CONTEXT)),
+        KeyBinding::new("down", NextSection, Some(SECTIONS)),
+        KeyBinding::new("up", PreviousSection, Some(SECTIONS)),
+        // The sidebar's selection already shows the page, so Enter and
+        // Right on it go into the page: its first control takes the
+        // keyboard.
+        KeyBinding::new("enter", EnterPage, Some(SECTIONS)),
+        KeyBinding::new("right", EnterPage, Some(SECTIONS)),
         // Tab and Shift-Tab move through the pages' controls, as the
         // launcher window's do through its: the pages' fields and buttons
         // are tab stops (the Shortcuts page's filter, group headers and
@@ -166,8 +209,8 @@ pub(crate) fn bind_keys(cx: &mut App) {
         // Escape closes the window where the Keyboard page says so; a
         // control that takes Escape itself (a recorder, a select, the
         // search field, an open menu) binds it deeper and keeps it, and a
-        // flow screen on the Extensions group takes it before the window
-        // closes (see `escape_settings`).
+        // flow screen on the Extensions group, then any other control,
+        // takes it before the window closes (see `escape_settings`).
         KeyBinding::new("escape", EscapeSettings, Some(CONTEXT)),
         // A pressable control: a switch, a button, a row (see
         // [`pressable`]).
@@ -213,8 +256,18 @@ pub struct SettingsWindow {
     /// only.
     #[cfg(any(test, debug_assertions))]
     arriving: Option<(f32, f32)>,
+    /// Whether the last frame drew the focus ring on the sidebar's
+    /// selected entry (see [`SettingsWindow::sidebar_ringed`]). Test and
+    /// debug builds only.
+    #[cfg(any(test, debug_assertions))]
+    ringed: bool,
     /// The sidebar's focus, which is the window's keyboard focus.
     focus: FocusHandle,
+    /// Where the selected page starts in the window's tab order: an empty
+    /// mark before the page's content, never a tab stop itself. Going into
+    /// the page ([`EnterPage`]) moves on from it to the page's first
+    /// control.
+    page_start: FocusHandle,
     /// The About page's state, owned by its module.
     about: about::State,
     /// The Appearance page's state (its segments' focus), owned by its
@@ -326,7 +379,10 @@ impl SettingsWindow {
             drawn_section: None,
             #[cfg(any(test, debug_assertions))]
             arriving: None,
+            #[cfg(any(test, debug_assertions))]
+            ringed: false,
             focus,
+            page_start: cx.focus_handle(),
             about: about::State::default(),
             appearance: appearance::State::new(cx),
             general: general::State::new(cx),
@@ -378,25 +434,54 @@ impl SettingsWindow {
         };
         self.selected = page;
         self.extension = extension;
+        // A menu the Extensions group had open closes with its page.
+        extensions::close_menus(self, cx);
         // Page navigation leaves the search: a query showing clears, so
         // the sidebar returns to the sections as the page changes.
         self.clear_search(cx);
         cx.notify();
     }
 
-    fn next_section(&mut self, _: &NextSection, _: &mut Window, cx: &mut Context<Self>) {
+    /// The sidebar's Down, and Ctrl+Tab or Ctrl+Page Down anywhere in the
+    /// window: the next entry's page shows, and the sidebar takes the
+    /// keyboard, so the keys that follow walk the sidebar or go into the
+    /// page.
+    fn next_section(&mut self, _: &NextSection, window: &mut Window, cx: &mut Context<Self>) {
         let position = self.sidebar_position();
         if position + 1 < self.sidebar_order().len() {
             self.select_position(position + 1, cx);
         }
+        window.focus(&self.focus, cx);
     }
 
-    fn previous_section(&mut self, _: &PreviousSection, _: &mut Window, cx: &mut Context<Self>) {
+    /// The sidebar's Up, and Ctrl+Shift+Tab or Ctrl+Page Up anywhere in
+    /// the window, as [`Self::next_section`] does the other way.
+    fn previous_section(
+        &mut self,
+        _: &PreviousSection,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let position = self.sidebar_position();
         if position > 0 {
-            // As the sections' Down key does.
             self.select_position(position - 1, cx);
         }
+        window.focus(&self.focus, cx);
+    }
+
+    /// Enter or Right on the sidebar: the keyboard goes into the selected
+    /// page, to its first control — the tab stop after the page's start
+    /// in the window's tab order. A page with no control the keyboard
+    /// reaches leaves it on the sidebar.
+    fn enter_page(&mut self, _: &EnterPage, window: &mut Window, cx: &mut Context<Self>) {
+        window.focus(&self.page_start, cx);
+        window.focus_next(cx);
+        // With no tab stop after the page's start, the order wrapped round
+        // to the window's first, the search field above the sidebar.
+        if self.page_start.is_focused(window) || self.search.focused(window, cx) {
+            window.focus(&self.focus, cx);
+        }
+        cx.notify();
     }
 
     fn focus_next(&mut self, _: &FocusNext, window: &mut Window, cx: &mut Context<Self>) {
@@ -426,6 +511,15 @@ impl SettingsWindow {
     #[doc(hidden)]
     pub fn game_record_busy(&self) -> bool {
         self.keyboard.game.busy
+    }
+
+    /// Test support: whether the last frame drew Pane's focus ring on the
+    /// sidebar's selected entry, as it does while the sidebar has the
+    /// keyboard. Test and debug builds only.
+    #[cfg(any(test, debug_assertions))]
+    #[doc(hidden)]
+    pub fn sidebar_ringed(&self) -> bool {
+        self.ringed
     }
 
     fn focus_previous(&mut self, _: &FocusPrevious, window: &mut Window, cx: &mut Context<Self>) {
@@ -525,12 +619,18 @@ impl SettingsWindow {
     /// Escape, where no control took it: on the Extensions group, a flow
     /// screen it shows (a confirmation, a preview, the update results)
     /// takes it first — the innermost thing closes first, as Raycast's
-    /// Escape dismisses a dialog and not its window (#492). Otherwise it
-    /// closes this window if the Keyboard page's choice says Escape closes
-    /// Settings.
+    /// Escape dismisses a dialog and not its window (#492). Then, from any
+    /// control but the sidebar's list, it returns the keyboard to the
+    /// sidebar (#495). Otherwise it closes this window if the Keyboard
+    /// page's choice says Escape closes Settings.
     fn escape_settings(&mut self, _: &EscapeSettings, window: &mut Window, cx: &mut Context<Self>) {
         if self.pages[self.selected].title == extensions::TITLE && extensions::leave_flow(self, cx)
         {
+            return;
+        }
+        if !self.focus.is_focused(window) {
+            window.focus(&self.focus, cx);
+            cx.notify();
             return;
         }
         if crate::settings::shared(cx)
@@ -552,10 +652,22 @@ impl SettingsWindow {
     /// a query shows, the search's results (see the search module's
     /// docs). The list is the window's keyboard focus, so its keys (see
     /// [`bind_keys`]) drive the window.
-    fn render_sidebar(&mut self, theme: &ui::theme::Theme, cx: &mut Context<Self>) -> Div {
+    fn render_sidebar(
+        &mut self,
+        theme: &ui::theme::Theme,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> Div {
         // While a query shows, the list is the search's results; the
         // search module builds those rows (or its no-results line).
         let searching = self.search.searching(cx);
+        // While the list has the keyboard, its selected entry draws Pane's
+        // focus ring — for the keyboard only, as a control's does.
+        let ring = self.focus.is_focused(window) && window.last_input_was_keyboard();
+        #[cfg(any(test, debug_assertions))]
+        {
+            self.ringed = ring && !searching;
+        }
         let rows: Vec<AnyElement> = if searching {
             search::result_rows(self, theme, cx)
         } else {
@@ -593,6 +705,9 @@ impl SettingsWindow {
                     .aria_label(page.title)
                     .aria_selected(selected)
                     .when(selected, |row| row.aria_active_descendant())
+                    .when(selected && ring, |row| {
+                        row.shadow(ui::controls::focus_ring(theme))
+                    })
                     .on_click(cx.listener(
                         move |this, _: &gpui::ClickEvent, _, cx| {
                             if this.selected != index || this.extension.is_some() {
@@ -611,7 +726,7 @@ impl SettingsWindow {
                     // The group's + menu, and its installed extensions
                     // under it (#168).
                     rows.push(row.children(add.take()).into_any_element());
-                    rows.extend(extensions::sidebar_entries(self, index, theme, cx));
+                    rows.extend(extensions::sidebar_entries(self, index, ring, theme, cx));
                 } else {
                     rows.push(row.into_any_element());
                 }
@@ -625,6 +740,7 @@ impl SettingsWindow {
             .debug_selector(|| "sections".into())
             .overflow_y_scroll()
             .track_scroll(&self.sidebar_scroll)
+            .key_context(SECTIONS)
             .track_focus(&self.focus)
             .role(Role::ListBox)
             .aria_label(if searching {
@@ -632,8 +748,7 @@ impl SettingsWindow {
             } else {
                 "Settings sections"
             })
-            .on_action(cx.listener(Self::next_section))
-            .on_action(cx.listener(Self::previous_section))
+            .on_action(cx.listener(Self::enter_page))
             .children(rows);
         let field = search::field(self, theme, cx);
         let sidebar = settings_shell::sidebar(field, sections, theme);
@@ -706,6 +821,9 @@ impl SettingsWindow {
             .debug_selector(|| "settings-page".into())
             .overflow_y_scroll()
             .track_scroll(self.search.scroll())
+            // The page's start in the tab order, before its content: an
+            // empty mark, so no click lands on it (see `page_start`).
+            .child(div().absolute().size_0().track_focus(&self.page_start))
             .child(motion::arriving_page(content, arriving))
     }
 }
@@ -726,6 +844,8 @@ impl Render for SettingsWindow {
         // by [`compose`].
         let root = div()
             .key_context(CONTEXT)
+            .on_action(cx.listener(Self::next_section))
+            .on_action(cx.listener(Self::previous_section))
             .on_action(cx.listener(Self::focus_next))
             .on_action(cx.listener(Self::focus_previous))
             .on_action(cx.listener(Self::search_focus))
@@ -746,7 +866,7 @@ impl Render for SettingsWindow {
         compose(
             root,
             title,
-            self.render_sidebar(&theme, cx),
+            self.render_sidebar(&theme, window, cx),
             self.render_page(&theme, window, cx),
             &theme,
             material,

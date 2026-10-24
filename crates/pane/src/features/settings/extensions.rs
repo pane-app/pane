@@ -828,7 +828,7 @@ fn choose(
 }
 
 /// Closes whichever menu is open.
-fn close_menus(this: &mut SettingsWindow, cx: &mut Context<SettingsWindow>) {
+pub(super) fn close_menus(this: &mut SettingsWindow, cx: &mut Context<SettingsWindow>) {
     this.extensions.menu = false;
     this.extensions.adding = false;
     cx.notify();
@@ -1043,10 +1043,12 @@ fn popover(
 /// own entry (`group`, its index among the pages): each its icon, its
 /// title, the word Official on one of Pane's own, and the mark that needs
 /// saying (a word: Paused, Broken, Updating), selected while its page
-/// shows.
+/// shows, and ringed then too where `ring` says the sidebar has the
+/// keyboard.
 pub(super) fn sidebar_entries(
     this: &SettingsWindow,
     group: usize,
+    ring: bool,
     theme: &Theme,
     cx: &mut Context<SettingsWindow>,
 ) -> Vec<AnyElement> {
@@ -1062,19 +1064,20 @@ pub(super) fn sidebar_entries(
             // A long group draws only the entries near the sidebar's view,
             // and the selected one always (#165).
             entries.row(listed, key.clone(), selected, &this.sidebar_scroll, || {
-                sidebar_entry_of(this, index, package, selected, theme, cx)
+                sidebar_entry_of(this, index, package, selected, selected && ring, theme, cx)
             })
         })
         .collect()
 }
 
 /// The sidebar entry of the installed `package`, the `index`th, selected
-/// while its page shows.
+/// while its page shows, with the focus ring where `ring` says.
 fn sidebar_entry_of(
     this: &SettingsWindow,
     index: usize,
     package: InstalledPackage,
     selected: bool,
+    ring: bool,
     theme: &Theme,
     cx: &mut Context<SettingsWindow>,
 ) -> AnyElement {
@@ -1107,6 +1110,7 @@ fn sidebar_entry_of(
     .aria_label(label)
     .aria_selected(selected)
     .when(selected, |row| row.aria_active_descendant())
+    .when(ring, |row| row.shadow(controls::focus_ring(theme)))
     .on_click(cx.listener(move |this, _: &gpui::ClickEvent, _, cx| {
         this.show_extension(Some(key.clone()), cx);
     }))

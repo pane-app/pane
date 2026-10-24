@@ -794,6 +794,41 @@ fn escape_cancels_the_recorder_and_captured_keys_do_not_act(cx: &mut TestAppCont
 }
 
 #[gpui::test]
+fn the_page_chords_reach_a_listening_recorder(cx: &mut TestAppContext) {
+    let data = tempfile::tempdir().unwrap();
+    let system = Arc::new(FakeSystem::default());
+    let launcher = Launcher::new(Runtime::start(), Vec::new()).with_hotkeys(system.clone());
+    init_settings(Some(data.path()), cx);
+    cx.executor().allow_parking();
+    cx.update(pane::bind_keys);
+    let (_window, cx) = cx.add_window_view(|window, cx| LauncherWindow::new(launcher, window, cx));
+    let (_settings, mut settings_cx) = open_settings(cx);
+    settings_cx.run_until_parked();
+
+    // While the recorder listens, the window's page-switching chords are
+    // the keys being recorded: the page stays the General one.
+    click(&mut settings_cx, "open-pane-recorder");
+    settings_cx.run_until_parked();
+    assert!(a11y(&mut settings_cx).contains("Recording; Open Pane with"));
+    settings_cx.simulate_keystrokes("ctrl-pagedown");
+    settings_cx.run_until_parked();
+    assert!(
+        settings_cx.debug_bounds("general").is_some(),
+        "the sidebar did not move to another page"
+    );
+    settings_cx.simulate_keystrokes("escape");
+    settings_cx.run_until_parked();
+    click(&mut settings_cx, "open-pane-recorder");
+    settings_cx.run_until_parked();
+    settings_cx.simulate_keystrokes("ctrl-tab");
+    settings_cx.run_until_parked();
+    assert!(
+        settings_cx.debug_bounds("general").is_some(),
+        "the sidebar did not move to another page"
+    );
+}
+
+#[gpui::test]
 fn resetting_returns_to_the_default_through_the_same_checks(cx: &mut TestAppContext) {
     let data = tempfile::tempdir().unwrap();
     let system = Arc::new(FakeSystem::default());

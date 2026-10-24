@@ -215,6 +215,11 @@ impl State {
         !self.query.read(cx).as_str().trim().is_empty()
     }
 
+    /// Whether the search field has the keyboard.
+    pub(crate) fn focused(&self, window: &Window, cx: &App) -> bool {
+        self.query.focus_handle(cx).is_focused(window)
+    }
+
     /// The page area's scroll container, which the reveal scrolls: the
     /// window's page render tracks it.
     pub(crate) fn scroll(&self) -> &ScrollHandle {
