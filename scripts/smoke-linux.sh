@@ -2497,8 +2497,9 @@ export PANE_DEFAULTS=$no_default_pins
 # Installing a Pane application update by the user's choice (#56): a
 # second package is built with --package-version 99.0.0, whose program
 # reports 99.0.0 and whose release names it (the two runnable builds
-# the update goes between); the 0.1.0 package the #53 phase built is
-# installed on another clean home, and its Pane, running from
+# the update goes between); the package the #53 phase built, at the
+# version crates/pane/Cargo.toml names, is installed on another clean
+# home, and its Pane, running from
 # ~/.local/bin/pane, is told by the check it makes at start that 99.0.0
 # exists: a row in root search with the version, and a word on the
 # status line. Nothing is downloaded until that row is chosen; the
@@ -2515,7 +2516,8 @@ export PANE_DEFAULTS=$no_default_pins
 # nothing of the update left in the bin folder.
 cargo xtask package-linux --dev --package-version 99.0.0 >/dev/null
 newer=$(ls target/dist/pane-99.0.0-linux-*-dev.tar.gz | head -1)
-older=$(ls target/dist/pane-0.1.0-linux-*-dev.tar.gz | head -1)
+workspace_version=$(sed -n 's/^version = "\(.*\)"$/\1/p' crates/pane/Cargo.toml | head -1)
+older=$(ls target/dist/pane-"$workspace_version"-linux-*-dev.tar.gz | head -1)
 [ -n "$newer" ] && [ -n "$older" ] || { echo "the two packages were not built"; exit 1; }
 update_home=$PWD/$out/update-home
 unpack_old=$PWD/$out/update-unpacked-old
@@ -2531,7 +2533,7 @@ for _ in $(seq 600); do [ -s "$out/update-release-server.port" ] && break; kill 
   || { echo "the update's stand-in for Pane's releases did not start (see $out/update-release-server.log)"; exit 1; }
 tar -xzf "$older" -C "$unpack_old"
 tar -xzf "$newer" -C "$unpack_new"
-# The 0.1.0 package installed on another clean home, as the #53 phase
+# The older package installed on another clean home, as the #53 phase
 # installed it: the install script, the empty PATH, the data under
 # ~/.local/share/pane of that home.
 env -i HOME="$update_home" PATH="/usr/bin:/bin" bash "$unpack_old/pane/install.sh" \

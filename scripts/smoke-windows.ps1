@@ -2862,8 +2862,9 @@ try {
 # Installing a Pane application update by the user's choice (#54): a
 # second package is built with --package-version 99.0.0, whose program
 # reports 99.0.0 and whose release names it (the two runnable builds
-# the update goes between); the 0.1.0 package the #51 phase built is
-# installed on another clean profile, and its Pane, running from
+# the update goes between); the package the #51 phase built, at the
+# version crates/pane/Cargo.toml names, is installed on another clean
+# profile, and its Pane, running from
 # %LOCALAPPDATA%\Pane\pane.exe, is told by the check it makes at start
 # that 99.0.0 exists: a row in root search with the version, and a word on
 # the status line. Nothing is downloaded until that row is chosen; the
@@ -2880,7 +2881,8 @@ try {
 # kept, and with nothing of the update left in the install folder.
 cargo xtask package-windows --dev --package-version 99.0.0
 if ($LASTEXITCODE -ne 0) { throw "the update package was not built" }
-$older = Get-ChildItem "target/dist/pane-0.1.0-windows-*-dev.zip" | Select-Object -First 1
+$workspaceVersion = (Select-String -Path crates/pane/Cargo.toml -Pattern '^version = "(.*)"$').Matches[0].Groups[1].Value
+$older = Get-ChildItem "target/dist/pane-$workspaceVersion-windows-*-dev.zip" | Select-Object -First 1
 $newer = Get-ChildItem "target/dist/pane-99.0.0-windows-*-dev.zip" | Select-Object -First 1
 if (-not $older -or -not $newer) { throw "the two packages were not built" }
 $cleanProfile = Join-Path $OutDir "update-profile"
@@ -2902,7 +2904,7 @@ $realAppData = $env:APPDATA; $realLocal = $env:LOCALAPPDATA; $realPath = $env:PA
 try {
     for ($i = 0; $i -lt 600 -and -not (Test-Path $portFile) -and -not $server.HasExited; $i++) { Start-Sleep -Milliseconds 100 }
     if (-not (Test-Path $portFile)) { throw "the update's stand-in for Pane's releases did not start (see update-release-server.log)" }
-    # The 0.1.0 package installed on another clean profile, as the #51
+    # The older package installed on another clean profile, as the #51
     # phase installed it (nothing is signed, so the policy is bypassed for
     # the one script).
     $env:LOCALAPPDATA = Join-Path $cleanProfile "Local"

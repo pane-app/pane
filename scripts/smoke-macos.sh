@@ -2314,7 +2314,8 @@ export PANE_DEFAULTS=$no_default_pins
 # macOS half of #54): a second package is built with --package-version
 # 99.0.0, whose program reports 99.0.0 and whose release names it for
 # macos-aarch64 (the two runnable builds the update goes between); the
-# 0.1.0 package the #52 phase built is installed on another clean home,
+# package the #52 phase built, at the version crates/pane/Cargo.toml
+# names, is installed on another clean home,
 # and its Pane, running from the Pane.app bundle's own binary
 # (Contents/MacOS/pane — what CFBundleExecutable names, so the swap
 # replaces the binary inside the bundle and the bundle itself stays), is
@@ -2337,7 +2338,8 @@ update_server_pid=
 # whatever order the phases run in.
 trap '[ -n "$pid" ] && kill "$pid" 2>/dev/null; [ -n "$npm_registry_pid" ] && kill "$npm_registry_pid" 2>/dev/null; [ -n "$repository_server_pid" ] && kill "$repository_server_pid" 2>/dev/null; [ -n "$service_pid" ] && kill "$service_pid" 2>/dev/null; [ -n "$release_server_pid" ] && kill "$release_server_pid" 2>/dev/null; [ -n "$update_server_pid" ] && kill "$update_server_pid" 2>/dev/null || true' EXIT
 cargo xtask package-macos --dev --package-version 99.0.0
-older=$(ls target/dist/pane-0.1.0-macos-*-dev.zip | head -1)
+workspace_version=$(sed -n 's/^version = "\(.*\)"$/\1/p' crates/pane/Cargo.toml | head -1)
+older=$(ls target/dist/pane-"$workspace_version"-macos-*-dev.zip | head -1)
 newer=$(ls target/dist/pane-99.0.0-macos-*-dev.zip | head -1)
 [ -n "$older" ] && [ -n "$newer" ] || { echo "the two packages were not built"; exit 1; }
 update_home=$out/update-home
@@ -2352,7 +2354,7 @@ python3 "$(dirname "$0")/release_server.py" target/dist/release "$out/update-rel
 update_server_pid=$!
 for _ in $(seq 600); do [ -s "$out/update-release-server.port" ] && break; kill -0 "$update_server_pid" 2>/dev/null || break; sleep 0.1; done
 [ -s "$out/update-release-server.port" ] || { echo "the update's stand-in for Pane's releases did not start (see $out/update-release-server.log)"; exit 1; }
-# The 0.1.0 package installed on another clean home, as the #52 phase
+# The older package installed on another clean home, as the #52 phase
 # installed it.
 env -i HOME="$update_home" PATH="/usr/bin:/bin" bash "$unpack_old/pane/install.sh" >>"$out/update-install.log" 2>&1 \
   || { echo "the install script failed (see $out/update-install.log)"; exit 1; }
