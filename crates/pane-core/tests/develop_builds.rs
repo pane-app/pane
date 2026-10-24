@@ -20,7 +20,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use futures::executor::block_on;
-use pane_core::develop::{BuildJob, BuildOutcome, Builder, Toolchains};
+use pane_core::develop::{BuildJob, BuildOutcome, Builder, PaneManifest, Toolchains};
 use pane_core::{Launcher, PackageIdentity, Runtime, Status};
 
 #[path = "support/feedback.rs"]
@@ -68,6 +68,18 @@ impl Sample {
         for file in self.files {
             fs::copy(from.join(file), to.join(file)).unwrap();
         }
+        // An icon of its own, as every new extension has (`pane-ext new`
+        // writes `icon.png`): each reload takes the package from a staged
+        // build, which must hold the icon too, or the reload is refused.
+        let mut manifest: serde_json::Value =
+            serde_json::from_slice(&fs::read(to.join("pane.json")).unwrap()).unwrap();
+        manifest["icon"] = "icon.png".into();
+        fs::write(to.join("pane.json"), manifest.to_string()).unwrap();
+        fs::copy(
+            repository().join("guests/packages/sample-icons/icon.png"),
+            to.join("icon.png"),
+        )
+        .unwrap();
         if to.join("Cargo.toml").exists() {
             let guest = repository().join("guests/pane-extension");
             let manifest = fs::read_to_string(to.join("Cargo.toml")).unwrap().replace(
@@ -164,7 +176,7 @@ fn build_once(folder: &Path) {
 fn build_with(toolchains: &Toolchains, folder: &Path) -> tempfile::TempDir {
     let build = toolchains.build_for(folder).unwrap();
     let staging = tempfile::tempdir().unwrap();
-    fs::copy(folder.join("pane.json"), staging.path().join("pane.json")).unwrap();
+    pane_build::stage_package(&PaneManifest, folder, staging.path()).unwrap();
     let job = BuildJob::new(staging.path().to_path_buf());
     let outcome = build.run(&job);
     assert_eq!(outcome, BuildOutcome::Built, "{:#?}", job.output());

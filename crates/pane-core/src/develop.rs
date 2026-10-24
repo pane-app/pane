@@ -33,14 +33,22 @@ impl pane_build::ManifestFiles for PaneManifest {
         Ok(components)
     }
 
-    fn helper_files(&self, folder: &Path) -> Result<Vec<PathBuf>, String> {
+    fn shipped_files(&self, folder: &Path) -> Result<Vec<PathBuf>, String> {
         let (manifest, _) = Manifest::read_parsed(folder).map_err(|error| error.to_string())?;
-        Ok(manifest
+        let mut files: Vec<PathBuf> = manifest
             .helpers
             .iter()
             .filter_map(|helper| helper.for_this_system())
             .map(Path::to_path_buf)
-            .collect())
+            .collect();
+        // The rest of what an install copies, so that a reload from a
+        // staged build finds the icons and assets the package names.
+        files.extend(
+            manifest
+                .shipped_files(folder)
+                .map_err(|error| error.to_string())?,
+        );
+        Ok(files)
     }
 }
 
@@ -448,5 +456,88 @@ mod tests {
         assert!(!staging.join("helpers/other").exists());
         // The build adds the components.
         assert!(!staging.join("command.wasm").exists());
+    }
+
+    /// What `pane-ext new` and Create Extension write: a package whose
+    /// manifest names its icon, `icon.png`.
+    fn package_with_icons(folder: &Path) {
+        std::fs::create_dir_all(folder.join("assets/rows")).unwrap();
+        std::fs::write(
+            folder.join("pane.json"),
+            r#"{ "manifestVersion": 1, "title": "Icons", "apiVersion": "0.2",
+                 "icon": "icon.png",
+                 "commands": [{ "id": "c", "title": "C", "component": "dist/command.wasm",
+                                "icon": { "light": "assets/c.png", "dark": "c-dark.png" } }] }"#,
+        )
+        .unwrap();
+        for file in [
+            "icon.png",
+            "icon@dark.png",
+            "assets/c.png",
+            "assets/rows/one.png",
+            "c-dark.png",
+            "HELP.md",
+            "src/index.ts",
+        ] {
+            let path = folder.join(file);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, file).unwrap();
+        }
+    }
+
+    #[test]
+    fn staging_takes_the_icons_help_and_assets_an_install_copies() {
+        let dir = tempfile::tempdir().unwrap();
+        let folder = dir.path().join("source");
+        package_with_icons(&folder);
+        let staging = dir.path().join("staging");
+        stage_package(&PaneManifest, &folder, &staging).unwrap();
+        for file in [
+            "icon.png",
+            "icon@dark.png",
+            "assets/c.png",
+            "assets/rows/one.png",
+            "c-dark.png",
+            "HELP.md",
+        ] {
+            assert_eq!(
+                std::fs::read_to_string(staging.join(file)).unwrap(),
+                file,
+                "{file}"
+            );
+        }
+        // The sources are the build's, not the package's.
+        assert!(!staging.join("src").exists());
+        // With the component the build adds, the staged folder reads as the
+        // package does: a reload from it is not refused for its icons.
+        std::fs::create_dir_all(staging.join("dist")).unwrap();
+        std::fs::write(staging.join("dist/command.wasm"), b"\0asm").unwrap();
+        Manifest::read(&staging).unwrap();
+        // Without the staged icon it would be refused, saying what is
+        // missing in plain words.
+        std::fs::remove_file(staging.join("icon.png")).unwrap();
+        assert_eq!(
+            Manifest::read(&staging).unwrap_err().to_string(),
+            "Invalid pane.json: it names icon.png as the extension's icon, but there is no \
+             icon.png in the package"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn staging_follows_no_link_among_the_shipped_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let folder = dir.path().join("source");
+        package_with_icons(&folder);
+        let outside = dir.path().join("secret.png");
+        std::fs::write(&outside, b"secret").unwrap();
+        std::fs::remove_file(folder.join("icon.png")).unwrap();
+        std::os::unix::fs::symlink(&outside, folder.join("icon.png")).unwrap();
+        std::os::unix::fs::symlink(&outside, folder.join("assets/linked.png")).unwrap();
+        let staging = dir.path().join("staging");
+        stage_package(&PaneManifest, &folder, &staging).unwrap();
+        assert!(!staging.join("icon.png").exists());
+        assert!(!staging.join("assets/linked.png").exists());
+        assert!(staging.join("assets/c.png").is_file());
     }
 }

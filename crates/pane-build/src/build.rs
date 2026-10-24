@@ -876,10 +876,12 @@ pub fn is_save(path: &Path, build: &dyn Build) -> bool {
 }
 
 /// Stages the package in `folder` into `staging` for a build to add its
-/// components to: its `pane.json`, and the files of the helpers it ships
-/// for this system, which no build makes. A helper file that is not a
-/// regular file (a link) is not copied, so the install checks refuse it as
-/// they would in the source folder.
+/// components to: its `pane.json`, and the files it ships that no build
+/// makes ([`ManifestFiles::shipped_files`]: its helpers' files for this
+/// system, its icons' images, its assets), so that the staged package reads
+/// as the source folder does. A file that is not a regular file (a link) is
+/// not copied, so the install checks refuse it as they would in the source
+/// folder.
 pub fn stage_package(
     manifests: &dyn ManifestFiles,
     folder: &Path,
@@ -887,7 +889,7 @@ pub fn stage_package(
 ) -> std::io::Result<()> {
     std::fs::create_dir_all(staging)?;
     std::fs::copy(folder.join(MANIFEST_FILE), staging.join(MANIFEST_FILE))?;
-    let Ok(files) = manifests.helper_files(staging) else {
+    let Ok(files) = manifests.shipped_files(folder) else {
         // The install checks explain it.
         return Ok(());
     };
@@ -952,7 +954,7 @@ mod tests {
             Ok(vec![PathBuf::from("hello.wasm")])
         }
 
-        fn helper_files(&self, _folder: &Path) -> Result<Vec<PathBuf>, String> {
+        fn shipped_files(&self, _folder: &Path) -> Result<Vec<PathBuf>, String> {
             Ok(Vec::new())
         }
     }

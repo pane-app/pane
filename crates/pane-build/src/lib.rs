@@ -49,9 +49,12 @@ pub trait ManifestFiles: Send + Sync + 'static {
     /// relative to `folder`, or why it cannot be read.
     fn components(&self, folder: &Path) -> Result<Vec<PathBuf>, String>;
 
-    /// The files of the helpers the [`MANIFEST_FILE`] in `folder` ships for
-    /// this system, relative to `folder`, or why it cannot be read.
-    fn helper_files(&self, folder: &Path) -> Result<Vec<PathBuf>, String>;
+    /// The files the package in `folder` ships beside its components, which
+    /// no build makes, relative to `folder`, or why its [`MANIFEST_FILE`]
+    /// cannot be read: what an install copies with the components (the
+    /// files of the helpers it ships for this system, the images its icons
+    /// name, its assets). A file named may be missing.
+    fn shipped_files(&self, folder: &Path) -> Result<Vec<PathBuf>, String>;
 }
 
 /// `path` resolved as a package identity's folder is: canonical, in the

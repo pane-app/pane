@@ -312,14 +312,14 @@ fn an_unknown_icon_name_or_a_missing_image_refuses_the_package_with_the_reason()
             (
                 "command",
                 json!("assets/gone.png"),
-                "Invalid pane.json: the icon of command `icons` names assets/gone.png, which \
-                 is not in the package",
+                "Invalid pane.json: it names assets/gone.png as the icon of command `icons`, \
+                 but there is no assets/gone.png in the package",
             ),
             (
                 "command",
                 json!({"light": "icon.png", "dark": "dark.png"}),
-                "Invalid pane.json: the icon of command `icons` names dark.png, which is not \
-                 in the package",
+                "Invalid pane.json: it names dark.png as the icon of command `icons`, but \
+                 there is no dark.png in the package",
             ),
             (
                 "icon",
