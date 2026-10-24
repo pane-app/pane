@@ -37,7 +37,7 @@ mod setup;
 #[path = "support/wait.rs"]
 mod wait;
 
-use a11y::a11y;
+use a11y::{a11y, focused_label};
 use packages::package;
 use setup::{init_settings, settings_shortcut};
 use wait::until_record_holds;
@@ -831,6 +831,85 @@ fn resetting_returns_to_the_default_through_the_same_checks(cx: &mut TestAppCont
     press(&window, &default, cx);
     cx.run_until_parked();
     assert!(is_active(&handle_of(cx), cx));
+}
+
+#[gpui::test]
+fn backspace_resets_the_recorder_and_reset_is_reached_by_keyboard(cx: &mut TestAppContext) {
+    let data = tempfile::tempdir().unwrap();
+    let system = Arc::new(FakeSystem::default());
+    let launcher = Launcher::new(Runtime::start(), Vec::new()).with_hotkeys(system.clone());
+    init_settings(Some(data.path()), cx);
+    cx.executor().allow_parking();
+    cx.update(pane::bind_keys);
+    let (_window, cx) = cx.add_window_view(|window, cx| LauncherWindow::new(launcher, window, cx));
+    let (_settings, mut settings_cx) = open_settings(cx);
+    settings_cx.run_until_parked();
+    let default = Shortcut::open_pane_default();
+    let recorded = Shortcut::parse("ctrl+alt+b").unwrap();
+
+    // Backspace while the recorder listens at the default: the hotkey
+    // can't be empty, so the recorder says why and keeps listening
+    // (#494). Nothing changed.
+    click(&mut settings_cx, "open-pane-recorder");
+    settings_cx.run_until_parked();
+    settings_cx.simulate_keystrokes("backspace");
+    until_diag(&mut settings_cx, |tree| {
+        tree.contains("The Open Pane hotkey can't be empty")
+    });
+    assert!(a11y(&mut settings_cx).contains("Recording; Open Pane with"));
+    assert_eq!(registered(&system), vec![default.clone()]);
+
+    // Away from the default, Backspace resets to it, as Reset does.
+    settings_cx.simulate_keystrokes("ctrl-alt-b");
+    until_record(&mut settings_cx, data.path(), "ctrl+alt+b");
+    click(&mut settings_cx, "open-pane-recorder");
+    settings_cx.run_until_parked();
+    settings_cx.simulate_keystrokes("backspace");
+    until_record(&mut settings_cx, data.path(), &default.id());
+    assert_eq!(registered(&system), vec![default.clone()]);
+    assert!(
+        !a11y(&mut settings_cx).contains("Recording;"),
+        "the recorder is done"
+    );
+
+    // The Reset button is a tab stop while it is enabled: Tab reaches it
+    // from the sidebar, right after the recorder, and Enter resets,
+    // leaving the keyboard on the recorder.
+    click(&mut settings_cx, "open-pane-recorder");
+    settings_cx.run_until_parked();
+    settings_cx.simulate_keystrokes("ctrl-alt-b");
+    until_record(&mut settings_cx, data.path(), "ctrl+alt+b");
+    assert_eq!(registered(&system), vec![recorded.clone()]);
+    let reset = format!("Reset the Open Pane hotkey to {default}");
+    let mut stops = Vec::new();
+    while focused_label(&mut settings_cx).as_deref() != Some(reset.as_str()) {
+        assert!(stops.len() < 8, "Tab never reached the reset: {stops:?}");
+        settings_cx.simulate_keystrokes("tab");
+        settings_cx.run_until_parked();
+        stops.push(focused_label(&mut settings_cx).unwrap_or_default());
+    }
+    assert!(
+        stops
+            .iter()
+            .rev()
+            .nth(1)
+            .is_some_and(|stop| stop == &format!("Open Pane with {recorded}")),
+        "the reset follows the recorder: {stops:?}"
+    );
+    settings_cx.simulate_keystrokes("enter");
+    until_record(&mut settings_cx, data.path(), &default.id());
+    assert_eq!(registered(&system), vec![default.clone()]);
+    assert_eq!(
+        focused_label(&mut settings_cx),
+        Some(format!("Open Pane with {default}")),
+        "Enter pressed the reset, and the keyboard is on the recorder"
+    );
+
+    // At the default the reset is disabled and no longer a tab stop:
+    // Tab from the recorder moves past it.
+    settings_cx.simulate_keystrokes("tab");
+    settings_cx.run_until_parked();
+    assert_ne!(focused_label(&mut settings_cx), Some(reset));
 }
 
 #[gpui::test]

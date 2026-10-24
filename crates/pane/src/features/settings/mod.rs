@@ -124,6 +124,16 @@ pub(crate) fn captured_while_recording(context: &'static str) -> [KeyBinding; 4]
     ]
 }
 
+/// Whether `keystroke`, pressed while a recorder listens, is the
+/// recorder's clearing key (#494): Backspace with no modifier held, as
+/// Raycast's recorders take it, and Delete too where `delete` says so.
+/// With a modifier held, either is recorded like any other key.
+pub(crate) fn clears(keystroke: &gpui::Keystroke, delete: bool) -> bool {
+    let held = keystroke.modifiers;
+    !(held.control || held.alt || held.shift || held.platform)
+        && (keystroke.key == "backspace" || (delete && keystroke.key == "delete"))
+}
+
 /// Registers the Settings window's key bindings: the sidebar's navigation
 /// keys, the window's focus traversal and the platform's close-window
 /// shortcut, which apply only while the Settings window is focused. Enter
@@ -1007,7 +1017,7 @@ pub(crate) fn pressable(
     focus: &FocusHandle,
     ring: Vec<gpui::BoxShadow>,
     press: impl Fn(&mut SettingsWindow, &mut Window, &mut Context<SettingsWindow>) + 'static,
-    cx: &mut Context<SettingsWindow>,
+    cx: &Context<SettingsWindow>,
 ) -> Stateful<Div> {
     pressable_in(CONTROL, control, focus, ring, press, cx)
 }
@@ -1020,7 +1030,7 @@ pub(crate) fn pressable_in(
     focus: &FocusHandle,
     ring: Vec<gpui::BoxShadow>,
     press: impl Fn(&mut SettingsWindow, &mut Window, &mut Context<SettingsWindow>) + 'static,
-    cx: &mut Context<SettingsWindow>,
+    cx: &Context<SettingsWindow>,
 ) -> Stateful<Div> {
     let press = std::rc::Rc::new(press);
     let on_click = press.clone();

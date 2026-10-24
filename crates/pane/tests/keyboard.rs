@@ -51,7 +51,7 @@ mod setup;
 #[path = "support/wait.rs"]
 mod wait;
 
-use a11y::a11y;
+use a11y::{a11y, focused_label};
 use setup::{
     CTRL, actions_shortcut, actions_shortcut_name, init_settings, settings_shortcut,
     settings_shortcut_name,
@@ -873,11 +873,12 @@ fn a_binding_that_would_take_over_typing_is_refused(cx: &mut TestAppContext) {
     let (_settings, mut settings_cx) = keyboard_page(cx);
     click(&mut settings_cx, "keyboard-next-result");
     settings_cx.run_until_parked();
-    // A plain letter, a plain editing key and the platform's select-all
-    // are all refused: text editing stays owned by the focused field.
+    // A plain letter, an editing key and the platform's select-all are
+    // all refused: text editing stays owned by the focused field. (Plain
+    // Backspace is the recorder's own reset key, #494.)
     for (keystroke, expected) in [
         ("j", "is protected: it types a character"),
-        ("backspace", "is protected: it deletes text"),
+        ("shift-backspace", "is protected: it deletes text"),
         (select_all_shortcut(), "is protected: it selects all text"),
     ] {
         settings_cx.simulate_keystrokes(keystroke);
@@ -968,6 +969,75 @@ fn a_reset_returns_to_the_default_through_the_same_checks(cx: &mut TestAppContex
     assert!(
         record_holds(data.path(), "open-settings", "ctrl-o"),
         "the reset kept nothing"
+    );
+}
+
+#[gpui::test]
+fn backspace_resets_a_recorder_and_reset_is_reached_by_keyboard(cx: &mut TestAppContext) {
+    let data = tempfile::tempdir().unwrap();
+    let (_window, cx) = open_sample(cx, Some(data.path()));
+    let (_settings, mut settings_cx) = keyboard_page(cx);
+
+    // Backspace while a recorder listens at the default: an action can't
+    // be left without a key, so the row says why and keeps listening
+    // (#494).
+    click(&mut settings_cx, "keyboard-back");
+    settings_cx.run_until_parked();
+    settings_cx.simulate_keystrokes("backspace");
+    settings_cx.run_until_parked();
+    let tree = a11y(&mut settings_cx);
+    assert!(
+        tree.contains("Back can't be left without a key. It is already the default, Escape."),
+        "the row says why, {tree}"
+    );
+    assert!(tree.contains("Recording; Back"), "still listening, {tree}");
+
+    // Away from the default, Backspace resets to it, as Reset does.
+    settings_cx.simulate_keystrokes("ctrl-b");
+    until_record(&mut settings_cx, data.path(), "back", "ctrl-b");
+    record(&mut settings_cx, "keyboard-back", "backspace");
+    until_record(&mut settings_cx, data.path(), "back", "escape");
+    assert!(
+        !a11y(&mut settings_cx).contains("Recording;"),
+        "the recorder is done"
+    );
+
+    // With a modifier, Backspace is recorded as before: a chord no field
+    // edits with (Alt+Backspace deletes a word on macOS, Control+Backspace
+    // doesn't).
+    let chord = if cfg!(target_os = "macos") {
+        "ctrl-backspace"
+    } else {
+        "alt-backspace"
+    };
+    record(&mut settings_cx, "keyboard-back", chord);
+    until_record(&mut settings_cx, data.path(), "back", chord);
+
+    // The Reset button is a tab stop while it is enabled: Tab reaches it
+    // right after its recorder, and Enter resets, leaving the keyboard on
+    // the recorder.
+    let reset = "Reset Back to Escape";
+    let mut stops = Vec::new();
+    while focused_label(&mut settings_cx).as_deref() != Some(reset) {
+        assert!(stops.len() < 40, "Tab never reached the reset: {stops:?}");
+        settings_cx.simulate_keystrokes("tab");
+        settings_cx.run_until_parked();
+        stops.push(focused_label(&mut settings_cx).unwrap_or_default());
+    }
+    assert!(
+        stops
+            .iter()
+            .rev()
+            .nth(1)
+            .is_some_and(|stop| stop.starts_with("Back with ")),
+        "the reset follows its recorder: {stops:?}"
+    );
+    settings_cx.simulate_keystrokes("enter");
+    until_record(&mut settings_cx, data.path(), "back", "escape");
+    assert_eq!(
+        focused_label(&mut settings_cx).as_deref(),
+        Some("Back with Escape"),
+        "the keyboard is on the recorder"
     );
 }
 

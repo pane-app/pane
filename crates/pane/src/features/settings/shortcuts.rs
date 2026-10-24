@@ -660,7 +660,8 @@ impl SettingsWindow {
     /// names is the binding to record, as the General page's recorder
     /// takes the Open Pane keys. Keys the window binds (Enter, Space,
     /// Escape, the navigation and traversal keys) never reach here — they
-    /// are bound in the recorder's context and handled above.
+    /// are bound in the recorder's context and handled above. Backspace
+    /// or Delete alone clears the hotkey instead (#494).
     fn shortcuts_hotkey_key_down(
         &mut self,
         event: &KeyDownEvent,
@@ -674,6 +675,23 @@ impl SettingsWindow {
         let keystroke = &event.keystroke;
         let modifiers = keystroke.modifiers;
         cx.stop_propagation();
+        // Backspace or Delete alone clears the hotkey, as Clear does
+        // (#494), the way Raycast's recorders take Backspace. A command
+        // with no hotkey has nothing to clear, so the recorder just stops.
+        if super::clears(keystroke, true) {
+            let recorded = self.launcher.shortcut_catalog().groups.iter().any(|group| {
+                group
+                    .commands
+                    .iter()
+                    .any(|shown| shown.id == command && shown.hotkey.is_some())
+            });
+            if recorded {
+                self.shortcuts_apply_hotkey(&command, None, window, cx);
+            } else {
+                self.shortcuts_cancel_recording(cx);
+            }
+            return;
+        }
         match Shortcut::new(
             modifiers.control,
             modifiers.alt,

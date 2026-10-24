@@ -53,8 +53,12 @@ recorded. A modifier pressed alone is not a key press; on Windows it is a
 tap the recording session takes instead (#260).
 
 To remove a hotkey, use the button beside it ("Clear the hotkey for
-Greeting"). It releases and forgets the hotkey ("Greeting has no hotkey
-now").
+Greeting"), a tab stop that Enter or Space presses, or press Backspace or
+Delete with no modifier while the cell listens, as in Raycast (#494). Either
+way the hotkey is released and forgotten ("Greeting has no hotkey now"). A
+command with no hotkey has nothing to clear, so Backspace just stops the
+recorder. With a modifier held, Delete is recorded like any other key
+(Ctrl+Shift+Delete).
 
 If the record cannot be written, Pane puts back what was last recorded,
 and the status line says "Could not keep the change: …".
@@ -170,7 +174,9 @@ has, is recorded as the modifier, which either side then presses
 side (Right Ctrl).
 
 What the session reports takes the same checks a keystroke does, with the
-same explanations. Escape and Tab still cancel. The session ends when the
+same explanations. Escape and Tab still cancel, and Backspace or Delete
+pressed alone passes to the recorder as its clearing key (#494). The
+session ends when the
 recorder stops listening, the window loses focus or Pane quits.
 
 On macOS and Linux the recorder is unchanged and offers none of the new
@@ -264,7 +270,19 @@ The reset button beside it ("Reset the Open Pane hotkey to …") goes back
 to this system's default, through the same checks: the Windows key alone
 on Windows where the adapter's hook can take it, Ctrl+Alt+Space or
 Option+Space elsewhere. It is enabled only while the hotkey is not the
-default.
+default, and then it is a tab stop after the recorder that Enter or Space
+presses; the keyboard stays on the recorder afterwards (#494).
+
+Backspace while the recorder listens does the same as the reset. The Open
+Pane hotkey can't be empty, since it is how Pane opens, so Backspace can't
+clear it the way it clears a command's hotkey. At the default, the row says
+so ("The Open Pane hotkey can't be empty…") and keeps listening.
+
+The Keyboard page's recorders work the same way. An action can't be left
+without a key, so Backspace resets it to its default ("Back can't be left
+without a key…" at the default). Each Reset is a tab stop while it is
+enabled. Shift+Backspace is still refused as an editing key, and other
+chords with Backspace record as before.
 
 ### Use the Windows key
 
@@ -553,6 +571,8 @@ extension cannot assign, read or declare one (no WIT or manifest change).
   - a failed save rolling the registration back
   - a restart registering the record
   - Escape, and reset
+  - Backspace resetting, or explaining at the default, and Reset reached
+    by Tab and pressed with Enter (#494)
   - the hotkey working while the extension runtime has failed
   - Wayland's explanation on the General page
   - with a fake recording session (#260), the recorder showing "Right
@@ -567,6 +587,8 @@ extension cannot assign, read or declare one (no WIT or manifest change).
   ([`crates/pane/tests/shortcuts.rs`](../crates/pane/tests/shortcuts.rs)),
   likewise:
   - a hotkey recorded inline and cleared
+  - Backspace or Delete alone clearing while the cell listens, and
+    Ctrl+Shift+Delete still recorded (#494)
   - the collisions with another command and with the Open Pane hotkey
     ("… opens Pane itself: …") explained
   - the catalog following the package lifecycle and a restart
@@ -625,7 +647,8 @@ extension cannot assign, read or declare one (no WIT or manifest change).
     release masked after a chord Pane swallowed, a single and a double tap
     of the same modifier each firing where a record holds both, and a
     recording session holding the keys back and reporting chords, taps and
-    double taps
+    double taps, with Backspace and Delete pressed alone passing to the
+    recorder (#494)
 - Game mode
   ([`crates/pane-core/tests/game_mode.rs`](../crates/pane-core/tests/game_mode.rs)
   and the decision's own tests in

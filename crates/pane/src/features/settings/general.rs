@@ -206,16 +206,20 @@ pub(crate) struct State {
     /// The recorder row's focus, held while it listens (and a tab stop
     /// otherwise, so the keyboard reaches the row).
     focus: FocusHandle,
+    /// The recorder's Reset button's focus: a tab stop while the binding
+    /// is not the default, when the reset is enabled (#494).
+    reset_focus: FocusHandle,
 }
 
 impl State {
-    /// The recorder's state, over the window's `cx` (its focus handle).
+    /// The recorder's state, over the window's `cx` (its focus handles).
     pub(crate) fn new(cx: &mut Context<SettingsWindow>) -> State {
         State {
             recording: false,
             rejection: None,
             tray_refusal: None,
             focus: cx.focus_handle().tab_stop(true),
+            reset_focus: cx.focus_handle(),
         }
     }
 }
@@ -283,9 +287,9 @@ fn entries(launcher: &Launcher, cx: &App) -> Vec<search::Entry> {
 
 /// The recorder row takes keyboard focus — it is a tab stop, and Enter
 /// or a click on it starts recording — so a jump to it focuses the row,
-/// ready to record. The reset row and the switches take none (they are
-/// chosen with the pointer, as the Appearance choices are), so a jump
-/// reveals them and the sidebar keeps the focus: `false`.
+/// ready to record. A jump to the reset — a tab stop only while it is
+/// enabled (#494) — or to a switch reveals it, and the sidebar keeps the
+/// focus: `false`.
 fn focus(
     this: &mut SettingsWindow,
     target: &str,
@@ -443,8 +447,8 @@ fn render(
         status,
     };
     // The controls' scroll anchors, which the search's reveal scrolls to
-    // (see the window's render): the reset and the switches take no focus
-    // of their own, so a jump to them reveals them.
+    // (see the window's render): a jump to the reset or a switch reveals
+    // it, and the sidebar keeps the focus.
     let recorder_anchor = this.search_anchor("open-pane-recorder");
     let reset_anchor = this.search_anchor("open-pane-reset");
     let windows_key_anchor = this.search_anchor("use-windows-key");
@@ -452,6 +456,7 @@ fn render(
     let tray_anchor = this.search_anchor("tray-visibility");
     let taskbar_anchor = this.search_anchor("show-taskbar");
     let focus = this.general.focus.clone();
+    let reset_focus = this.general.reset_focus.clone();
     let focused = focus.is_focused(window);
     let recording = this.general.recording;
     let (resettable, windows_key_offered, login_offered, tray_offered, taskbar_offered) = (
@@ -493,20 +498,20 @@ fn render(
                         this.start_recorder(window, cx);
                     }
                 })),
-            GeneralControl::Reset => {
-                // The default is taken per call: the listener outlives this
-                // frame, and it may be invoked again.
-                let default = default.clone();
-                element
-                    .anchor_scroll(Some(reset_anchor.clone()))
-                    // The reset sits inside the recorder: its click is its own.
-                    .on_click(cx.listener(move |this, _: &gpui::ClickEvent, window, cx| {
-                        cx.stop_propagation();
-                        if resettable {
-                            this.apply_open_pane(default.clone(), window, cx);
-                        }
-                    }))
-            }
+            // A button the keyboard reaches while it is enabled (#494):
+            // Enter and Space press it, as a click does.
+            GeneralControl::Reset => super::pressable(
+                element.anchor_scroll(Some(reset_anchor.clone())),
+                &reset_focus.clone().tab_stop(resettable),
+                controls::focus_ring(&theme),
+                |this, window, cx| {
+                    // The reset sits inside the recorder: its press is its
+                    // own.
+                    cx.stop_propagation();
+                    this.reset_open_pane(window, cx);
+                },
+                cx,
+            ),
             GeneralControl::UseWindowsKey => {
                 element
                     .anchor_scroll(Some(windows_key_anchor.clone()))
@@ -978,7 +983,8 @@ impl SettingsWindow {
     /// A key pressed while the recorder listens: the combination it names
     /// is the binding to record. Keys the window binds (Enter, Space,
     /// Escape, the navigation and traversal keys) never reach here — they
-    /// are bound in the recorder's context and handled above.
+    /// are bound in the recorder's context and handled above. Backspace
+    /// alone resets instead (#494, see [`Self::clear_open_pane`]).
     fn recorder_key_down(
         &mut self,
         event: &KeyDownEvent,
@@ -991,6 +997,10 @@ impl SettingsWindow {
         let keystroke = &event.keystroke;
         let modifiers = keystroke.modifiers;
         cx.stop_propagation();
+        if super::clears(keystroke, false) {
+            self.clear_open_pane(window, cx);
+            return;
+        }
         let shortcut = Shortcut::new(
             modifiers.control,
             modifiers.alt,
@@ -1004,6 +1014,41 @@ impl SettingsWindow {
                 self.general.rejection = Some(format!("{problem}."));
                 cx.notify();
             }
+        }
+    }
+
+    /// Backspace while the recorder listens, the key that clears a
+    /// recorder (#494). The Open Pane hotkey cannot be empty — it is how
+    /// Pane opens — so it goes back to the default, as Reset does; where
+    /// it already is the default, the recorder says why nothing changed
+    /// and keeps listening.
+    fn clear_open_pane(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let default = self.launcher.open_pane_fresh_default().shortcut;
+        if crate::settings::shared(cx).read(cx).open_pane() == default {
+            self.general.rejection = Some(format!(
+                "The Open Pane hotkey can't be empty, since it is how Pane opens. It is \
+                 already the default, {default}."
+            ));
+            cx.notify();
+        } else {
+            self.apply_open_pane(default, window, cx);
+        }
+    }
+
+    /// Reset, pressed with Enter or Space or clicked: the Open Pane
+    /// hotkey goes back to the default, through the same checks a
+    /// recording takes. Once it lands the reset is disabled, so the
+    /// keyboard goes to the recorder beside it rather than the sidebar.
+    fn reset_open_pane(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let default = self.launcher.open_pane_fresh_default().shortcut;
+        if crate::settings::shared(cx).read(cx).open_pane() == default {
+            return;
+        }
+        let keyboard = self.general.reset_focus.is_focused(window);
+        self.apply_open_pane(default, window, cx);
+        if keyboard && self.general.rejection.is_none() {
+            let recorder = self.general.focus.clone();
+            window.focus(&recorder, cx);
         }
     }
 

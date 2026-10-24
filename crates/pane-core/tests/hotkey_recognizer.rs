@@ -19,6 +19,8 @@ const G: u32 = 0x47; // 'G'
 const H: u32 = 0x48; // 'H'
 const E: u32 = 0x45; // 'E'
 const ENTER: u32 = 0x0D; // VK_RETURN, shared by the numpad's Enter
+const BACKSPACE: u32 = 0x08; // VK_BACK
+const DELETE: u32 = 0x2E; // VK_DELETE
 
 /// The modifiers as the recognizer's positions order them.
 const CTRL_AT: usize = 0;
@@ -732,6 +734,31 @@ fn a_recording_session_holds_the_keys_back_and_reports_what_was_pressed() {
             Decision::Pass,
             Decision::Pass,
         ]
+    );
+}
+
+#[test]
+fn backspace_or_delete_alone_passes_to_the_recorder_while_recording() {
+    let mut recognizer = Recognizer::default();
+    recognizer.recording(true);
+    // Pressed alone, Backspace and Delete are the recorder's clearing
+    // keys (#494): they pass to the window, press and release, as Escape
+    // and Tab do, and report nothing.
+    for key in [BACKSPACE, DELETE] {
+        assert_eq!(
+            press(&mut recognizer, &[], key),
+            vec![Decision::Pass, Decision::Pass]
+        );
+    }
+    // With a modifier held, each is a chord candidate like any other key.
+    assert_eq!(recognizer.step(event(CONTROL, true)), Decision::Swallow);
+    assert_eq!(
+        recognizer.step(event(DELETE, true)),
+        Decision::Recorded(Recorded::Chord {
+            modifiers: [Some(Side::Left), None, None, None],
+            key: DELETE,
+            numpad: false,
+        })
     );
 }
 

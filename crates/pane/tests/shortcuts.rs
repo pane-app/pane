@@ -1649,6 +1649,70 @@ fn clearing_a_hotkey_by_keyboard_releases_and_forgets_it(cx: &mut TestAppContext
 }
 
 #[gpui::test]
+fn backspace_or_delete_while_recording_clears_the_hotkey(cx: &mut TestAppContext) {
+    let (sources, data) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let hello = hello_package(&sources.path().join("hello"));
+    let hello_id = command_id(&hello);
+    seed(&data, &[], &[(hello_id.clone(), "ctrl+alt+p")]);
+    let (window, settings, hotkeys, cx) = open(cx, &data, &[&hello]);
+    let cleared = Shortcut::parse("ctrl+alt+p").unwrap();
+
+    // Backspace alone while the cell listens clears the hotkey, as Clear
+    // does (#494): released, forgotten, and the cell keeps the focus.
+    let mut settings_cx = record_hotkey(&settings, cx, &hello_id);
+    settings_cx.simulate_keystrokes("backspace");
+    let json = until_text(&mut settings_cx, "Say hello has no hotkey now");
+    assert!(
+        json.contains("Hotkey for Say hello: none"),
+        "the cell shows none, {json}"
+    );
+    let (label, _) = accessibility(&mut settings_cx);
+    assert_eq!(label.as_deref(), Some("Hotkey for Say hello: none"));
+    assert_eq!(
+        hotkeys.registered.lock().unwrap().clone(),
+        vec![Shortcut::open_pane_default()]
+    );
+    assert!(
+        !hotkeys_record(&data).contains("ctrl+alt+p"),
+        "the record was rewritten without it, {}",
+        hotkeys_record(&data)
+    );
+    press(&window, &cleared, cx);
+    let view = settle(&window, cx);
+    assert!(matches!(view.screen, Screen::Root { .. }), "nothing opened");
+
+    // With nothing to clear, Backspace just stops the recorder.
+    let mut settings_cx = record_hotkey(&settings, cx, &hello_id);
+    settings_cx.simulate_keystrokes("backspace");
+    settings_cx.run_until_parked();
+    let (label, _) = accessibility(&mut settings_cx);
+    assert_eq!(label.as_deref(), Some("Hotkey for Say hello: none"));
+
+    // With a modifier held, Delete is recorded like any other key...
+    let mut settings_cx = record_hotkey(&settings, cx, &hello_id);
+    settings_cx.simulate_keystrokes("ctrl-shift-delete");
+    let recorded = Shortcut::parse("ctrl+shift+delete").unwrap();
+    until_text(
+        &mut settings_cx,
+        &format!("Hotkey for Say hello: {recorded}"),
+    );
+    assert!(
+        hotkeys.registered.lock().unwrap().contains(&recorded),
+        "the chord with Delete registered"
+    );
+
+    // ...and Delete alone clears it again.
+    let mut settings_cx = record_hotkey(&settings, cx, &hello_id);
+    settings_cx.simulate_keystrokes("delete");
+    let json = until_text(&mut settings_cx, "Say hello has no hotkey now");
+    assert!(json.contains("Hotkey for Say hello: none"), "{json}");
+    assert_eq!(
+        hotkeys.registered.lock().unwrap().clone(),
+        vec![Shortcut::open_pane_default()]
+    );
+}
+
+#[gpui::test]
 fn a_command_unavailable_here_keeps_its_hotkey_display_only(cx: &mut TestAppContext) {
     let (sources, data) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
     let nowhere = unavailable_package(&sources.path().join("nowhere"));

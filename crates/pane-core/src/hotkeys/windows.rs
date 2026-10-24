@@ -19,7 +19,8 @@
 //! A recorder that listens asks for a recording session
 //! ([`Hotkeys::recording`], #260): the hook then holds every key back
 //! from the system — Escape and Tab excepted, so the recorder's own
-//! cancellation keys work — and reports what the user presses to the
+//! cancellation keys work, and Backspace and Delete pressed alone, its
+//! clearing keys (#494) — and reports what the user presses to the
 //! session, which lasts until the recorder stops listening, a window of
 //! another process comes in front, or Pane quits.
 //!
@@ -1394,7 +1395,9 @@ fn decide(event: &KBDLLHOOKSTRUCT) -> (bool, Option<u32>, bool) {
             if state.recording {
                 // Escape and Tab pass, so the recorder's own cancellation
                 // keys work as they do today; everything else is held
-                // back, and what the session recognizes is posted.
+                // back, and what the session recognizes is posted (the
+                // recognizer passes Backspace and Delete pressed alone,
+                // the recorder's clearing keys, #494).
                 if key.key == VK_ESCAPE.0 as u32 || key.key == VK_TAB.0 as u32 {
                     return Some((false, None, false));
                 }
