@@ -236,6 +236,7 @@ impl DesignedControls {
             entry.render = render;
             entry.key = node.key.clone().unwrap_or_default();
             entry.on_key = node.on_key;
+            entry.arrows = takes_arrows(node);
             let field = matches!(entry.held, Held::Field { .. });
             match &mut entry.held {
                 Held::Field {
@@ -279,6 +280,11 @@ impl DesignedControls {
                     NodeKind::ListDropdown(dropdown) => *on_change = dropdown.on_change,
                     _ => {}
                 },
+                // One tab stop per link the content holds now, by place.
+                Held::Links { focus, urls } => {
+                    *urls = links_of(node);
+                    chip_focuses(focus, urls.len(), cx);
+                }
                 _ => {}
             }
             // The focus and blur events, subscribed while the node names
@@ -402,6 +408,11 @@ pub(crate) struct KeyedState {
     /// The key-event handler the tree names on the node, when it asks for
     /// keys.
     pub(super) on_key: Option<u32>,
+    /// Whether the node, focused, takes the plain arrows for itself: a
+    /// segmented control, a slider, a canvas, a node that asks for keys —
+    /// a screen that is its detail alone scrolls with them otherwise
+    /// (#499).
+    pub(super) arrows: bool,
     /// Whether the node's focus ask was honoured for the tree on screen
     /// (an unchanged ask does not fire again).
     asked: bool,
@@ -419,6 +430,7 @@ impl KeyedState {
             render: 0,
             key: String::new(),
             on_key: None,
+            arrows: false,
             asked: false,
             watching: None,
         }
@@ -433,7 +445,18 @@ impl KeyedState {
             Held::Select { focus, .. } => Some(focus.clone()),
             Held::Tags { focus, .. } => Some(focus.clone()),
             Held::Paths { focus, .. } => Some(focus.clone()),
-            Held::Scroll(_) => None,
+            // A node's links are tab stops inside it, never where the
+            // keyboard lands when the view opens or asks for it.
+            Held::Scroll(_) | Held::Links { .. } => None,
+        }
+    }
+
+    /// The focus of the link at `place` inside the node, when the node
+    /// holds links.
+    pub(super) fn link_focus(&self, place: usize) -> Option<FocusHandle> {
+        match &self.held {
+            Held::Links { focus, .. } => focus.get(place).cloned(),
+            _ => None,
         }
     }
 }
@@ -465,6 +488,9 @@ pub(super) enum HeldKind {
     Paths,
     /// A scroll region.
     Scroll,
+    /// A node whose content holds links: Markdown, a text's linked spans,
+    /// a metadata list's linked values.
+    Links,
 }
 
 /// The keyed state a node's kind holds.
@@ -524,6 +550,15 @@ pub(super) enum Held {
     /// A scroll region: its position, kept by the handle its drawing
     /// tracks.
     Scroll(ScrollHandle),
+    /// The links inside a node's content, each a tab stop of its own, by
+    /// place (#499): a Markdown node's links in reading order, a text's
+    /// spans or a metadata list's rows by index. A Markdown link's address
+    /// is kept beside its focus, for the footer to show while it is
+    /// focused; an extension's own link has none.
+    Links {
+        focus: Vec<FocusHandle>,
+        urls: Vec<Option<String>>,
+    },
 }
 
 impl Held {
@@ -662,6 +697,10 @@ impl Held {
                 }
             }
             HeldKind::Scroll => Held::Scroll(ScrollHandle::new()),
+            HeldKind::Links => Held::Links {
+                focus: Vec::new(),
+                urls: Vec::new(),
+            },
             HeldKind::Tags => {
                 let query = cx.new(|cx| EditableTextState::new(StringStorage::default(), cx));
                 let focus = query.read(cx).focus_handle(cx);
@@ -719,6 +758,7 @@ impl Held {
                 | (Held::Tags { .. }, HeldKind::Tags)
                 | (Held::Paths { .. }, HeldKind::Paths)
                 | (Held::Scroll(_), HeldKind::Scroll)
+                | (Held::Links { .. }, HeldKind::Links)
         )
     }
 }
@@ -869,7 +909,48 @@ fn held(node: &Node) -> Option<HeldKind> {
         {
             Some(HeldKind::Focus)
         }
+        // A Detail's content scrolls, and the keyboard scrolls it (#499).
+        NodeKind::Detail(_) => Some(HeldKind::Scroll),
+        _ if !links_of(node).is_empty() => Some(HeldKind::Links),
         _ => None,
+    }
+}
+
+/// Whether a focused node of this kind takes the plain arrows for itself
+/// (#499): its own keys move it, so they never scroll the screen. A
+/// field's, a select's and a picker's are theirs too, kept by the
+/// window's own check of what edits with its keys.
+fn takes_arrows(node: &Node) -> bool {
+    node.on_key.is_some()
+        || matches!(
+            &node.kind,
+            NodeKind::Segmented(_) | NodeKind::Slider(_) | NodeKind::Canvas(_)
+        )
+}
+
+/// The links inside a node's content, by place, with a Markdown link's
+/// address (#499): a Markdown node's links in reading order; a text's
+/// spans, or a metadata list's rows, one place each when any of them is a
+/// link (the ones that are not keep a focus nothing draws). Empty when
+/// the node holds no link.
+pub(super) fn links_of(node: &Node) -> Vec<Option<String>> {
+    match &node.kind {
+        NodeKind::Markdown(markdown) => super::markdown::link_targets(&markdown.blocks)
+            .into_iter()
+            .map(Some)
+            .collect(),
+        NodeKind::Text(text) => match &text.content {
+            pane_core::TextContent::Spans(spans)
+                if spans.iter().any(|span| span.on_press.is_some()) =>
+            {
+                vec![None; spans.len()]
+            }
+            _ => Vec::new(),
+        },
+        NodeKind::MetadataList(list) if list.items.iter().any(|item| item.on_press.is_some()) => {
+            vec![None; list.items.len()]
+        }
+        _ => Vec::new(),
     }
 }
 

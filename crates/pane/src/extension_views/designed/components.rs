@@ -191,6 +191,7 @@ fn span_run(
     truncate: bool,
     cx: &mut gpui::Context<LauncherWindow>,
 ) -> AnyElement {
+    let text_path = path;
     let path = format!("{path}/{index}");
     let debug = format!("designed-text-{}", short(&span.text));
     if span.on_press.is_none() {
@@ -209,6 +210,8 @@ fn span_run(
         )
         .into_any_element();
     }
+    // The span's own tab stop, by its place in the text (#499).
+    let focus = draw.link_focus(text_path, index);
     link_of(
         span.on_press,
         key,
@@ -216,6 +219,7 @@ fn span_run(
         &path,
         span.color.as_ref(),
         &debug,
+        focus,
         draw,
         cx,
     )
@@ -446,6 +450,7 @@ pub(super) fn link(
         path,
         link.color.as_ref(),
         &debug,
+        draw.focus_of(path),
         draw,
         cx,
     )
@@ -453,7 +458,8 @@ pub(super) fn link(
 
 /// One link, from its parts (a span's, or a metadata row's): raised on
 /// the node with `key` — the text or list the link belongs to, whose
-/// handler the tree names on it.
+/// handler the tree names on it. `focus` is its tab stop: a link node's
+/// own, or the one its text or list keeps for it by place (#499).
 #[allow(clippy::too_many_arguments)]
 fn link_of(
     on_press: Option<u32>,
@@ -462,6 +468,7 @@ fn link_of(
     path: &str,
     color: Option<&Paint>,
     debug: &str,
+    focus: Option<gpui::FocusHandle>,
     draw: &Draw,
     cx: &mut gpui::Context<LauncherWindow>,
 ) -> Stateful<Div> {
@@ -518,7 +525,7 @@ fn link_of(
     let ring = focus_ring(theme);
     element
         .key_context(BUTTON_CONTEXT)
-        .when_some(draw.focus_of(path), |link, focus| {
+        .when_some(focus, |link, focus| {
             link.track_focus(&focus)
                 .focus(move |link| link.shadow(ring))
         })
@@ -1625,6 +1632,7 @@ fn metadata_row(
     cx: &mut gpui::Context<LauncherWindow>,
 ) -> AnyElement {
     let theme = draw.theme;
+    let list_path = path;
     let path = format!("{path}/{index}");
     if item.separator {
         return div()
@@ -1643,6 +1651,8 @@ fn metadata_row(
             &format!("{path}/value"),
             None,
             &format!("designed-link-{}", short(value)),
+            // The row's own tab stop, by its place in the list (#499).
+            draw.link_focus(list_path, index),
             draw,
             cx,
         )

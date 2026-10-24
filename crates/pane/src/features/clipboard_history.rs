@@ -975,6 +975,12 @@ impl LauncherWindow {
                     preview.into_any_element(),
                     &theme,
                 )
+                // Shift+Up and Shift+Down, Shift+Page Up and Shift+Page
+                // Down scroll a long preview (#499).
+                .track_scroll(&self.detail_scroll.region(
+                    &format!("clipboard/{}", record.id),
+                    super::detail_scroll::Keys::Shifted,
+                ))
                 .into_any_element(),
                 split_view::information(rows, &theme),
                 &theme,

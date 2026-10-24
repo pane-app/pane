@@ -669,6 +669,12 @@ impl LauncherWindow {
                     &theme,
                 )
                 .debug_selector(|| "files-preview".into())
+                // The keys scroll it as they do Clipboard History's
+                // (#499).
+                .track_scroll(&self.detail_scroll.region(
+                    &format!("files/{}", details.id),
+                    super::detail_scroll::Keys::Shifted,
+                ))
                 .into_any_element(),
                 split_view::info_section("Metadata", "files", rows, &theme),
                 &theme,

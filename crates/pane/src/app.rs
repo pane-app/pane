@@ -40,6 +40,7 @@ use crate::features::announcer;
 use crate::features::clipboard_history;
 use crate::features::compact_pins;
 use crate::features::confirmation;
+use crate::features::detail_scroll;
 use crate::features::footer_menu;
 use crate::features::held_keys;
 use crate::features::hud;
@@ -110,6 +111,9 @@ pub struct LauncherWindow {
     pub(crate) update_results: Option<update_results::UpdateResultsView>,
     /// The footer toast's focus and time; see [`features::toast`].
     pub(crate) toast: toast::ToastControls,
+    /// The screen's detail region the keyboard scrolls (#499); see
+    /// [`features::detail_scroll`].
+    pub(crate) detail_scroll: detail_scroll::DetailScroll,
     /// What the window's live region says of the selection and the
     /// footer's message (#132); see [`features::announcer`].
     pub(crate) announcer: announcer::Announcer,
@@ -193,6 +197,10 @@ pub struct LauncherWindow {
     /// press from a repeat — sees it (#258); dropped, and so stopped, with
     /// the window.
     _backspace_gate: Subscription,
+    /// Scrolls the screen's detail with its keys ahead of the key bindings
+    /// (#499): a search field's own Shift+Up and Shift+Down would take
+    /// them first. Dropped, and so stopped, with the window.
+    _scroll_gate: Subscription,
     /// Draws the window again now and then while its rows show a date,
     /// keeping it current (#139; see
     /// [`LauncherWindow::keep_dates_current`]).
@@ -313,6 +321,22 @@ impl LauncherWindow {
                 cx.stop_propagation();
             }
         });
+        // The detail's scrolling keys (#499), scrolled here, before any
+        // binding: a key that scrolled is stopped, and one that had
+        // nothing to scroll goes on to the bindings.
+        let scroll_window = window.window_handle();
+        let scrolled = cx.weak_entity();
+        let scroll_gate = cx.intercept_keystrokes(move |event, window, cx| {
+            if window.window_handle() != scroll_window {
+                return;
+            }
+            let acted = scrolled.update(cx, |this, cx| {
+                this.scroll_detail_by_key(&event.keystroke, window, cx)
+            });
+            if acted.unwrap_or(false) {
+                cx.stop_propagation();
+            }
+        });
         let mut this = LauncherWindow {
             launcher,
             focus_handle,
@@ -324,6 +348,7 @@ impl LauncherWindow {
             reveal_after_layout: None,
             jump_reveal: None,
             _backspace_gate: backspace_gate,
+            _scroll_gate: scroll_gate,
             dates: None,
             designed: None,
             designed_search: designed::SearchEvents::default(),
@@ -335,6 +360,7 @@ impl LauncherWindow {
             log: None,
             update_results: None,
             toast: toast::ToastControls::new(cx),
+            detail_scroll: detail_scroll::DetailScroll::default(),
             announcer: announcer::Announcer::default(),
             held: held_keys::HeldKeys::default(),
             arguments: None,
@@ -3136,6 +3162,9 @@ impl Render for LauncherWindow {
         // cleared through the launcher when its time is up (#249).
         let toast = self.footer_toast(&view.status);
         self.time_toast(toast.as_ref(), &view.status, window, cx);
+        // The detail region the keyboard scrolls is the one this frame
+        // draws (#499).
+        self.detail_scroll.start_frame();
         // Pane's Clipboard History and Search Files draw their own split
         // view (#102, #177), with a confirmation the command asks for over
         // it (#146).
@@ -3232,6 +3261,14 @@ impl Render for LauncherWindow {
         // A preview has one or two rows (Install or Update) and more lines
         // to read, which may take more of the window than a confirmation's.
         let details_share = if preview { 0.62 } else { 0.4 };
+        // Shift+Up and Shift+Down, Shift+Page Up and Shift+Page Down
+        // scroll them, the selection staying on the choices (#499).
+        let details_scroll = (confirm && !view.details().is_empty()).then(|| {
+            self.detail_scroll.region(
+                &format!("details/{}", view.title),
+                detail_scroll::Keys::Shifted,
+            )
+        });
         let details: Vec<_> = view
             .details()
             .iter()
@@ -3656,6 +3693,9 @@ impl Render for LauncherWindow {
                                 .max_h(relative(details_share))
                                 .overflow_y_scroll()
                         })
+                        .when_some(details_scroll, |details, handle| {
+                            details.track_scroll(&handle)
+                        })
                         .children(details),
                 )
             })
@@ -3719,10 +3759,13 @@ impl Render for LauncherWindow {
                                     footer::status_message(text, &theme).into_any_element()
                                 }
                                 // At rest: the open Actions panel's hint,
+                                // else the focused link's address (#499),
                                 // else the open command's icon and title
                                 // (#162).
                                 (None, None) => footer::hint_slot(
-                                    self.footer_hint(with_actions, &theme).or(footer_command),
+                                    self.footer_hint(with_actions, &theme)
+                                        .or_else(|| self.footer_link(window, &theme))
+                                        .or(footer_command),
                                     &theme,
                                 )
                                 .into_any_element(),
