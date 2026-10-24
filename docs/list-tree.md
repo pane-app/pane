@@ -374,6 +374,10 @@ drawn bare. The path is absolute, or from `~/`. On Windows a packaged
 application can also be named by `shell:AppsFolder\<id>`.
 
 Pane extracts the icon in the background and keeps it in its own folder.
+On Windows, a file of a type whose files all show one icon is drawn with
+the icon extracted for another file of its type that session. Search Files
+lists many such files at once. Programs, shortcuts, internet shortcuts,
+icon files, management consoles and folders each keep their own icon.
 A path that does not exist shows the fallback. The SDKs' file icon helper
 gives it a document as its fallback.
 

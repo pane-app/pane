@@ -524,6 +524,12 @@ The index is kept in Pane's cache folder, since it can always be rebuilt
 - macOS: `~/Library/Caches/Pane/file-index`
 - Linux: `$XDG_CACHE_HOME/pane/file-index`
 
+The compiled extension code is kept beside it in a folder of its own
+(`code`), since Wasmtime deletes every file it does not recognize in the
+folder its cache is given. Up to Pane 0.1.1 that folder was the cache
+folder itself, and installing or updating an extension deleted the index
+(see [the applications' icon cache](applications.md#the-cache)).
+
 The folder is readable by the user only: mode 0700 (files 0600) on macOS
 and Linux, and on Windows a protected DACL for the user and SYSTEM,
 inherited by its files, as `credentials.json` is written. It is never sent

@@ -40,6 +40,24 @@ static NEXT_TEMPORARY: AtomicU64 = AtomicU64::new(0);
 /// locked, though: when two writers each read, change and write it back, the
 /// later rename wins and the other change is lost.
 pub(crate) fn write_atomically(path: &Path, contents: &[u8], readers: Readers) -> io::Result<()> {
+    replace(path, contents, readers, true)
+}
+
+/// Replaces the file at `path` with `contents` as [`write_atomically`] does,
+/// through a temporary file renamed over it, but flushing nothing to disk:
+/// for a disposable cache Pane rebuilds, such as the icons it extracted,
+/// whose many small writes would each wait for the disk otherwise, behind
+/// whatever else is writing. Readers never see a torn file; after a crash
+/// or a power loss the file may be the old one, the new one, or empty, which
+/// its reader takes as missing.
+pub(crate) fn write_cache_file(path: &Path, contents: &[u8]) -> io::Result<()> {
+    replace(path, contents, Readers::Default, false)
+}
+
+/// Writes `contents` to a new temporary file beside `path`, flushed to disk
+/// if `sync`, and renames it over `path` (flushing the folder too if
+/// `sync`).
+fn replace(path: &Path, contents: &[u8], readers: Readers, sync: bool) -> io::Result<()> {
     let dir = match path.parent() {
         Some(dir) if !dir.as_os_str().is_empty() => dir,
         _ => Path::new("."),
@@ -57,7 +75,9 @@ pub(crate) fn write_atomically(path: &Path, contents: &[u8], readers: Readers) -
     let written = (|| {
         let mut file = create_new(&temporary, readers)?;
         file.write_all(contents)?;
-        file.sync_all()?;
+        if sync {
+            file.sync_all()?;
+        }
         drop(file);
         fs::rename(&temporary, path)
     })();
@@ -65,7 +85,7 @@ pub(crate) fn write_atomically(path: &Path, contents: &[u8], readers: Readers) -
         let _ = fs::remove_file(&temporary);
     }
     written?;
-    sync_dir(dir)
+    if sync { sync_dir(dir) } else { Ok(()) }
 }
 
 /// Creates the file at `path`, which must not exist yet, for writing,

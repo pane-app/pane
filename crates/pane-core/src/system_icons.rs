@@ -88,6 +88,28 @@ mod platform {
     }
 }
 
+/// What a thread extracting icons holds for its whole life. On Windows,
+/// COM: each extraction starts COM for itself, and when it was the only
+/// one to, ending COM after it unloaded every shell handler the icon loaded
+/// (`CoUninitialize` unloads the DLLs the thread loaded through COM), to be
+/// loaded again for the next. Held, an extraction's own COM only counts up
+/// and down. Nothing elsewhere.
+pub(crate) struct ThreadApartment {
+    #[cfg(windows)]
+    _com: Option<crate::windows_shell::Com>,
+}
+
+impl ThreadApartment {
+    /// Holds it on the calling thread until dropped; an extraction without
+    /// it still starts COM for itself.
+    pub(crate) fn hold() -> ThreadApartment {
+        ThreadApartment {
+            #[cfg(windows)]
+            _com: crate::windows_shell::Com::new().ok(),
+        }
+    }
+}
+
 /// `bgra`, rows of premultiplied BGRA pixels as Windows draws them, as
 /// straight-alpha RGBA. A bitmap whose alpha is zero throughout has none,
 /// and is opaque.

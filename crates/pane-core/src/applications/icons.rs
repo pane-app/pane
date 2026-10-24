@@ -32,9 +32,14 @@
 //!   wrote without extraction times is read with every picture old. Files
 //!   the index does not name are removed. It holds at most [`MAX_BYTES`]
 //!   and [`MAX_ICONS`], the least recently drawn going first. Deleting it
-//!   loses nothing but the time to extract the icons again.
-//! - **Refreshing**: one worker thread at low priority extracts a small
-//!   batch at a time ([`BATCH`]). After each start it looks once at every
+//!   loses nothing but the time to extract the icons again. It is a folder
+//!   of its own beside the compiled extension code, which Wasmtime keeps
+//!   in a folder of its own: Wasmtime's clean up deletes every file it
+//!   does not recognize in the folder it is given.
+//! - **Refreshing**: one worker thread at low CPU priority (never a lower
+//!   disk priority), holding COM on Windows, extracts the icons one at a
+//!   time, rows on screen first, writing the index after each small batch
+//!   ([`BATCH`]). After each start it looks once at every
 //!   listed application's icon and extracts it again only when it is
 //!   missing, its fingerprint changed, or its picture is older than
 //!   [`REFRESH_AGE`]; an icon a row on screen wants goes first, drawn from
@@ -76,8 +81,8 @@ pub const MAX_ICONS: usize = 10_000;
 /// edge to edge.
 pub const CHECKED_ABOVE: u32 = 48;
 
-/// How many icons the worker extracts before it looks again at what rows
-/// on screen want.
+/// How many icons the worker looks at between two writes of its index.
+/// It takes each one as the one before it ends, rows on screen first.
 pub const BATCH: usize = 8;
 
 /// How old a kept picture may grow before the background refresh extracts
@@ -668,23 +673,28 @@ mod platform {
     }
 }
 
-/// Makes the calling thread one of low priority, for the CPU and, where
-/// the system has it, the disk: the worker refreshing icons never competes
-/// with what the user does. On macOS that is the utility quality-of-service
-/// class, not the background band (`PRIO_DARWIN_BG`): the system throttles
-/// a background thread's processor and disk for as long as anything else
-/// is busy, and on a loaded Mac it held this worker for 13 to 34 seconds
-/// at a time, while the row on screen waiting for the icon showed its
+/// Makes the calling thread one of low priority for the CPU: the worker
+/// refreshing icons never competes with what the user does. Its disk is
+/// not throttled, on any system, since a row on screen may be waiting for
+/// what it reads. On macOS that is the utility quality-of-service class,
+/// not the background band (`PRIO_DARWIN_BG`): the system throttles a
+/// background thread's processor and disk for as long as anything else is
+/// busy, and on a loaded Mac it held this worker for 13 to 34 seconds at a
+/// time, while the row on screen waiting for the icon showed its
 /// placeholder. A utility thread still yields to the user's work, but it
-/// is not held back.
+/// is not held back. On Windows it is the lowest thread priority, not the
+/// background mode (`THREAD_MODE_BACKGROUND_BEGIN`), which also gives the
+/// thread very low disk and memory priority: while Pane rebuilt its file
+/// index, single icons, each read from a program's resources and written
+/// to the cache, took 10 to 27 seconds instead of 50 milliseconds.
 fn lower_priority() {
     #[cfg(windows)]
     {
         use ::windows::Win32::System::Threading::{
-            GetCurrentThread, SetThreadPriority, THREAD_MODE_BACKGROUND_BEGIN,
+            GetCurrentThread, SetThreadPriority, THREAD_PRIORITY_LOWEST,
         };
         // SAFETY: the pseudo handle of the calling thread, always valid.
-        let _ = unsafe { SetThreadPriority(GetCurrentThread(), THREAD_MODE_BACKGROUND_BEGIN) };
+        let _ = unsafe { SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_LOWEST) };
     }
     #[cfg(target_os = "linux")]
     {
@@ -902,6 +912,16 @@ impl IconCache {
         Some(Shown { light, dark })
     }
 
+    /// Reads the kept icons in the background now, rather than when a row
+    /// first asks for one, so the first rows drawn after a start already
+    /// draw them.
+    pub fn prepare(&self) {
+        let mut state = self.shared.lock();
+        if !state.loaded {
+            self.start_worker(&mut state);
+        }
+    }
+
     /// Wants the icon of the application `id`, as a row on screen does,
     /// without asking what it draws.
     pub fn want(&self, id: &str) {
@@ -959,6 +979,7 @@ impl IconCache {
             .name("pane-application-icons".into())
             .spawn(move || {
                 lower_priority();
+                let _apartment = crate::system_icons::ThreadApartment::hold();
                 shared.work();
             });
         if let Err(error) = started {
@@ -995,9 +1016,11 @@ impl Shared {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
-    /// The worker: reads the index, then runs batch after batch, rows on
-    /// screen first, until nothing is left, resting after every background
-    /// batch.
+    /// The worker: reads the index, then runs batch after batch until
+    /// nothing is left, writing the index after each and resting after
+    /// every background batch. Each job of a batch is taken as the one
+    /// before it ends, rows on screen first, so a row waits for the icon
+    /// being extracted at most, not for the rest of a batch.
     fn work(&self) {
         if !self.lock().loaded {
             let index = self.load();
@@ -1009,53 +1032,64 @@ impl Shared {
             (self.changed)();
         }
         loop {
-            let (jobs, background) = {
-                let mut state = self.lock();
-                let jobs = next_batch(&mut state);
-                if jobs.is_empty() {
-                    state.working = false;
-                    return;
-                }
-                let background = jobs.iter().any(|job| !job.urgent);
-                (jobs, background)
-            };
-            let mut extracted = false;
-            for job in jobs {
-                extracted |= self.run(job);
-            }
-            {
-                let mut state = self.lock();
-                state.index.tick += 1;
-                self.keep_within_limits(&mut state);
-                if state.dirty {
-                    let written = serde_json::to_vec(&state.index)
-                        .map_err(|error| error.to_string())
-                        .and_then(|json| {
-                            crate::atomic::write_atomically(
-                                &self.folder.join(INDEX),
-                                &json,
-                                crate::atomic::Readers::Default,
-                            )
-                            .map_err(|error| error.to_string())
-                        });
-                    match written {
-                        Ok(()) => state.dirty = false,
-                        Err(why) => crate::diagnostic!(
-                            "pane: could not keep the application icons' index in {}: {why}",
-                            self.folder.display()
-                        ),
+            let mut background = false;
+            for taken in 0..BATCH {
+                let job = {
+                    let mut state = self.lock();
+                    match next_job(&mut state) {
+                        Some(job) => job,
+                        None if taken == 0 => {
+                            state.working = false;
+                            return;
+                        }
+                        None => break,
                     }
+                };
+                background |= !job.urgent;
+                // An icon kept as it was changes no row; one extracted
+                // draws at once.
+                if self.run(job) {
+                    (self.changed)();
                 }
             }
-            // A batch that kept every icon as it was changes no row.
-            if extracted {
-                (self.changed)();
-            }
+            self.write_index();
             // Every background batch rests, one that only read fingerprints
             // too: the start's look at every application is not a busy loop.
             if background {
                 std::thread::sleep(BACKGROUND_REST);
             }
+        }
+    }
+
+    /// Moves the index's tick on, keeps the cache within its bounds and
+    /// writes the index if it changed. The index is written with nothing
+    /// locked, so a row asking what it shows never waits for the disk.
+    fn write_index(&self) {
+        let json = {
+            let mut state = self.lock();
+            state.index.tick += 1;
+            self.keep_within_limits(&mut state);
+            if !state.dirty {
+                return;
+            }
+            state.dirty = false;
+            serde_json::to_vec(&state.index)
+        };
+        let written = json.map_err(|error| error.to_string()).and_then(|json| {
+            crate::atomic::write_atomically(
+                &self.folder.join(INDEX),
+                &json,
+                crate::atomic::Readers::Default,
+            )
+            .map_err(|error| error.to_string())
+        });
+        if let Err(why) = written {
+            // Written again after the next batch.
+            self.lock().dirty = true;
+            crate::diagnostic!(
+                "pane: could not keep the application icons' index in {}: {why}",
+                self.folder.display()
+            );
         }
     }
 
@@ -1086,13 +1120,14 @@ impl Shared {
         };
         index.version = INDEX_VERSION;
         let folder = &self.folder;
-        index.icons.retain(|_, kept| {
-            folder.join(&kept.light).is_file()
-                && kept
-                    .dark
-                    .as_ref()
-                    .is_none_or(|dark| folder.join(dark).is_file())
-        });
+        // An image is written without being flushed to disk (`write`): one
+        // a crash left empty is gone too.
+        let there = |name: &String| {
+            std::fs::metadata(folder.join(name)).is_ok_and(|file| file.is_file() && file.len() > 0)
+        };
+        index
+            .icons
+            .retain(|_, kept| there(&kept.light) && kept.dark.as_ref().is_none_or(there));
         let named: HashSet<String> = index
             .icons
             .values()
@@ -1227,12 +1262,11 @@ impl Shared {
             bytes = filled;
         }
         let name = format!("{stem}.{kind}");
-        crate::atomic::write_atomically(
-            &self.folder.join(&name),
-            &bytes,
-            crate::atomic::Readers::Default,
-        )
-        .map_err(|error| format!("cannot keep it in {}: {error}", self.folder.display()))?;
+        // Not flushed to disk: on a busy disk each flush waited behind every
+        // other write, and an image a crash left empty is dropped when the
+        // index is read ([`Shared::load`]) and extracted again.
+        crate::atomic::write_cache_file(&self.folder.join(&name), &bytes)
+            .map_err(|error| format!("cannot keep it in {}: {error}", self.folder.display()))?;
         Ok((name, bytes.len() as u64))
     }
 
@@ -1262,34 +1296,28 @@ impl Shared {
     }
 }
 
-/// The next jobs: what rows on screen want first, then the background
-/// refresh of the applications listed, at most [`BATCH`]. An application
-/// is in a batch once: a row's icon wanted while its background refresh
-/// waits is looked at for the row alone (which queues the refresh again
-/// when it draws a kept icon whose picture is old).
-fn next_batch(state: &mut State) -> Vec<Job> {
-    let mut jobs: Vec<Job> = Vec::new();
-    let taken = |jobs: &[Job], id: &str| jobs.iter().any(|job| job.id == id);
-    while jobs.len() < BATCH {
-        if let Some(id) = state.urgent.pop_front() {
-            if state.session.get(&id) == Some(&Session::Wanted) && !taken(&jobs, &id) {
-                jobs.push(Job { id, urgent: true });
-            }
-            continue;
+/// The next job: what a row on screen wants first, then the background
+/// refresh of the applications listed. A row's icon wanted while its
+/// background refresh waits is looked at for the row (which queues the
+/// refresh again when it draws a kept icon whose picture is old), and the
+/// refresh then finds it done.
+fn next_job(state: &mut State) -> Option<Job> {
+    while let Some(id) = state.urgent.pop_front() {
+        if state.session.get(&id) == Some(&Session::Wanted) {
+            return Some(Job { id, urgent: true });
         }
-        let Some(id) = state.background.pop_front() else {
-            break;
-        };
+    }
+    while let Some(id) = state.background.pop_front() {
         // A wanted icon is extracted for its row, ahead of this.
         let due = matches!(
             state.session.get(&id),
             Some(Session::Queued | Session::Kept)
         );
-        if due && state.listed.contains(&id) && !taken(&jobs, &id) {
-            jobs.push(Job { id, urgent: false });
+        if due && state.listed.contains(&id) {
+            return Some(Job { id, urgent: false });
         }
     }
-    jobs
+    None
 }
 
 #[cfg(test)]
@@ -1691,7 +1719,7 @@ mod tests {
     }
 
     #[test]
-    fn rows_on_screen_go_before_the_background_and_a_batch_is_small() {
+    fn rows_on_screen_go_before_the_background() {
         let mut state = State::default();
         for index in 0..20 {
             let id = format!("app{index}");
@@ -1706,15 +1734,20 @@ mod tests {
         state.session.insert("app3".into(), Session::Refreshed);
         state.listed.remove("app4");
 
-        let batch = next_batch(&mut state);
-        let ids: Vec<(&str, bool)> = batch
-            .iter()
-            .map(|job| (job.id.as_str(), job.urgent))
-            .collect();
-        assert_eq!(ids.len(), BATCH);
-        assert_eq!(ids[0], ("app15", true));
+        let mut ids: Vec<(String, bool)> = Vec::new();
+        while let Some(job) = next_job(&mut state) {
+            // As the worker does: looked at once.
+            if job.urgent {
+                state.session.insert(job.id.clone(), Session::Refreshed);
+            }
+            ids.push((job.id, job.urgent));
+        }
+        assert_eq!(ids[0], ("app15".to_owned(), true));
         assert!(ids[1..].iter().all(|(_, urgent)| !urgent));
-        // Done this start, or no longer listed: skipped.
-        assert!(!ids.iter().any(|(id, _)| *id == "app3" || *id == "app4"));
+        // Done this start (the wanted one too), or no longer listed:
+        // skipped.
+        let looked = |wanted: &str| ids.iter().filter(|(id, _)| id == wanted).count();
+        assert_eq!((looked("app15"), looked("app3"), looked("app4")), (1, 0, 0));
+        assert_eq!(ids.len(), 18, "{ids:?}");
     }
 }
