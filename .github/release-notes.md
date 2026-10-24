@@ -2,9 +2,12 @@
 
 ## What's new
 
-- **Currencies in the calculator** (#475): the calculator converts between currencies, as Raycast's does.
-- **A back button on every pushed view** (#482): forms, detail views and canvases, which have no search bar, get a top bar with a back button.
-- **Updates like Raycast's**: Pane checks for updates every few hours, downloads them by itself, and **Restart to Update Pane** restarts into the new version with one Enter. After an update, **What's New** shows these notes for a day.
+- **Updates like Raycast's** (#517, #521, #523): Pane checks for updates every few hours and downloads them by itself. **Restart to Update Pane**, first in the launcher, restarts into the new version with one Enter. After an update, **What's New** shows these notes for a day.
+- **Everything from the keyboard** (#511, #514, #516, #518, #519, #522, #524, #525): every Settings page and control can be reached with Tab and the arrow keys, and extension pages, confirmations and hotkey recorders work without a mouse. Forms submit from any field, dropdowns open with Ctrl+P, and links and long text in detail views can be reached and scrolled from the keyboard. The Actions panel adds **Uninstall Extension**, **Disable Command** and **Configure Extension**.
+- **Quit Pane** (#520): a command in root search.
+- **App icons** (#489, #512): icons show on the first search after Pane starts, and they and the file index are no longer cleared when an extension is built.
+- **Each app listed once** (#515): an app that several shortcuts launch, such as Discord, shows up once.
+- **Extension development** (#487): `pane-ext dev` builds include the package's icons, help and assets.
 - **Updating from 0.1.1 or 0.1.0**: once more by hand. Pane finds this release by itself: choose **Update Pane to {version}** in the launcher, then quit Pane from its tray or menu-bar icon and start it again (or run the setup or installer of this release over it). From this version on, updates restart by themselves (see Updates below).
 
 ## What was checked
