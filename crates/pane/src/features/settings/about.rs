@@ -50,7 +50,7 @@ use gpui::{
 use pane_core::hotkeys::HookHealth;
 use pane_core::{ApplicationUpdate, Status};
 
-use super::{Page, SettingsWindow, search};
+use super::{Page, SettingsWindow, pressable, search};
 use crate::app::launcher_changed_outside;
 use crate::ui::controls::{self, status_note};
 use crate::ui::icon::Glyph;
@@ -112,9 +112,8 @@ fn entries(_launcher: &pane_core::Launcher, _cx: &App) -> Vec<search::Entry> {
     }]
 }
 
-/// The page's entry takes no keyboard focus (it is a link row, chosen
-/// with the pointer), so a jump reveals it and the sidebar keeps the
-/// focus: `false`.
+/// A jump to the page's entry reveals the documentation's button, a tab
+/// stop, and the sidebar keeps the focus: `false`.
 fn focus(_: &mut SettingsWindow, _: &str, _: &mut Window, _: &mut Context<SettingsWindow>) -> bool {
     false
 }
@@ -321,44 +320,68 @@ fn render(
         log: this.launcher.log_notice().map(log_view),
     };
     let documentation = this.search_anchor(DOCUMENTATION_ROW);
+    // Each button is a tab stop that Enter and Space press, as a click
+    // does.
+    let ring = controls::focus_ring(&theme);
+    let focuses = [
+        "about-check-update",
+        "about-restart",
+        "about-documentation",
+        "about-diagnostics",
+        "about-log-folder",
+    ]
+    .map(|key| this.focuses.get(key, cx));
     compose(&view, &theme, |control, element| match control {
-        AboutControl::Check => {
-            element.on_click(cx.listener(|this, _: &gpui::ClickEvent, _, cx| {
+        AboutControl::Check => pressable(
+            element,
+            &focuses[0],
+            ring.clone(),
+            |this, _, cx| {
                 this.about.started = Some(Started::Check);
                 run(this.launcher.check_application_update_again(), cx);
-            }))
-        }
-        AboutControl::Restart => {
-            element.on_click(cx.listener(move |this, _: &gpui::ClickEvent, _, cx| {
+            },
+            cx,
+        ),
+        AboutControl::Restart => pressable(
+            element,
+            &focuses[1],
+            ring.clone(),
+            |this, _, cx| {
                 this.about.started = Some(Started::Restart);
                 run(this.launcher.restart_to_update(), cx);
-            }))
-        }
-        AboutControl::Documentation => {
-            element
-                .anchor_scroll(Some(documentation.clone()))
-                .on_click(cx.listener(move |this, _: &gpui::ClickEvent, _, cx| {
-                    // A system handler may take a moment to start, so the
-                    // opening happens off the window's thread; what it
-                    // reports becomes the page's status.
-                    let links = this.launcher.link_opener();
-                    cx.spawn(async move |this, cx| {
-                        let opened = cx
-                            .background_executor()
-                            .spawn(async move { links.open(DOCUMENTATION) })
-                            .await;
-                        this.update(cx, |this, cx| {
-                            this.about.record(opened);
-                            cx.notify();
-                        })
-                        .ok();
+            },
+            cx,
+        ),
+        AboutControl::Documentation => pressable(
+            element.anchor_scroll(Some(documentation.clone())),
+            &focuses[2],
+            ring.clone(),
+            |this, _, cx| {
+                // A system handler may take a moment to start, so the
+                // opening happens off the window's thread; what it
+                // reports becomes the page's status.
+                let links = this.launcher.link_opener();
+                cx.spawn(async move |this, cx| {
+                    let opened = cx
+                        .background_executor()
+                        .spawn(async move { links.open(DOCUMENTATION) })
+                        .await;
+                    this.update(cx, |this, cx| {
+                        this.about.record(opened);
+                        cx.notify();
                     })
-                    .detach();
-                }))
-        }
-        AboutControl::Diagnostics => {
-            element.on_click(cx.listener(|this, _: &gpui::ClickEvent, _, cx| {
-                // The report is what the launcher holds as of this click,
+                    .ok();
+                })
+                .detach();
+            },
+            cx,
+        ),
+        AboutControl::Diagnostics => pressable(
+            element,
+            &focuses[3],
+            ring.clone(),
+            |this, _, cx| {
+                // The report is what the launcher holds as of this press,
                 // not as of the frame that drew the button.
                 let report = diagnostics(
                     &this.launcher.application_update(),
@@ -368,10 +391,14 @@ fn render(
                 cx.write_to_clipboard(ClipboardItem::new_string(report));
                 this.about.copied = true;
                 cx.notify();
-            }))
-        }
-        AboutControl::LogFolder => {
-            element.on_click(cx.listener(|this, _: &gpui::ClickEvent, _, cx| {
+            },
+            cx,
+        ),
+        AboutControl::LogFolder => pressable(
+            element,
+            &focuses[4],
+            ring.clone(),
+            |this, _, cx| {
                 // The folder opens with the system's file manager, off the
                 // window's thread; the notice goes, here and in root
                 // search, and the status line says whether it opened.
@@ -384,8 +411,9 @@ fn render(
                     this.update(cx, |_, cx| cx.notify()).ok();
                 })
                 .detach();
-            }))
-        }
+            },
+            cx,
+        ),
     })
     .into_any_element()
 }

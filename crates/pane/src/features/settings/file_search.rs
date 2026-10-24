@@ -423,7 +423,7 @@ fn render(
         window,
         cx,
     ));
-    sections.push(rules_section(&rules, busy, theme, cx));
+    sections.push(rules_section(this, &rules, busy, theme, cx));
     if !drawn.problems.is_empty() {
         sections.push(problems_section(
             this,
@@ -486,14 +486,25 @@ fn status_section(
     }
     let mut rows = Vec::new();
     let rebuild_anchor = this.search_anchor(REBUILD);
-    let rebuild = button(REBUILD.into(), "Rebuild Index", !busy, theme)
-        .anchor_scroll(Some(rebuild_anchor))
-        .when(!busy, |button| {
-            button.on_click(cx.listener(|this, _: &gpui::ClickEvent, _, cx| {
+    let rebuild =
+        button(REBUILD.into(), "Rebuild Index", !busy, theme).anchor_scroll(Some(rebuild_anchor));
+    // The page's buttons and switches are tab stops that Enter and Space
+    // press while they are offered.
+    let rebuild = if busy {
+        rebuild
+    } else {
+        let focus = this.focuses.get(REBUILD, cx);
+        pressable(
+            rebuild,
+            &focus,
+            controls::focus_ring(theme),
+            |this, _, cx| {
                 let pending = this.launcher.rebuild_file_index();
                 apply_and_report(this, pending, cx);
-            }))
-        });
+            },
+            cx,
+        )
+    };
     rows.push(
         controls::setting_row("File search", lines, theme)
             .child(rebuild)
@@ -567,6 +578,9 @@ fn roots_section(
     let listed = effective.roots.len();
     for root in &effective.roots {
         let key = format!("root:{}", root.display());
+        let remove_focus = this
+            .focuses
+            .get(&format!("file-search-remove-root-{}", root.display()), cx);
         rows.push(window_rows.row(listed, key, false, &page, || {
             let added = rules.added_roots.contains(root);
             let name = last_name(root);
@@ -588,40 +602,54 @@ fn roots_section(
             });
             if added {
                 let root = root.clone();
-                row = row.child(
-                    button(
-                        format!("file-search-remove-root-{name}"),
-                        "Remove",
-                        !busy,
-                        theme,
-                    )
-                    .when(!busy, |button| {
-                        button.on_click(cx.listener(move |this, _: &gpui::ClickEvent, _, cx| {
+                let remove = button(
+                    format!("file-search-remove-root-{name}"),
+                    "Remove",
+                    !busy,
+                    theme,
+                );
+                row = row.child(if busy {
+                    remove
+                } else {
+                    pressable(
+                        remove,
+                        &remove_focus,
+                        controls::focus_ring(theme),
+                        move |this, _, cx| {
                             let root = root.clone();
                             change(
                                 this,
                                 move |rules| rules.added_roots.retain(|r| *r != root),
                                 cx,
                             );
-                        }))
-                    }),
-                );
+                        },
+                        cx,
+                    )
+                });
             }
             row.into_any_element()
         }));
     }
     let anchor = this.search_anchor(ADD_ROOT);
-    let add = button(ADD_ROOT.into(), "Add Folder…", !busy, theme)
-        .anchor_scroll(Some(anchor))
-        .when(!busy, |button| {
-            button.on_click(cx.listener(|this, _: &gpui::ClickEvent, window, cx| {
+    let add = button(ADD_ROOT.into(), "Add Folder…", !busy, theme).anchor_scroll(Some(anchor));
+    let add = if busy {
+        add
+    } else {
+        let focus = this.focuses.get(ADD_ROOT, cx);
+        pressable(
+            add,
+            &focus,
+            controls::focus_ring(theme),
+            |this, window, cx| {
                 pick_folder(this, "Add", window, cx, |rules, folder| {
                     if !rules.added_roots.contains(&folder) {
                         rules.added_roots.push(folder);
                     }
                 });
-            }))
-        });
+            },
+            cx,
+        )
+    };
     rows.push(
         controls::setting_row(
             "Add a folder",
@@ -666,7 +694,35 @@ fn excluded_section(
         let name = last_name(folder);
         let removed = folder.clone();
         let key = format!("excluded:{}", folder.display());
+        let remove_focus = this.focuses.get(
+            &format!("file-search-remove-excluded-{}", folder.display()),
+            cx,
+        );
         rows.push(window_rows.row(listed, key, false, &page, || {
+            let remove = button(
+                format!("file-search-remove-excluded-{name}"),
+                "Remove",
+                !busy,
+                theme,
+            );
+            let remove = if busy {
+                remove
+            } else {
+                pressable(
+                    remove,
+                    &remove_focus,
+                    controls::focus_ring(theme),
+                    move |this, _, cx| {
+                        let removed = removed.clone();
+                        change(
+                            this,
+                            move |rules| rules.excluded_folders.retain(|f| *f != removed),
+                            cx,
+                        );
+                    },
+                    cx,
+                )
+            };
             controls::setting_row(
                 shown(folder, home),
                 vec![controls::row_line(
@@ -680,32 +736,42 @@ fn excluded_section(
                 let name = name.clone();
                 move || format!("file-search-excluded-{name}")
             })
-            .child(
-                button(
-                    format!("file-search-remove-excluded-{name}"),
-                    "Remove",
-                    !busy,
-                    theme,
-                )
-                .when(!busy, |button| {
-                    button.on_click(cx.listener(move |this, _: &gpui::ClickEvent, _, cx| {
-                        let removed = removed.clone();
-                        change(
-                            this,
-                            move |rules| rules.excluded_folders.retain(|f| *f != removed),
-                            cx,
-                        );
-                    }))
-                }),
-            )
+            .child(remove)
             .into_any_element()
         }));
     }
     for pattern in &rules.excluded_patterns {
         let removed = pattern.clone();
         let selector = format!("file-search-pattern-{pattern}");
+        let remove_focus = this
+            .focuses
+            .get(&format!("file-search-remove-pattern-{pattern}"), cx);
         rows.push(
             window_rows.row(listed, format!("pattern:{pattern}"), false, &page, || {
+                let remove = button(
+                    format!("file-search-remove-pattern-{pattern}"),
+                    "Remove",
+                    !busy,
+                    theme,
+                );
+                let remove = if busy {
+                    remove
+                } else {
+                    pressable(
+                        remove,
+                        &remove_focus,
+                        controls::focus_ring(theme),
+                        move |this, _, cx| {
+                            let removed = removed.clone();
+                            change(
+                                this,
+                                move |rules| rules.excluded_patterns.retain(|p| *p != removed),
+                                cx,
+                            );
+                        },
+                        cx,
+                    )
+                };
                 controls::setting_row(
                     pattern.clone(),
                     vec![controls::row_line(
@@ -716,24 +782,7 @@ fn excluded_section(
                     theme,
                 )
                 .debug_selector(move || selector)
-                .child(
-                    button(
-                        format!("file-search-remove-pattern-{pattern}"),
-                        "Remove",
-                        !busy,
-                        theme,
-                    )
-                    .when(!busy, |button| {
-                        button.on_click(cx.listener(move |this, _: &gpui::ClickEvent, _, cx| {
-                            let removed = removed.clone();
-                            change(
-                                this,
-                                move |rules| rules.excluded_patterns.retain(|p| *p != removed),
-                                cx,
-                            );
-                        }))
-                    }),
-                )
+                .child(remove)
                 .into_any_element()
             }),
         );
@@ -860,6 +909,7 @@ fn excluded_section(
 
 /// The Rules card: the four switches.
 fn rules_section(
+    this: &mut SettingsWindow,
     rules: &UserRules,
     busy: bool,
     theme: &Theme,
@@ -867,6 +917,7 @@ fn rules_section(
 ) -> AnyElement {
     let rows = SWITCHES.iter().map(|&(id, title, rule)| {
         let on = rule.get(rules);
+        let focus = this.focuses.get(id, cx);
         super::general::switch_row(
             super::general::SwitchRow {
                 id,
@@ -878,11 +929,16 @@ fn rules_section(
             },
             theme,
             |row| {
-                row.when(!busy, |row| {
-                    row.on_click(cx.listener(move |this, _: &gpui::ClickEvent, _, cx| {
-                        change(this, move |rules| rule.set(rules, !on), cx);
-                    }))
-                })
+                if busy {
+                    return row;
+                }
+                pressable(
+                    row,
+                    &focus,
+                    controls::focus_ring(theme),
+                    move |this, _, cx| change(this, move |rules| rule.set(rules, !on), cx),
+                    cx,
+                )
             },
         )
         .into_any_element()
@@ -915,8 +971,9 @@ fn problems_section(
         .enumerate()
         .map(|(at, problem)| {
             let key = format!("problem:{at}:{:?}", problem.folder);
+            let focus = this.focuses.get(&key, cx);
             window_rows.row(listed, key, false, &page, || {
-                problem_row(problem, home, busy, theme, cx)
+                problem_row(problem, home, busy, focus, theme, cx)
             })
         })
         .collect();
@@ -930,11 +987,13 @@ fn problems_section(
 }
 
 /// One row of the Needs attention card: what needs attention, why and
-/// what to do, with Include Again for a folder taken out for churn.
+/// what to do, with Include Again for a folder taken out for churn, whose
+/// focus is `focus`.
 fn problem_row(
     problem: &Problem,
     home: Option<&Path>,
     busy: bool,
+    focus: FocusHandle,
     theme: &Theme,
     cx: &mut Context<SettingsWindow>,
 ) -> AnyElement {
@@ -964,21 +1023,27 @@ fn problem_row(
         (ProblemKind::Churned, Some(folder)) => {
             let folder = folder.clone();
             let name = last_name(&folder);
-            row.child(
-                button(
-                    format!("file-search-include-again-{name}"),
-                    "Include Again",
-                    !busy,
-                    theme,
-                )
-                .when(!busy, |button| {
-                    button.on_click(cx.listener(move |this, _: &gpui::ClickEvent, _, cx| {
+            let include = button(
+                format!("file-search-include-again-{name}"),
+                "Include Again",
+                !busy,
+                theme,
+            );
+            let include = if busy {
+                include
+            } else {
+                pressable(
+                    include,
+                    &focus,
+                    controls::focus_ring(theme),
+                    move |this, _, cx| {
                         let pending = this.launcher.include_in_file_search(folder.clone());
                         apply_and_report(this, pending, cx);
-                    }))
-                }),
-            )
-            .into_any_element()
+                    },
+                    cx,
+                )
+            };
+            row.child(include).into_any_element()
         }
         _ => row.into_any_element(),
     }

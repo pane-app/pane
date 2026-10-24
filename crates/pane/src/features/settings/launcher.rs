@@ -57,7 +57,7 @@ use gpui::{
 use pane_core::placement::{DisplayLayout, resolve};
 use pane_core::{Launcher, OpeningMonitor, PinnedLayout, Reopening, SearchSensitivity, WindowMode};
 
-use super::{Page, SettingsWindow, search};
+use super::{Page, SegmentChoice, SettingsWindow, search};
 use crate::ui::controls::{self, status_note as note};
 use crate::ui::icon::Glyph;
 use crate::ui::select::{Choice, Model, Select};
@@ -195,11 +195,14 @@ pub(crate) const MONITOR_NAME: &str = "Display";
 pub(crate) const MONITOR_DESCRIPTION: &str = "Where the launcher opens";
 pub(crate) const MONITOR_DEBUG: &str = "launcher-monitor";
 
+/// The page's title: its sidebar entry, and its page's.
+pub(crate) const TITLE: &str = "Launcher";
+
 /// The Launcher page, registered after General in the window's page list:
 /// the page of the launcher window itself.
 pub(crate) fn page() -> Page {
     Page {
-        title: "Launcher",
+        title: TITLE,
         about: ABOUT,
         icon: Glyph::Monitor,
         count: None,
@@ -534,10 +537,9 @@ fn entries(launcher: &Launcher, cx: &App) -> Vec<search::Entry> {
 /// The page's keyboard controls are its three selects, the display, the
 /// reopening delay and the search sensitivity: a select's trigger takes
 /// focus (it is a tab stop, and Enter opens its choices), so a jump to
-/// any of its choices focuses it. The Layout card's segments and switch
-/// take no keyboard focus (they are chosen with the pointer, as the
-/// reference's settings rows are), so a jump to one reveals it and the
-/// sidebar keeps the focus: `false`.
+/// any of its choices focuses it. The learning controls and the Layout
+/// card's segments and switch are tab stops too, but a jump to one reveals
+/// it and the sidebar keeps the focus: `false`.
 fn focus(
     this: &mut SettingsWindow,
     target: &str,
@@ -646,6 +648,8 @@ fn render(
         .child(this.launcher_page.sensitivity.clone());
     // The learning controls (#200): the switch and the reset, built here
     // because their behavior is the page's own.
+    let ring = controls::focus_ring(theme);
+    let learn_focus = this.focuses.get(LEARN_DEBUG, cx);
     let learn = super::general::switch_row(
         super::general::SwitchRow {
             id: LEARN_DEBUG,
@@ -663,15 +667,19 @@ fn render(
         theme,
         |switch| {
             let anchor = this.search_anchor(LEARN_DEBUG);
-            switch.anchor_scroll(Some(anchor)).on_click(cx.listener(
-                |_, _: &gpui::ClickEvent, _, cx| {
+            super::pressable(
+                switch.anchor_scroll(Some(anchor)),
+                &learn_focus,
+                ring.clone(),
+                |_, _, cx| {
                     let settings = crate::settings::shared(cx);
                     let on = settings.read(cx).learning();
                     settings.update(cx, |settings, cx| {
                         settings.set_learning(!on, cx);
                     });
                 },
-            ))
+                cx,
+            )
         },
     )
     .into_any_element();
@@ -680,38 +688,117 @@ fn render(
     let mode_anchor = this.search_anchor("launcher-window-mode");
     let pinned_anchor = this.search_anchor("launcher-pinned");
     let compact_pinned_anchor = this.search_anchor(COMPACT_PINNED_DEBUG);
+    // The segments as the keyboard walks them, and the switch's focus.
+    let modes = segment_group(
+        this,
+        &WINDOW_MODES,
+        |mode, cx| {
+            crate::settings::shared(cx).update(cx, |settings, cx| {
+                settings.set_window_mode(mode, cx);
+            });
+        },
+        cx,
+    );
+    let layouts = segment_group(
+        this,
+        &PINNED_LAYOUTS,
+        |layout, cx| {
+            crate::settings::shared(cx).update(cx, |settings, cx| {
+                settings.set_pinned_layout(layout, cx);
+            });
+        },
+        cx,
+    );
+    let compact_pinned_focus = this.focuses.get(COMPACT_PINNED_DEBUG, cx);
     compose(
         &view,
         (select, Some(reopening), Some(sensitivity)),
         [learn, reset, history_reset],
         theme,
         |control, element| match control {
-            LauncherControl::WindowMode(mode) => element
-                .anchor_scroll(Some(mode_anchor.clone()))
-                .on_click(cx.listener(move |_, _: &gpui::ClickEvent, _, cx| {
-                    crate::settings::shared(cx).update(cx, |settings, cx| {
-                        settings.set_window_mode(mode, cx);
-                    });
-                })),
-            LauncherControl::Pinned(layout) => element
-                .anchor_scroll(Some(pinned_anchor.clone()))
-                .on_click(cx.listener(move |_, _: &gpui::ClickEvent, _, cx| {
-                    crate::settings::shared(cx).update(cx, |settings, cx| {
-                        settings.set_pinned_layout(layout, cx);
-                    });
-                })),
-            LauncherControl::CompactPinned => element
-                .anchor_scroll(Some(compact_pinned_anchor.clone()))
-                .on_click(cx.listener(|_, _: &gpui::ClickEvent, _, cx| {
+            LauncherControl::WindowMode(mode) => {
+                let index = WINDOW_MODES
+                    .iter()
+                    .position(|&(of, ..)| of == mode)
+                    .unwrap_or(0);
+                super::segment(
+                    element.anchor_scroll(Some(mode_anchor.clone())),
+                    index,
+                    &modes,
+                    controls::segment_focus_shadows(mode == window_mode, theme),
+                )
+            }
+            LauncherControl::Pinned(layout) => {
+                let index = PINNED_LAYOUTS
+                    .iter()
+                    .position(|&(of, ..)| of == layout)
+                    .unwrap_or(0);
+                super::segment(
+                    element.anchor_scroll(Some(pinned_anchor.clone())),
+                    index,
+                    &layouts,
+                    controls::segment_focus_shadows(layout == pinned_layout, theme),
+                )
+            }
+            LauncherControl::CompactPinned => super::pressable(
+                element.anchor_scroll(Some(compact_pinned_anchor.clone())),
+                &compact_pinned_focus,
+                ring.clone(),
+                |_, _, cx| {
                     let settings = crate::settings::shared(cx);
                     let on = settings.read(cx).compact_pinned();
                     settings.update(cx, |settings, cx| {
                         settings.set_compact_pinned(!on, cx);
                     });
-                })),
+                },
+                cx,
+            ),
         },
     )
     .into_any_element()
+}
+
+/// A row's segments as the keyboard walks them ([`super::segment`]): each
+/// of `choices` with its focus, choosing it through `choose`, which
+/// reports the choice to the host settings.
+fn segment_group<T: Copy + 'static>(
+    this: &mut SettingsWindow,
+    choices: &[(T, &'static str, &'static str)],
+    choose: fn(T, &mut App),
+    cx: &mut Context<SettingsWindow>,
+) -> Rc<[SegmentChoice]> {
+    choices
+        .iter()
+        .map(|&(choice, _, selector)| SegmentChoice {
+            focus: this.focuses.get(selector, cx),
+            choose: Rc::new(move |cx: &mut App| choose(choice, cx)),
+        })
+        .collect()
+}
+
+/// Escape while a reset on the page asks its confirmation: the reset
+/// stands down, and the keyboard goes back to the button that armed it.
+/// Whether there was one to stand down; only the page showing has one.
+pub(crate) fn disarm(
+    this: &mut SettingsWindow,
+    window: &mut Window,
+    cx: &mut Context<SettingsWindow>,
+) -> bool {
+    if this.pages[this.selected].title != TITLE {
+        return false;
+    }
+    let armed = if this.launcher_page.reset == Resetting::Asking {
+        RESET_DEBUG
+    } else if this.launcher_page.history == Resetting::Asking {
+        HISTORY_DEBUG
+    } else {
+        return false;
+    };
+    this.launcher_page.reset = Resetting::Idle;
+    this.launcher_page.history = Resetting::Idle;
+    window.focus(&this.focuses.get(armed, cx), cx);
+    cx.notify();
+    true
 }
 
 /// The "Reset ranking…" row (#200): what the reset clears, and the
@@ -751,15 +838,27 @@ fn reset_row(
     }
     let offered = unreadable.is_none();
     let anchor = Some(anchor);
+    // The row's buttons are tab stops while offered. Arming the reset takes
+    // the keyboard to its Reset, and Reset, Cancel and Escape (see
+    // [`disarm`]) bring it back to the button that armed it.
+    let ring = controls::focus_ring(theme);
+    let ask_focus = this.focuses.get(RESET_DEBUG, cx);
+    let confirm_focus = this.focuses.get("launcher-reset-ranking-reset", cx);
+    let cancel_focus = this.focuses.get("launcher-reset-ranking-cancel", cx);
     let buttons = if asking {
         let confirm = controls::button("launcher-reset-ranking-reset", "Reset", offered, theme)
             .debug_selector(|| "launcher-reset-ranking-reset".into())
             .role(Role::Button)
             .aria_label("Reset what every result learned")
             .text_color(theme.danger)
-            .anchor_scroll(anchor)
-            .when(offered, |reset| {
-                reset.on_click(cx.listener(|this, _: &gpui::ClickEvent, _, cx| {
+            .anchor_scroll(anchor);
+        let confirm = if offered {
+            let back = ask_focus.clone();
+            super::pressable(
+                confirm,
+                &confirm_focus,
+                ring.clone(),
+                move |this, window, cx| {
                     this.launcher_page.reset = Resetting::Idle;
                     this.launcher_page.reset_problem = None;
                     let (_, recorded) = this.launcher.reset_all_learned();
@@ -772,17 +871,29 @@ fn reset_row(
                         .ok();
                     })
                     .detach();
+                    window.focus(&back, cx);
                     cx.notify();
-                }))
-            });
+                },
+                cx,
+            )
+        } else {
+            confirm
+        };
         let cancel = controls::ghost_button("launcher-reset-ranking-cancel", "Cancel", true, theme)
             .debug_selector(|| "launcher-reset-ranking-cancel".into())
             .role(Role::Button)
-            .aria_label("Cancel the reset")
-            .on_click(cx.listener(|this, _: &gpui::ClickEvent, _, cx| {
+            .aria_label("Cancel the reset");
+        let cancel = super::pressable(
+            cancel,
+            &cancel_focus,
+            ring.clone(),
+            move |this, window, cx| {
                 this.launcher_page.reset = Resetting::Idle;
+                window.focus(&ask_focus, cx);
                 cx.notify();
-            }));
+            },
+            cx,
+        );
         div()
             .flex()
             .items_center()
@@ -795,15 +906,24 @@ fn reset_row(
             .debug_selector(|| RESET_DEBUG.into())
             .role(Role::Button)
             .aria_label("Reset ranking")
-            .anchor_scroll(anchor)
-            .when(offered, |reset| {
-                reset.on_click(cx.listener(|this, _: &gpui::ClickEvent, _, cx| {
+            .anchor_scroll(anchor);
+        if offered {
+            super::pressable(
+                ask,
+                &ask_focus,
+                ring,
+                move |this, window, cx| {
                     this.launcher_page.reset = Resetting::Asking;
                     this.launcher_page.reset_problem = None;
+                    window.focus(&confirm_focus, cx);
                     cx.notify();
-                }))
-            });
-        ask.into_any_element()
+                },
+                cx,
+            )
+            .into_any_element()
+        } else {
+            ask.into_any_element()
+        }
     };
     controls::setting_row(RESET_NAME, lines, theme)
         .debug_selector(|| "launcher-reset-ranking-field".into())
@@ -876,15 +996,25 @@ fn history_row(
     }
     let offered = unreadable.is_none();
     let anchor = Some(anchor);
+    // The keyboard moves as "Reset ranking…" moves it (see [`reset_row`]).
+    let ring = controls::focus_ring(theme);
+    let ask_focus = this.focuses.get(HISTORY_DEBUG, cx);
+    let confirm_focus = this.focuses.get("launcher-reset-history-reset", cx);
+    let cancel_focus = this.focuses.get("launcher-reset-history-cancel", cx);
     let buttons = if asking {
         let confirm = controls::button("launcher-reset-history-reset", "Reset", offered, theme)
             .debug_selector(|| "launcher-reset-history-reset".into())
             .role(Role::Button)
             .aria_label("Reset the search history")
             .text_color(theme.danger)
-            .anchor_scroll(anchor)
-            .when(offered, |reset| {
-                reset.on_click(cx.listener(|this, _: &gpui::ClickEvent, _, cx| {
+            .anchor_scroll(anchor);
+        let confirm = if offered {
+            let back = ask_focus.clone();
+            super::pressable(
+                confirm,
+                &confirm_focus,
+                ring.clone(),
+                move |this, window, cx| {
                     this.launcher_page.history = Resetting::Idle;
                     this.launcher_page.history_problem = None;
                     let (_, recorded) = this.launcher.reset_search_history();
@@ -897,17 +1027,29 @@ fn history_row(
                         .ok();
                     })
                     .detach();
+                    window.focus(&back, cx);
                     cx.notify();
-                }))
-            });
+                },
+                cx,
+            )
+        } else {
+            confirm
+        };
         let cancel = controls::ghost_button("launcher-reset-history-cancel", "Cancel", true, theme)
             .debug_selector(|| "launcher-reset-history-cancel".into())
             .role(Role::Button)
-            .aria_label("Cancel the reset")
-            .on_click(cx.listener(|this, _: &gpui::ClickEvent, _, cx| {
+            .aria_label("Cancel the reset");
+        let cancel = super::pressable(
+            cancel,
+            &cancel_focus,
+            ring.clone(),
+            move |this, window, cx| {
                 this.launcher_page.history = Resetting::Idle;
+                window.focus(&ask_focus, cx);
                 cx.notify();
-            }));
+            },
+            cx,
+        );
         div()
             .flex()
             .items_center()
@@ -920,15 +1062,24 @@ fn history_row(
             .debug_selector(|| HISTORY_DEBUG.into())
             .role(Role::Button)
             .aria_label("Reset search history")
-            .anchor_scroll(anchor)
-            .when(offered, |reset| {
-                reset.on_click(cx.listener(|this, _: &gpui::ClickEvent, _, cx| {
+            .anchor_scroll(anchor);
+        if offered {
+            super::pressable(
+                ask,
+                &ask_focus,
+                ring,
+                move |this, window, cx| {
                     this.launcher_page.history = Resetting::Asking;
                     this.launcher_page.history_problem = None;
+                    window.focus(&confirm_focus, cx);
                     cx.notify();
-                }))
-            });
-        ask.into_any_element()
+                },
+                cx,
+            )
+            .into_any_element()
+        } else {
+            ask.into_any_element()
+        }
     };
     controls::setting_row(HISTORY_NAME, lines, theme)
         .debug_selector(|| "launcher-reset-history-field".into())

@@ -41,10 +41,17 @@
 //! first control. Ctrl+Tab and Ctrl+Page Down select the next entry, and
 //! Ctrl+Shift+Tab and Ctrl+Page Up the previous, from anywhere in the
 //! window, giving the keyboard back to the sidebar; a listening recorder
-//! takes them as the keys it records. Escape is layered, the innermost
+//! takes them as the keys it records. Every control a page draws is a tab
+//! stop with Pane's focus ring, for the keyboard only: a switch or button
+//! is [`pressable`] (Enter and Space press it), and a segment of a
+//! segmented choice is a [`segment`] (Enter and Space choose it, Left and
+//! Right choose its neighbours). A window test walks every page with Tab
+//! and fails on a control a click presses that Tab never reaches (#498).
+//! Escape is layered, the innermost
 //! thing first: a control that takes it itself (a recorder, a select, the
 //! search field, an open menu) keeps it, an Extensions flow screen takes it
-//! next, then any other control gives the keyboard back to the sidebar,
+//! next, an armed reset on the Launcher page stands down, then any other
+//! control gives the keyboard back to the sidebar,
 //! and only from the sidebar does it close the window (where the Keyboard
 //! page says Escape closes Settings). Raycast documents no page-switching
 //! keys, so the chords are the platforms' tabbed-window ones (#495).
@@ -104,7 +111,9 @@ actions!(
         EnterPage,
         CloseSettings,
         EscapeSettings,
-        Press
+        Press,
+        PreviousSegment,
+        NextSegment
     ]
 );
 
@@ -126,6 +135,11 @@ const CONTROL: &str = "SettingsControl";
 /// Actions…, the Extensions group's +): Enter and Space press it, and Down
 /// opens it too, as a menu button's does.
 pub(crate) const MENU_BUTTON: &str = "SettingsMenuButton";
+
+/// The key context of a segment of a segmented choice (see [`segment`]):
+/// Enter and Space choose it, and Left and Right choose the segment before
+/// or after it, as the designed segmented control's arrows do.
+const SEGMENT: &str = "SettingsSegment";
 
 /// The window's own keys, bound to [`gpui::NoAction`] in a listening
 /// recorder's `context`: the close shortcut, the find shortcut and the
@@ -219,6 +233,11 @@ pub(crate) fn bind_keys(cx: &mut App) {
         KeyBinding::new("enter", Press, Some(MENU_BUTTON)),
         KeyBinding::new("space", Press, Some(MENU_BUTTON)),
         KeyBinding::new("down", Press, Some(MENU_BUTTON)),
+        // A segment of a segmented choice (see [`segment`]).
+        KeyBinding::new("enter", Press, Some(SEGMENT)),
+        KeyBinding::new("space", Press, Some(SEGMENT)),
+        KeyBinding::new("left", PreviousSegment, Some(SEGMENT)),
+        KeyBinding::new("right", NextSegment, Some(SEGMENT)),
     ]);
     appearance::bind_keys(cx);
     extensions::bind_keys(cx);
@@ -299,6 +318,9 @@ pub struct SettingsWindow {
     file_search: file_search::State,
     /// The sidebar's search, owned by its module.
     search: search::State,
+    /// The focus of each switch, button and segment Pane's own pages make
+    /// pressable (see [`Focuses`]).
+    focuses: Focuses,
     /// The sidebar's sections list as it scrolls: a long Extensions group
     /// draws only the entries near its view (#165).
     sidebar_scroll: gpui::ScrollHandle,
@@ -394,6 +416,7 @@ impl SettingsWindow {
             extensions: extensions::State::default(),
             file_search: file_search::State::default(),
             search: search::State::new(cx),
+            focuses: Focuses::default(),
             sidebar_scroll: gpui::ScrollHandle::new(),
         }
     }
@@ -620,13 +643,19 @@ impl SettingsWindow {
     /// Escape, where no control took it: on the Extensions group, a flow
     /// screen it shows (a confirmation, a preview, the update results)
     /// takes it first — the innermost thing closes first, as Raycast's
-    /// Escape dismisses a dialog and not its window (#492). Then, from any
+    /// Escape dismisses a dialog and not its window (#492). A reset the
+    /// Launcher page has armed stands down next (#498). Then, from any
     /// control but the sidebar's list, it returns the keyboard to the
     /// sidebar (#495). Otherwise it closes this window if the Keyboard
     /// page's choice says Escape closes Settings.
     fn escape_settings(&mut self, _: &EscapeSettings, window: &mut Window, cx: &mut Context<Self>) {
         if self.pages[self.selected].title == extensions::TITLE && extensions::leave_flow(self, cx)
         {
+            return;
+        }
+        // An armed reset on the Launcher page stands down before the
+        // keyboard leaves the page.
+        if launcher::disarm(self, window, cx) {
             return;
         }
         if !self.focus.is_focused(window) {
@@ -822,6 +851,9 @@ impl SettingsWindow {
             .debug_selector(|| "settings-page".into())
             .overflow_y_scroll()
             .track_scroll(self.search.scroll())
+            // The window's main region for assistive technology: the page
+            // beside the sidebar.
+            .role(Role::Main)
             // The page's start in the tab order, before its content: an
             // empty mark, so no click lands on it (see `page_start`).
             .child(div().absolute().size_0().track_focus(&self.page_start))
@@ -1163,6 +1195,70 @@ pub(crate) fn pressable_in(
         .on_click(
             cx.listener(move |this, _: &gpui::ClickEvent, window, cx| on_click(this, window, cx)),
         )
+}
+
+/// The focus of each control Pane's own pages make [`pressable`] or a
+/// [`segment`], by a key unique to the control (its debug selector): a
+/// tab stop, made the first time the control draws.
+#[derive(Default)]
+pub(crate) struct Focuses(std::collections::HashMap<String, FocusHandle>);
+
+impl Focuses {
+    /// The focus of the control `key` names.
+    pub(crate) fn get(&mut self, key: &str, cx: &mut App) -> FocusHandle {
+        self.0
+            .entry(key.to_owned())
+            .or_insert_with(|| cx.focus_handle().tab_stop(true))
+            .clone()
+    }
+}
+
+/// One choice of a segmented group (see [`segment`]): its focus, and what
+/// choosing it does.
+pub(crate) struct SegmentChoice {
+    pub(crate) focus: FocusHandle,
+    pub(crate) choose: std::rc::Rc<dyn Fn(&mut App)>,
+}
+
+/// Makes `control`, the `index`th segment of `group`, a radio button the
+/// keyboard reaches and chooses (ADR 0035): a tab stop, under `ring` while
+/// the keyboard is on it, never for the pointer. Enter, Space and a click
+/// choose it; Left and Right choose the segment before or after it,
+/// wrapping, and take the keyboard there, as the designed segmented
+/// control's arrows move its choice.
+pub(crate) fn segment(
+    control: Stateful<Div>,
+    index: usize,
+    group: &std::rc::Rc<[SegmentChoice]>,
+    ring: Vec<gpui::BoxShadow>,
+) -> Stateful<Div> {
+    let choose = {
+        let group = group.clone();
+        move |to: usize, window: &mut Window, cx: &mut App| {
+            let choice = &group[to];
+            (choice.choose)(cx);
+            window.focus(&choice.focus, cx);
+        }
+    };
+    let count = group.len();
+    let (press, previous, next, click) = (choose.clone(), choose.clone(), choose.clone(), choose);
+    control
+        .key_context(SEGMENT)
+        .track_focus(&group[index].focus)
+        .focus_visible(move |style| style.shadow(ring))
+        .on_action(move |_: &Press, window, cx| press(index, window, cx))
+        .on_action(move |_: &PreviousSegment, window, cx| {
+            previous((index + count - 1) % count, window, cx)
+        })
+        .on_action(move |_: &NextSegment, window, cx| next((index + 1) % count, window, cx))
+        .on_click(move |_: &gpui::ClickEvent, window, cx| click(index, window, cx))
+}
+
+/// A button inside a recorder (its Reset) while it is disabled: no tab
+/// stop and no press, and a click on it is its own, so the recorder
+/// around it does not start listening.
+pub(crate) fn inert(control: Stateful<Div>) -> Stateful<Div> {
+    control.on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
 }
 
 /// A select of a few fixed choices at a settings row's end: the shared

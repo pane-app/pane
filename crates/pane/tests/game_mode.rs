@@ -285,6 +285,28 @@ fn the_keyboard_page_names_programs_to_treat_as_games(cx: &mut TestAppContext) {
     ));
 }
 
+/// The section from the keyboard (#498): Enter in the field adds the
+/// program it names, as Add does, and the program's Remove, the tab stop
+/// just before the field, takes it out again.
+#[gpui::test]
+fn the_keyboard_page_names_programs_from_the_keyboard(cx: &mut TestAppContext) {
+    let world = World::new();
+    let hotkeys = Arc::new(FakeHotkeys::default());
+    let foreground = Arc::new(FakeForeground::default());
+    let launcher = world.launcher(&hotkeys, &foreground);
+    let (_settings, mut settings_cx) = open_page(cx, launcher.clone(), world.data.path());
+
+    click(&mut settings_cx, "keyboard-game-program-field");
+    settings_cx.simulate_input("helldivers.exe");
+    settings_cx.simulate_keystrokes("enter");
+    until_record(&mut settings_cx, &world.records(), "helldivers.exe");
+    assert_eq!(launcher.game_mode().programs, ["helldivers.exe"]);
+
+    settings_cx.simulate_keystrokes("shift-tab enter");
+    until_record_clears(&mut settings_cx, &world.records(), "helldivers.exe");
+    assert!(launcher.game_mode().programs.is_empty());
+}
+
 #[gpui::test]
 fn a_game_in_front_pauses_the_hotkeys_and_the_tooltip_state_says_so(cx: &mut TestAppContext) {
     let world = World::new();

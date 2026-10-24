@@ -393,7 +393,9 @@ The user controls what is learned (#200):
   other result's, and says "Ranking reset for <title>" in the status line.
 - The Launcher page offers "Reset ranking…" for everything. It asks for
   confirmation first: the first press arms the row and the second runs it,
-  with Cancel standing it down.
+  with Cancel standing it down. From the keyboard, Enter or Space arms it
+  and moves the keyboard to its Reset, and Escape stands it down, back on
+  the button. "Reset search history" works the same way.
 - The Launcher page's "Learn from what I choose" switch is recorded in the
   settings record as `learning`, on by default. Turned off, Pane records
   no use and ranking acts as if none had been recorded. What was learned

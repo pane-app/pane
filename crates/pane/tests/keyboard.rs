@@ -1656,6 +1656,12 @@ fn escape_closes_settings_when_nothing_inside_uses_it_and_only_while_chosen(
         data.path(),
         "\"escapeClosesSettings\": true",
     );
+    // The click left the keyboard on the switch, a tab stop (#498), so
+    // the first Escape gives it back to the sidebar (#495), and the next
+    // closes the window.
+    settings_cx.simulate_keystrokes("escape");
+    settings_cx.run_until_parked();
+    assert_eq!(settings_windows(cx), 1, "the switch gave the keyboard back");
     settings_cx.simulate_keystrokes("escape");
     cx.run_until_parked();
     assert_eq!(settings_windows(cx), 0, "Escape closed Settings");
