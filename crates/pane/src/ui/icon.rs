@@ -121,6 +121,9 @@ pub(crate) enum Glyph {
     Reset,
     /// A keyboard: a key binding recorder's record mark.
     Record,
+    /// A power symbol: the Quit Pane root row (#496), as Raycast's Quit
+    /// Raycast draws.
+    Power,
     /// A cross: the Actions panel's Delete entry on a clipboard record
     /// (#166) — `pane/`'s close mark on every system, since the set in
     /// use has no cross.
@@ -166,6 +169,7 @@ impl Glyph {
         Glyph::Plus,
         Glyph::Reset,
         Glyph::Record,
+        Glyph::Power,
         Glyph::Delete,
     ];
 
@@ -198,6 +202,7 @@ impl Glyph {
             Glyph::Plus => glyph_svg!("plus"),
             Glyph::Reset => glyph_svg!("reset"),
             Glyph::Record => glyph_svg!("record"),
+            Glyph::Power => glyph_svg!("power"),
             Glyph::Delete => include_bytes!("../../assets/icons/pane/window-close.svg"),
             #[cfg(target_os = "windows")]
             Glyph::WindowClose => include_bytes!("../../assets/icons/pane/window-close.svg"),

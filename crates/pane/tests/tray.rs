@@ -7,7 +7,8 @@
 //! rollbacks and the platform's lack of an entry are exercised at the
 //! same boundary a user sees them. The menu's selections are driven
 //! through the window's own dispatch (`LauncherWindow::tray_selected`),
-//! the seam the application's selection loop calls. The entry's real OS
+//! the seam the application's selection loop calls; root search's Quit
+//! Pane (#496) quits through the same path. The entry's real OS
 //! behavior (the icon in the notification area, the menu's labels, the
 //! status item in the menu bar, the system's refusal of an add) is
 //! recorded natively in
@@ -583,6 +584,61 @@ fn quit_from_the_tray_releases_the_entry_and_the_hotkey_registrations(cx: &mut T
     );
     // And it was a clean quit: no marker is left for the next start to
     // take for a crash.
+    assert!(!marker.exists(), "a clean quit leaves no marker");
+}
+
+#[gpui::test]
+fn quit_pane_in_root_search_quits_as_the_tray_does(cx: &mut TestAppContext) {
+    let data = tempfile::tempdir().unwrap();
+    let hotkeys = Arc::new(FakeHotkeys::default());
+    let system = tray();
+    let record = CrashRecord::open(&data.path().join("logs"), "0.0.1", &SystemProcesses);
+    let marker = record.marker().to_path_buf();
+    let launcher = Launcher::new(Runtime::start(), Vec::new())
+        .with_hotkeys(hotkeys.clone())
+        .with_crash_record(Arc::new(record));
+    let (window, cx) = open(cx, launcher, Some(data.path()), system.clone());
+    // The blank query's list never offers a quit to a stray Enter.
+    let view = settle(&window, cx);
+    assert!(
+        view.rows.iter().all(|row| row.id != pane_core::QUIT_PANE),
+        "{:?}",
+        view.rows
+    );
+    let default = Shortcut::open_pane_default();
+    assert!(
+        hotkeys.registered.lock().unwrap().contains(&default),
+        "the application's own binding is registered"
+    );
+
+    // "exit", the tray menu's word on Windows, finds the row too.
+    cx.simulate_input("exit");
+    let view = settle(&window, cx);
+    let selected = view.selected.map(|index| view.rows[index].id.as_str());
+    assert_eq!(selected, Some(pane_core::QUIT_PANE), "{:?}", view.rows);
+    cx.simulate_keystrokes("escape");
+    settle(&window, cx);
+
+    // Root search's Quit Pane, found by "quit" (#496).
+    cx.simulate_input("quit");
+    let view = settle(&window, cx);
+    let selected = view.selected.map(|index| view.rows[index].title.as_str());
+    assert_eq!(selected, Some("Quit Pane"), "{:?}", view.rows);
+
+    // Enter quits through the tray's Quit path: the entry removed, every
+    // hotkey registration released and the marker gone, and then the
+    // platform asked to quit, which the test platform does not act on.
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    assert_eq!(
+        system.calls(),
+        vec![true, false],
+        "the entry was removed by the quit"
+    );
+    assert!(
+        hotkeys.registered.lock().unwrap().is_empty(),
+        "every hotkey registration was released"
+    );
     assert!(!marker.exists(), "a clean quit leaves no marker");
 }
 

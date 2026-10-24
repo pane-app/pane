@@ -93,8 +93,8 @@ The list holds:
 4. Pane's own rows: "Install extension from folder…", "Install extension
    from npm…" ([npm](npm.md)), "Install extension from Git…" ([Git](git.md)),
    "Check for Extension Updates", "Check for Pane Updates", "Manage
-   Extensions" and "Settings…", and "Update Pane to <version>" once an
-   update of Pane is downloaded and ready
+   Extensions", "Settings…" and "Quit Pane", and "Update Pane to
+   <version>" once an update of Pane is downloaded and ready
    ([installer](installer.md#updating-pane-itself)).
 
 Extensions are installed and managed in Settings (#168,
@@ -115,6 +115,15 @@ the schedule, and downloads what it finds; it answers even when Pane is
 up to date ([installer](installer.md#when-pane-checks)). It is listed
 whenever a release source is configured. Settings' About page has a
 "Check for updates" button that runs the same check.
+
+"Quit Pane" (also found as "exit" or "close") quits Pane, as Raycast's
+"Quit Raycast" does, the same way the tray's or menu bar's Quit does:
+the tray entry goes, every global hotkey is released, the quit is a
+clean one, and the extensions' instances, helpers and development
+watches stop (#496). It is the way to quit from the keyboard, and the
+only visible one while the General page hides the tray entry. It is
+listed only while something is typed, so the blank query's list never
+offers a quit to a stray Enter.
 
 For a query that matches nothing but fallbacks, the first fallback is
 selected, so Enter sends it the query (ADR 0031).

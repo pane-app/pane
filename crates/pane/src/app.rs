@@ -1844,19 +1844,22 @@ impl LauncherWindow {
             TrayAction::Settings => {
                 settings::open(&self.launcher, cx);
             }
-            TrayAction::Quit => {
-                // Pane's own resources are removed deliberately — a quit
-                // that ended the process might never run a destructor —
-                // and then the same quit path closing the launcher's
-                // window is taken.
-                crate::settings::shared(cx).update(cx, |settings, _| settings.release_tray());
-                self.launcher.release_hotkeys();
-                // A clean quit: this run's marker goes, so the next start
-                // does not say Pane quit unexpectedly (#133).
-                self.launcher.quit_cleanly();
-                cx.quit();
-            }
+            TrayAction::Quit => self.quit(cx),
         }
+    }
+
+    /// Quits Pane explicitly: the tray's Quit and root search's Quit Pane
+    /// (#496) both end here. Pane's own resources are removed deliberately
+    /// — a quit that ended the process might never run a destructor — and
+    /// then the same quit path closing the launcher's window is taken,
+    /// whose hooks stop the runtime's helpers and the development watches.
+    pub(crate) fn quit(&mut self, cx: &mut Context<Self>) {
+        crate::settings::shared(cx).update(cx, |settings, _| settings.release_tray());
+        self.launcher.release_hotkeys();
+        // A clean quit: this run's marker goes, so the next start does not
+        // say Pane quit unexpectedly (#133).
+        self.launcher.quit_cleanly();
+        cx.quit();
     }
 
     /// The keys the designed view's List and Grid own, taken before the
@@ -2173,6 +2176,12 @@ impl LauncherWindow {
         // [`Launcher::selected_settings_target`]).
         if let Some(target) = self.launcher.selected_settings_target() {
             open_settings_at(&self.launcher, target, cx);
+            return;
+        }
+        // Quit Pane quits the way the tray's Quit does (#496); the
+        // launcher itself does nothing (see [`Launcher::selected_quits`]).
+        if self.launcher.selected_quits() {
+            self.quit(cx);
             return;
         }
         if self.launcher.selected_asks_for_folder() {
@@ -3880,6 +3889,7 @@ pub(crate) fn row_icon(id: &str) -> (IconTone, Glyph) {
         "pane.check-extensions" => (IconTone::Command, Glyph::Blocks),
         pane_core::MANAGE_EXTENSIONS => (IconTone::Command, Glyph::Blocks),
         "pane.settings" => (IconTone::Command, Glyph::Gear),
+        pane_core::QUIT_PANE => (IconTone::Command, Glyph::Power),
         pane_core::UNEXPECTED_QUIT => (IconTone::Folder, Glyph::Folder),
         _ => (IconTone::Command, Glyph::Prompt),
     }

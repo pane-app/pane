@@ -205,6 +205,10 @@ pub const MANAGE_EXTENSIONS: &str = "pane.manage-extensions";
 /// The id of the root row that opens Pane's Settings window.
 const SETTINGS: &str = "pane.settings";
 
+/// The id of the root row of Pane's "Quit Pane" command (#496), Raycast's
+/// "Quit Raycast": the window quits by it, and draws its tile by it.
+pub const QUIT_PANE: &str = "pane.quit";
+
 /// A command offered in root search, backed by one extension component.
 #[derive(Clone, Debug)]
 pub struct CommandRegistration {
@@ -1506,6 +1510,10 @@ enum Entry {
     /// window (root). Which pages Settings offers is the app's, not the
     /// launcher's.
     Settings,
+    /// Nothing in the launcher: the window quits Pane, the way the tray's
+    /// Quit does (root: Quit Pane, #496; see
+    /// [`Launcher::selected_quits`]).
+    Quit,
     /// Enable this installed package if it is disabled, else disable it, or
     /// first ask about the enabled packages that require it.
     Toggle(PackageIdentity),
@@ -3460,6 +3468,19 @@ impl Launcher {
         matches!(entry, Some(Entry::Settings))
     }
 
+    /// Whether the selected row is Quit Pane (#496). Activating it does
+    /// nothing in the launcher: the window quits Pane through the path the
+    /// tray's Quit takes, which releases the hotkeys, removes the tray
+    /// entry and quits cleanly before the quit hooks stop the runtime.
+    pub fn selected_quits(&self) -> bool {
+        let state = self.lock();
+        let entry = state
+            .view
+            .selected
+            .and_then(|index| state.entries.get(index));
+        matches!(entry, Some(Entry::Quit))
+    }
+
     /// Where in Pane's Settings window the selected root row is handled,
     /// if it is handled there (#168): the Settings row opens the window;
     /// "Manage Extensions" opens it at the extensions; and the install
@@ -4036,6 +4057,7 @@ impl Launcher {
             Entry::InstallFromFolder
             | Entry::ChooseFolder(_)
             | Entry::Settings
+            | Entry::Quit
             | Entry::ShowExtension(_)
             | Entry::CreateExtension
             | Entry::ImportExtension => Pending::Nothing,
@@ -5220,6 +5242,28 @@ impl Launcher {
                 None,
                 &[],
                 CommandWhen::Always,
+                CommandMatches::Title,
+            );
+        }
+        // Quitting Pane, as Raycast's "Quit Raycast" does: the only other
+        // way is the tray's menu, which the General page can hide (#496).
+        // "exit" finds it too, the tray menu's word on Windows. It is
+        // listed only while the user searches, so the blank query's list
+        // never offers a quit to a stray Enter.
+        {
+            let row = Row {
+                id: QUIT_PANE.into(),
+                title: "Quit Pane".into(),
+                subtitle: Some("Quit Pane and stop its extensions".into()),
+                unavailable: None,
+            };
+            add(
+                row,
+                Entry::Quit,
+                None,
+                None,
+                &["exit".to_owned(), "close".to_owned()],
+                CommandWhen::Searching,
                 CommandMatches::Title,
             );
         }

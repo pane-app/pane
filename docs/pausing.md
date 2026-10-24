@@ -691,8 +691,8 @@ At start Pane writes `running-<process id>.json` in the logs folder,
 holding its process id, when the process started and Pane's version.
 Each start writes its own.
 
-A clean quit removes it: the tray's or menu bar's Quit, closing the
-launcher's window, and the system ending the session (GPUI's quit hooks
+A clean quit removes it: the tray's or menu bar's Quit, root search's
+Quit Pane, closing the launcher's window, and the system ending the session (GPUI's quit hooks
 run for `WM_ENDSESSION` on Windows and the termination notification on
 macOS; SIGTERM, SIGINT and SIGHUP on Linux and macOS). A clean quit also
 writes the clipboard history that waits in a batch (#192,
@@ -747,7 +747,8 @@ next quits cleanly and starts again.
 - `crates/pane/tests/crash_record.rs`: a start after a crash lists the
   notice, dismissing it removes it, and the About page shows it with the
   log's folder in the diagnostics.
-- `crates/pane/tests/tray.rs`: the tray's Quit leaves no marker.
+- `crates/pane/tests/tray.rs`: the tray's Quit and root search's Quit
+  Pane leave no marker.
 
 ## Author example and tests
 

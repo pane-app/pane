@@ -617,6 +617,9 @@ pub(in crate::launcher) fn selected_action(state: &State) -> SelectedAction {
         // ellipsis menu entry and the local shortcut do (the window, not
         // the launcher, acts; see [`Launcher::selected_opens_settings`]).
         (_, Some(Entry::Settings)) => acting("Open settings"),
+        // Quit Pane quits through the tray's Quit path (the window acts;
+        // see [`Launcher::selected_quits`]).
+        (_, Some(Entry::Quit)) => acting("Quit Pane"),
         // A dynamic root item's row runs its first action (#158).
         (_, Some(Entry::DynamicAction(_))) => acting("Run item"),
         // An item of a command's list: its primary action, by the title the

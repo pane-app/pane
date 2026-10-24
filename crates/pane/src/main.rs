@@ -360,8 +360,9 @@ fn main() {
         pane::settings::attach_tray(tray.clone(), cx);
         // Quitting removes Pane's native tray/menu-bar entry and releases
         // its global hotkey registrations, whichever way Pane is quit —
-        // closing the launcher's window or the tray's Quit item, which
-        // does the same itself before it asks the platform to quit — and
+        // closing the launcher's window, or the tray's Quit item and root
+        // search's Quit Pane, which do the same themselves before they ask
+        // the platform to quit (`LauncherWindow::quit`) — and
         // it is a clean quit, whose marker goes (#133): GPUI runs these
         // hooks for the system ending the session too (`WM_ENDSESSION` on
         // Windows, the termination notification on macOS).
