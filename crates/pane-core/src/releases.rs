@@ -183,6 +183,18 @@ impl ReleaseSource {
         format!("{}repos/{REPOSITORY}/releases?per_page={LISTED}", self.api)
     }
 
+    /// The address of the release `v<version>` in GitHub's API.
+    fn release_url(&self, version: &str) -> String {
+        format!("{}repos/{REPOSITORY}/releases/tags/v{version}", self.api)
+    }
+
+    /// The page of the release `v<version>` on GitHub, as its `html_url`
+    /// names it: where What's New sends the user when its notes cannot be
+    /// read.
+    pub(crate) fn release_page(&self, version: &str) -> String {
+        format!("{}{REPOSITORY}/releases/tag/v{version}", self.downloads)
+    }
+
     /// Where every asset of Pane's releases is downloaded from: an asset
     /// whose address the listing gives elsewhere is refused.
     fn downloads_prefix(&self) -> String {
@@ -262,6 +274,41 @@ impl ReleaseSource {
             .and_then(|etag| etag.to_str().ok())
             .map(str::to_owned);
         Ok(Listed::Releases { releases, etag })
+    }
+
+    /// Reads the release `v<version>` alone, with its notes and page: what
+    /// What's New shows when the listing Pane kept does not hold it (the
+    /// setup installed it, say). One request, made when the user opens
+    /// What's New; a failure is explained, and What's New opens the
+    /// release's page instead.
+    pub(crate) fn release(&self, version: &str) -> Result<Release, String> {
+        let url = self.release_url(version);
+        crate::http::https_only(self.loopback, &url)?;
+        let headers = [
+            ("Accept", "application/vnd.github+json"),
+            ("X-GitHub-Api-Version", API_VERSION),
+        ];
+        let read = crate::http::get_blocking(&url, &headers, MAX_LISTING, OWN_LIMITS).map_err(
+            |error| match error {
+                GetError::TooLarge => format!(
+                    "Pane's release at {url} is larger than the {} MiB Pane reads",
+                    MAX_LISTING >> 20
+                ),
+                GetError::Failed(why) => format!("{url} could not be reached: {why}"),
+            },
+        )?;
+        if let Some((why, _)) = rate_limited(&read) {
+            return Err(why);
+        }
+        if read.status != 200 {
+            return Err(format!("{url} answered {}", read.status));
+        }
+        let release: ReleaseJson = serde_json::from_slice(&read.body)
+            .map_err(|error| format!("{url} gave a release that cannot be read: {error}"))?;
+        parse_releases(vec![release])
+            .pop()
+            .filter(|release| release.version == version)
+            .ok_or_else(|| format!("{url} gave another release than v{version}"))
     }
 
     /// Downloads `url`, an asset of Pane's releases (`what` names it in
@@ -404,7 +451,12 @@ fn host_of(url: &str) -> String {
 pub(crate) fn parse_listing(body: &[u8]) -> Result<Vec<Release>, String> {
     let releases: Vec<ReleaseJson> =
         serde_json::from_slice(body).map_err(|error| format!("cannot be read: {error}"))?;
-    Ok(releases
+    Ok(parse_releases(releases))
+}
+
+/// The releases of `releases` that are Pane's versions, as [`Release`]s.
+fn parse_releases(releases: Vec<ReleaseJson>) -> Vec<Release> {
+    releases
         .into_iter()
         .filter(|release| !release.draft && crate::defaults::is_release_tag(&release.tag_name))
         .map(|release| Release {
@@ -421,7 +473,7 @@ pub(crate) fn parse_listing(body: &[u8]) -> Result<Vec<Release>, String> {
             notes: release.body.filter(|body| !body.trim().is_empty()),
             page: release.html_url,
         })
-        .collect())
+        .collect()
 }
 
 /// One release of the listing, as GitHub's API writes it: the fields Pane
@@ -458,6 +510,14 @@ mod tests {
         assert_eq!(
             source.listing_url(),
             "https://api.github.com/repos/pane-app/pane/releases?per_page=10"
+        );
+        assert_eq!(
+            source.release_url("0.1.2"),
+            "https://api.github.com/repos/pane-app/pane/releases/tags/v0.1.2"
+        );
+        assert_eq!(
+            source.release_page("0.1.2"),
+            "https://github.com/pane-app/pane/releases/tag/v0.1.2"
         );
         assert!(source.is_download(
             "https://github.com/pane-app/pane/releases/download/v0.1.0/pane-0.1.0-windows-x86_64.zip"

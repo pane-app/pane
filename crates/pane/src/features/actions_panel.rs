@@ -1520,11 +1520,12 @@ impl LauncherWindow {
                     self.focus_slot(slot, window, cx);
                 }
             }
-            // The notice that Pane quit unexpectedly last time (#133): its
-            // row leaves root search.
+            // The notice that Pane quit unexpectedly last time (#133), or
+            // What's New after an update (ADR 0050): its row leaves root
+            // search.
             ResultAction::DismissNotice => {
                 self.close_actions(window, cx);
-                self.launcher.dismiss_crash_notice();
+                self.launcher.dismiss_notice(&target);
                 self.show_until_done(std::future::ready(()), window, cx);
             }
             // What root search learned for the panel's target is cleared

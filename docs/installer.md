@@ -569,16 +569,15 @@ failed.
 
 ## Updating Pane itself
 
-> **Being replaced.** [ADR 0050](adr/0050-pane-downloads-its-updates-by-itself-and-restarts-into-them.md)
-> (accepted 2026-10-24) makes Pane update the way Raycast does. The check
+> [ADR 0050](adr/0050-pane-downloads-its-updates-by-itself-and-restarts-into-them.md)
+> (accepted 2026-10-24) makes Pane update the way Raycast does: the check
 > on a schedule, the download by itself and **Check for Pane Updates**
-> ([#502](https://github.com/pane-app/pane/issues/502)), and **Restart to
+> ([#502](https://github.com/pane-app/pane/issues/502)), **Restart to
 > Update Pane** with its toast and the restart into the new version
 > ([#503](https://github.com/pane-app/pane/issues/503),
-> [#504](https://github.com/pane-app/pane/issues/504)) have landed and are
-> described below. Still to come: after the restart, **What's New in Pane
-> <version>** shows the release notes for a day
-> ([#505](https://github.com/pane-app/pane/issues/505)).
+> [#504](https://github.com/pane-app/pane/issues/504)), and, after an
+> update, **What's New in Pane <version>** with the release's notes for a
+> day ([#505](https://github.com/pane-app/pane/issues/505)).
 
 Pane checks its GitHub releases for a newer version of itself at start,
 every few hours and when the launcher opens after a stale check. It
@@ -641,7 +640,7 @@ holds:
 - the listing's `ETag`, and what choosing a release needs of that
   listing: each release's version, the assets this system's package can
   be (the package and its `.sha256`), and its notes and page, which
-  What's New will show;
+  [What's New](#after-an-update-whats-new) shows;
 - when GitHub's rate limit lifts, if a check found it used up;
 - the last check or download that failed, when and why.
 
@@ -792,6 +791,47 @@ whenever it holds nothing newer than the version running.
 Restarting while Pane is being used is fine: what an extension is doing
 in the background is waited for (see above), and the restart takes a few
 seconds.
+
+### After an update: What's New
+
+After an update, root search lists **What's New in Pane 99.0.0** for a
+day, as Raycast lists "See What's New"
+([#505](https://github.com/pane-app/pane/issues/505)).
+
+- **Which start is an update.** Each start records the version it runs in
+  `whats-new.json` in Pane's data folder, before anything else of the run
+  writes there. A start on a newer version than the last one is an update,
+  however it got there: a restart into an update (`--updated-from`), the
+  setup installed over Pane, or a package installed by hand. A data folder
+  with Pane's data in it but no record belongs to a Pane from before the
+  record (0.1.1 and earlier), so its first start counts as an update too.
+  A fresh data folder is a first install and lists nothing, and neither
+  does a start of an older version than the last.
+- **The toast.** The first time the launcher is shown after an update, a
+  toast says "Updated to Pane 99.0.0", once, never as a HUD.
+- **The row.** For a blank query it comes near the top, under the
+  "Update" section above the pinned home, below Restart to Update Pane
+  when both are listed, and it is selected when it is first. Compact mode
+  shows it under the search field too. A typed query ("what's new") finds
+  it like any root result.
+- **How long.** It stays for 24 hours from the start that found the
+  update, across restarts, until the user opens it, or until they dismiss
+  it with **Dismiss What's New** in its Actions panel. Then it is gone for
+  good: the record keeps that.
+- **Enter** shows the release's notes, the GitHub release's body, as
+  Markdown in a detail view titled "What's New in Pane 99.0.0", with
+  **Open Release Page** as its primary action. The notes come from the
+  listing the update check kept in `application-update.json`. If it does
+  not hold them (the setup installed the update, say), Pane asks GitHub's
+  API for that release alone, once
+  (`api.github.com/repos/pane-app/pane/releases/tags/v99.0.0`). If that
+  fails too, Enter opens the release's page instead, with no error. The
+  Markdown is read by Pane's own parser, which reads no HTML, and its
+  images are not loaded, so the notes show only their text.
+
+The notes are the release's body, written from
+[`.github/release-notes.md`](../.github/release-notes.md), so its first
+section is kept short enough to read there.
 
 ### What a failure leaves
 

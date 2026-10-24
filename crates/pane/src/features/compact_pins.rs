@@ -26,7 +26,8 @@
 //! While an update of Pane is ready, Restart to Update Pane shows under the
 //! search field too, above the pins (ADR 0050): the result row root search
 //! lists first for a blank query, selected, so Enter restarts collapsed as
-//! expanded ([`LauncherWindow::render_compact_update`]).
+//! expanded. So does What's New, for a day after an update, below it when
+//! both show ([`LauncherWindow::render_compact_updates`]).
 //!
 //! The row's geometry is kept here rather than among the theme's pinned
 //! tokens: it is this row's own, and no other surface draws it.
@@ -104,27 +105,31 @@ impl LauncherWindow {
             && !self.launcher.quick_slots().is_empty()
     }
 
-    /// Restart to Update Pane under the collapsed window's search field,
-    /// drawn from `row`, root search's first (ADR 0050): the result row the
-    /// expanded list draws, `selected` as it is there. `None` without a
-    /// row.
-    pub(crate) fn render_compact_update(
+    /// Restart to Update Pane and What's New under the collapsed window's
+    /// search field, drawn from `rows`, root search's first (ADR 0050):
+    /// the result rows the expanded list draws, the one at `selected`
+    /// selected as it is there.
+    pub(crate) fn render_compact_updates(
         &self,
-        row: Option<pane_core::Row>,
-        selected: bool,
+        rows: Vec<pane_core::Row>,
+        selected: Option<usize>,
         theme: &Theme,
         cx: &mut Context<Self>,
-    ) -> Option<Div> {
-        let row = row?;
-        let shown = self.launcher.present_row(0);
-        Some(
-            div()
-                .flex_none()
-                .h(px(update_row_height(theme)))
-                .py(px(UPDATE_INSET))
-                .px(theme.geometry.list_padding_x)
-                .child(self.render_row(0, row, selected, shown, true, None, cx)),
-        )
+    ) -> Vec<Div> {
+        rows.into_iter()
+            .enumerate()
+            .map(|(index, row)| {
+                let shown = self.launcher.present_row(index);
+                let row =
+                    self.render_row(index, row, selected == Some(index), shown, true, None, cx);
+                div()
+                    .flex_none()
+                    .h(px(update_row_height(theme)))
+                    .py(px(UPDATE_INSET))
+                    .px(theme.geometry.list_padding_x)
+                    .child(row)
+            })
+            .collect()
     }
 
     /// The collapsed window's row of pins, under the search field, when it

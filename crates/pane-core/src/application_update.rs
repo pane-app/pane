@@ -306,6 +306,14 @@ impl Record {
     /// The version of the record's format this Pane writes.
     const VERSION: u32 = 1;
 
+    /// The release `version` of the listing the record keeps, with its
+    /// notes and page, if the last listing read named it.
+    pub(crate) fn release(&self, version: &str) -> Option<&Release> {
+        self.releases
+            .iter()
+            .find(|release| release.version == version)
+    }
+
     /// The record at `path`; an empty one when there is none, or none this
     /// Pane can read.
     pub(crate) fn open(path: &Path) -> Record {

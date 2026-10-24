@@ -181,6 +181,21 @@ fn main() {
     if let Some(waited) = restarted.wait_pid {
         hand_over(waited);
     }
+    // Whether this start is an update (ADR 0050): the version it runs is
+    // recorded in the data folder, and one newer than the last start's
+    // lists What's New for a day — an update the setup installed too. Read
+    // before anything else of this run writes to the data folder, so the
+    // data a Pane from before the record left there is told apart.
+    let whats_new = pane::data_dir().map(|data| {
+        let now = pane_core::clipboard::Clock::now(&pane_core::clipboard::SystemClock);
+        let started = pane_core::whats_new::start(
+            &data,
+            pane::APP_VERSION,
+            restarted.updated_from.as_deref(),
+            now,
+        );
+        (data, started)
+    });
     // Pane's own log and crash record (#133), before anything else can
     // write a diagnostic or panic: the log keeps what standard error says,
     // and the record tells whether the run before ended unexpectedly.
@@ -382,6 +397,12 @@ fn main() {
         // launcher is shown.
         let launcher = match &restarted.updated_from {
             Some(previous) => launcher.with_updated_from(previous),
+            None => launcher,
+        };
+        // After an update, root search lists What's New for a day, and
+        // the first showing says Pane was updated (ADR 0050).
+        let launcher = match &whats_new {
+            Some((data, started)) => launcher.with_whats_new(data, pane::APP_VERSION, started),
             None => launcher,
         };
         #[cfg(debug_assertions)]

@@ -4,7 +4,8 @@
 
 - **Currencies in the calculator** (#475): the calculator converts between currencies, as Raycast's does.
 - **A back button on every pushed view** (#482): forms, detail views and canvases, which have no search bar, get a top bar with a back button.
-- **Updating from 0.1.0**: Pane 0.1.0 finds this release by itself. Choose **Update Pane to {version}** in the launcher, and the new version is used the next time Pane starts (see Updates below).
+- **Updates like Raycast's**: Pane checks for updates every few hours, downloads them by itself, and **Restart to Update Pane** restarts into the new version with one Enter. After an update, **What's New** shows these notes for a day.
+- **Updating from 0.1.1 or 0.1.0**: once more by hand. Pane finds this release by itself: choose **Update Pane to {version}** in the launcher, then quit Pane from its tray or menu-bar icon and start it again (or run the setup or installer of this release over it). From this version on, updates restart by themselves (see Updates below).
 
 ## What was checked
 
@@ -35,4 +36,4 @@ Pane is free software under GPL-3.0-or-later. `pane-{version}-source.tar.gz` (wi
 
 ## Updates
 
-Pane checks this repository's releases when it starts and tells you when a newer version is out. It never downloads or installs one unless you choose to, and it checks each download against its `.sha256`. On Windows, an update installed from inside Pane also gives its entry in Settings → Apps the new version. On macOS, the update replaces the program inside Pane.app wherever you put it. On Linux, an AppImage is replaced by the new AppImage at the same path.
+Pane checks this repository's releases when it starts, every few hours and when you open it after a while, and downloads a newer version by itself, checking it against its `.sha256`. It installs it only when you choose **Restart to Update Pane**, first in the launcher (or the toast's **Restart**): Pane then restarts into the new version, keeping your extensions and settings, and shows **What's New** with the release's notes for a day. On Windows, an update installed from inside Pane also gives its entry in Settings → Apps the new version. On macOS, the update replaces the program inside Pane.app wherever you put it. On Linux, an AppImage is replaced by the new AppImage at the same path.

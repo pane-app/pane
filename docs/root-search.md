@@ -98,7 +98,11 @@ The list holds:
    ([installer](installer.md#ready-restart-to-update-pane)). For a blank
    query that row is not ranked: it comes first of all, under its own
    "Update" section above the pinned home, drawn with the accent and
-   selected, and compact mode shows it under the search field.
+   selected, and compact mode shows it under the search field. After an
+   update, "What's New in Pane <version>" is listed the same way for a
+   day, below the restart row when both are, without the accent; Enter
+   shows the release's notes, and its Actions panel dismisses it
+   ([installer](installer.md#after-an-update-whats-new)).
 
 Extensions are installed and managed in Settings (#168,
 [ADR 0043](adr/0043-extensions-are-managed-in-settings-one-page-per-extension.md)).

@@ -67,7 +67,7 @@ use crate::application_update::{
 use crate::feedback::{Toast, ToastAction, ToastDoes, ToastStyle, WindowPresence};
 use crate::launcher::Entry;
 use crate::launcher::Row;
-use crate::releases::ReleaseSource;
+use crate::releases::{Release, ReleaseSource};
 use crate::restart::{self, Relaunch};
 
 /// How often Pane checks for a newer version of itself while it runs, and
@@ -294,7 +294,28 @@ enum Restarted {
     Stuck(String, String),
 }
 
+impl Application {
+    /// Where this Pane's updates come from, which What's New reads a
+    /// release's notes from too.
+    pub(in crate::launcher) fn source(&self) -> &ReleaseSource {
+        &self.source
+    }
+}
+
 impl Updates {
+    /// The release `version` as the record's listing keeps it, with its
+    /// notes and page: what What's New shows.
+    pub(in crate::launcher) fn kept_release(&self, version: &str) -> Option<Release> {
+        self.record.release(version).cloned()
+    }
+
+    /// This run of Pane is an update from version `previous` (empty when
+    /// it is not known): the first time the launcher is shown, a toast says
+    /// "Updated to Pane <version>", once, however the update was found.
+    pub(in crate::launcher) fn note_updated(&mut self, previous: &str) {
+        self.updated_from.get_or_insert_with(|| previous.to_owned());
+    }
+
     /// How often Pane checks.
     fn interval(&self) -> Duration {
         self.interval.unwrap_or(CHECK_EVERY)
@@ -595,7 +616,7 @@ impl Launcher {
     /// time the launcher is shown, a toast says "Updated to Pane
     /// <version>".
     pub fn with_updated_from(self, previous: &str) -> Self {
-        self.lock().updates.updated_from = Some(previous.to_owned());
+        self.lock().updates.note_updated(previous);
         self
     }
 
@@ -686,15 +707,21 @@ impl Launcher {
         if state.feedback.presence != WindowPresence::Shown {
             return;
         }
-        let Some(application) = &self.application else {
-            return;
-        };
-        if state.updates.updated_from.take().is_some() {
-            let toast = Toast::new(
-                ToastStyle::Success,
-                format!("Updated to Pane {}", application.version),
-            );
+        // A start on a newer version: the updater's version, or else the
+        // one What's New was given (see `whats_new`).
+        let running = self
+            .application
+            .as_ref()
+            .map(|application| application.version.clone())
+            .or_else(|| state.whats_new.version().map(str::to_owned));
+        if let Some(version) = running
+            && state.updates.updated_from.take().is_some()
+        {
+            let toast = Toast::new(ToastStyle::Success, format!("Updated to Pane {version}"));
             self.show_own_toast(state, toast);
+            return;
+        }
+        if self.application.is_none() {
             return;
         }
         let Some(staged) = state.updates.ready() else {

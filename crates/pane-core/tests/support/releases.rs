@@ -1,6 +1,8 @@
 //! A stand-in for Pane's releases on GitHub, for tests: it serves, on
 //! 127.0.0.1 only, the listing GitHub's API gives of Pane's releases
-//! (`/repos/pane-app/pane/releases`), and each release's assets — the
+//! (`/repos/pane-app/pane/releases`), each release alone as the API gives
+//! it by its tag (`/repos/pane-app/pane/releases/tags/v<version>`), with
+//! the notes and page What's New shows, and each release's assets — the
 //! application package and its `.sha256` — under the address GitHub
 //! downloads them from (`/pane-app/pane/releases/download/v<version>/
 //! <name>`), which redirects to where the bytes are (`/assets/<name>`), as
@@ -25,6 +27,22 @@ use sha2::{Digest, Sha256};
 /// The path of the listing of Pane's releases, as Pane asks GitHub's API
 /// for it (without its query).
 pub const LISTING: &str = "/repos/pane-app/pane/releases";
+
+/// The path of the release `v<version>` alone, as Pane asks GitHub's API
+/// for it.
+pub fn release_path(version: &str) -> String {
+    format!("{LISTING}/tags/v{version}")
+}
+
+/// The notes the stand-in gives the release `v<version>`, as GitHub gives
+/// a release's body: Markdown.
+pub fn notes_of(version: &str) -> String {
+    format!(
+        "## What's new in Pane {version}
+
+- **Faster** searches."
+    )
+}
 
 /// The path an asset's bytes are served at, once the download's redirect
 /// was followed.
@@ -327,33 +345,36 @@ fn listing_of(served: &Served, url: &str) -> Value {
         .releases
         .iter()
         .rev()
-        .map(|release| {
-            let tag = format!("v{}", release.version);
-            let assets: Vec<Value> = release
-                .assets
-                .iter()
-                .map(|(name, bytes)| {
-                    json!({
-                        "name": name,
-                        "size": bytes.len(),
-                        "state": "uploaded",
-                        "browser_download_url":
-                            format!("{url}pane-app/pane/releases/download/{tag}/{name}"),
-                    })
-                })
-                .collect();
+        .map(|release| release_of(release, url))
+        .collect();
+    Value::Array(releases)
+}
+
+/// One release, as GitHub's API writes it in the listing and alone.
+fn release_of(release: &Published, url: &str) -> Value {
+    let tag = format!("v{}", release.version);
+    let assets: Vec<Value> = release
+        .assets
+        .iter()
+        .map(|(name, bytes)| {
             json!({
-                "tag_name": tag,
-                "name": format!("Pane {}", release.version),
-                "draft": false,
-                "prerelease": true,
-                "body": format!("## What's new in Pane {}", release.version),
-                "html_url": format!("{url}pane-app/pane/releases/tag/{tag}"),
-                "assets": assets,
+                "name": name,
+                "size": bytes.len(),
+                "state": "uploaded",
+                "browser_download_url":
+                    format!("{url}pane-app/pane/releases/download/{tag}/{name}"),
             })
         })
         .collect();
-    Value::Array(releases)
+    json!({
+        "tag_name": tag,
+        "name": format!("Pane {}", release.version),
+        "draft": false,
+        "prerelease": true,
+        "body": notes_of(&release.version),
+        "html_url": format!("{url}pane-app/pane/releases/tag/{tag}"),
+        "assets": assets,
+    })
 }
 
 /// `path` without its query.
@@ -557,6 +578,16 @@ fn answer_path(served: &Served, path: &str, url: &str, if_none_match: Option<&st
         let mut reply = Reply::ok(listing.into_bytes());
         reply.headers.push(format!("ETag: {etag}"));
         return reply;
+    }
+    if let Some(version) = path.strip_prefix(&format!("{LISTING}/tags/v")) {
+        return match served
+            .releases
+            .iter()
+            .find(|release| release.version == version)
+        {
+            Some(release) => Reply::ok(release_of(release, url).to_string().into_bytes()),
+            None => Reply::not_found(),
+        };
     }
     let find = |name: &str, version: Option<&str>| {
         served
