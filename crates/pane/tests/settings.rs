@@ -2877,6 +2877,108 @@ fn an_extension_is_uninstalled_from_its_page_with_the_keyboard_alone(cx: &mut Te
         view.screen
     );
     assert_eq!(settings_windows(cx).len(), 1, "Settings stays open");
+
+    // The confirmation takes the keyboard (#492): its answers' list, on
+    // the launcher's own selection — the first answer, drawn selected and
+    // read as the list's active answer.
+    assert!(has_node(
+        &mut settings_cx,
+        "ListBox",
+        "Uninstall Settings sample?"
+    ));
+    assert_eq!(focused(&mut settings_cx), "Uninstall and keep saved data");
+    let selected = |cx: &mut VisualTestContext| {
+        cx.read_entity(&launcher, |window, _| window.launcher().selected())
+    };
+    assert_eq!(selected(cx), Some(0));
+    assert!(has_selected_node(
+        &mut settings_cx,
+        "Uninstall and keep saved data"
+    ));
+    // Down and Up move it, as the launcher window's arrows do, stopping at
+    // either end; the row drawn selected follows.
+    settings_cx.simulate_keystrokes("down");
+    assert_eq!(selected(cx), Some(1));
+    assert!(has_selected_node(
+        &mut settings_cx,
+        "Uninstall and delete saved data"
+    ));
+    settings_cx.simulate_keystrokes("down down");
+    assert_eq!(selected(cx), Some(2), "Down stops at Cancel, the last");
+    settings_cx.simulate_keystrokes("up up up");
+    assert_eq!(selected(cx), Some(0), "Up stops at the first");
+
+    // Enter answers it: the extension is uninstalled, its saved data kept,
+    // and Settings stays open.
+    settings_cx.simulate_keystrokes("enter");
+    until_text(
+        &mut settings_cx,
+        "Uninstalled Settings sample; its settings and content are kept",
+    );
+    assert!(
+        cx.read_entity(&launcher, |window, _| window.launcher().packages())
+            .is_empty(),
+        "nothing is installed"
+    );
+    assert_eq!(settings_windows(cx).len(), 1, "Settings stays open");
+}
+
+/// Whether the node labelled `label` reads as selected, as assistive
+/// technology sees it.
+fn has_selected_node(cx: &mut VisualTestContext, label: &str) -> bool {
+    let (_, json) = accessibility(cx);
+    let tree: serde_json::Value = serde_json::from_str(&json).unwrap();
+    tree["nodes"].as_object().unwrap().values().any(|node| {
+        let aria = &node["aria"];
+        aria["label"] == label && aria["selected"] == true
+    })
+}
+
+#[gpui::test]
+fn escape_on_the_uninstall_confirmation_cancels_it_and_leaves_settings_open(
+    cx: &mut TestAppContext,
+) {
+    let (sources, data) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let folder = settings_package(&sources.path().join("settings"));
+    let (launcher, cx) = open_installed(cx, &data, &folder);
+    let mut settings_cx = open_settings(cx);
+    let settings = settings_windows(cx).pop().expect("Settings opened");
+    open_page_by_keys(&settings, &mut settings_cx);
+    tab_to(&mut settings_cx, "Actions for Settings sample");
+    settings_cx.simulate_keystrokes("enter end enter");
+    settings_cx.run_until_parked();
+    assert_eq!(focused(&mut settings_cx), "Uninstall and keep saved data");
+
+    // Escape is the confirmation's Cancel (#492), as in the launcher
+    // window: nothing is uninstalled, the page shows again with the
+    // keyboard back on Actions…, and Settings stays open.
+    settings_cx.simulate_keystrokes("escape");
+    settings_cx.run_until_parked();
+    let view = cx.read_entity(&launcher, |window, _| window.launcher().view());
+    assert!(
+        !matches!(view.screen, Screen::Confirm { .. }),
+        "{:?}",
+        view.screen
+    );
+    assert_eq!(settings_windows(cx).len(), 1, "Settings stays open");
+    assert!(
+        settings_cx
+            .debug_bounds("extension-page-title-Settings sample")
+            .is_some(),
+        "its page shows again"
+    );
+    assert_eq!(
+        cx.read_entity(&launcher, |window, _| window.launcher().packages())
+            .len(),
+        1,
+        "it is still installed"
+    );
+    assert_eq!(focused(&mut settings_cx), "Actions for Settings sample");
+
+    // With no flow screen showing, Escape is the window's again.
+    settings_cx.simulate_keystrokes("escape");
+    settings_cx.run_until_parked();
+    assert!(settings_windows(cx).is_empty(), "Escape closed Settings");
 }
 
 #[gpui::test]
@@ -3019,6 +3121,22 @@ fn the_extensions_group_installs_and_opens_pages_from_the_keyboard(cx: &mut Test
         &mut settings_cx,
         "`Not A Package!` is not an npm package name",
     );
+
+    // The preview, with no rows to answer, gives the keyboard to its Back
+    // button (#492); Escape is its Back, leaving the preview for the
+    // group's page, and not Settings.
+    settings_cx.run_until_parked();
+    assert_eq!(focused(&mut settings_cx), "Back");
+    settings_cx.simulate_keystrokes("escape");
+    settings_cx.run_until_parked();
+    assert!(settings_cx.debug_bounds("extension-back").is_none());
+    assert!(
+        settings_cx
+            .debug_bounds("extension-item-Settings sample")
+            .is_some(),
+        "the group's page shows again"
+    );
+    assert_eq!(settings_windows(cx).len(), 1, "Settings stays open");
 }
 
 #[gpui::test]
@@ -3272,6 +3390,60 @@ fn a_collection_folder_chosen_from_the_plus_menu_opens_the_choice(cx: &mut TestA
         "extension-row-Update extensions automatically",
     );
     open_page(&mut settings_cx, "Clock from Git");
+}
+
+#[gpui::test]
+fn a_collection_s_choice_is_answered_from_the_keyboard(cx: &mut TestAppContext) {
+    let (sources, data) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let folder = choice_collection(&sources.path().join("tools"));
+    cx.executor().allow_parking();
+    cx.update(pane::bind_keys);
+    let launcher =
+        Launcher::with_packages(Runtime::start(), vec![], data.path().join("extensions"));
+    let (_launcher, cx) =
+        cx.add_window_view(|window, cx| LauncherWindow::new(launcher, window, cx));
+    let (_settings, mut settings_cx) = open_extensions(cx);
+    click_row(&mut settings_cx, "extensions-add");
+    click_row(&mut settings_cx, "extensions-add-Install from Folder…");
+    let chosen = folder.clone();
+    settings_cx.simulate_path_prompt_response(move |_| Some(vec![chosen]));
+    until_drawn(&mut settings_cx, "extension-row-Install");
+
+    // The choice takes the keyboard (#492) on its first extension. Space
+    // ticks the selected extension, as the launcher window's Space does;
+    // Down moves on to the next.
+    settings_cx.run_until_parked();
+    assert!(has_selected_node(&mut settings_cx, "Clock from Git"));
+    settings_cx.simulate_keystrokes("space");
+    until_text(&mut settings_cx, "Untick Clock from Git");
+    settings_cx.simulate_keystrokes("down space");
+    until_text(&mut settings_cx, "Untick Timers from Git");
+
+    // Enter previews the selected extension, as a click does; Escape is
+    // the preview's Back, returning to the choice with its ticks, and
+    // leaves Settings open.
+    settings_cx.simulate_keystrokes("enter");
+    until_drawn(
+        &mut settings_cx,
+        "extension-detail-Extension: timers, one of the extensions its collection lists",
+    );
+    settings_cx.simulate_keystrokes("escape");
+    until_drawn(&mut settings_cx, "extension-tick-Clock from Git");
+    assert_eq!(settings_windows(cx).len(), 1, "Settings stays open");
+    assert!(has_node(
+        &mut settings_cx,
+        "CheckBox",
+        "Untick Clock from Git"
+    ));
+
+    // End reaches the Install row, and Enter installs the ticked ones.
+    settings_cx.simulate_keystrokes("end");
+    assert!(has_selected_node(&mut settings_cx, "Install"));
+    settings_cx.simulate_keystrokes("enter");
+    until_text(
+        &mut settings_cx,
+        "Installed Clock from Git and Timers from Git",
+    );
 }
 
 #[gpui::test]

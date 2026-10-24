@@ -155,7 +155,9 @@ pub(crate) fn bind_keys(cx: &mut App) {
         ),
         // Escape closes the window where the Keyboard page says so; a
         // control that takes Escape itself (a recorder, a select, the
-        // search field, an open menu) binds it deeper and keeps it.
+        // search field, an open menu) binds it deeper and keeps it, and a
+        // flow screen on the Extensions group takes it before the window
+        // closes (see `escape_settings`).
         KeyBinding::new("escape", EscapeSettings, Some(CONTEXT)),
         // A pressable control: a switch, a button, a row (see
         // [`pressable`]).
@@ -510,9 +512,17 @@ impl SettingsWindow {
         }
     }
 
-    /// Escape, where no control took it: closes this window if the
-    /// Keyboard page's choice says Escape closes Settings.
+    /// Escape, where no control took it: on the Extensions group, a flow
+    /// screen it shows (a confirmation, a preview, the update results)
+    /// takes it first — the innermost thing closes first, as Raycast's
+    /// Escape dismisses a dialog and not its window (#492). Otherwise it
+    /// closes this window if the Keyboard page's choice says Escape closes
+    /// Settings.
     fn escape_settings(&mut self, _: &EscapeSettings, window: &mut Window, cx: &mut Context<Self>) {
+        if self.pages[self.selected].title == extensions::TITLE && extensions::leave_flow(self, cx)
+        {
+            return;
+        }
         if crate::settings::shared(cx)
             .read(cx)
             .escape_closes_settings()

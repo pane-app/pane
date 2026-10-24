@@ -67,8 +67,13 @@
 //! its first item that can be chosen; Up, Down, Home and End move between
 //! the items, Enter or Space chooses one, and Escape or Tab closes the
 //! menu and gives the keyboard back to its button, leaving Settings open.
-//! Enter in the install field shows the package. So the user's case — open
-//! an extension's page, Actions…, Uninstall — needs no pointer.
+//! Enter in the install field shows the package. A flow screen drawn in
+//! place of the page — "Uninstall X?", a preview, a collection's choice,
+//! the update results — takes the keyboard when it shows, on the
+//! launcher's own selection: Up and Down move it, Enter answers, Space
+//! ticks a collection's extension, and Escape is Cancel or Back, never
+//! the window's close (#492). So the user's case — open an extension's
+//! page, Actions…, Uninstall, keep its data — needs no pointer.
 //!
 //! Synchronization is by reading, not copying: every frame re-reads the
 //! launcher, and wherever the launcher changes — an operation's reply, a
@@ -117,7 +122,8 @@ actions!(
         FirstItem,
         LastItem,
         CloseMenu,
-        ShowPackage
+        ShowPackage,
+        TickItem
     ]
 );
 
@@ -130,11 +136,21 @@ const MENU: &str = "ExtensionMenu";
 /// repository to install: Enter shows the package, as Show Package does.
 const INSTALL_FIELD: &str = "ExtensionInstallField";
 
+/// The key context of a flow screen's list (a confirmation's answers, a
+/// preview's rows, a collection's choice, the update results): the arrows
+/// move the launcher's selection, Enter activates the selected row and
+/// Space ticks a collection's extension.
+const FLOW: &str = "ExtensionFlow";
+
+/// The focus key of a flow screen's Back button.
+const FLOW_BACK: &str = "flow-back";
+
 /// Registers the pages' keys. Every switch, button and row is pressable
 /// (Enter and Space, [`super::pressable`]); here are an open menu's keys,
 /// bound deeper than the window's so they never reach its sidebar keys,
-/// focus traversal or Escape — Escape closes the menu, not Settings — and
-/// the install field's Enter.
+/// focus traversal or Escape — Escape closes the menu, not Settings — a
+/// flow screen's list's keys, and the install field's Enter. Escape on a
+/// flow screen is the window's (see [`leave_flow`]).
 pub(crate) fn bind_keys(cx: &mut App) {
     let field = format!("{INSTALL_FIELD} > {DEFAULT_INPUT_CONTEXT}");
     cx.bind_keys([
@@ -147,6 +163,12 @@ pub(crate) fn bind_keys(cx: &mut App) {
         KeyBinding::new("escape", CloseMenu, Some(MENU)),
         KeyBinding::new("tab", CloseMenu, Some(MENU)),
         KeyBinding::new("shift-tab", CloseMenu, Some(MENU)),
+        KeyBinding::new("down", NextItem, Some(FLOW)),
+        KeyBinding::new("up", PreviousItem, Some(FLOW)),
+        KeyBinding::new("home", FirstItem, Some(FLOW)),
+        KeyBinding::new("end", LastItem, Some(FLOW)),
+        KeyBinding::new("enter", super::Press, Some(FLOW)),
+        KeyBinding::new("space", TickItem, Some(FLOW)),
         KeyBinding::new("enter", ShowPackage, Some(&field)),
     ]);
 }
@@ -284,9 +306,27 @@ pub(crate) struct State {
     /// Which of the open menu's items can be chosen, by index, as it last
     /// drew them: the ones its arrows stop at.
     menu_offered: Vec<bool>,
+    /// A flow screen's list's focus, a tab stop: made the first time one
+    /// draws and kept, so the keyboard stays on the list as one flow screen
+    /// follows another.
+    flow_list: Option<FocusHandle>,
+    /// Whether the last frame of the group's pages drew a flow screen: a
+    /// change is when the list takes the keyboard, or gives it back.
+    flow_shown: bool,
+    /// What had the keyboard when the flow screen took it (the Actions…
+    /// button an Uninstall came from, say), which gets it back when the
+    /// flow ends.
+    flow_return: Option<FocusHandle>,
 }
 
 impl State {
+    /// The focus of a flow screen's list.
+    fn flow_focus(&mut self, cx: &mut Context<SettingsWindow>) -> FocusHandle {
+        self.flow_list
+            .get_or_insert_with(|| cx.focus_handle().tab_stop(true))
+            .clone()
+    }
+
     /// The focus of the control `key` names: a tab stop, made the first
     /// time the control draws.
     fn focus(&mut self, key: &str, cx: &mut Context<SettingsWindow>) -> FocusHandle {
@@ -1213,6 +1253,7 @@ fn render(
         this.extensions.menu = false;
     }
     let flow = in_extension_flow(&live.screen);
+    follow_flow(this, flow, !live.rows.is_empty(), window, cx);
     // The flow's status while the launcher is in it; else, on a developed
     // extension's page, why its last build failed, as the development
     // thread reports it; else what the last operation came to; else a
@@ -1246,9 +1287,9 @@ fn render(
         if matches!(live.screen, Screen::UpdateResults { .. }) {
             update_results_screen(this, &live, &theme, cx)
         } else if matches!(live.screen, Screen::Choice(_)) {
-            choice_screen(&live, &theme, cx)
+            choice_screen(this, &live, &theme, cx)
         } else {
-            flow_screen(&live, &theme, cx)
+            flow_screen(this, &live, &theme, cx)
         }
     } else {
         match this.extension.clone() {
@@ -1266,9 +1307,10 @@ fn render(
 
 /// A flow screen in place of the page: its title over its lines of
 /// information, its rows (a confirmation's answers, a preview's Install,
-/// a details screen's Retry), and the way back a details screen or a
-/// preview offers.
+/// a details screen's Retry) as a list the keyboard is on ([`flow_list`]),
+/// and the way back a details screen or a preview offers.
 fn flow_screen(
+    this: &mut SettingsWindow,
     live: &LauncherView,
     theme: &Theme,
     cx: &mut Context<SettingsWindow>,
@@ -1295,7 +1337,7 @@ fn flow_screen(
             let reason = row.unavailable.as_ref().map(|why| why.reason().to_owned());
             let selector = format!("extension-row-{}", row.title);
             let id = row.id.clone();
-            list_entry(
+            let item = list_entry(
                 ("extension-row", index),
                 None,
                 &row.title,
@@ -1308,30 +1350,18 @@ fn flow_screen(
             .when(reason.is_some(), |item| item.aria_disabled(true))
             .on_click(cx.listener(move |this, _: &gpui::ClickEvent, _, cx| {
                 answer(this, &id, cx);
-            }))
-            .into_any_element()
+            }));
+            flow_row(this, item, &row.id, live.selected == Some(index), theme)
         })
         .collect();
-    let back = details_screen(&live.screen).then(|| {
-        let back = controls::button("extension-back", "Back", true, theme)
-            .debug_selector(|| "extension-back".into())
-            .role(Role::Button)
-            .aria_label("Back")
-            .on_click(cx.listener(|this, _: &gpui::ClickEvent, _, cx| {
-                // The way out of a details screen or a preview the page
-                // shows, as the launcher window's Escape is there.
-                this.launcher.back();
-                launcher_changed_outside(cx);
-                cx.notify();
-            }));
-        div().flex().child(back)
-    });
+    let back = details_screen(&live.screen).then(|| flow_back(this, theme, cx));
+    let list = (!rows.is_empty()).then(|| flow_list(this, live, rows, theme, cx));
     let body = div()
         .flex()
         .flex_col()
         .gap(theme.geometry.settings.section_label_gap)
         .children(details)
-        .children((!rows.is_empty()).then(|| controls::list_card(rows, theme)))
+        .children(list)
         .children(back);
     vec![
         controls::section(Some(live.title.clone().into()), body, theme)
@@ -1347,8 +1377,12 @@ fn flow_screen(
 /// first; what the run of the ticked ones came to for each once it ends.
 /// Clicking a row previews that extension (as Enter does in the launcher
 /// window); the check mark alone ticks it. The Install row after them
-/// runs the ticked extensions, each as its own package.
+/// runs the ticked extensions, each as its own package. The rows are a
+/// list the keyboard is on ([`flow_list`]): Enter previews or installs as
+/// a click does, and Space ticks the selected extension, as the launcher
+/// window's Space does.
 fn choice_screen(
+    this: &mut SettingsWindow,
     live: &LauncherView,
     theme: &Theme,
     cx: &mut Context<SettingsWindow>,
@@ -1380,7 +1414,7 @@ fn choice_screen(
         })
         .collect::<Vec<_>>();
     let Screen::Choice(choice) = &live.screen else {
-        return flow_screen(live, theme, cx);
+        return flow_screen(this, live, theme, cx);
     };
     let mut rows: Vec<AnyElement> = Vec::new();
     for (index, row) in live.rows.iter().enumerate().take(choice.extensions.len()) {
@@ -1440,29 +1474,34 @@ fn choice_screen(
         let scope = format!("extension-{title}");
         let tick = settings_choice_tick(index, &id, &title, ticked, theme, cx);
         let selector = format!("extension-row-{title}");
-        rows.push(
-            controls::list_item(
-                ("extension-row", index),
-                Some(row_icon_at(
-                    &RowIcon::Drawn(icon),
-                    TileSize::Row,
-                    "extension-item-icon",
-                    &scope,
-                    theme,
-                )),
-                title.clone(),
-                lines,
+        let item = controls::list_item(
+            ("extension-row", index),
+            Some(row_icon_at(
+                &RowIcon::Drawn(icon),
+                TileSize::Row,
+                "extension-item-icon",
+                &scope,
                 theme,
-            )
-            .debug_selector(move || selector)
-            .role(Role::Button)
-            .aria_label(title.clone())
-            .child(tick)
-            .on_click(cx.listener(move |this, _: &gpui::ClickEvent, _, cx| {
-                answer(this, &id, cx);
-            }))
-            .into_any_element(),
-        );
+            )),
+            title.clone(),
+            lines,
+            theme,
+        )
+        .debug_selector(move || selector)
+        .role(Role::Button)
+        .aria_label(title.clone())
+        .child(tick);
+        let on_click = id.clone();
+        let item = item.on_click(cx.listener(move |this, _: &gpui::ClickEvent, _, cx| {
+            answer(this, &on_click, cx);
+        }));
+        rows.push(flow_row(
+            this,
+            item,
+            &id,
+            live.selected == Some(index),
+            theme,
+        ));
     }
     // The Install row, after the extensions, while no run is going: the
     // last of the choice's rows, as the launcher's own rows list it.
@@ -1471,48 +1510,41 @@ fn choice_screen(
         let title = row.title.clone();
         let subtitle = row.subtitle.clone().unwrap_or_default();
         let selector = format!("extension-row-{title}");
-        rows.push(
-            controls::list_item(
-                ("extension-row", index),
-                None,
-                title.clone(),
-                vec![
-                    controls::field_description(subtitle, theme.text_muted, theme)
-                        .truncate()
-                        .into_any_element(),
-                ],
-                theme,
-            )
-            .debug_selector(move || selector)
-            .role(Role::Button)
-            .aria_label(title.clone())
-            .on_click(cx.listener(move |this, _: &gpui::ClickEvent, _, cx| {
-                answer(this, &id, cx);
-            }))
-            .into_any_element(),
-        );
+        let on_click = id.clone();
+        let item = controls::list_item(
+            ("extension-row", index),
+            None,
+            title.clone(),
+            vec![
+                controls::field_description(subtitle, theme.text_muted, theme)
+                    .truncate()
+                    .into_any_element(),
+            ],
+            theme,
+        )
+        .debug_selector(move || selector)
+        .role(Role::Button)
+        .aria_label(title.clone())
+        .on_click(cx.listener(move |this, _: &gpui::ClickEvent, _, cx| {
+            answer(this, &on_click, cx);
+        }));
+        rows.push(flow_row(
+            this,
+            item,
+            &id,
+            live.selected == Some(index),
+            theme,
+        ));
     }
-    let back = details_screen(&live.screen).then(|| {
-        let back = controls::button("extension-back", "Back", true, theme)
-            .debug_selector(|| "extension-back".into())
-            .role(Role::Button)
-            .aria_label("Back")
-            .on_click(cx.listener(|this, _: &gpui::ClickEvent, _, cx| {
-                // The way out of the choice the page shows, as the
-                // launcher window's Escape is there.
-                this.launcher.back();
-                launcher_changed_outside(cx);
-                cx.notify();
-            }));
-        div().flex().child(back)
-    });
+    let back = details_screen(&live.screen).then(|| flow_back(this, theme, cx));
+    let list = (!rows.is_empty()).then(|| flow_list(this, live, rows, theme, cx));
     let body = div()
         .flex()
         .flex_col()
         .gap(theme.geometry.settings.section_label_gap)
         .children(status)
         .children(details)
-        .children((!rows.is_empty()).then(|| controls::list_card(rows, theme)))
+        .children(list)
         .children(back);
     vec![
         controls::section(Some(live.title.clone().into()), body, theme)
@@ -1586,7 +1618,8 @@ fn settings_choice_tick(
 /// each row the extension's icon, title and outcome, opening that
 /// extension's page — as the screen's own rows do in the launcher
 /// window. The way back is the page's own Back button, as a details
-/// screen's is.
+/// screen's is. The groups are one list the keyboard is on
+/// ([`flow_keys`]), the launcher's selected row drawn selected.
 fn update_results_screen(
     this: &mut SettingsWindow,
     live: &LauncherView,
@@ -1594,6 +1627,10 @@ fn update_results_screen(
     cx: &mut Context<SettingsWindow>,
 ) -> Vec<AnyElement> {
     let results = this.launcher.update_results();
+    let selected = live
+        .selected
+        .and_then(|index| live.rows.get(index))
+        .map(|row| row.id.clone());
     let mut groups = Vec::new();
     let mut at: usize = 0;
     for (label, group) in [
@@ -1628,22 +1665,22 @@ fn update_results_screen(
                     .into_any_element(),
             ];
             let selector = format!("extension-row-{title}");
-            items.push(
-                controls::list_item(
-                    ("extension-row", index),
-                    Some(tile),
-                    title.clone(),
-                    lines,
-                    theme,
-                )
-                .debug_selector(move || selector)
-                .role(Role::Link)
-                .aria_label(title)
-                .on_click(cx.listener(move |this, _: &gpui::ClickEvent, _, cx| {
-                    this.show_extension(Some(key.clone()), cx);
-                }))
-                .into_any_element(),
-            );
+            let chosen = selected.as_deref() == Some(key.as_str());
+            let opened = key.clone();
+            let item = controls::list_item(
+                ("extension-row", index),
+                Some(tile),
+                title.clone(),
+                lines,
+                theme,
+            )
+            .debug_selector(move || selector)
+            .role(Role::Link)
+            .aria_label(title)
+            .on_click(cx.listener(move |this, _: &gpui::ClickEvent, _, cx| {
+                open_result(this, &opened, cx);
+            }));
+            items.push(flow_row(this, item, &key, chosen, theme));
         }
         groups.push(
             controls::section(Some(label.into()), controls::list_card(items, theme), theme)
@@ -1651,28 +1688,250 @@ fn update_results_screen(
                 .into_any_element(),
         );
     }
-    let back = controls::button("extension-back", "Back", true, theme)
-        .debug_selector(|| "extension-back".into())
-        .role(Role::Button)
-        .aria_label("Back")
-        .on_click(cx.listener(|this, _: &gpui::ClickEvent, _, cx| {
-            // The way out of the results screen, as the launcher window's
-            // Escape is there.
-            this.launcher.back();
-            launcher_changed_outside(cx);
-            cx.notify();
-        }));
+    let groups = (!groups.is_empty()).then(|| {
+        let column = div()
+            .flex()
+            .flex_col()
+            .gap(theme.geometry.settings.section_label_gap)
+            .children(groups);
+        flow_keys(this, live, column, cx)
+    });
     let body = div()
         .flex()
         .flex_col()
         .gap(theme.geometry.settings.section_label_gap)
         .children(groups)
-        .child(div().flex().child(back));
+        .child(flow_back(this, theme, cx));
     vec![
         controls::section(Some(live.title.clone().into()), body, theme)
             .debug_selector(|| "extensions-title".into())
             .into_any_element(),
     ]
+}
+
+// --------------------------------------------- flow screens' keyboard
+//
+// A flow screen answers to the keyboard as the launcher window's same
+// screen does (#492), on the launcher's own selection, so the two windows
+// show one selection: when the screen shows, its list takes the keyboard
+// with the launcher's selected row drawn selected; Up, Down, Home and End
+// move it; Enter activates it; Space ticks a collection's extension. Escape
+// is Cancel on a confirmation and Back elsewhere ([`leave_flow`]), never
+// the window's close, as Raycast's Escape dismisses a dialog and not its
+// window. Tab reaches the Back button after the list.
+
+/// The scroll anchor of a flow screen's row with `id`, which the arrows
+/// keep in view.
+fn flow_anchor(id: &str) -> String {
+    format!("flow:{id}")
+}
+
+/// A flow screen's row `item`, whose launcher row is `id`: drawn selected,
+/// in the selection wash, while it is the launcher's selected row. The
+/// wash is drawn behind the row, whose own hover wash stays over it.
+fn flow_row(
+    this: &mut SettingsWindow,
+    item: Stateful<Div>,
+    id: &str,
+    selected: bool,
+    theme: &Theme,
+) -> AnyElement {
+    let item = item
+        .anchor_scroll(Some(this.search.anchor(&flow_anchor(id))))
+        .aria_selected(selected)
+        .when(selected, |row| row.aria_active_descendant());
+    div()
+        .w_full()
+        .rounded(theme.geometry.controls.list_radius)
+        .when(selected, |row| row.bg(theme.selection_wash))
+        .child(item)
+        .into_any_element()
+}
+
+/// A flow screen's `rows` in their card, as the list the keyboard is on
+/// ([`flow_keys`]).
+fn flow_list(
+    this: &mut SettingsWindow,
+    live: &LauncherView,
+    rows: Vec<AnyElement>,
+    theme: &Theme,
+    cx: &mut Context<SettingsWindow>,
+) -> AnyElement {
+    flow_keys(this, live, controls::list_card(rows, theme), cx)
+}
+
+/// Makes `list`, a flow screen's rows, the list the keyboard is on: a tab
+/// stop named for the screen's title, taking the arrows, Enter and Space
+/// (see the section's comment).
+fn flow_keys(
+    this: &mut SettingsWindow,
+    live: &LauncherView,
+    list: Div,
+    cx: &mut Context<SettingsWindow>,
+) -> AnyElement {
+    let focus = this.extensions.flow_focus(cx);
+    list.id("extension-flow")
+        .debug_selector(|| "extension-flow".into())
+        .key_context(FLOW)
+        .track_focus(&focus)
+        .role(Role::ListBox)
+        .aria_label(live.title.clone())
+        .on_action(cx.listener(|this, _: &NextItem, window, cx| {
+            move_in_flow(this, Step::Next, window, cx);
+        }))
+        .on_action(cx.listener(|this, _: &PreviousItem, window, cx| {
+            move_in_flow(this, Step::Previous, window, cx);
+        }))
+        .on_action(cx.listener(|this, _: &FirstItem, window, cx| {
+            move_in_flow(this, Step::First, window, cx);
+        }))
+        .on_action(cx.listener(|this, _: &LastItem, window, cx| {
+            move_in_flow(this, Step::Last, window, cx);
+        }))
+        .on_action(cx.listener(|this, _: &super::Press, _, cx| activate(this, cx)))
+        .on_action(cx.listener(|this, _: &TickItem, _, cx| tick(this, cx)))
+        .into_any_element()
+}
+
+/// A flow screen's Back button, a tab stop after its list: the way out
+/// the launcher window's Escape is there.
+fn flow_back(this: &mut SettingsWindow, theme: &Theme, cx: &mut Context<SettingsWindow>) -> Div {
+    let focus = this.extensions.focus(FLOW_BACK, cx);
+    let back = controls::button("extension-back", "Back", true, theme)
+        .debug_selector(|| "extension-back".into())
+        .role(Role::Button)
+        .aria_label("Back");
+    div().flex().child(pressable(
+        back,
+        &focus,
+        controls::focus_ring(theme),
+        |this, _, cx| {
+            leave_flow(this, cx);
+        },
+        cx,
+    ))
+}
+
+/// Follows the flow screen showing or not (`flow`, this frame's): when one
+/// starts showing, its list takes the keyboard — its Back button, where it
+/// has no rows (`rows`) — and what had it is kept; when it ends with the
+/// keyboard still on it, that gets the keyboard back: Actions… after an
+/// Uninstall answered or cancelled, or the sidebar where it is gone (see
+/// the window's focus-lost handler).
+fn follow_flow(
+    this: &mut SettingsWindow,
+    flow: bool,
+    rows: bool,
+    window: &mut Window,
+    cx: &mut Context<SettingsWindow>,
+) {
+    if flow == this.extensions.flow_shown {
+        return;
+    }
+    this.extensions.flow_shown = flow;
+    let list = this.extensions.flow_focus(cx);
+    if flow {
+        this.extensions.flow_return = window.focused(cx);
+        let target = if rows {
+            list
+        } else {
+            this.extensions.focus(FLOW_BACK, cx)
+        };
+        // Once this frame is drawn, what it draws is there to focus.
+        window.defer(cx, move |window, cx| window.focus(&target, cx));
+        return;
+    }
+    let previous = this.extensions.flow_return.take();
+    let on_flow = list.is_focused(window) || this.extensions.focused(FLOW_BACK, window);
+    if on_flow && let Some(previous) = previous {
+        window.defer(cx, move |window, cx| window.focus(&previous, cx));
+    }
+}
+
+/// Moves the launcher's selection on a flow screen, as the launcher
+/// window's arrows do ([`Launcher::move_selection`],
+/// [`Launcher::select`]), keeping the selected row in view.
+fn move_in_flow(
+    this: &mut SettingsWindow,
+    step: Step,
+    window: &mut Window,
+    cx: &mut Context<SettingsWindow>,
+) {
+    let launcher = &this.launcher;
+    let rows = launcher.view().rows;
+    if rows.is_empty() {
+        return;
+    }
+    match step {
+        Step::Next => launcher.move_selection(1),
+        Step::Previous => launcher.move_selection(-1),
+        Step::First => launcher.select(0),
+        Step::Last => launcher.select(rows.len() - 1),
+    }
+    if let Some(row) = launcher.selected().and_then(|index| rows.get(index)) {
+        this.search
+            .anchor(&flow_anchor(&row.id))
+            .scroll_to(window, cx);
+    }
+    launcher_changed_outside(cx);
+    cx.notify();
+}
+
+/// Enter on a flow screen: activates the launcher's selected row, as
+/// [`answer`] does for a click; on the update results, opens its
+/// extension's page, as a click on the row does.
+fn activate(this: &mut SettingsWindow, cx: &mut Context<SettingsWindow>) {
+    let view = this.launcher.view();
+    if matches!(view.screen, Screen::UpdateResults { .. }) {
+        if let Some(row) = view.selected.and_then(|index| view.rows.get(index)) {
+            open_result(this, &row.id, cx);
+        }
+        return;
+    }
+    this.extensions.outcome = None;
+    let pending = this.launcher.activate_selected();
+    keep_outcome_of(pending, cx);
+}
+
+/// Space on a collection's choice: ticks or unticks the selected
+/// extension, as the launcher window's Space does.
+fn tick(this: &mut SettingsWindow, cx: &mut Context<SettingsWindow>) {
+    if let Some(id) = this.launcher.selected_choice_extension()
+        && this.launcher.toggle_choice_tick(&id)
+    {
+        launcher_changed_outside(cx);
+        cx.notify();
+    }
+}
+
+/// Opens the page of the extension whose identity key is `key`, from the
+/// update results: the launcher leaves the results, as the launcher
+/// window's Escape does, so the page shows in their place.
+fn open_result(this: &mut SettingsWindow, key: &str, cx: &mut Context<SettingsWindow>) {
+    // A search typed into the results in the launcher window is cleared by
+    // the first step back, and the results left by the second.
+    for _ in 0..2 {
+        if matches!(this.launcher.screen(), Screen::UpdateResults { .. }) {
+            this.launcher.back();
+        }
+    }
+    launcher_changed_outside(cx);
+    this.show_extension(Some(key.to_owned()), cx);
+}
+
+/// Escape while the group's pages show: on a flow screen, Cancel on a
+/// confirmation and Back elsewhere ([`Launcher::back`], which on a
+/// confirmation is its Cancel), and `true`; `false` with no flow screen,
+/// where Escape is the window's.
+pub(super) fn leave_flow(this: &mut SettingsWindow, cx: &mut Context<SettingsWindow>) -> bool {
+    if !in_extension_flow(&this.launcher.screen()) {
+        return false;
+    }
+    this.extensions.outcome = None;
+    this.launcher.back();
+    launcher_changed_outside(cx);
+    cx.notify();
+    true
 }
 
 /// One entry of a list on these pages as a Settings list item named `id`:
