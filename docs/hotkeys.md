@@ -588,7 +588,7 @@ extension cannot assign, read or declare one (no WIT or manifest change).
   likewise:
   - a hotkey recorded inline and cleared
   - Backspace or Delete alone clearing while the cell listens, and
-    Ctrl+Shift+Delete still recorded (#494)
+    Ctrl+Shift+Delete still recorded on Windows (#494)
   - the collisions with another command and with the Open Pane hotkey
     ("… opens Pane itself: …") explained
   - the catalog following the package lifecycle and a restart
