@@ -13,8 +13,11 @@
 //! install ([`pane_core::Launcher::install_application_update`]) the root
 //! rows run, so the two entry points cannot disagree — whichever found
 //! the offer, both show it, and installing from either swaps the same
-//! program the same way. Nothing is downloaded, installed or restarted
-//! except by the user's choice, the new version is used the next time
+//! program the same way. Pane checks and downloads a newer version by
+//! itself (ADR 0050), quietly: this page is where that work shows — the
+//! check running, the download's progress, the update ready to install,
+//! when Pane last checked and the last check or download that failed.
+//! Only the user's choice installs, the new version is used the next time
 //! Pane starts, and where no release source is configured the page says
 //! so instead of promising one.
 //!
@@ -166,6 +169,9 @@ fn render(
     // this page itself started (see [`State::started`]).
     let update = this.launcher.application_update();
     let started = this.about.started;
+    // When Pane last checked, and the last check or download that failed,
+    // as its update record keeps them.
+    let checks = this.launcher.application_update_checks();
     // Whether a check or an install is running: the launcher's own state
     // for one it began, or this page's word for the one it just started.
     let checking = started == Some(Started::Check) || matches!(update, ApplicationUpdate::Checking);
@@ -192,10 +198,22 @@ fn render(
         ApplicationUpdate::Unchecked
         | ApplicationUpdate::Current
         | ApplicationUpdate::Failed(_)
+        | ApplicationUpdate::Offered { .. }
             if checking =>
         {
             (checking_text(), theme.warning, Action::None)
         }
+        // A download running, which Pane started by itself or after a
+        // check the user asked for: its progress.
+        ApplicationUpdate::Downloading { version, .. } => (
+            format!(
+                "Downloading Pane {version}: {}",
+                update.progress().unwrap_or_default()
+            )
+            .into(),
+            theme.warning,
+            Action::None,
+        ),
         // An install running: the status line's own progress, and what
         // the install is doing before the first bytes of its package
         // arrive.
@@ -204,9 +222,9 @@ fn render(
             theme.warning,
             Action::None,
         ),
-        // The offer this page's clicked row named, before the launcher
-        // has begun installing it.
-        ApplicationUpdate::Offered { version, .. } if installing => (
+        // The update this page's clicked button named, before the
+        // launcher has begun installing it.
+        ApplicationUpdate::Ready { version, .. } if installing => (
             install_progress(&status, version),
             theme.warning,
             Action::None,
@@ -219,18 +237,33 @@ fn render(
             theme.danger,
             Action::Check,
         ),
-        // The offer: the same version, and the same explanation of what
-        // installing does, the root row offers — with why installing it
-        // last failed, if it did, since the offer stays, ready to be
-        // chosen again.
+        // A newer version found and not downloaded yet: about to be, or
+        // its download failed, which the next check tries again — as the
+        // check this page offers does at once.
         ApplicationUpdate::Offered { version, failure } => match failure {
+            Some(why) => (
+                format!("Couldn't download Pane {version}: {why}").into(),
+                theme.danger,
+                Action::Check,
+            ),
+            None => (
+                format!("Pane {version} is available").into(),
+                theme.success,
+                Action::None,
+            ),
+        },
+        // The staged update: the same version, and the same explanation of
+        // what installing does, the root row offers — with why installing
+        // it last failed, if it did, since it stays, ready to be chosen
+        // again.
+        ApplicationUpdate::Ready { version, failure } => match failure {
             Some(why) => (
                 format!("Couldn't update to {version}: {why}").into(),
                 theme.danger,
                 Action::Update(version.clone()),
             ),
             None => (
-                format!("Pane {version} is available").into(),
+                format!("Pane {version} is ready to install").into(),
                 theme.success,
                 Action::Update(version.clone()),
             ),
@@ -241,10 +274,36 @@ fn render(
             Action::None,
         ),
     };
+    // Under the status: when Pane last checked, and the last failure, when
+    // the status does not already say it.
+    let mut update_notes = Vec::new();
+    if update != ApplicationUpdate::Unconfigured {
+        update_notes.push((
+            "about-update-checked",
+            SharedString::from(super::extensions::last_checked_words(checks.checked)),
+            theme.text_muted,
+        ));
+        let said = matches!(
+            update,
+            ApplicationUpdate::Failed(_)
+                | ApplicationUpdate::Offered {
+                    failure: Some(_),
+                    ..
+                }
+        );
+        if let Some((_, why)) = checks.failure.filter(|_| !said) {
+            update_notes.push((
+                "about-update-failure",
+                format!("Last failure: {why}").into(),
+                theme.danger,
+            ));
+        }
+    }
     let view = AboutView {
         version: crate::APP_VERSION.to_owned(),
         update_status,
         update_tone,
+        update_notes,
         action,
         opened: opened.map(|opened| match opened {
             Ok(()) => (format!("Opened {DOCUMENTATION}").into(), theme.success),
@@ -336,6 +395,9 @@ pub(crate) struct AboutView {
     /// What the update section says, and in which tone.
     pub(crate) update_status: SharedString,
     pub(crate) update_tone: Hsla,
+    /// What it says under that, each by its selector and in its tone:
+    /// when Pane last checked, and the last check or download that failed.
+    pub(crate) update_notes: Vec<(&'static str, SharedString, Hsla)>,
     /// The update section's button, if it offers one.
     pub(crate) action: Action,
     /// What opening the documentation last reported, in its tone.
@@ -436,8 +498,13 @@ pub(crate) fn compose(
         view.update_tone,
         theme,
     );
-    let updates = controls::setting_row("Updates", vec![status.into_any_element()], theme)
-        .children(update_button);
+    let mut update_lines = vec![status.into_any_element()];
+    update_lines.extend(
+        view.update_notes.iter().map(|(id, text, tone)| {
+            status_note(*id, text.clone(), *tone, theme).into_any_element()
+        }),
+    );
+    let updates = controls::setting_row("Updates", update_lines, theme).children(update_button);
     // The documentation: Pane's repository, opened with the launcher's
     // link opener, and what the opening reported.
     let mut documentation_lines = vec![controls::row_line(
@@ -541,7 +608,7 @@ pub(crate) enum Action {
     None,
     /// "Check for updates": the check the user asks for.
     Check,
-    /// "Update Pane to <version>", the offered update the user chooses to
+    /// "Update Pane to <version>", the staged update the user chooses to
     /// install.
     Update(String),
 }
@@ -642,7 +709,16 @@ fn update_line(update: &ApplicationUpdate) -> String {
         ApplicationUpdate::Offered {
             version,
             failure: Some(why),
-        } => format!("Pane {version} is available; installing it failed: {why}"),
+        } => format!("Pane {version} is available; downloading it failed: {why}"),
+        ApplicationUpdate::Downloading { version, .. } => format!("downloading Pane {version}"),
+        ApplicationUpdate::Ready {
+            version,
+            failure: None,
+        } => format!("Pane {version} is ready to install"),
+        ApplicationUpdate::Ready {
+            version,
+            failure: Some(why),
+        } => format!("Pane {version} is ready to install; installing it failed: {why}"),
         ApplicationUpdate::Installing { version } => format!("installing Pane {version}"),
         ApplicationUpdate::Installed { version } => {
             format!("installed Pane {version}; used the next time Pane starts")

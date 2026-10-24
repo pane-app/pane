@@ -92,7 +92,10 @@ The list holds:
    row explaining the problem.
 4. Pane's own rows: "Install extension from folder…", "Install extension
    from npm…" ([npm](npm.md)), "Install extension from Git…" ([Git](git.md)),
-   "Check for Extension Updates", "Manage Extensions" and "Settings…".
+   "Check for Extension Updates", "Check for Pane Updates", "Manage
+   Extensions" and "Settings…", and "Update Pane to <version>" once an
+   update of Pane is downloaded and ready
+   ([installer](installer.md#updating-pane-itself)).
 
 Extensions are installed and managed in Settings (#168,
 [ADR 0043](adr/0043-extensions-are-managed-in-settings-one-page-per-extension.md)).
@@ -105,6 +108,13 @@ package or a Git repository, then the package's preview with its Install.
 whatever the cadence, and updates what it finds
 ([npm](npm.md#updating-by-itself)). Settings' Extensions group has a
 "Check for updates" button that starts the same pass.
+
+"Check for Pane Updates" (also found as "Check for Updates", Raycast's
+name for it) checks for a newer version of Pane itself at once, whatever
+the schedule, and downloads what it finds; it answers even when Pane is
+up to date ([installer](installer.md#when-pane-checks)). It is listed
+whenever a release source is configured. Settings' About page has a
+"Check for updates" button that runs the same check.
 
 For a query that matches nothing but fallbacks, the first fallback is
 selected, so Enter sends it the query (ADR 0031).

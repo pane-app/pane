@@ -2494,26 +2494,24 @@ stop_pane
 unset PANE_TEST_FILE_INDEX_HOME
 export PANE_DEFAULTS=$no_default_pins
 
-# Installing a Pane application update by the user's choice (#56): a
-# second package is built with --package-version 99.0.0, whose program
-# reports 99.0.0 and whose release names it (the two runnable builds
-# the update goes between); the package the #53 phase built, at the
-# version crates/pane/Cargo.toml names, is installed on another clean
-# home, and its Pane, running from
-# ~/.local/bin/pane, is told by the check it makes at start that 99.0.0
-# exists: a row in root search with the version, and a word on the
-# status line. Nothing is downloaded until that row is chosen; the
-# choice is proven by the release server's log, which must hold no
-# request for the package until then. A corrupted package is explained
-# first (its bytes do not match the sha256 its .sha256 gives), everything
-# untouched and the row ready to try again; then the real install
-# downloads the tarball, checks it, and swaps the running pane — the old
-# one renamed pane.old, removed on a later start — so the new version is
-# used the next time Pane starts (Pane never restarts itself). The new
-# Pane, started again, reports 99.0.0, with the old version's data (the
-# calculator set up at first setup, from the pinned repositories) and
-# the extension the user disabled (Clipboard History) kept, and with
-# nothing of the update left in the bin folder.
+# Pane's own update (#56, ADR 0050): a second package is built with
+# --package-version 99.0.0, whose program reports 99.0.0 and whose
+# release names it (the two runnable builds the update goes between); the
+# package the #53 phase built, at the version crates/pane/Cargo.toml
+# names, is installed on another clean home, and its Pane, running from
+# ~/.local/bin/pane, checks at start and downloads 99.0.0 by itself,
+# before anyone chooses anything: the release server's log holds the
+# tarball's request. The first tarball served is damaged (its bytes do
+# not match the sha256 its .sha256 gives), so that download fails
+# quietly: nothing staged, the program untouched. Check for Pane Updates,
+# once the tarball is whole again, downloads it and stages it; the row
+# Update Pane to 99.0.0 then installs it without downloading again,
+# swapping the running pane — the old one renamed pane.old, removed on a
+# later start — so the new version is used the next time Pane starts.
+# The new Pane, started again, reports 99.0.0, with the old version's
+# data (the calculator set up at first setup, from the pinned
+# repositories) and the extension the user disabled (Clipboard History)
+# kept, and with nothing of the update left in the bin folder.
 cargo xtask package-linux --dev --package-version 99.0.0 >/dev/null
 newer=$(ls target/dist/pane-99.0.0-linux-*-dev.tar.gz | head -1)
 workspace_version=$(sed -n 's/^version = "\(.*\)"$/\1/p' crates/pane/Cargo.toml | head -1)
@@ -2543,6 +2541,20 @@ env -i HOME="$update_home" PATH="/usr/bin:/bin" bash "$unpack_old/pane/install.s
 update_program=$update_home/.local/bin/pane
 update_registry=$update_home/.local/share/pane/extensions/installed.json
 update_log=$out/update-release-server.log
+# The marker an update staged by itself writes last, beside the program.
+update_staged=$update_home/.local/bin/update/.pane-staged.json
+# The tarball served first is damaged: the download Pane makes by itself
+# fails its sha256. The release assets name the package as a release
+# does, without -dev.
+served=target/dist/release/$(basename "$newer" | sed 's/-dev\././')
+python3 - "$served" <<'EOF'
+import sys
+with open(sys.argv[1], "rb") as file:
+    package = bytearray(file.read())
+package[len(package) // 2] ^= 1
+with open(sys.argv[1], "wb") as file:
+    file.write(package)
+EOF
 # First setup's choice made, as the #53 phase makes it (#283).
 choose_first_setup "$(dirname "$update_registry")"
 # Starts the installed Pane of the update home, with the PATH that holds
@@ -2570,7 +2582,7 @@ start_update_pane
 focus_launcher
 # First setup fetches the pinned commits from the repositories (no
 # request reaches the release server for them), and Pane's own check
-# lists the releases once — its request is the first.
+# lists the releases at start — its request is the first.
 for _ in $(seq 2000); do
   [ "$(grep -c /repos/pane-app/pane/releases "$update_log" 2>/dev/null || true)" -ge 1 ] && break
   kill -0 "$pane_pid" 2>/dev/null || { echo "the installed Pane exited during setup"; exit 1; }
@@ -2580,13 +2592,18 @@ done
   || { echo "Pane never checked for its own update"; exit 1; }
 wait_for "$update_registry" '"default": "calculator"' present 6000
 wait_for "$update_registry" '"default": "clipboard-history"' present 6000
-# The check has told the user what it found; nothing has been downloaded.
-capture 600-notification.png   # evidence only: the toast ("Pane 99.0.0 is available", or the setup's own outcome) leaves after 3 s, and may have left while the defaults were waited for; 601's offer row is what says the check found the update
-"$xdotool" key ctrl+a; "$xdotool" type --delay 50 update; sleep 1
-capture_until 601-offered.png subtitle 30   # the offer row: "Your extensions and settings are kept; ..."
-check 601-offered.png selected 3000   # the row, selected
-# Taking no action downloads nothing: no package was asked for.
-[ -z "$(grep "\.tar\.gz" "$update_log")" ] || { echo "a package was downloaded without the user choosing it"; exit 1; }
+# Finding 99.0.0, the check downloaded its tarball by itself, with no
+# choice made. The damaged tarball failed its sha256 quietly: nothing is
+# staged and the program is the one installed.
+for _ in $(seq 600); do
+  [ "$(grep -c "\.tar\.gz HTTP" "$update_log")" -ge 1 ] && break
+  sleep 0.1
+done
+[ "$(grep -c "\.tar\.gz HTTP" "$update_log")" -ge 1 ] || { echo "Pane did not download the update by itself"; exit 1; }
+sleep 2
+capture 600-quiet-failure.png   # evidence only: a download Pane made by itself that failed shows nothing
+[ ! -e "$update_staged" ] || { echo "a damaged package was staged"; exit 1; }
+cmp -s "$update_program" "$unpack_old/pane/pane" || { echo "a failed download changed the program"; exit 1; }
 
 # Disable Clipboard History first: an extension the user disabled before
 # the update must stay disabled after it (the switch on its page in
@@ -2596,32 +2613,22 @@ a11y toggle "Clipboard History"   # Clipboard History: disabled
 wait_for "$update_registry" '"disabled": true' present 600
 close_settings
 
-# A package that does not match the sha256 its release gives is
-# explained and not installed: the bytes of the served package are
-# damaged, and the program keeps running the one it was.
-# The release assets name the package as a release does, without -dev.
-served=target/dist/release/$(basename "$newer" | sed 's/-dev\././')
-python3 - "$served" <<'EOF'
-import sys
-with open(sys.argv[1], "rb") as file:
-    package = bytearray(file.read())
-package[len(package) // 2] ^= 1
-with open(sys.argv[1], "wb") as file:
-    file.write(package)
-EOF
-"$xdotool" key ctrl+a; "$xdotool" type --delay 50 "update pane"; sleep 1
-"$xdotool" key Return
-capture_until 602-corrupt-package.png error 60   # "Could not update Pane to 99.0.0: ... does not match the sha256"
-[ ! -e "$update_home/.local/bin/pane.old" ] || { echo "a failed install replaced the program"; exit 1; }
-cmp -s "$update_program" "$unpack_old/pane/pane" || { echo "a failed install changed the program"; exit 1; }
-[ ! -e "$update_home/.local/bin/update" ] || { echo "a failed install left its staging behind"; exit 1; }
-
-# The source works again; the row that stays tries again, and the update
-# is installed: the new program takes the old one's name and place, the
-# old one is renamed out of its way.
-# The row leaves the list while an install runs, and comes back selected
-# once it failed (#424): Enter alone tries again.
+# The tarball is whole again; Check for Pane Updates checks at once and
+# downloads it, and it is staged.
 cp "$newer" "$served"
+"$xdotool" key ctrl+a; "$xdotool" type --delay 50 "check for pane updates"; sleep 1
+"$xdotool" key Return
+capture_until 601-ready.png success 120   # "Pane 99.0.0 is ready to install"
+wait_for "$update_staged" 99.0.0 present 600
+# The tarball was downloaded once for each attempt: the damaged one and
+# the one staged.
+[ "$(grep -c "\.tar\.gz HTTP" "$update_log")" = 2 ] || { echo "the package was not downloaded exactly twice"; exit 1; }
+"$xdotool" key ctrl+a; "$xdotool" type --delay 50 "update pane"; sleep 1
+capture_until 602-offered.png subtitle 30   # the row: "Your extensions and settings are kept; ..."
+check 602-offered.png selected 3000   # the row, selected
+
+# Enter installs the staged update: the new program takes the old one's
+# name and place, the old one is renamed out of its way.
 "$xdotool" key Return
 for _ in $(seq 1200); do
   kill -0 "$pane_pid" 2>/dev/null || { echo "Pane exited while updating itself"; exit 1; }
@@ -2634,9 +2641,8 @@ cmp -s "$update_program" "$unpack_new/pane/pane" || { echo "the new program was 
 cmp -s "$update_home/.local/bin/pane.old" "$unpack_old/pane/pane" \
   || { echo "the old program was not kept out of the new one's way"; exit 1; }
 [ ! -e "$update_home/.local/bin/update" ] || { echo "the install left its staging behind"; exit 1; }
-# The package was downloaded once for each attempt: the damaged one and
-# the one that installed.
-[ "$(grep -c "\.tar\.gz HTTP" "$update_log")" = 2 ] || { echo "the package was not downloaded exactly twice"; exit 1; }
+# Installing downloaded nothing more.
+[ "$(grep -c "\.tar\.gz HTTP" "$update_log")" = 2 ] || { echo "the install downloaded the package again"; exit 1; }
 stop_pane
 
 # The next start runs the new version: it reports 99.0.0, removes what
@@ -2654,7 +2660,7 @@ capture_until 604-answer-after-update.png answer 30   # "42", the calculator's s
 capture_until 605-copied-after-update.png success 10   # "Copied 42 to the clipboard"
 wait_for "$update_registry" '"disabled": true' present
 python3 "$(dirname "$0")/check_screenshot.py" --distinct \
-  "$out"/{600-notification,601-offered,602-corrupt-package,603-installed,604-answer-after-update}.png
+  "$out"/{601-ready,602-offered,603-installed,604-answer-after-update}.png
 stop_pane
 # The program files go again, as the #53 phase's do.
 rm -f "$update_program" "$unpack_old/pane/pane" "$unpack_new/pane/pane"

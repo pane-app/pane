@@ -573,6 +573,14 @@ impl LauncherWindow {
                     // the keys the window held for the query's list (#203).
                     this.replay_held_keys_if_published(window, cx);
                     cx.notify();
+                    // The Settings window reads the launcher too: its About
+                    // page follows Pane's own update, which checks and
+                    // downloads in the background (ADR 0050).
+                    for window in cx.windows() {
+                        if let Some(settings) = window.downcast::<crate::SettingsWindow>() {
+                            settings.update(cx, |_, _, cx| cx.notify()).ok();
+                        }
+                    }
                 });
                 if shown.is_err() {
                     break;

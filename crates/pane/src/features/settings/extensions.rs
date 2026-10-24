@@ -1964,7 +1964,7 @@ fn list_entry(
 /// Pane last checked for extension updates, for people — "Last checked 3
 /// minutes ago" — or that it has not yet. The clock the record keeps is
 /// the launcher's, which in release builds is the system's.
-fn last_checked_words(checked: Option<u64>) -> String {
+pub(crate) fn last_checked_words(checked: Option<u64>) -> String {
     let Some(at) = checked else {
         return "Not checked yet".into();
     };

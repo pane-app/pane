@@ -273,8 +273,12 @@ fn main() {
         // Pane's releases on GitHub carries the newer package, the package
         // built for this system (a zip on Windows and macOS, a gzipped
         // tarball on Linux), unpacked by the same platform-independent
-        // machinery. Pane checks once, at start, and only the user's
-        // choice downloads and installs anything. A release build reads
+        // machinery. Pane checks at start, then every four hours and when
+        // the launcher is shown after a stale check, keeping what it learns
+        // in its cache folder; it downloads and stages a newer version by
+        // itself, and only the user's choice installs it (ADR 0050). A
+        // development build can check more often (PANE_UPDATE_INTERVAL,
+        // in seconds), as the smokes do. A release build reads
         // Pane's published releases; a development build only where
         // PANE_RELEASES names a stand-in on this computer (the tests' and
         // smokes' own), so that a development checkout checks nothing over
@@ -309,6 +313,21 @@ fn main() {
                 }
                 _ => launcher,
             }
+        };
+        let launcher = match pane::cache_dir() {
+            Some(cache) => launcher.with_application_update_cache(&cache),
+            None => launcher,
+        };
+        #[cfg(debug_assertions)]
+        let launcher = match std::env::var("PANE_UPDATE_INTERVAL")
+            .ok()
+            .and_then(|seconds| seconds.trim().parse::<u64>().ok())
+            .filter(|seconds| *seconds > 0)
+        {
+            Some(seconds) => {
+                launcher.with_application_update_interval(std::time::Duration::from_secs(seconds))
+            }
+            None => launcher,
         };
         // Global hotkeys: the system's adapter is made on the main thread,
         // whose run loop receives the presses on macOS.
@@ -516,14 +535,12 @@ fn main() {
             acquiring.first_setup().await;
         })
         .detach();
-        // Checking for a Pane application update does too: it reads only
-        // the list of Pane's releases, and what it finds is offered as a
-        // row in root search the user chooses. (A Pane that wires no
-        // updater checks for nothing.)
-        cx.spawn(async move |_| {
-            checking.check_application_update().await;
-        })
-        .detach();
+        // Checking for a Pane application update does too, on a schedule
+        // of its own: at once if a check is due, then every few hours. A
+        // newer version is downloaded and staged quietly, and root search
+        // lists the row that installs it once it is ready. (A Pane that
+        // wires no updater checks for nothing.)
+        checking.start_application_update_checks();
         cx.activate(true);
     });
 }

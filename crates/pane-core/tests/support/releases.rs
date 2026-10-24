@@ -4,8 +4,10 @@
 //! application package and its `.sha256` — under the address GitHub
 //! downloads them from (`/pane-app/pane/releases/download/v<version>/
 //! <name>`), which redirects to where the bytes are (`/assets/<name>`), as
-//! GitHub redirects to the host it serves release assets from. Nothing
-//! reaches the network or Pane's published releases.
+//! GitHub redirects to the host it serves release assets from. The listing
+//! carries an `ETag`, and a request that names the listing as it stands
+//! (`If-None-Match`) is answered `304 Not Modified`, as GitHub answers.
+//! Nothing reaches the network or Pane's published releases.
 
 #![allow(dead_code)]
 
@@ -76,6 +78,9 @@ struct Served {
     listing: Option<String>,
     /// Every path asked for, in order.
     requests: Vec<String>,
+    /// How many requests for the listing were answered `304 Not
+    /// Modified`.
+    not_modified: usize,
     /// What to answer instead, for the next requests asking for a path.
     behaviors: Vec<Planned>,
 }
@@ -289,6 +294,12 @@ impl Releases {
             .count()
     }
 
+    /// How many requests for the listing were answered `304 Not
+    /// Modified`: they named the listing as it stands.
+    pub fn not_modified(&self) -> usize {
+        self.served().not_modified
+    }
+
     /// How many times the listing was asked for.
     pub fn listed(&self) -> usize {
         self.requests()
@@ -336,6 +347,8 @@ fn listing_of(served: &Served, url: &str) -> Value {
                 "name": format!("Pane {}", release.version),
                 "draft": false,
                 "prerelease": true,
+                "body": format!("## What's new in Pane {}", release.version),
+                "html_url": format!("{url}pane-app/pane/releases/tag/{tag}"),
                 "assets": assets,
             })
         })
@@ -348,21 +361,35 @@ fn without_query(path: &str) -> &str {
     path.split('?').next().unwrap_or(path)
 }
 
-/// The path a request's first line names.
-fn requested(reader: &mut BufReader<TcpStream>) -> Option<String> {
+/// The path a request's first line names, and the `ETag` its
+/// `If-None-Match` names, if it names one.
+fn requested(reader: &mut BufReader<TcpStream>) -> Option<(String, Option<String>)> {
     let mut line = String::new();
     reader.read_line(&mut line).ok()?;
     let path = line.split_whitespace().nth(1)?.to_owned();
     // The rest of the request's head.
+    let mut if_none_match = None;
     loop {
         let mut header = String::new();
         match reader.read_line(&mut header) {
             Ok(0) | Err(_) => break,
             Ok(_) if header == "\r\n" || header == "\n" => break,
-            Ok(_) => {}
+            Ok(_) => {
+                if let Some((name, value)) = header.split_once(':')
+                    && name.trim().eq_ignore_ascii_case("if-none-match")
+                {
+                    if_none_match = Some(value.trim().to_owned());
+                }
+            }
         }
     }
-    Some(path)
+    Some((path, if_none_match))
+}
+
+/// The `ETag` of `listing`, as GitHub writes one: a weak tag over its
+/// digest.
+fn etag_of(listing: &str) -> String {
+    format!("W/\"{}\"", sha256(listing.as_bytes()))
 }
 
 /// What one request is answered with: its status line, its headers
@@ -390,6 +417,14 @@ impl Reply {
         }
     }
 
+    fn not_modified() -> Reply {
+        Reply {
+            status: "304 Not Modified",
+            headers: Vec::new(),
+            body: Vec::new(),
+        }
+    }
+
     fn redirect(location: String) -> Reply {
         Reply {
             status: "302 Found",
@@ -401,7 +436,7 @@ impl Reply {
 
 fn answer(stream: TcpStream, served: &Mutex<Served>, url: &str) {
     let mut reader = BufReader::new(stream);
-    let Some(path) = requested(&mut reader) else {
+    let Some((path, if_none_match)) = requested(&mut reader) else {
         return;
     };
     let mut stream = reader.into_inner();
@@ -422,7 +457,13 @@ fn answer(stream: TcpStream, served: &Mutex<Served>, url: &str) {
             let reply = answer_behavior(&served, &path, url, &behavior);
             (reply, Some(behavior))
         }
-        None => (answer_path(&served, &path, url), None),
+        None => {
+            let reply = answer_path(&served, &path, url, if_none_match.as_deref());
+            if reply.status.starts_with("304") {
+                served.not_modified += 1;
+            }
+            (reply, None)
+        }
     };
     drop(served);
     let mut head = format!(
@@ -495,20 +536,27 @@ fn answer_behavior(served: &Served, path: &str, url: &str, behavior: &Behavior) 
             }
         }
         Behavior::Redirect(location) => Reply::redirect(location.clone()),
-        Behavior::Drop { .. } | Behavior::Stall { .. } => answer_path(served, path, url),
+        Behavior::Drop { .. } | Behavior::Stall { .. } => answer_path(served, path, url, None),
     }
 }
 
-/// What `path` asks for: the listing, a release's download (a redirect to
-/// its bytes), or the bytes.
-fn answer_path(served: &Served, path: &str, url: &str) -> Reply {
+/// What `path` asks for: the listing (with its `ETag`, or `304` when
+/// `if_none_match` names it), a release's download (a redirect to its
+/// bytes), or the bytes.
+fn answer_path(served: &Served, path: &str, url: &str, if_none_match: Option<&str>) -> Reply {
     let path = without_query(path);
     if path == LISTING {
         let listing = served
             .listing
             .clone()
             .unwrap_or_else(|| listing_of(served, url).to_string());
-        return Reply::ok(listing.into_bytes());
+        let etag = etag_of(&listing);
+        if if_none_match == Some(etag.as_str()) {
+            return Reply::not_modified();
+        }
+        let mut reply = Reply::ok(listing.into_bytes());
+        reply.headers.push(format!("ETag: {etag}"));
+        return reply;
     }
     let find = |name: &str, version: Option<&str>| {
         served

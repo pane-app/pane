@@ -1033,24 +1033,30 @@ or Pane's published releases.
 
 ### What the phase checks
 
-1. The installed 0.1.0 Pane is started with `PANE_RELEASES` and the same
-   pinned repositories. It fetches its default extensions and, in the
-   same background, lists its releases for a newer version of itself. The
-   offer appears as Update Pane to 99.0.0 in root search (frame 601),
-   and the status line tells what was found (frame 600).
-2. The release server's log must hold no request for the package until
-   the row is chosen. Nothing is downloaded, installed or restarted
-   automatically.
+Since [#502](https://github.com/pane-app/pane/issues/502)
+([ADR 0050](../adr/0050-pane-downloads-its-updates-by-itself-and-restarts-into-them.md))
+Pane downloads an update by itself, and the phase checks that instead of
+"nothing is downloaded until the row is chosen":
+
+1. The package served first is damaged: its bytes do not match the
+   sha256 its `.sha256` gives. The installed 0.1.0 Pane is started with
+   `PANE_RELEASES` and the same pinned repositories. It fetches its
+   default extensions and, in the same background, lists its releases and
+   downloads 99.0.0 by itself: the release server's log holds the
+   package's request before anything is chosen.
+2. That download fails quietly (frame 600, evidence only): nothing is
+   staged, and the program is the one installed.
 3. Clipboard History is disabled first (the Helper sample was, until #162
    took it out of the default set), so an extension the user disabled
    before the update must stay disabled after it.
-4. Choosing the row with a damaged package is explained: its bytes do not
-   match the sha256 its `.sha256` gives (frame 602). The program, the data and
-   the folder stay untouched, and the row is ready to try again.
-5. The real choice downloads the package, checks it, unpacks it and swaps
-   the running `pane.exe`. The old program is renamed `pane.exe.old`, the
-   new one takes its place, and the staging folder is gone (frame 603, and
-   hash checks of both programs against the two packages' own files).
+4. With the package whole again, Check for Pane Updates downloads it and
+   stages it: "Pane 99.0.0 is ready to install" (frame 601), the marker
+   written in `update\`, and the package downloaded twice in all. Root
+   search then lists Update Pane to 99.0.0, selected (frame 602).
+5. Enter swaps the running `pane.exe` without downloading again. The old
+   program is renamed `pane.exe.old`, the new one takes its place, and
+   the staging folder is gone (frame 603, and hash checks of both
+   programs against the two packages' own files).
 6. The next start runs the new version. It reports `Pane 99.0.0` and
    removes `pane.exe.old` at start. The calculator still answers "6*7"
    with 42 from the old version's install (the calculator set up at first

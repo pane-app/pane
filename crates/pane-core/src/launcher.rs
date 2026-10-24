@@ -140,8 +140,8 @@ pub use actions::{DISMISS_NOTICE, ResultAction, ResultActionItem, ResultActions}
 use aliases::AliasChoices;
 pub use aliases::AliasFlow;
 pub use aliases::AliasOutcome;
-pub use application_update::ApplicationUpdate;
 use application_update::{Application, Updates};
+pub use application_update::{ApplicationUpdate, UpdateChecks};
 pub use argument_fields::{ArgumentFields, Choice, FieldKind, FormField};
 pub use capability_choices::{Capability, CapabilityProvider};
 pub use choice::{ChoiceExtension, ChoiceOutcome, ChoiceView};
@@ -1446,11 +1446,11 @@ enum Entry {
     ImportExtension,
     /// Acquire this default extension again, after Pane could not (root).
     Acquire(String),
-    /// Install the offered Pane application update, which the user chose
+    /// Install the staged Pane application update, which the user chose
     /// (root).
     InstallUpdate,
-    /// Check for a Pane application update again, after the check failed
-    /// (root).
+    /// Check for a Pane application update at once, whatever the schedule
+    /// (root: Check for Pane Updates).
     CheckUpdate,
     /// Check every updatable extension at once and update what the pass
     /// finds, whatever the cadence (root): the pass the user asked for,
@@ -2147,6 +2147,7 @@ impl Launcher {
         if let Some(updates) = &self.updates {
             updates.follow(clock.clone());
         }
+        self.follow_clock_for_application_update(&clock);
         // A clock a test advances publishes what is due by it (#201): the
         // system's clock only moves by time passing, which a thread of the
         // launcher's own waits out.
@@ -5132,16 +5133,17 @@ impl Launcher {
                 );
             }
         }
-        // Pane's own update, when a check found one the user can choose to
-        // install, or failed in a way that can be tried again.
+        // Pane's own update: the check the user can ask for at any time
+        // (found by Raycast's name for it too), and the staged update the
+        // user can choose to install (ADR 0050).
         if self.application.is_some() {
-            for (row, entry) in state.updates.rows() {
+            for (row, entry, keywords) in state.updates.rows() {
                 add(
                     row,
                     entry,
                     None,
                     None,
-                    &[],
+                    &keywords,
                     CommandWhen::Always,
                     CommandMatches::Title,
                 );

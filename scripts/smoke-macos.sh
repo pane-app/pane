@@ -2310,29 +2310,26 @@ stop_pane
 unset PANE_TEST_FILE_INDEX_HOME
 export PANE_DEFAULTS=$no_default_pins
 
-# Installing a Pane application update by the user's choice (#55, the
-# macOS half of #54): a second package is built with --package-version
-# 99.0.0, whose program reports 99.0.0 and whose release names it for
-# macos-aarch64 (the two runnable builds the update goes between); the
-# package the #52 phase built, at the version crates/pane/Cargo.toml
-# names, is installed on another clean home,
-# and its Pane, running from the Pane.app bundle's own binary
+# Pane's own update (#55, the macOS half of #54; ADR 0050): a second
+# package is built with --package-version 99.0.0, whose program reports
+# 99.0.0 and whose release names it for macos-aarch64 (the two runnable
+# builds the update goes between); the package the #52 phase built, at
+# the version crates/pane/Cargo.toml names, is installed on another clean
+# home, and its Pane, running from the Pane.app bundle's own binary
 # (Contents/MacOS/pane — what CFBundleExecutable names, so the swap
-# replaces the binary inside the bundle and the bundle itself stays), is
-# told by the check it makes at start that 99.0.0 exists: a row in root
-# search with the version, and a word on the status line. Nothing is
-# downloaded until that row is chosen; the choice is proven by the
-# release server's log, which must hold no request for the package
-# until then. A corrupted package is explained first (its bytes do not
-# match the sha256 its .sha256 gives), everything untouched and the row
-# ready to try again; then the real install downloads the package,
-# checks it, and swaps the running binary — the old one renamed pane.old
-# beside it in Contents/MacOS, removed on a later start — so the new
-# version is used the next time Pane starts (Pane never restarts
-# itself). The new Pane, started again, reports 99.0.0, with the old
-# version's data (the calculator set up at first setup) and the
-# extension the user disabled kept, and with nothing of the update left
-# in the bundle.
+# replaces the binary inside the bundle and the bundle itself stays),
+# checks at start and downloads 99.0.0 by itself, before anyone chooses
+# anything: the release server's log holds the package's request. The
+# first package served is damaged (its bytes do not match the sha256 its
+# .sha256 gives), so that download fails quietly: nothing staged, the
+# program untouched. Check for Pane Updates, once the package is whole
+# again, downloads it and stages it; the row Update Pane to 99.0.0 then
+# installs it without downloading again, swapping the running binary —
+# the old one renamed pane.old beside it in Contents/MacOS, removed on a
+# later start — so the new version is used the next time Pane starts.
+# The new Pane, started again, reports 99.0.0, with the old version's
+# data (the calculator set up at first setup) and the extension the user
+# disabled kept, and with nothing of the update left in the bundle.
 update_server_pid=
 # Every server's arm again, plus this phase's own: nothing is lost
 # whatever order the phases run in.
@@ -2366,6 +2363,20 @@ rm -rf "$update_clean_bin"; mkdir -p "$update_clean_bin"
 # quoted).
 update_installed="$update_home/Library/Application Support/Pane/extensions"
 update_registry=$update_installed/installed.json
+# The marker an update staged by itself writes last, beside the binary.
+update_staged=$(dirname "$binary")/update/.pane-staged.json
+# The package served first is damaged: the download Pane makes by itself
+# fails its sha256. The release assets name the package as a release
+# does, without -dev.
+served=target/dist/release/$(basename "$newer" | sed 's/-dev\././')
+python3 - "$served" <<'PY'
+import sys
+with open(sys.argv[1], "rb") as f:
+    package = bytearray(f.read())
+package[len(package) // 2] ^= 1
+with open(sys.argv[1], "wb") as f:
+    f.write(package)
+PY
 # First setup's choice made, as the #52 phase makes it (#283).
 choose_first_setup "$update_installed"
 start_updated() {
@@ -2403,23 +2414,27 @@ update_recorded '"default": "calculator"'
 update_recorded '"default": "clipboard-history"'
 # The check has listed the releases (first setup fetches the pinned commits
 # from the repositories, so no request reaches the release server for
-# them): the offer is in root search. The status line tells what
-# it found; nothing has been downloaded.
+# them) and, finding 99.0.0, downloaded its package by itself, with no
+# choice made. The damaged package failed its sha256 quietly: nothing is
+# staged and the program is the one installed.
 for _ in $(seq 100); do
   [ "$(grep -c /repos/pane-app/pane/releases "$out/update-release-server.log")" -ge 1 ] && break
   sleep 0.1
 done
 [ "$(grep -c /repos/pane-app/pane/releases "$out/update-release-server.log")" -ge 1 ] \
   || { echo "Pane never checked for its own update"; exit 1; }
+for _ in $(seq 600); do
+  [ "$(grep -c "\.zip HTTP" "$out/update-release-server.log")" -ge 1 ] && break
+  sleep 0.1
+done
+[ "$(grep -c "\.zip HTTP" "$out/update-release-server.log")" -ge 1 ] \
+  || { echo "Pane did not download the update by itself"; record_update_state; exit 1; }
 sleep 2
-capture 600-notification.png   # evidence only: the toast ("Pane 99.0.0 is available", or the setup's own outcome) leaves after 3 s, and may have left while the defaults were waited for; 601's offer row is what says the check found the update
-command_key a; type_text update; sleep 1
-capture 601-offered.png
-check 601-offered.png subtitle   # the offer row: "Your extensions and settings are kept; ..."
-check 601-offered.png selected 3000   # the row, selected
-# Taking no action downloads nothing: no package was asked for.
-[ -z "$(grep "\.zip" "$out/update-release-server.log")" ] \
-  || { echo "a package was downloaded without the user choosing it"; exit 1; }
+capture 600-quiet-failure.png   # evidence only: a download Pane made by itself that failed shows nothing
+[ -e "$update_staged" ] && { echo "a damaged package was staged"; exit 1; }
+cmp -s "$binary" "$unpack_old/pane/pane" || { echo "a failed download changed the program"; exit 1; }
+bundle_plist=$update_home/Applications/Pane.app/Contents/Info.plist
+cmp -s "$bundle_plist" "$unpack_old/pane/Info.plist" || { echo "a failed download changed the bundle's Info.plist"; exit 1; }
 
 # Disable Clipboard History first: an extension the user disabled before
 # the update must stay disabled after it (the switch on its page in
@@ -2430,34 +2445,25 @@ for _ in $(seq 100); do grep -q '"disabled": true' "$update_registry" 2>/dev/nul
 grep -q '"disabled": true' "$update_registry" || { echo "Clipboard History was not disabled"; exit 1; }
 close_settings
 
-# A package that does not match the sha256 its release gives is
-# explained and not installed: the bytes of the served package are
-# damaged, and the program keeps running the one it was.
-# The release assets name the package as a release does, without -dev.
-served=target/dist/release/$(basename "$newer" | sed 's/-dev\././')
-python3 - "$served" <<'PY'
-import sys
-with open(sys.argv[1], "rb") as f:
-    package = bytearray(f.read())
-package[len(package) // 2] ^= 1
-with open(sys.argv[1], "wb") as f:
-    f.write(package)
-PY
-command_key a; type_text "update pane"; sleep 1
-key 36   # the offer, tried: the damaged package is explained
-capture_until 602-corrupt-package.png error 60   # "Could not update Pane to 99.0.0: ... does not match the sha256"
-[ -e "$binary.old" ] && { echo "a failed install replaced the program"; exit 1; }
-cmp -s "$binary" "$unpack_old/pane/pane" || { echo "a failed install changed the program"; exit 1; }
-[ -e "$binary/../update" ] && { echo "a failed install left its staging behind"; exit 1; }
-bundle_plist=$update_home/Applications/Pane.app/Contents/Info.plist
-cmp -s "$bundle_plist" "$unpack_old/pane/Info.plist" || { echo "a failed install changed the bundle's Info.plist"; exit 1; }
-
-# The source works again; the row that stays tries again, and the update
-# is installed: the new binary takes the old one's name and place inside
-# the bundle, the old one renamed out of its way.
-# The row leaves the list while an install runs, and comes back selected
-# once it failed (#424): Enter alone tries again.
+# The package is whole again; Check for Pane Updates checks at once and
+# downloads it, and it is staged.
 cp "$newer" "$served"
+command_key a; type_text "check for pane updates"; sleep 1
+key 36
+capture_until 601-ready.png success 120   # "Pane 99.0.0 is ready to install"
+for _ in $(seq 600); do grep -q 99.0.0 "$update_staged" 2>/dev/null && break; sleep 0.1; done
+grep -q 99.0.0 "$update_staged" || { echo "the update was not staged"; record_update_state; exit 1; }
+# The package was downloaded once for each attempt: the damaged one and
+# the one staged.
+[ "$(grep -c "\.zip HTTP" "$out/update-release-server.log")" = 2 ] \
+  || { echo "the package was not downloaded exactly twice"; exit 1; }
+command_key a; type_text "update pane"; sleep 1
+capture 602-offered.png
+check 602-offered.png subtitle   # the row: "Your extensions and settings are kept; ..."
+check 602-offered.png selected 3000   # the row, selected
+
+# Enter installs the staged update: the new binary takes the old one's
+# name and place inside the bundle, the old one renamed out of its way.
 key 36
 for _ in $(seq 1200); do
   [ -e "$binary.old" ] && break
@@ -2470,7 +2476,7 @@ capture 603-installed.png
 check 603-installed.png success   # "Installed Pane 99.0.0; the new version is used the next time Pane starts"
 cmp -s "$binary" "$unpack_new/pane/pane" || { echo "the new program was not installed"; exit 1; }
 cmp -s "$binary.old" "$unpack_old/pane/pane" || { echo "the old program was not kept out of the new one's way"; exit 1; }
-[ -e "$binary/../update" ] && { echo "the install left its staging behind"; exit 1; }
+[ -e "$(dirname "$binary")/update" ] && { echo "the install left its staging behind"; exit 1; }
 # The bundle's Info.plist names the new version too (#455): only its
 # version keys changed, so it is now the new package's own plist, and
 # macOS reads the new version from it.
@@ -2478,10 +2484,9 @@ cmp -s "$bundle_plist" "$unpack_new/pane/Info.plist" || { echo "the bundle's Inf
 [ "$(plutil -extract CFBundleShortVersionString raw -o - "$bundle_plist")" = "99.0.0" ] \
   || { echo "macOS does not read 99.0.0 from the bundle's Info.plist"; exit 1; }
 [ -e "$bundle_plist.update" ] && { echo "the Info.plist rewrite left its file behind"; exit 1; }
-# The package was downloaded once for each attempt: the damaged one and
-# the one that installed.
+# Installing downloaded nothing more.
 [ "$(grep -c "\.zip HTTP" "$out/update-release-server.log")" = 2 ] \
-  || { echo "the package was not downloaded exactly twice"; exit 1; }
+  || { echo "the install downloaded the package again"; exit 1; }
 stop_pane
 
 # The next start runs the new version: it reports 99.0.0, removes what
@@ -2502,7 +2507,7 @@ capture 605-copied-after-update.png
 check 605-copied-after-update.png success   # "Copied 42 to the clipboard"
 [ "$(pbpaste)" = "42" ] || { echo "the pasteboard holds: $(pbpaste)"; exit 1; }
 grep -q '"disabled": true' "$update_registry" || { echo "the disabled extension did not stay disabled"; exit 1; }
-python3 "$(dirname "$0")/check_screenshot.py" --distinct "$out"/{600-notification,601-offered,602-corrupt-package,603-installed,604-answer-after-update}.png
+python3 "$(dirname "$0")/check_screenshot.py" --distinct "$out"/{601-ready,602-offered,603-installed,604-answer-after-update}.png
 stop_pane
 kill "$update_server_pid"; wait "$update_server_pid" 2>/dev/null || true; update_server_pid=
 # The program files go again, as the #52 phase's do: the evidence is the
