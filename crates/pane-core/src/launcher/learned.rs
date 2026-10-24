@@ -234,6 +234,7 @@ pub(super) fn reset_item(state: &State) -> ResultActionItem {
         action: ResultAction::ResetRanking,
         label: "Reset Ranking".into(),
         available: state.learned.unreadable().is_none(),
+        reason: None,
     }
 }
 

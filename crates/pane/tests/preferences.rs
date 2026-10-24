@@ -6,8 +6,10 @@
 //! "Needs setup" a row says meanwhile; the controls of an extension's page
 //! in Settings › Extensions, each saving as it changes; and the Actions
 //! panel's "Configure Command…" and "Configure Extension…", which open
-//! that card. The core's rules (the other languages, what is kept) are
-//! `pane-core`'s `preferences.rs`.
+//! that card, with "Disable Command" and "Uninstall Extension…" beside
+//! them and the chords of the three that have one (#493). The core's
+//! rules (the other languages, what is kept) are `pane-core`'s
+//! `preferences.rs`.
 
 use std::path::PathBuf;
 
@@ -490,4 +492,198 @@ fn configure_entries_open_the_extensions_card_in_settings(cx: &mut TestAppContex
             .debug_bounds("preference-command-show")
             .is_some()
     );
+}
+
+/// Root search's chords for Pane's own result actions on this system
+/// (#493), and their names as the panel's entries tell assistive
+/// technology.
+const CONFIGURE_COMMAND: &str = if cfg!(target_os = "macos") {
+    "cmd-shift-,"
+} else {
+    "ctrl-shift-,"
+};
+const CONFIGURE_EXTENSION: &str = if cfg!(target_os = "macos") {
+    "cmd-alt-,"
+} else {
+    "ctrl-alt-,"
+};
+const DISABLE_COMMAND: &str = if cfg!(target_os = "macos") {
+    "cmd-alt-shift-d"
+} else {
+    "ctrl-alt-shift-d"
+};
+const CONFIGURE_COMMAND_NAME: &str = if cfg!(target_os = "macos") {
+    "Shift+Command+,"
+} else {
+    "Ctrl+Shift+,"
+};
+const CONFIGURE_EXTENSION_NAME: &str = if cfg!(target_os = "macos") {
+    "Option+Command+,"
+} else {
+    "Ctrl+Alt+,"
+};
+const DISABLE_COMMAND_NAME: &str = if cfg!(target_os = "macos") {
+    "Option+Shift+Command+D"
+} else {
+    "Ctrl+Alt+Shift+D"
+};
+
+fn actions_open(window: &Entity<LauncherWindow>, cx: &mut VisualTestContext) -> bool {
+    cx.update(|_, cx| window.read(cx).actions_open())
+}
+
+/// An installed command's row lists its extension's entries under Pane
+/// (#493): Configure Command… where it declares preferences, Configure
+/// Extension… always, Disable Command and Uninstall Extension…, the last
+/// destructive; the chorded ones show their chords.
+#[gpui::test]
+fn the_extension_entries_show_their_chords_and_uninstall_is_destructive(cx: &mut TestAppContext) {
+    let opened = opened(cx);
+    let cx = opened.cx;
+    cx.simulate_input("show preferences");
+    settle(&opened.window, cx);
+    cx.simulate_keystrokes(actions_shortcut());
+    settle(&opened.window, cx);
+    assert!(cx.debug_bounds("action-group-Pane").is_some());
+
+    let nodes = nodes(cx);
+    let entry = |label: &str| node(&nodes, "MenuItem", label);
+    assert_eq!(
+        entry("Configure Command…")["keyboard_shortcut"],
+        CONFIGURE_COMMAND_NAME
+    );
+    assert_eq!(
+        entry("Configure Extension…")["keyboard_shortcut"],
+        CONFIGURE_EXTENSION_NAME
+    );
+    assert_eq!(
+        entry("Disable Command")["keyboard_shortcut"],
+        DISABLE_COMMAND_NAME
+    );
+    let uninstall = entry("Uninstall Extension…");
+    assert_eq!(uninstall["keyboard_shortcut"], serde_json::Value::Null);
+    assert_eq!(uninstall["description"], "Destructive");
+    assert_eq!(
+        entry("Disable Command")["description"],
+        serde_json::Value::Null
+    );
+}
+
+/// Configure Command's chord, without the panel, opens Settings at the
+/// selected command's preferences.
+#[gpui::test]
+fn the_configure_command_chord_opens_its_preferences(cx: &mut TestAppContext) {
+    let opened = opened(cx);
+    let cx = opened.cx;
+    cx.simulate_input("show preferences");
+    settle(&opened.window, cx);
+    assert!(settings_windows(cx).is_empty());
+    cx.simulate_keystrokes(CONFIGURE_COMMAND);
+    cx.run_until_parked();
+
+    assert!(!actions_open(&opened.window, cx));
+    let settings = settings_windows(cx).pop().expect("Settings opened");
+    let mut settings_cx = settings_context(&settings, cx);
+    settings_cx.run_until_parked();
+    assert!(settings_cx.debug_bounds("extensions").is_some());
+    assert!(
+        settings_cx
+            .debug_bounds("preference-command-show")
+            .is_some()
+    );
+}
+
+/// Configure Extension's chord, with the panel open over the row, closes
+/// the panel and opens Settings on the extension's page.
+#[gpui::test]
+fn the_configure_extension_chord_runs_from_the_open_panel(cx: &mut TestAppContext) {
+    let opened = opened(cx);
+    let cx = opened.cx;
+    cx.simulate_input("tick");
+    settle(&opened.window, cx);
+    cx.simulate_keystrokes(actions_shortcut());
+    settle(&opened.window, cx);
+    assert!(actions_open(&opened.window, cx));
+    cx.simulate_keystrokes(CONFIGURE_EXTENSION);
+    cx.run_until_parked();
+
+    assert!(!actions_open(&opened.window, cx));
+    let settings = settings_windows(cx).pop().expect("Settings opened");
+    let mut settings_cx = settings_context(&settings, cx);
+    settings_cx.run_until_parked();
+    assert!(settings_cx.debug_bounds("extensions").is_some());
+}
+
+/// Disable Command's chord turns the selected command off: it leaves root
+/// search, and the status says so.
+#[gpui::test]
+fn the_disable_command_chord_turns_the_command_off(cx: &mut TestAppContext) {
+    let opened = opened(cx);
+    let cx = opened.cx;
+    cx.simulate_input("tick");
+    let view = settle(&opened.window, cx);
+    assert!(view.rows.iter().any(|row| row.title == "Tick"), "{view:?}");
+    cx.simulate_keystrokes(DISABLE_COMMAND);
+    let view = settle(&opened.window, cx);
+
+    assert!(view.rows.iter().all(|row| row.title != "Tick"), "{view:?}");
+    assert_eq!(view.status, Status::Result("Turned off Tick".into()));
+    let identity = PackageIdentity::local(&opened.folder).unwrap();
+    let package = opened
+        .launcher
+        .packages()
+        .into_iter()
+        .find(|package| package.identity == identity)
+        .expect("still installed");
+    assert!(!package.command_enabled("tick"));
+}
+
+/// Uninstall Extension… opens the launcher's "Uninstall X?" confirmation,
+/// all by keys: Escape there returns to the search, and Enter on its first
+/// row uninstalls the extension, back on the search without its rows.
+#[gpui::test]
+fn uninstall_extension_asks_and_is_answered_by_keys(cx: &mut TestAppContext) {
+    let opened = opened(cx);
+    let cx = opened.cx;
+    cx.simulate_input("tick");
+    settle(&opened.window, cx);
+    let choose_uninstall = |cx: &mut VisualTestContext| {
+        cx.simulate_keystrokes(actions_shortcut());
+        settle(&opened.window, cx);
+        cx.simulate_input("uninstall");
+        settle(&opened.window, cx);
+        cx.simulate_keystrokes("enter");
+        settle(&opened.window, cx)
+    };
+
+    let view = choose_uninstall(cx);
+    assert!(
+        matches!(view.screen, Screen::Confirm { .. }),
+        "{:?}",
+        view.screen
+    );
+    assert_eq!(view.title, "Uninstall Preferences sample?");
+    assert!(!actions_open(&opened.window, cx));
+
+    cx.simulate_keystrokes("escape");
+    let view = settle(&opened.window, cx);
+    assert_eq!(
+        view.screen,
+        Screen::Root {
+            query: "tick".into()
+        }
+    );
+    assert!(view.rows.iter().any(|row| row.title == "Tick"));
+
+    choose_uninstall(cx);
+    cx.simulate_keystrokes("enter");
+    let view = settle(&opened.window, cx);
+    assert_eq!(
+        view.screen,
+        Screen::Root {
+            query: "tick".into()
+        }
+    );
+    assert!(view.rows.iter().all(|row| row.title != "Tick"), "{view:?}");
+    assert!(opened.launcher.packages().is_empty());
 }

@@ -7,16 +7,24 @@
 //! own entries remove and move it) and resetting what root search
 //! learned for it (see `learned`, #200), then, for an installed command,
 //! the hotkey and alias configuration the extension list already offers,
-//! and "Configure Command…" and "Configure Extension…" when the command
-//! or its package declares preferences (the window opens the extension's
-//! card in Settings for them; see `setup`).
+//! "Configure Command…" when the command declares preferences, and
+//! "Configure Extension…" always (the window opens the extension's page in
+//! Settings for them; see `setup`), then "Disable Command" and "Uninstall
+//! Extension…" (#493), Raycast's Action Panel order. The last two are the
+//! operations Settings' page runs (ADR 0043) through a new entry point:
+//! the command's switch, and the uninstall operation's confirmation, with
+//! that operation's availability.
 //! Nothing is listed that has no working operation behind it (#100): no
 //! quit, new window or hide. The same items describe a quick slot's own
 //! entries (see `quick_slots`).
 //!
-//! An alias or hotkey flow opened here returns to the search it came from
-//! — the same rows, the target still selected, the outcome in the status —
+//! An alias or hotkey flow, or the uninstall confirmation, opened here
+//! returns to the search it came from — the same rows (less an uninstalled
+//! extension's), the target still selected, the outcome in the status —
 //! where the same flows opened from the extension list return there.
+
+use std::future::Future;
+use std::time::Instant;
 
 use super::aliases::Via;
 use super::learned;
@@ -25,7 +33,7 @@ use super::{
     Entry, Launcher, LauncherView, Mode, Screen, SelectedAction, State, Status, quick_slots,
     shortcuts,
 };
-use crate::packages::SavedData;
+use crate::packages::{PackageIdentity, SavedData};
 
 /// One kind of action on a result.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -49,9 +57,17 @@ pub enum ResultAction {
     /// Settings › Extensions (the window does; see
     /// [`Launcher::preferences_target`]).
     ConfigureCommand,
-    /// Opens the extension's preferences on its card in Settings ›
-    /// Extensions (the window does).
+    /// Opens the extension's page in Settings › Extensions, at its
+    /// preferences when it declares some (the window does; see
+    /// [`Launcher::extension_of_result`]).
     ConfigureExtension,
+    /// Turns the command off, as its switch on its extension's page does
+    /// ([`Launcher::disable_result_command`]).
+    DisableCommand,
+    /// Asks whether to uninstall the command's extension: the launcher's
+    /// own "Uninstall X?" confirmation, which returns to the search it was
+    /// opened from ([`Launcher::open_result_action`]).
+    UninstallExtension,
     /// Takes away the notice that Pane quit unexpectedly last time
     /// ([`Launcher::dismiss_crash_notice`]).
     DismissNotice,
@@ -78,10 +94,49 @@ impl ResultAction {
             ResultAction::MovePinDown => "move-pin-down",
             ResultAction::ConfigureCommand => "configure-command",
             ResultAction::ConfigureExtension => "configure-extension",
+            ResultAction::DisableCommand => "disable-command",
+            ResultAction::UninstallExtension => "uninstall-extension",
             ResultAction::DismissNotice => "dismiss-notice",
             ResultAction::ResetRanking => "reset-ranking",
         }
     }
+
+    /// Whether the panel draws the entry as destructive: uninstalling the
+    /// extension, which removes it.
+    pub fn destructive(self) -> bool {
+        self == ResultAction::UninstallExtension
+    }
+
+    /// The fixed chord that runs the entry on root search's selected row
+    /// without opening the panel, and that the panel shows beside it
+    /// (Raycast's): Configure Command, Configure Extension and Disable
+    /// Command. `None` for the others, whose keys (the invoke binding, the
+    /// pin keys) the window shows itself, or which have none.
+    pub fn chord(self) -> Option<crate::keyboard::Binding> {
+        match self {
+            ResultAction::ConfigureCommand => Some(crate::keyboard::configure_command_key()),
+            ResultAction::ConfigureExtension => Some(crate::keyboard::configure_extension_key()),
+            ResultAction::DisableCommand => Some(crate::keyboard::disable_command_key()),
+            ResultAction::Invoke
+            | ResultAction::Hotkey
+            | ResultAction::Alias
+            | ResultAction::Pin
+            | ResultAction::Unpin
+            | ResultAction::MovePinUp
+            | ResultAction::MovePinDown
+            | ResultAction::UninstallExtension
+            | ResultAction::DismissNotice
+            | ResultAction::ResetRanking => None,
+        }
+    }
+
+    /// The entries [`ResultAction::chord`] gives a chord, in the panel's
+    /// order.
+    pub const CHORDED: [ResultAction; 3] = [
+        ResultAction::ConfigureCommand,
+        ResultAction::ConfigureExtension,
+        ResultAction::DisableCommand,
+    ];
 
     /// A quick slot entry's fixed label: "Pin", "Unpin", "Move Up", "Move
     /// Down" (a window that lays the pins out side by side may say left and
@@ -97,6 +152,8 @@ impl ResultAction {
             | ResultAction::Alias
             | ResultAction::ConfigureCommand
             | ResultAction::ConfigureExtension
+            | ResultAction::DisableCommand
+            | ResultAction::UninstallExtension
             | ResultAction::ResetRanking
             | ResultAction::DismissNotice => None,
         }
@@ -104,8 +161,9 @@ impl ResultAction {
 
     /// A configuration entry's label, by whether the command already has
     /// that configuration: "Assign Hotkey…" or "Change Hotkey…", "Add
-    /// Alias…" or "Change Alias…"; "Configure Command…" and "Configure
-    /// Extension…" whatever is set. `None` for [`ResultAction::Invoke`],
+    /// Alias…" or "Change Alias…"; "Configure Command…", "Configure
+    /// Extension…", "Disable Command" and "Uninstall Extension…" whatever
+    /// is set. `None` for [`ResultAction::Invoke`],
     /// which is named by the result's own action, and for the quick slot
     /// entries (see [`ResultAction::quick_slot_label`]).
     pub fn configuration_label(self, configured: bool) -> Option<&'static str> {
@@ -126,6 +184,8 @@ impl ResultAction {
             (ResultAction::Alias, true) => Some("Change Alias…"),
             (ResultAction::ConfigureCommand, _) => Some("Configure Command…"),
             (ResultAction::ConfigureExtension, _) => Some("Configure Extension…"),
+            (ResultAction::DisableCommand, _) => Some("Disable Command"),
+            (ResultAction::UninstallExtension, _) => Some("Uninstall Extension…"),
         }
     }
 }
@@ -139,6 +199,9 @@ pub struct ResultActionItem {
     /// Whether it can run now; the primary action of an unavailable result
     /// cannot.
     pub available: bool,
+    /// Why it cannot run now, where the operation behind it says: "Hello
+    /// is reloading". The panel shows it beside the dimmed entry.
+    pub reason: Option<String>,
 }
 
 /// The actions of root search's selected row.
@@ -193,26 +256,42 @@ impl Launcher {
     }
 
     /// Opens the hotkey screen or the alias form of `target`, an installed
-    /// command, when the action is [ready](Launcher::result_action_ready);
+    /// command, or the confirmation that uninstalls its extension (the
+    /// extension list's own, which asks about the extensions that require
+    /// it too), when the action is [ready](Launcher::result_action_ready);
     /// the flow returns to this search when it ends. Whether it opened:
-    /// nothing changes otherwise. Only [`ResultAction::Hotkey`] and
-    /// [`ResultAction::Alias`] open a flow: [`ResultAction::Invoke`] is the
-    /// window's primary action, the quick slot entries change the slots
-    /// ([`Launcher::change_quick_slots`]), and [`ResultAction::ResetRanking`]
+    /// nothing changes otherwise. Only [`ResultAction::Hotkey`],
+    /// [`ResultAction::Alias`] and [`ResultAction::UninstallExtension`] open
+    /// a flow: [`ResultAction::Invoke`] is the window's primary action, the
+    /// quick slot entries change the slots
+    /// ([`Launcher::change_quick_slots`]), [`ResultAction::ResetRanking`]
     /// clears what root search learned for the row
-    /// ([`Launcher::reset_ranking`]).
+    /// ([`Launcher::reset_ranking`]), [`ResultAction::DisableCommand`] turns
+    /// the command off ([`Launcher::disable_result_command`]), and the
+    /// configure entries are the window's.
     pub fn open_result_action(&self, target: &str, action: ResultAction) -> bool {
         let mut state = self.lock();
-        let flow = matches!(action, ResultAction::Hotkey | ResultAction::Alias);
+        let flow = matches!(
+            action,
+            ResultAction::Hotkey | ResultAction::Alias | ResultAction::UninstallExtension
+        );
         if !flow || !ready(self, &state, target, action) {
             return false;
         }
         let view = state.view.clone();
         let entries = state.entries.clone();
-        if action == ResultAction::Hotkey {
-            self.show_hotkey(&mut state, target);
-        } else {
-            self.show_alias_form(&mut state, target);
+        match action {
+            ResultAction::Hotkey => self.show_hotkey(&mut state, target),
+            ResultAction::Alias => self.show_alias_form(&mut state, target),
+            _ => {
+                let Some(identity) = package_of(&state, target) else {
+                    return false;
+                };
+                // The extension list's row, activated: asking about the
+                // extensions that require it when some do. It does nothing
+                // more until the confirmation is answered.
+                let _ = self.activation(&mut state, Entry::AskUninstall(identity));
+            }
         }
         // Set after the flow opened: opening it clears what a visit from
         // the extension list would otherwise inherit.
@@ -224,9 +303,59 @@ impl Launcher {
         true
     }
 
-    /// Ends an alias or hotkey flow back on the search the Actions panel
-    /// opened it from, if it did and the flow is still the screen it
-    /// opened: whether it did.
+    /// The installed extension of `target`, root search's selected row of
+    /// an installed command, when [`ResultAction::ConfigureExtension`] is
+    /// [ready](Launcher::result_action_ready) for it: the extension whose
+    /// page in Settings the entry opens.
+    pub fn extension_of_result(&self, target: &str) -> Option<PackageIdentity> {
+        let state = self.lock();
+        if !ready(self, &state, target, ResultAction::ConfigureExtension) {
+            return None;
+        }
+        package_of(&state, target)
+    }
+
+    /// Turns off the installed command of `target`, root search's selected
+    /// row, when [`ResultAction::DisableCommand`] is
+    /// [ready](Launcher::result_action_ready) for it: what its switch on
+    /// its extension's page does ([`Launcher::set_command_enabled`]). It
+    /// leaves root search at once; await the future to record the choice:
+    /// the status then says what was done, or why it could not be, while
+    /// the search is still the screen. `None` when the entry is not ready:
+    /// nothing changes.
+    pub fn disable_result_command(
+        &self,
+        target: &str,
+    ) -> Option<impl Future<Output = ()> + Send + 'static> {
+        if !self.result_action_ready(target, ResultAction::DisableCommand) {
+            return None;
+        }
+        let switched = self.set_command_enabled(target, false);
+        // Running while the choice is recorded, as a choice of the alias
+        // form is.
+        let epoch = {
+            let mut state = self.lock();
+            state.view.status = Status::Running {
+                since: Instant::now(),
+            };
+            state.screen_epoch
+        };
+        let launcher = self.clone();
+        Some(async move {
+            let status = match switched.await {
+                Ok(done) => Status::Result(done),
+                Err(why) => Status::Error(why),
+            };
+            let mut state = launcher.lock();
+            if state.screen_epoch == epoch {
+                state.view.status = status;
+            }
+        })
+    }
+
+    /// Ends an alias or hotkey flow, or the uninstall confirmation, back on
+    /// the search the Actions panel opened it from, if it did and the flow
+    /// is still the screen it opened: whether it did.
     pub(super) fn return_from_actions_flow(&self, state: &mut State) -> bool {
         let Some(back) = state
             .actions_return
@@ -253,6 +382,7 @@ fn result_actions(launcher: &Launcher, state: &State) -> Option<ResultActions> {
         action: ResultAction::Invoke,
         label: primary.label,
         available: primary.available,
+        reason: None,
     }];
     // A result a quick slot can hold: pinning it (its slot's own panel
     // removes and moves it), and resetting what root search learned for
@@ -268,6 +398,7 @@ fn result_actions(launcher: &Launcher, state: &State) -> Option<ResultActions> {
             action: ResultAction::DismissNotice,
             label: DISMISS_NOTICE.into(),
             available: true,
+            reason: None,
         });
     }
     // An installed command's own row — not one that sends text through
@@ -294,23 +425,35 @@ fn result_actions(launcher: &Launcher, state: &State) -> Option<ResultActions> {
         if command.editable {
             items.push(configuration(ResultAction::Alias, command.alias.is_some()));
         }
-        // Its preferences, and its package's, on the extension's card.
+        // Its own preferences, when it declares some, and its extension's
+        // page, always: Raycast offers Configure Extension for every
+        // command, and the page holds more than preferences.
         let (key, id) = super::choices::split(&row.id);
-        let manifest = state
+        let package = state
             .packages
             .iter()
-            .find(|package| package.identity.key() == key)
-            .and_then(|package| package.manifest.as_ref().ok());
-        if let Some(manifest) = manifest {
-            let own = manifest
-                .commands
-                .iter()
-                .any(|declared| declared.id == id && !declared.preferences.is_empty());
-            if own {
-                items.push(configuration(ResultAction::ConfigureCommand, false));
-            }
-            if !manifest.preferences.is_empty() {
-                items.push(configuration(ResultAction::ConfigureExtension, false));
+            .find(|package| package.identity.key() == key);
+        let own = package
+            .and_then(|package| package.manifest.as_ref().ok())
+            .is_some_and(|manifest| {
+                manifest
+                    .commands
+                    .iter()
+                    .any(|declared| declared.id == id && !declared.preferences.is_empty())
+            });
+        if own {
+            items.push(configuration(ResultAction::ConfigureCommand, false));
+        }
+        if let Some(package) = package {
+            items.push(configuration(ResultAction::ConfigureExtension, false));
+            // Turning it off and uninstalling its extension record the
+            // change, which a launcher that does not install extensions
+            // cannot.
+            if launcher.installation.is_some() {
+                items.push(configuration(ResultAction::DisableCommand, false));
+                if let Some(uninstall) = uninstall_item(launcher, state, &package.identity) {
+                    items.push(uninstall);
+                }
             }
         }
     } else if matches!(
@@ -345,7 +488,49 @@ fn configuration(action: ResultAction, configured: bool) -> ResultActionItem {
             .expect("a configuration entry")
             .to_owned(),
         available: true,
+        reason: None,
     }
+}
+
+/// The "Uninstall Extension…" entry for the installed package with
+/// `identity`, as available as the extension list's uninstall operation
+/// for it is: not listed where there is none, and unavailable, saying why,
+/// where it cannot run now or something else is happening to the package
+/// (a reload, an update, an uninstall).
+fn uninstall_item(
+    launcher: &Launcher,
+    state: &State,
+    identity: &PackageIdentity,
+) -> Option<ResultActionItem> {
+    let (rows, entries) = launcher.extension_rows(state);
+    let (row, _) = rows
+        .into_iter()
+        .zip(entries)
+        .find(|(_, entry)| matches!(entry, Entry::AskUninstall(asked) if *asked == *identity))?;
+    let reason = row
+        .unavailable
+        .map(|why| why.reason().to_owned())
+        .or_else(|| {
+            state
+                .changing
+                .get(identity)
+                .map(|busy| format!("{} {}", state.title_of(identity), busy.doing()))
+        });
+    Some(ResultActionItem {
+        available: reason.is_none(),
+        reason,
+        ..configuration(ResultAction::UninstallExtension, false)
+    })
+}
+
+/// The installed package whose command `target`, a row id, is.
+fn package_of(state: &State, target: &str) -> Option<PackageIdentity> {
+    let (key, _) = super::choices::split(target);
+    state
+        .packages
+        .iter()
+        .find(|package| package.identity.key() == key)
+        .map(|package| package.identity.clone())
 }
 
 fn ready(launcher: &Launcher, state: &State, target: &str, action: ResultAction) -> bool {

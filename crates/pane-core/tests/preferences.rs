@@ -791,7 +791,7 @@ fn every_type_is_accepted_and_invalid_declarations_are_refused_at_install() {
 }
 
 #[test]
-fn configure_entries_appear_only_where_preferences_are_declared() {
+fn configure_command_appears_where_it_declares_preferences_and_configure_extension_always() {
     let pane = Pane::new();
     let folder = pane.install(&RUST, "preferences");
     let other = pane.source("sample-no-view", "no-view");
@@ -818,7 +818,11 @@ fn configure_entries_appear_only_where_preferences_are_declared() {
         ["Configure Command…", "Configure Extension…"]
     );
     assert_eq!(configuration("tick", "Tick"), ["Configure Extension…"]);
-    assert!(configuration("report launch", "Report launch").is_empty());
+    // An extension without preferences still has its page (#493).
+    assert_eq!(
+        configuration("report launch", "Report launch"),
+        ["Configure Extension…"]
+    );
 
     // They name the card to open, and are ready.
     pane.search("show preferences");

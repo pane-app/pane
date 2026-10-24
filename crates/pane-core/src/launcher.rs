@@ -5476,6 +5476,13 @@ impl Launcher {
             Question::ClearClipboardHistory(identity) => {
                 self.show_extensions_at_clear_clipboard_history(state, &identity)
             }
+            // Asked from root search's Actions panel (#493): back to that
+            // search.
+            Question::Uninstall(_) | Question::UninstallDependents(_)
+                if self.return_from_actions_flow(state) =>
+            {
+                self.refresh(state)
+            }
             Question::Uninstall(identity) | Question::UninstallDependents(identity) => self
                 .show_extensions_at(
                     state,

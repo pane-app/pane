@@ -484,7 +484,34 @@ from the core's `Launcher::result_actions`:
   - for an installed command, "Assign Hotkey…"/"Change Hotkey…" and "Add
     Alias…"/"Change Alias…". These open the same hotkey screen and alias
     form the extension list does, and return to this search when they
-    end.
+    end;
+  - then, for an installed command, its extension's entries (#493), in
+    Raycast's order:
+    - "Configure Command…" (Ctrl+Shift+,; Cmd+Shift+, on macOS), when
+      the command declares preferences. It opens Settings at them.
+    - "Configure Extension…" (Ctrl+Alt+,; Cmd+Option+, on macOS),
+      always. It opens the extension's page in Settings.
+    - "Disable Command" (Ctrl+Alt+Shift+D; Cmd+Option+Shift+D on macOS).
+      It turns the command off, as its switch on that page does: the row
+      leaves root search, and the status line says what was recorded.
+    - "Uninstall Extension…", drawn as destructive, with no key. It opens
+      the launcher's own "Uninstall X?" confirmation, the one the
+      extension list asks, and asks about the extensions that require it
+      too. Enter answers the selected row (keep or delete saved data, or
+      Cancel), and Escape leaves it. Either way the launcher returns to
+      this search, without the extension's rows once it is uninstalled.
+      While something else is happening to the extension (a reload, an
+      update), the entry is dimmed and says why.
+
+    These are the operations Settings' extension page runs (ADR 0043),
+    with their availability, through a new entry point. Their chords run
+    them on the selected row with the panel closed, or on the panel's
+    target while it is open. The chords are fixed and act only on
+    root search's row of an installed command, whose actions are all
+    Pane's. In a command's list the same keys stay the extension's.
+    Raycast's sources give Disable Command as Ctrl+Shift+D or as
+    Ctrl+Alt+Shift+D; Pane takes the second, because extensions commonly
+    use Ctrl+Shift+D for their own actions.
 
 Nothing without a working operation is listed: no new window, file
 manager, quit or hide (#100).

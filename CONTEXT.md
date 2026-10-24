@@ -149,7 +149,7 @@ How much of the launcher shows while root search's query is blank, as the Launch
 _Avoid_: Size, density
 
 **Actions panel**:
-The panel, opened from the launcher's footer or its Open actions binding, that lists what can be done with the selected root result or item. For root search's result: its primary action, then pinning it to the quick slots or unpinning it, then the alias and hotkey configuration of an installed command. For an item of a command's list: the item's actions, with their sections, submenus and shortcuts, filtered as the user types. A quick slot has one of its own, opening, unpinning and moving it. It lists only what can be done, and holds the result or item it opened for.
+The panel, opened from the launcher's footer or its Open actions binding, that lists what can be done with the selected root result or item. For root search's result: its primary action, then pinning it to the quick slots or unpinning it, then the alias and hotkey configuration of an installed command, then its extension's entries: Configure Command (when it declares preferences), Configure Extension, Disable Command and Uninstall Extension, the first three with Raycast's chords. For an item of a command's list: the item's actions, with their sections, submenus and shortcuts, filtered as the user types. A quick slot has one of its own, opening, unpinning and moving it. It lists only what can be done, and holds the result or item it opened for.
 _Avoid_: Context menu, app menu (the Pane menu is separate)
 
 **Action**:

@@ -3516,6 +3516,9 @@ impl Render for LauncherWindow {
             // A toast's actions' shortcuts first: the toast is what was
             // said last (#141).
             .capture_key_down(cx.listener(Self::toast_action_keys))
+            // Root search's chords for Pane's own result actions (#493),
+            // with the Actions panel open or not.
+            .capture_key_down(cx.listener(Self::result_action_chords))
             .capture_key_down(cx.listener(Self::item_action_keys))
             .capture_key_down(cx.listener(Self::designed_list_keys))
             .capture_key_down(cx.listener(Self::held_typing_keys))

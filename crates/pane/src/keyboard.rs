@@ -206,6 +206,43 @@ pub(crate) fn binding_of(keystroke: &Keystroke) -> Result<Binding, String> {
     )
 }
 
+/// Whether `keystroke`, a key pressed, is `binding`. A binding with Shift
+/// and a punctuation key also matches the press Windows reports for it:
+/// the shifted character without Shift (Ctrl+Shift+, arrives as Ctrl+<
+/// there), on the US layout, the one whose shifted characters are known
+/// here.
+pub(crate) fn pressed(keystroke: &Keystroke, binding: &Binding) -> bool {
+    if binding_of(keystroke).is_ok_and(|pressed| pressed == *binding) {
+        return true;
+    }
+    let (control, alt, shift, platform, function) = binding.modifiers();
+    let held = keystroke.modifiers;
+    shift
+        && !held.shift
+        && (held.control, held.alt, held.platform, held.function)
+            == (control, alt, platform, function)
+        && shifted(binding.key()).is_some_and(|key| keystroke.key == key)
+}
+
+/// The character Shift and `key` type on the US layout, for the
+/// punctuation keys.
+fn shifted(key: &str) -> Option<&'static str> {
+    Some(match key {
+        "," => "<",
+        "." => ">",
+        "/" => "?",
+        ";" => ":",
+        "'" => "\"",
+        "[" => "{",
+        "]" => "}",
+        "\\" => "|",
+        "-" => "_",
+        "=" => "+",
+        "`" => "~",
+        _ => return None,
+    })
+}
+
 /// The Escape key's cap: what closes the Actions panel and the footer
 /// menu, whatever back is bound to.
 pub(crate) fn escape_keys() -> KeySequence {
@@ -498,5 +535,26 @@ mod tests {
                 format!("{CTRL}+Page Down")
             )
         );
+    }
+
+    #[test]
+    fn a_shifted_punctuation_chord_matches_as_windows_reports_it_too() {
+        let press = |id: &str| Keystroke::parse(id).unwrap();
+        let configure = Binding::parse("ctrl-shift-,").unwrap();
+        // As the test platform and macOS report it, and as Windows does:
+        // the shifted character, Shift dropped.
+        assert!(pressed(&press("ctrl-shift-,"), &configure));
+        assert!(pressed(&press("ctrl-<"), &configure));
+        // Other modifiers, or the plain key, are other chords.
+        assert!(!pressed(&press("ctrl-,"), &configure));
+        assert!(!pressed(&press("ctrl-alt-<"), &configure));
+        assert!(!pressed(&press("<"), &configure));
+        // A chord without Shift never takes the shifted character.
+        let extension = Binding::parse("ctrl-alt-,").unwrap();
+        assert!(pressed(&press("ctrl-alt-,"), &extension));
+        assert!(!pressed(&press("ctrl-alt-<"), &extension));
+        let disable = Binding::parse("ctrl-alt-shift-d").unwrap();
+        assert!(pressed(&press("ctrl-alt-shift-d"), &disable));
+        assert!(!pressed(&press("ctrl-alt-d"), &disable));
     }
 }
