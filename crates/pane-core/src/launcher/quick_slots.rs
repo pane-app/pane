@@ -506,10 +506,12 @@ fn resolve_indexed(state: &State, target: &PinTarget, command: &str) -> Resolved
 /// What a quick slot pinning one of `command`'s results by `result`, an
 /// id the command no longer lists, holds now, when `result` names an
 /// installed application by another id, such as the path that was its id
-/// before applications had stable identities: the command's result for
-/// that application (the one with its current id, else the one opening
-/// it). `None` when `result` is listed or names no application.
-fn carried(
+/// before applications had stable identities or one it had before its
+/// shortcuts were keyed by their AppUserModelID (#508): the command's
+/// result for that application (the one with its current id, else the one
+/// opening it). `None` when `result` is listed or names no application.
+/// What root search learned is carried by it too (`learned`).
+pub(super) fn carried(
     state: &State,
     command: &str,
     result: &str,

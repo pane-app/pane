@@ -8,12 +8,18 @@
 //! `ShellExecuteEx`): a shortcut by its path, a packaged app by
 //! `shell:AppsFolder\<AppUserModelID>`.
 //!
-//! A shell link is identified by what it opens: its target and arguments as
-//! the shell's shortcut interface reads them, on single-threaded COM
-//! apartments in parallel, with version folders as a wildcard
-//! ([`Key::program`]); an MSI-advertised shortcut is resolved through the
-//! installer to the program it installs; a shortcut whose AppUserModelID is
-//! a packaged app's is that app. An internet shortcut is identified by its
+//! A shell link is identified by what it opens, as the shell's shortcut
+//! interface reads it, on single-threaded COM apartments in parallel: a
+//! shortcut whose AppUserModelID is a packaged app's is that app; one that
+//! carries a desktop program's own AppUserModelID is identified by it
+//! ([`Key::App`]), as Windows groups a program's shortcuts; any other by its
+//! target and arguments, with version folders as a wildcard
+//! ([`Key::program`]). An MSI-advertised shortcut is resolved through the
+//! installer to the program it installs, and a Squirrel updater's
+//! `Update.exe --processStart X.exe` to the `X.exe` beside it
+//! ([`squirrel_program`]). Shortcuts that run one program under one name
+//! are then one application whatever arguments they pass
+//! ([`super::identity::owners`]). An internet shortcut is identified by its
 //! URL and a ClickOnce reference by its deployment ([`Key::Link`]). A
 //! packaged app is identified by its package family
 //! ([`super::identity::packaged_keys`]). A shell link Pane cannot read is
@@ -72,18 +78,20 @@ const APPS_FOLDER: &str = r"shell:AppsFolder\";
 
 /// Where a shortcut was found, the most preferred first: the primary
 /// source of an application found in several places is the one in the
-/// earliest ([`super::identity::primary`]), as Explorer prefers the user's
-/// own shortcuts.
+/// earliest ([`super::identity::primary`]). The Start menu comes first, as
+/// it is what the Start menu and Raycast list, and its shortcut is the one
+/// an installer made (a Desktop copy may pass extra arguments, as
+/// Discord's does); then the user's own shortcuts before every user's.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Place {
-    /// The user's Desktop.
-    UserDesktop,
-    /// Every user's Desktop (`%PUBLIC%\Desktop`).
-    AllUsersDesktop,
     /// The user's Start menu Programs folder.
     UserStartMenu,
     /// Every user's Start menu Programs folder.
     AllUsersStartMenu,
+    /// The user's Desktop.
+    UserDesktop,
+    /// Every user's Desktop (`%PUBLIC%\Desktop`).
+    AllUsersDesktop,
     /// The shortcuts pinned to the taskbar.
     TaskbarPins,
     /// The Apps folder's packaged apps.
@@ -561,32 +569,102 @@ fn is_app_user_model_id(parsing: &str) -> bool {
     parsing.contains('!') && !parsing.contains(['\\', '/', ':', '{'])
 }
 
-/// The key of a shell link that opens `shortcut`, or `None` when it is not
-/// an application: a packaged app's key when its AppUserModelID is one in
-/// `package_key`; else, when its target is a program that is there
-/// (`targets`) and not an uninstaller, its target and arguments. An empty
-/// target opens a shell item, or is an MSI-advertised shortcut whose
-/// product is not installed (the reader resolves an installed one to its
-/// program); a missing target is a broken shortcut; a folder or a document
-/// is not an application.
+/// The option a Squirrel-installed app's shortcuts pass its `Update.exe` to
+/// start the app, followed by the app's program file name.
+const SQUIRREL_START: &str = "--processStart";
+
+/// The program a Squirrel updater's shortcut starts, with the arguments
+/// left for it: `Update.exe --processStart Discord.exe` starts the
+/// `Discord.exe` beside `Update.exe`, so it is that program's shortcut.
+/// `None` when `target` is not an `Update.exe` started so, or the program
+/// it names is not there as a file (`targets`).
+fn squirrel_program(
+    target: &str,
+    arguments: &str,
+    targets: &dyn Fn(&str) -> ShortcutTarget,
+) -> Option<(String, String)> {
+    let file = target.rsplit(['\\', '/']).next()?;
+    if !file.eq_ignore_ascii_case("update.exe") {
+        return None;
+    }
+    let arguments = arguments.trim();
+    let option = arguments.get(..SQUIRREL_START.len())?;
+    let rest = &arguments[SQUIRREL_START.len()..];
+    if !option.eq_ignore_ascii_case(SQUIRREL_START) || !rest.starts_with(char::is_whitespace) {
+        return None;
+    }
+    let rest = rest.trim_start();
+    let (program, rest) = match rest.strip_prefix('"') {
+        Some(quoted) => quoted.split_once('"')?,
+        None => rest.split_once(char::is_whitespace).unwrap_or((rest, "")),
+    };
+    if program.is_empty() || program.contains(['\\', '/', ':']) || !is_program(program) {
+        return None;
+    }
+    let sibling = format!("{}{program}", &target[..target.len() - file.len()]);
+    (targets(&sibling) == ShortcutTarget::File).then(|| (sibling, rest.trim().to_owned()))
+}
+
+/// What identifies a shell link that is an application ([`link_key`]).
+#[derive(Debug, PartialEq, Eq)]
+struct Linked {
+    key: Key,
+    /// The program it runs, and the arguments it passes it: a Squirrel
+    /// updater's shortcut runs the program it starts
+    /// ([`squirrel_program`]). `None` for a packaged app's.
+    program: Option<(String, String)>,
+    /// The key it had when shortcuts were keyed by their target and
+    /// arguments alone, when that is not `key` ([`Source::previous`]).
+    previous: Option<Key>,
+}
+
+/// What identifies a shell link that opens `shortcut`, or `None` when it is
+/// not an application: a packaged app's key when its AppUserModelID is one
+/// in `package_key`; else, when its target is a program that is there
+/// (`targets`) and not an uninstaller, its own AppUserModelID when it
+/// carries one ([`Key::App`]), as Windows groups shortcuts, or else its
+/// program and arguments. An empty target opens a shell item, or is an
+/// MSI-advertised shortcut whose product is not installed (the reader
+/// resolves an installed one to its program); a missing target is a broken
+/// shortcut; a folder or a document is not an application.
 fn link_key(
     shortcut: &Shortcut,
     package_key: &HashMap<String, Key>,
     targets: &dyn Fn(&str) -> ShortcutTarget,
-) -> Option<Key> {
-    if let Some(key) = shortcut
+) -> Option<Linked> {
+    let aumid = shortcut
         .app_user_model_id
-        .as_ref()
-        .and_then(|aumid| package_key.get(&aumid.to_lowercase()))
-    {
-        return Some(key.clone());
+        .as_deref()
+        .map(str::trim)
+        .filter(|aumid| !aumid.is_empty())
+        .map(str::to_lowercase);
+    if let Some(key) = aumid.as_ref().and_then(|aumid| package_key.get(aumid)) {
+        return Some(Linked {
+            key: key.clone(),
+            program: None,
+            previous: None,
+        });
     }
     let target = shortcut.target.trim();
     let admitted = !target.is_empty()
         && is_program(target)
         && !is_uninstaller_program(target)
         && targets(target) == ShortcutTarget::File;
-    admitted.then(|| Key::program(target, &shortcut.arguments))
+    if !admitted {
+        return None;
+    }
+    let (program, arguments) = squirrel_program(target, &shortcut.arguments, targets)
+        .unwrap_or_else(|| (target.to_owned(), shortcut.arguments.trim().to_owned()));
+    let key = match aumid {
+        Some(aumid) => Key::App(aumid),
+        None => Key::program(&program, &arguments),
+    };
+    let previous = Some(Key::program(target, &shortcut.arguments)).filter(|old| *old != key);
+    Some(Linked {
+        key,
+        program: Some((program, arguments)),
+        previous,
+    })
 }
 
 /// The sources the shortcuts `found` and the Apps folder's `items` (each
@@ -594,9 +672,10 @@ fn link_key(
 /// (`opens`, in the order of `found`), what a shell link's target is on
 /// disk (`targets`) and whether a URL scheme has a handler (`handles`).
 ///
-/// A shell link is keyed by the packaged app its AppUserModelID names, or
-/// by its target and arguments ([`link_key`], which leaves out what is not
-/// an application), or, when it could not be read, by its own path. An
+/// A shell link is keyed by the packaged app its AppUserModelID names, by
+/// its own AppUserModelID, or by its program and arguments ([`link_key`],
+/// which leaves out what is not an application), or, when it could not be
+/// read, by its own path. An
 /// internet shortcut whose URL is an application's
 /// ([`is_application_url`]) is keyed by its URL and a ClickOnce reference
 /// by its deployment, in lowercase. The Apps folder's packaged apps are
@@ -639,16 +718,18 @@ fn sources(
             let path = found.path.to_string_lossy().into_owned();
             let mut program = None;
             let mut arguments = false;
+            let mut previous = None;
             let mut shown = None;
             let key = match opens {
                 Opens::Link(Some(shortcut)) => {
-                    let key = link_key(&shortcut, &package_key, targets)?;
-                    if matches!(key, Key::Program { .. }) {
-                        program = Some(shortcut.target.trim().to_owned());
-                        arguments = !shortcut.arguments.trim().is_empty();
+                    let linked = link_key(&shortcut, &package_key, targets)?;
+                    if let Some((target, passed)) = linked.program {
+                        program = Some(target);
+                        arguments = !passed.is_empty();
                     }
+                    previous = linked.previous;
                     shown = shortcut.display_name.as_deref().map(shown_name);
-                    key
+                    linked.key
                 }
                 Opens::Link(None) => Key::Path(path.to_lowercase()),
                 Opens::Url(Some(url)) if is_application_url(&url, handles) => {
@@ -667,6 +748,7 @@ fn sources(
                 untranslated,
                 arguments,
                 program,
+                previous,
                 ..Source::new(key, path, name, found.location, found.place as usize)
             })
         })
@@ -1280,7 +1362,200 @@ mod tests {
             vec![shortcut],
             vec![],
         );
-        assert_eq!(sources[0].key, Key::program(r"C:\Tool\tool.exe", ""));
+        // It is keyed by its own AppUserModelID, and still runs its program.
+        assert_eq!(sources[0].key, Key::App("vendor.tool".into()));
+        assert_eq!(sources[0].program.as_deref(), Some(r"C:\Tool\tool.exe"));
+        assert_eq!(
+            sources[0].previous,
+            Some(Key::program(r"C:\Tool\tool.exe", ""))
+        );
+    }
+
+    /// A shell link to `target` passing `arguments`, carrying `aumid`.
+    fn link(target: &str, arguments: &str, aumid: Option<&str>) -> Option<Shortcut> {
+        Some(Shortcut {
+            target: target.into(),
+            arguments: arguments.into(),
+            app_user_model_id: aumid.map(String::from),
+            display_name: None,
+        })
+    }
+
+    fn found_at(path: &str, place: Place) -> Found {
+        let name = path.rsplit('\\').next().unwrap().trim_end_matches(".lnk");
+        Found {
+            path: PathBuf::from(path),
+            name: name.into(),
+            location: path.rsplit_once('\\').unwrap().0.into(),
+            place,
+            kind: Kind::Link,
+        }
+    }
+
+    const DISCORD: &str = r"C:\Users\Ann\AppData\Local\Discord";
+    const DISCORD_ID: &str = "com.squirrel.Discord.Discord";
+
+    /// The user's Discord shortcuts (#508): the Desktop's, the Start
+    /// menu's two and the taskbar pin, as `aumid` says they carry it.
+    fn discord(aumid: Option<&str>) -> Vec<Source> {
+        let program = format!(r"{DISCORD}\Discord.exe");
+        let start = "--processStart Discord.exe";
+        link_sources(
+            vec![
+                found_at(r"C:\Users\Ann\Desktop\Discord.lnk", Place::UserDesktop),
+                found_at(
+                    r"C:\Users\Ann\Start Menu\Programs\Discord.lnk",
+                    Place::UserStartMenu,
+                ),
+                found_at(
+                    r"C:\Users\Ann\Start Menu\Programs\Discord Inc\Discord.lnk",
+                    Place::UserStartMenu,
+                ),
+                found_at(r"C:\Users\Ann\TaskBar\Discord.lnk", Place::TaskbarPins),
+            ],
+            vec![
+                link(&program, start, aumid),
+                link(&program, "", aumid),
+                link(&program, start, aumid),
+                link(&format!(r"{DISCORD}\Update.exe"), start, aumid),
+            ],
+            vec![],
+        )
+    }
+
+    #[test]
+    fn shortcuts_with_one_app_user_model_id_are_one_application_opened_from_the_start_menu() {
+        let program = format!(r"{DISCORD}\Discord.exe");
+        let catalog = super::super::Catalog::new(discord(Some(DISCORD_ID)));
+
+        let applications = catalog.applications();
+        assert_eq!(applications.len(), 1);
+        let discord = &catalog.identified()[0];
+        assert_eq!(discord.id, Key::App(DISCORD_ID.to_lowercase()).id());
+        // The Start menu's shortcut passing no arguments opens it and gives
+        // its icon, not the Desktop's.
+        assert_eq!(
+            discord.primary().path,
+            r"C:\Users\Ann\Start Menu\Programs\Discord.lnk"
+        );
+        // Every id the shortcuts had by target and arguments finds it, so
+        // a pin or learned ranking on either carries over.
+        for old in [
+            Key::program(&program, "--processStart Discord.exe"),
+            Key::program(&program, ""),
+            Key::program(
+                &format!(r"{DISCORD}\Update.exe"),
+                "--processStart Discord.exe",
+            ),
+        ] {
+            assert_eq!(catalog.find(&old.id()).unwrap().id, discord.id, "{old:?}");
+        }
+    }
+
+    #[test]
+    fn without_an_app_user_model_id_one_program_under_one_name_is_one_application() {
+        let program = format!(r"{DISCORD}\Discord.exe");
+        let catalog = super::super::Catalog::new(discord(None));
+
+        assert_eq!(catalog.applications().len(), 1);
+        let discord = &catalog.identified()[0];
+        // Named by the shortcut passing no arguments, which the taskbar
+        // pin's `Update.exe --processStart Discord.exe` is too.
+        assert_eq!(discord.id, Key::program(&program, "").id());
+        assert_eq!(
+            discord.primary().path,
+            r"C:\Users\Ann\Start Menu\Programs\Discord.lnk"
+        );
+        let pinned = Key::program(&program, "--processStart Discord.exe").id();
+        assert_eq!(catalog.find(&pinned).unwrap().id, discord.id);
+    }
+
+    #[test]
+    fn browser_profiles_and_web_apps_keep_their_own_app_user_model_ids() {
+        let chrome = r"C:\Program Files\Google\Chrome\Application\chrome.exe";
+        let sources = link_sources(
+            vec![
+                found_at(r"C:\Menu\Google Chrome.lnk", Place::UserStartMenu),
+                found_at(r"C:\Desktop\Google Chrome.lnk", Place::UserDesktop),
+                found_at(r"C:\Menu\Work - Chrome.lnk", Place::UserStartMenu),
+                found_at(r"C:\Menu\Gmail.lnk", Place::UserStartMenu),
+            ],
+            vec![
+                link(chrome, "", Some("Chrome")),
+                link(chrome, "", Some("Chrome")),
+                link(
+                    chrome,
+                    "--profile-directory=\"Profile 1\"",
+                    Some("Chrome.UserData.Profile1"),
+                ),
+                link(
+                    chrome,
+                    "--profile-directory=Default --app-id=fmgjjmmmlfnkbppncabfkddbjimcfncm",
+                    Some("Chrome._crx_fmgjjmmmlfnkbppncabfkddbjimcfncm"),
+                ),
+            ],
+            vec![],
+        );
+
+        let catalog = super::super::Catalog::new(sources);
+        let names: Vec<String> = catalog
+            .applications()
+            .into_iter()
+            .map(|app| app.name)
+            .collect();
+        assert_eq!(names, ["Google Chrome", "Work - Chrome", "Gmail"]);
+    }
+
+    #[test]
+    fn a_squirrel_updater_s_shortcut_is_the_program_it_starts() {
+        let present = |_: &str| ShortcutTarget::File;
+        assert_eq!(
+            squirrel_program(
+                r"C:\Discord\Update.exe",
+                "--processStart Discord.exe",
+                &present
+            ),
+            Some((r"C:\Discord\Discord.exe".into(), String::new()))
+        );
+        assert_eq!(
+            squirrel_program(
+                r"C:\Slack\update.exe",
+                r#"--processstart "slack.exe" --process-start-args "--startup""#,
+                &present
+            ),
+            Some((
+                r"C:\Slack\slack.exe".into(),
+                r#"--process-start-args "--startup""#.into()
+            ))
+        );
+        // Not an updater, not starting a program, naming a path, or naming
+        // a program that is not there.
+        for (target, arguments) in [
+            (r"C:\Discord\Discord.exe", "--processStart Discord.exe"),
+            (r"C:\Discord\Update.exe", ""),
+            (
+                r"C:\Discord\Update.exe",
+                "--processStartAndWait Discord.exe",
+            ),
+            (r"C:\Discord\Update.exe", "--processStart"),
+            (
+                r"C:\Discord\Update.exe",
+                r"--processStart C:\Other\other.exe",
+            ),
+            (r"C:\Discord\Update.exe", "--processStart readme.txt"),
+        ] {
+            assert_eq!(
+                squirrel_program(target, arguments, &present),
+                None,
+                "{target} {arguments}"
+            );
+        }
+        assert_eq!(
+            squirrel_program(r"C:\Discord\Update.exe", "--processStart Gone.exe", &|_| {
+                ShortcutTarget::Missing
+            }),
+            None
+        );
     }
 
     #[test]
@@ -1370,11 +1645,11 @@ mod tests {
     }
 
     #[test]
-    fn places_are_preferred_as_explorer_prefers_them() {
-        assert!(Place::UserDesktop < Place::AllUsersDesktop);
-        assert!(Place::AllUsersDesktop < Place::UserStartMenu);
+    fn the_start_menu_is_preferred_then_the_user_s_own_shortcuts() {
         assert!(Place::UserStartMenu < Place::AllUsersStartMenu);
-        assert!(Place::AllUsersStartMenu < Place::TaskbarPins);
+        assert!(Place::AllUsersStartMenu < Place::UserDesktop);
+        assert!(Place::UserDesktop < Place::AllUsersDesktop);
+        assert!(Place::AllUsersDesktop < Place::TaskbarPins);
         assert!(Place::TaskbarPins < Place::PackagedApps);
     }
 
@@ -1593,7 +1868,7 @@ mod tests {
         assert_eq!(applications[0].id, Key::program(word, "").id());
         assert_eq!(
             catalog.find(&applications[0].id).unwrap().primary().place,
-            Place::UserDesktop as usize
+            Place::AllUsersStartMenu as usize
         );
     }
 
@@ -1613,7 +1888,7 @@ mod tests {
         assert_eq!(catalog.applications().len(), 1);
         assert_eq!(
             catalog.identified()[0].primary().place,
-            Place::AllUsersDesktop as usize
+            Place::UserStartMenu as usize
         );
     }
 }

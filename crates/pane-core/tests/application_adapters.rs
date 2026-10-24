@@ -219,22 +219,26 @@ fn opening_something_that_is_not_an_application_is_refused() {
 
 /// A shortcut reader for fixture files on every system: a file says what
 /// it opens as `target|arguments`, optionally followed by `|` and the name
-/// Explorer shows for it; an empty one is a shortcut the shell could not
-/// read.
+/// Explorer shows for it (empty for none), then by `|` and its
+/// AppUserModelID; an empty one is a shortcut the shell could not read.
 fn read_fixtures(paths: &[PathBuf]) -> Vec<Option<Shortcut>> {
     paths
         .iter()
         .map(|path| {
             let text = fs::read_to_string(path).ok()?;
-            let mut fields = text.splitn(3, '|');
+            let mut fields = text.splitn(4, '|');
             let target = fields.next().unwrap_or_default();
             let arguments = fields.next().unwrap_or_default();
-            let display_name = fields.next().map(str::to_owned);
+            let display_name = fields
+                .next()
+                .filter(|name| !name.is_empty())
+                .map(str::to_owned);
+            let app_user_model_id = fields.next().map(str::to_owned);
             (!target.is_empty()).then(|| Shortcut {
                 target: target.into(),
                 arguments: arguments.into(),
                 display_name,
-                ..Shortcut::default()
+                app_user_model_id,
             })
         })
         .collect()
@@ -433,7 +437,7 @@ fn desktop_shortcuts_and_taskbar_pins_are_applications() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
     // On the user's Desktop and in their Start menu: one application, which
-    // Pane opens by the Desktop's shortcut, as Explorer prefers it.
+    // Pane opens by the Start menu's shortcut, the one its installer made.
     write(&root.join("user/Desktop/My Tool.lnk"), r"C:\Tool\tool.exe");
     write(
         &root.join("user/Programs/Tool/Tool.lnk"),
@@ -468,17 +472,20 @@ fn desktop_shortcuts_and_taskbar_pins_are_applications() {
         .map(|app| app.name)
         .collect();
     titles.sort();
-    assert_eq!(titles, ["My Tool", "Portable", "Viewer"]);
+    assert_eq!(titles, ["Portable", "Tool", "Viewer"]);
     let tool = catalog
         .find(&Key::program(r"C:\Tool\tool.exe", "").id())
         .unwrap();
     assert_eq!(tool.sources.len(), 2);
     assert_eq!(
         tool.primary().path,
-        root.join("user/Desktop")
-            .join("My Tool.lnk")
+        root.join("user/Programs")
+            .join("Tool")
+            .join("Tool.lnk")
             .to_string_lossy()
     );
+    // The Desktop copy's name still finds it.
+    assert_eq!(tool.alternate_titles, ["My Tool"]);
     let portable = catalog
         .find(&Key::program(r"D:\Portable\portable.exe", "").id())
         .unwrap();
@@ -523,11 +530,12 @@ fn internet_shortcuts_with_a_handled_scheme_and_click_once_references_are_applic
     let titles: Vec<&str> = applications.iter().map(|app| app.name.as_str()).collect();
     assert_eq!(titles, ["Orders", "Dota 2"]);
     let game = catalog.find(&Key::Link(game.into()).id()).unwrap();
-    // Found twice, listed once, opened by the Desktop's.
+    // Found twice, listed once, opened by the Start menu's.
     assert_eq!(game.sources.len(), 2);
     assert_eq!(
         game.primary().path,
-        root.join("user/Desktop")
+        root.join("user/Programs")
+            .join("Steam")
             .join("Dota 2.url")
             .to_string_lossy()
     );
@@ -535,6 +543,71 @@ fn internet_shortcuts_with_a_handled_scheme_and_click_once_references_are_applic
         applications[0].id,
         Key::Link(deployment.to_lowercase()).id()
     );
+}
+
+#[test]
+fn shortcuts_carrying_one_app_user_model_id_are_one_application() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    // Discord's shortcuts (#508): each passes its program other arguments,
+    // the taskbar's starts it through its updater, and all carry Discord's
+    // AppUserModelID.
+    let discord = r"C:\Users\Ann\AppData\Local\Discord";
+    let aumid = "com.squirrel.Discord.Discord";
+    let start = "--processStart Discord.exe";
+    write(
+        &root.join("user/Desktop/Discord.lnk"),
+        &format!(r"{discord}\Discord.exe|{start}||{aumid}"),
+    );
+    write(
+        &root.join("user/Programs/Discord.lnk"),
+        &format!(r"{discord}\Discord.exe|||{aumid}"),
+    );
+    write(
+        &root.join("user/Programs/Discord Inc/Discord.lnk"),
+        &format!(r"{discord}\Discord.exe|{start}||{aumid}"),
+    );
+    write(
+        &root.join("user/TaskBar/Discord.lnk"),
+        &format!(r"{discord}\Update.exe|{start}||{aumid}"),
+    );
+    // Two browser profiles carrying their own: two applications.
+    let chrome = r"C:\Chrome\chrome.exe";
+    write(
+        &root.join("user/Programs/Google Chrome.lnk"),
+        &format!("{chrome}|||Chrome"),
+    );
+    write(
+        &root.join("user/Programs/Work - Chrome.lnk"),
+        &format!("{chrome}|--profile-directory=Work||Chrome.Work"),
+    );
+
+    let catalog = Catalog::new(
+        StartMenu::with_folders(windows_folders(root))
+            .with_resolver(read_fixtures)
+            .sources()
+            .unwrap(),
+    );
+
+    let titles: Vec<String> = catalog
+        .applications()
+        .into_iter()
+        .map(|app| app.name)
+        .collect();
+    assert_eq!(titles, ["Discord", "Google Chrome", "Work - Chrome"]);
+    let found = catalog.find(&Key::App(aumid.to_lowercase()).id()).unwrap();
+    assert_eq!(found.sources.len(), 4);
+    assert_eq!(
+        found.primary().path,
+        root.join("user/Programs")
+            .join("Discord.lnk")
+            .to_string_lossy()
+    );
+    // The ids the Desktop's and the Start menu's had find it.
+    for arguments in [start, ""] {
+        let before = Key::program(&format!(r"{discord}\Discord.exe"), arguments).id();
+        assert_eq!(catalog.find(&before).unwrap().id, found.id);
+    }
 }
 
 #[test]

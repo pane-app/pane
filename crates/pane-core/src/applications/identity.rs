@@ -7,10 +7,12 @@
 //! what it opens. Sources with one key are one application, whose id is a
 //! digest of that key ([`Key::id`]): the same on every start and on every
 //! machine with the same installation, and opaque to extensions. The
-//! [`Catalog`] groups the sources, elects each application's primary source
+//! [`Catalog`] groups the sources, merges the shortcuts that run one program
+//! under one name ([`owners`]), elects each application's primary source
 //! ([`primary`]), whose name is its title and which Pane opens, and keeps
-//! the map from every id (and every source's path, which was the
-//! application's id before identities) to what opens it.
+//! the map from every id (every earlier id of its sources, and every
+//! source's path, which was the application's id before identities) to
+//! what opens it.
 
 use std::collections::HashMap;
 
@@ -21,12 +23,19 @@ use super::{Application, names};
 /// What identifies an application, whichever source it was found by.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Key {
-    /// A Windows desktop program: its shortcut's resolved target, in
-    /// lowercase with version folders as a wildcard ([`program_target`]),
-    /// and the arguments the shortcut passes, so that two browser profiles
-    /// or two progressive web apps stay apart. Build it with
-    /// [`Key::program`].
+    /// A Windows desktop program whose shortcut carries no AppUserModelID:
+    /// its shortcut's resolved target, in lowercase with version folders as
+    /// a wildcard ([`program_target`]), and the arguments the shortcut
+    /// passes, so that two browser profiles or two progressive web apps
+    /// stay apart. Build it with [`Key::program`].
     Program { target: String, arguments: String },
+    /// A Windows desktop program's shortcut that carries its own
+    /// AppUserModelID (not a packaged app's), in lowercase: the id Windows
+    /// groups a program's shortcuts and windows by, so Discord's Desktop and
+    /// Start menu shortcuts, which pass it different arguments, are one
+    /// application, while browser profiles and web apps, which carry their
+    /// own, stay apart.
+    App(String),
     /// A Windows packaged (AppX/MSIX) app: its package family name, in
     /// lowercase, and its AppUserModelID when it is not the package's
     /// first app ([`packaged_keys`]).
@@ -65,6 +74,7 @@ impl Key {
             Key::Program { target, arguments } => {
                 ("program", vec![target.as_str(), arguments.as_str()])
             }
+            Key::App(aumid) => ("app", vec![aumid.as_str()]),
             Key::Package { family, app: None } => ("package", vec![family.as_str()]),
             Key::Package {
                 family,
@@ -212,6 +222,11 @@ pub struct Source {
     /// opens (a browser's web app), so that the program's name is not one
     /// of its alternate titles.
     pub arguments: bool,
+    /// The key it had before shortcuts were keyed by their AppUserModelID
+    /// (#508), when that is not [`Source::key`]: the id of that key still
+    /// names its application ([`Catalog::find`]), so what a quick slot or
+    /// root search's learning holds under it carries over.
+    pub previous: Option<Key>,
 }
 
 impl Source {
@@ -234,20 +249,114 @@ impl Source {
             keywords: Vec::new(),
             program: None,
             arguments: false,
+            previous: None,
         }
     }
 }
 
 /// Which of `sources`, all of one application, is its primary source, whose
 /// name is its title and which Pane opens: the one found in the most
-/// preferred place, then the one with the shorter path, then the first by
-/// path, so the choice never depends on the order they were found in.
-/// `None` only when `sources` is empty.
+/// preferred place, then one passing its program no arguments, then the
+/// one with the shorter path, then the first by path, so the choice never
+/// depends on the order they were found in. `None` only when `sources` is
+/// empty.
 pub fn primary(sources: &[Source]) -> Option<usize> {
     (0..sources.len()).min_by(|&a, &b| {
         let (a, b) = (&sources[a], &sources[b]);
-        (a.place, a.path.len(), &a.path).cmp(&(b.place, b.path.len(), &b.path))
+        (a.place, a.arguments, a.path.len(), &a.path).cmp(&(
+            b.place,
+            b.arguments,
+            b.path.len(),
+            &b.path,
+        ))
     })
+}
+
+/// For each group of sources with one key (`keys`, the group of each of
+/// `sources` in `group_of`), the group whose key names its application:
+/// itself, or the group it merges into. Windows shortcuts that run one
+/// program (their resolved [`Source::program`], as [`program_target`] keys
+/// it) under one name (compared without case) are one application, whatever
+/// arguments they pass: a Desktop shortcut passing `--processStart` and a
+/// Start menu one passing nothing. Two different AppUserModelIDs are never
+/// merged, nor is a plain shortcut merged into one of several that share
+/// its program and name, so browser profiles and web apps stay apart.
+///
+/// A merged application is named by its AppUserModelID's group when it has
+/// one, else by the group passing the fewest arguments (the shortest, then
+/// the first in order), so its id does not depend on the order shortcuts
+/// were found in.
+pub fn owners(keys: &[Key], sources: &[Source], group_of: &[usize]) -> Vec<usize> {
+    let is_app = |group: usize| matches!(keys[group], Key::App(_));
+    // Each group's program and name pairs, and the groups sharing each.
+    let mut shared: HashMap<(String, String), Vec<usize>> = HashMap::new();
+    for (source, &group) in sources.iter().zip(group_of) {
+        if !matches!(keys[group], Key::Program { .. } | Key::App(_)) {
+            continue;
+        }
+        let (Some(program), name) = (source.program.as_deref(), names::folded(&source.name)) else {
+            continue;
+        };
+        if name.is_empty() || program.trim().is_empty() {
+            continue;
+        }
+        let groups = shared.entry((program_target(program), name)).or_default();
+        if !groups.contains(&group) {
+            groups.push(group);
+        }
+    }
+    let mut shared: Vec<_> = shared.into_iter().collect();
+    shared.sort();
+
+    // Union-find over the groups, each set holding at most one
+    // AppUserModelID.
+    let mut parent: Vec<usize> = (0..keys.len()).collect();
+    let mut holds_app: Vec<bool> = (0..keys.len()).map(is_app).collect();
+    fn root(parent: &mut [usize], mut group: usize) -> usize {
+        while parent[group] != group {
+            parent[group] = parent[parent[group]];
+            group = parent[group];
+        }
+        group
+    }
+    for (_, groups) in shared {
+        // Several AppUserModelIDs under one program and name: which of
+        // them a plain shortcut is cannot be told, so only plain ones merge.
+        let apps = groups.iter().filter(|&&group| is_app(group)).count();
+        let merging: Vec<usize> = groups
+            .into_iter()
+            .filter(|&group| apps <= 1 || !is_app(group))
+            .collect();
+        let Some((&first, rest)) = merging.split_first() else {
+            continue;
+        };
+        for &other in rest {
+            let (a, b) = (root(&mut parent, first), root(&mut parent, other));
+            if a == b || (holds_app[a] && holds_app[b]) {
+                continue;
+            }
+            let (kept, merged) = (a.min(b), a.max(b));
+            parent[merged] = kept;
+            holds_app[kept] |= holds_app[merged];
+        }
+    }
+
+    // Each set's owner: its AppUserModelID, else the fewest arguments.
+    let rank = |group: usize| match &keys[group] {
+        Key::Program { arguments, .. } => (1, arguments.len(), group),
+        _ => (0, 0, group),
+    };
+    let mut owner: HashMap<usize, usize> = HashMap::new();
+    for group in 0..keys.len() {
+        let set = root(&mut parent, group);
+        let best = owner.entry(set).or_insert(group);
+        if rank(group) < rank(*best) {
+            *best = group;
+        }
+    }
+    (0..keys.len())
+        .map(|group| owner[&root(&mut parent, group)])
+        .collect()
 }
 
 /// One application of a [`Catalog`].
@@ -298,6 +407,10 @@ pub struct Catalog {
     applications: Vec<Identified>,
     /// Each application's index by its id.
     by_id: HashMap<String, usize>,
+    /// Each application's index by the ids it had before (#508): its
+    /// sources' [`Source::previous`] keys' and those of the groups merged
+    /// into it ([`owners`]).
+    by_previous_id: HashMap<String, usize>,
     /// Each application's index by the path of each of its sources, which
     /// was an id before identities: as found, and in lowercase.
     by_path: HashMap<String, usize>,
@@ -305,15 +418,32 @@ pub struct Catalog {
 }
 
 impl Catalog {
-    /// The applications `sources` are, grouped by key, each with its
+    /// The applications `sources` are, grouped by key and merged where
+    /// shortcuts run one program under one name ([`owners`]), each with its
     /// alternate titles, keywords and distinction ([`super::names`]).
     pub fn new(sources: Vec<Source>) -> Catalog {
-        let mut catalog = Catalog::default();
+        let mut keys: Vec<Key> = Vec::new();
         let mut by_key: HashMap<Key, usize> = HashMap::new();
-        for source in sources {
-            let index = *by_key.entry(source.key.clone()).or_insert_with(|| {
+        let group_of: Vec<usize> = sources
+            .iter()
+            .map(|source| {
+                *by_key.entry(source.key.clone()).or_insert_with(|| {
+                    keys.push(source.key.clone());
+                    keys.len() - 1
+                })
+            })
+            .collect();
+        let owners = owners(&keys, &sources, &group_of);
+        let ids: Vec<String> = keys.iter().map(Key::id).collect();
+
+        let mut catalog = Catalog::default();
+        let mut by_owner: HashMap<usize, usize> = HashMap::new();
+        let mut previous: Vec<(String, usize)> = Vec::new();
+        for (source, group) in sources.into_iter().zip(group_of) {
+            let owner = owners[group];
+            let index = *by_owner.entry(owner).or_insert_with(|| {
                 catalog.applications.push(Identified {
-                    id: source.key.id(),
+                    id: ids[owner].clone(),
                     sources: Vec::new(),
                     primary: 0,
                     alternate_titles: Vec::new(),
@@ -322,6 +452,12 @@ impl Catalog {
                 });
                 catalog.applications.len() - 1
             });
+            if group != owner {
+                previous.push((ids[group].clone(), index));
+            }
+            if let Some(key) = &source.previous {
+                previous.push((key.id(), index));
+            }
             catalog.by_path.entry(source.path.clone()).or_insert(index);
             catalog
                 .by_lowercase_path
@@ -332,6 +468,9 @@ impl Catalog {
         for (index, application) in catalog.applications.iter_mut().enumerate() {
             application.primary = primary(&application.sources).unwrap_or(0);
             catalog.by_id.insert(application.id.clone(), index);
+        }
+        for (id, index) in previous {
+            catalog.by_previous_id.entry(id).or_insert(index);
         }
         let alternate_titles = names::alternate_titles(&catalog.applications);
         let distinctions = names::distinctions(&catalog.applications);
@@ -361,14 +500,17 @@ impl Catalog {
             .collect()
     }
 
-    /// The application `id` names: by its id, or by the path of one of its
-    /// sources, which was its id before identities (a Start menu
-    /// shortcut's, a bundle's or a desktop entry's path, or
+    /// The application `id` names: by its id; by an id it had before
+    /// shortcuts were keyed by their AppUserModelID and merged by program
+    /// and name (#508), unless another application has that id now; or by
+    /// the path of one of its sources, which was its id before identities
+    /// (a Start menu shortcut's, a bundle's or a desktop entry's path, or
     /// `shell:AppsFolder\<AppUserModelID>`), exactly or else ignoring case.
     pub fn find(&self, id: &str) -> Option<&Identified> {
         let index = self
             .by_id
             .get(id)
+            .or_else(|| self.by_previous_id.get(id))
             .or_else(|| self.by_path.get(id))
             .or_else(|| self.by_lowercase_path.get(&id.to_lowercase()))?;
         self.applications.get(*index)
@@ -461,6 +603,10 @@ mod tests {
             Key::Path("steam://rungameid/570".into()).id()
         );
         assert_ne!(Key::program("ab", "c").id(), Key::program("a", "bc").id());
+        assert_ne!(
+            Key::App("vendor.tool".into()).id(),
+            Key::Link("vendor.tool".into()).id()
+        );
         assert_ne!(
             Key::Package {
                 family: "a".into(),
@@ -589,6 +735,149 @@ mod tests {
         );
         assert!(catalog.find(r"C:\Start\Gone.lnk").is_none());
         assert!(catalog.find(&Key::Path("gone".into()).id()).is_none());
+    }
+
+    /// A shortcut named `name` at `path` running `program`, keyed `key`.
+    fn shortcut(key: Key, path: &str, name: &str, program: &str, arguments: bool) -> Source {
+        Source {
+            program: Some(program.into()),
+            arguments,
+            ..Source::new(key, path, name, "here", 2)
+        }
+    }
+
+    #[test]
+    fn the_primary_source_passes_no_arguments_when_its_place_is_shared() {
+        let key = Key::App("vendor.tool".into());
+        let sources = [
+            shortcut(key.clone(), r"C:\Start\Tool.lnk", "Tool", "tool.exe", true),
+            shortcut(
+                key.clone(),
+                r"C:\Start\Vendor\Tool.lnk",
+                "Tool",
+                "tool.exe",
+                false,
+            ),
+        ];
+        assert_eq!(primary(&sources), Some(1));
+    }
+
+    #[test]
+    fn one_program_under_one_name_is_one_application_whatever_its_arguments() {
+        let tool = r"C:\Tool\app-1.2\tool.exe";
+        let plain = Key::program(tool, "");
+        let started = Key::program(tool, "--start");
+        let catalog = Catalog::new(vec![
+            shortcut(started.clone(), r"C:\Desktop\Tool.lnk", "Tool", tool, true),
+            shortcut(plain.clone(), r"C:\Start\Tool.lnk", "tool", tool, false),
+            // The same program under another name is another application:
+            // a web app the shortcut's arguments name.
+            shortcut(
+                Key::program(tool, "--app=mail"),
+                r"C:\Start\Mail.lnk",
+                "Mail",
+                tool,
+                true,
+            ),
+        ]);
+
+        let applications = catalog.applications();
+        assert_eq!(applications.len(), 2);
+        // Named by the shortcut passing the fewest arguments, wherever it
+        // was found; the id it had alone still finds it.
+        assert_eq!(applications[0].id, plain.id());
+        assert_eq!(catalog.find(&started.id()).unwrap().id, plain.id());
+        assert_eq!(catalog.identified()[0].sources.len(), 2);
+        assert_eq!(applications[1].name, "Mail");
+    }
+
+    #[test]
+    fn a_plain_shortcut_joins_the_one_app_user_model_id_running_its_program_under_its_name() {
+        let tool = r"C:\Tool\tool.exe";
+        let app = Key::App("vendor.tool".into());
+        let plain = Key::program(tool, "");
+        let catalog = Catalog::new(vec![
+            shortcut(plain.clone(), r"C:\Desktop\Tool.lnk", "Tool", tool, false),
+            shortcut(app.clone(), r"C:\Start\Tool.lnk", "Tool", tool, false),
+        ]);
+        assert_eq!(catalog.applications().len(), 1);
+        assert_eq!(catalog.applications()[0].id, app.id());
+        assert_eq!(catalog.find(&plain.id()).unwrap().id, app.id());
+    }
+
+    #[test]
+    fn two_app_user_model_ids_are_never_merged() {
+        let browser = r"C:\Browser\browser.exe";
+        let first = Key::App("browser.profile1".into());
+        let second = Key::App("browser.profile2".into());
+        let plain = Key::program(browser, "");
+        let catalog = Catalog::new(vec![
+            shortcut(
+                first.clone(),
+                r"C:\Start\A\Browser.lnk",
+                "Browser",
+                browser,
+                true,
+            ),
+            shortcut(
+                second.clone(),
+                r"C:\Start\B\Browser.lnk",
+                "Browser",
+                browser,
+                true,
+            ),
+            // Which of the two a plain shortcut of their name is cannot be
+            // told: it stays its own.
+            shortcut(
+                plain.clone(),
+                r"C:\Desktop\Browser.lnk",
+                "Browser",
+                browser,
+                false,
+            ),
+        ]);
+        let ids: Vec<String> = catalog
+            .applications()
+            .into_iter()
+            .map(|app| app.id)
+            .collect();
+        assert_eq!(ids, [first.id(), second.id(), plain.id()]);
+    }
+
+    #[test]
+    fn a_previous_key_finds_its_application_unless_another_has_that_id_now() {
+        let tool = r"C:\Tool\tool.exe";
+        let old = Key::program(tool, "");
+        let catalog = Catalog::new(vec![Source {
+            previous: Some(old.clone()),
+            ..shortcut(
+                Key::App("vendor.tool".into()),
+                r"C:\Start\Tool.lnk",
+                "Tool",
+                tool,
+                false,
+            )
+        }]);
+        assert_eq!(
+            catalog.find(&old.id()).unwrap().id,
+            Key::App("vendor.tool".into()).id()
+        );
+
+        // A shortcut keyed by that id now keeps it, under another name.
+        let catalog = Catalog::new(vec![
+            Source {
+                previous: Some(old.clone()),
+                ..shortcut(
+                    Key::App("vendor.tool".into()),
+                    r"C:\Start\Tool.lnk",
+                    "Tool",
+                    tool,
+                    false,
+                )
+            },
+            shortcut(old.clone(), r"C:\Start\Other.lnk", "Other", tool, false),
+        ]);
+        assert_eq!(catalog.find(&old.id()).unwrap().primary().name, "Other");
     }
 
     #[test]
