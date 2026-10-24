@@ -802,8 +802,10 @@ title: the command's on its list, and a form's or a custom view's on those
 ("Search Files", "Clipboard History").
 
 Section labels inside a list ("Today", "Commands") stay. The core's own
-screens (a package's preview, a confirmation, the details and hotkey
-screens) keep the heading that says what they are about.
+pages (a package's preview, a collection's choice, the details, Logs and
+hotkey screens) name themselves in their top bar, beside its back button
+([#482](https://github.com/pane-app/pane/issues/482)), and a
+confirmation keeps the plain heading that says what it asks.
 
 ### What each row shows
 

@@ -3036,8 +3036,8 @@ impl LauncherWindow {
     /// ([`LauncherWindow::enter_extension_flow`]), the Manage Extensions
     /// row's tile and title. `None` on every
     /// other screen: root search has no title, and the core's own screens
-    /// (a preview, a confirmation, the details screens) keep their
-    /// heading, which says what they ask.
+    /// (a preview, a confirmation, the details screens) name themselves
+    /// in their top bar or heading, which says what they ask.
     pub(crate) fn footer_command(&self, view: &LauncherView, theme: &Theme) -> Option<Div> {
         let id = match &view.screen {
             Screen::Command
@@ -3259,8 +3259,10 @@ impl Render for LauncherWindow {
         let confirm =
             matches!(view.screen, Screen::Confirm { .. } | Screen::Crash { .. }) || preview;
         // A preview has one or two rows (Install or Update) and more lines
-        // to read, which may take more of the window than a confirmation's.
-        let details_share = if preview { 0.62 } else { 0.4 };
+        // to read, which may take more of the window than a confirmation's:
+        // what its top bar (#482), 20px taller than a heading, leaves, so
+        // its rows keep the room they had under the heading.
+        let details_share = if preview { 0.55 } else { 0.4 };
         // Shift+Up and Shift+Down, Shift+Page Up and Shift+Page Down
         // scroll them, the selection staying on the choices (#499).
         let details_scroll = (confirm && !view.details().is_empty()).then(|| {
@@ -3459,15 +3461,19 @@ impl Render for LauncherWindow {
         // with their content, as Raycast's do, and the footer's left names
         // the open command instead (#162). A form's or a designed view's
         // content has the top bar above it, its search bar's place (#482),
-        // drawn with the body below. The core's own screens (a
-        // package's preview, a confirmation, the details and hotkey
-        // screens) keep their heading, which says what they are about. The
+        // drawn with the body below. The core's own pages (a package's
+        // preview, a collection's choice, the details, Logs and hotkey
+        // screens) have the same top bar, named by their title, which
+        // says what they are about, as Raycast's Store page of an
+        // extension has its back button: their details and rows below
+        // it. A confirmation keeps its plain heading: Raycast asks with
+        // an alert, not a page, so it has no back button to show. The
         // heading and the footer's command are computed before the body
-        // dispatch, which moves the screen. A heading is also its screen's
-        // drag region (the footer's command is the others'): with the
-        // native title bar hidden, it is a place outside the editable
-        // field to grab the window by, and a long heading truncates
-        // instead of eating the list.
+        // dispatch, which moves the screen. A heading or a top bar's
+        // title is also its screen's drag region (the footer's command is
+        // the others'): with the native title bar hidden, it is a place
+        // outside the editable field to grab the window by, and a long
+        // title truncates instead of eating the list.
         let heading = match &view.screen {
             Screen::Root { .. }
             | Screen::Command
@@ -3475,7 +3481,14 @@ impl Render for LauncherWindow {
             | Screen::PaneForm(_)
             | Screen::DesignedView(_)
             | Screen::Extensions { .. } => None,
-            _ => Some(shell::screen_heading(view.title.clone(), &theme)),
+            // The update results have their search bar under the heading.
+            Screen::Confirm { .. } | Screen::UpdateResults { .. } => {
+                Some(shell::screen_heading(view.title.clone(), &theme).into_any_element())
+            }
+            _ => Some(
+                root_search::top_bar(view.title.clone().into(), loading.bar, &theme, cx)
+                    .into_any_element(),
+            ),
         };
         // Whether the result list is what scrolls: a form and a designed
         // view scroll their own content, which the background image does
@@ -3677,7 +3690,7 @@ impl Render for LauncherWindow {
             .text_color(theme.text_title)
             .when_some(heading, |content, heading| content.child(heading))
             // A confirmation's, preview's or error overlay's long details
-            // scroll within 40% (a preview's 62%) of the window, leaving the
+            // scroll within 40% (a preview's 55%) of the window, leaving the
             // rest to its choices, which stay visible.
             .when(!details.is_empty(), |content| {
                 content.child(

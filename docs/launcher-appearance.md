@@ -195,8 +195,8 @@ field holds, and the keyboard stays in the search field. Root search
 shows the magnifier.
 
 A pushed view with no search bar (a designed view whose tree names no
-List or Grid: a form, a detail, a canvas; and the forms Pane itself
-asks, such as the alias form) has a top bar in its place, as Raycast's
+List or Grid: a form, a detail, a canvas; the forms Pane itself asks,
+such as the alias form; and Pane's own pages, below) has a top bar in its place, as Raycast's
 does (#482). The top bar is the search bar's row: the same 64px, rule
 (or frosted pill) and loading bar, the same back button in the same
 place, and the view's navigation title in the row title's 14/500 where
@@ -204,8 +204,20 @@ the query's text starts (the open command's title when the tree names
 none). Nothing in the row moves between a search view and a top-bar
 view, and the content starts at the same height. The title is the row's
 drag region. The bar takes no focus: the keyboard stays where the view
-put it, a form's first field say. The core's own screens (a package's
-preview, a confirmation, the details screens) keep their heading.
+put it, a form's first field say.
+
+Pane's own pages have the same top bar, named by their title, as
+Raycast's Store page of an extension has its back button: a package's
+preview before it is installed or updated (from a folder, npm, Git or
+the official extensions), a collection's choice of extensions, and the
+details, Logs, error overlay and hotkey screens. Their lines of
+information and their rows sit under it, and the keyboard stays on
+their rows (the Logs screen's, on its lines). The back button goes back one level, as Escape does.
+
+A confirmation ("Uninstall X?", "Clear cache of X?") keeps its plain
+heading, the title in the row title's 14/500 with no back button:
+Raycast asks those with an alert, not a page. The update results keep
+their heading above their search bar.
 
 ### Status lines, forms and extension drawing
 
