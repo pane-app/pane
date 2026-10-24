@@ -1512,6 +1512,168 @@ fn a_typed_query_finds_the_restart_among_the_results() {
     assert_eq!(titles(&launcher)[0], RESTART);
 }
 
+/// How long the launcher stays hidden before Pane restarts into a staged
+/// update by itself (ADR 0051).
+const IDLE: Duration = Duration::from_secs(10 * 60);
+
+/// Gives the schedule's thread a moment to look, after the clock moved,
+/// for a test that expects it to do nothing.
+fn let_the_schedule_look() {
+    thread::sleep(Duration::from_millis(300));
+}
+
+/// A launcher on `dirs` running 0.1.0, keeping time by `clock`, whose
+/// schedule has found 99.0.0 and staged it; its window is attached.
+fn staged_by_the_schedule(
+    dirs: &Dirs,
+    clock: &Arc<ManualClock>,
+) -> (Launcher, Arc<RecordingWindow>) {
+    dirs.publish_update("99.0.0", b"the 99.0.0 program");
+    dirs.running(b"the 0.1.0 program");
+    let launcher = dirs.launcher_at("0.1.0", clock);
+    let window = RecordingWindow::attach(&launcher);
+    launcher.start_application_update_checks();
+    wait_until("the check at start staged the update", || {
+        launcher.application_update() == ready("99.0.0")
+    });
+    (launcher, window)
+}
+
+#[test]
+fn a_staged_update_is_restarted_into_by_itself_once_pane_is_hidden_for_a_while() {
+    let dirs = Dirs::new();
+    let clock = ManualClock::at(START);
+    let (launcher, window) = staged_by_the_schedule(&dirs, &clock);
+
+    // Shown, Pane never restarts by itself, however long it stays so.
+    clock.advance(IDLE * 3);
+    let_the_schedule_look();
+    assert!(dirs.relaunch.started().is_empty());
+
+    // Hidden for less than ten minutes, nor does it; shown again, the
+    // time hidden starts over — collapsed to its search field counts as
+    // shown.
+    launcher.set_window_presence(WindowPresence::Hidden);
+    clock.advance(IDLE - Duration::from_secs(60));
+    let_the_schedule_look();
+    launcher.set_window_presence(WindowPresence::Compact);
+    launcher.set_window_presence(WindowPresence::Hidden);
+    clock.advance(IDLE - Duration::from_secs(60));
+    let_the_schedule_look();
+    assert!(dirs.relaunch.started().is_empty());
+    assert_eq!(launcher.application_update(), ready("99.0.0"));
+
+    // Ten minutes hidden, with nothing running: Pane restarts into the
+    // update as Enter does, and starts the new version hidden.
+    clock.advance(Duration::from_secs(61));
+    wait_until("the restart by itself", || window.quits() == 1);
+    assert_restarted(&launcher, "99.0.0");
+    assert_eq!(
+        dirs.relaunch.started(),
+        [vec![
+            "--updated-from".to_owned(),
+            "0.1.0".to_owned(),
+            "--wait-pid".to_owned(),
+            std::process::id().to_string(),
+            "--hidden".to_owned(),
+        ]]
+    );
+    assert_eq!(fs::read(dirs.program()).unwrap(), b"the 99.0.0 program");
+    assert_eq!(
+        fs::read(dirs.install.path().join("pane.old")).unwrap(),
+        b"the 0.1.0 program"
+    );
+
+    // The new version starts hidden: nothing is said while it stays so,
+    // never as a HUD; the next showing says Pane was updated.
+    drop(launcher);
+    let launcher = dirs
+        .launcher_at("99.0.0", &clock)
+        .with_updated_from("0.1.0");
+    let window = RecordingWindow::attach(&launcher);
+    launcher.set_window_presence(WindowPresence::Hidden);
+    assert_eq!(launcher.toast(), None);
+    assert!(window.huds().is_empty());
+    launcher.set_window_presence(WindowPresence::Shown);
+    assert_eq!(
+        toast_title(&launcher).as_deref(),
+        Some("Updated to Pane 99.0.0")
+    );
+}
+
+#[test]
+fn a_restart_by_itself_waits_for_what_holds_it() {
+    let dirs = Dirs::new();
+    let clock = ManualClock::at(START);
+    let (launcher, window) = staged_by_the_schedule(&dirs, &clock);
+
+    // The Settings window holds it while it is open.
+    let hold = launcher.hold_restart_by_itself();
+    launcher.set_window_presence(WindowPresence::Hidden);
+    clock.advance(IDLE * 2);
+    let_the_schedule_look();
+    assert!(launcher.restart_by_itself_held());
+    assert!(dirs.relaunch.started().is_empty());
+
+    // So does a screen other than root search left on display, which a
+    // restart would lose.
+    launcher.manage_extensions();
+    drop(hold);
+    clock.advance(Duration::from_secs(1));
+    let_the_schedule_look();
+    assert!(launcher.restart_by_itself_held());
+    assert!(dirs.relaunch.started().is_empty());
+
+    // Back at root search with nothing held, the next look restarts.
+    assert!(launcher.back());
+    assert!(!launcher.restart_by_itself_held());
+    clock.advance(Duration::from_secs(1));
+    wait_until("the restart by itself", || window.quits() == 1);
+    assert_restarted(&launcher, "99.0.0");
+}
+
+#[test]
+fn a_restart_by_itself_that_fails_is_left_to_the_user() {
+    let dirs = Dirs::new();
+    let clock = ManualClock::at(START);
+    let (launcher, window) = staged_by_the_schedule(&dirs, &clock);
+
+    // The new version exits as it starts: the swap is undone, and the
+    // update stays ready, saying why.
+    dirs.relaunch.will(Starts::Exits);
+    launcher.set_window_presence(WindowPresence::Hidden);
+    clock.advance(IDLE);
+    wait_until("the restart by itself failed", || {
+        matches!(
+            launcher.application_update(),
+            ApplicationUpdate::Ready {
+                failure: Some(_),
+                ..
+            }
+        )
+    });
+    assert_eq!(dirs.relaunch.started().len(), 1);
+    assert_eq!(fs::read(dirs.program()).unwrap(), b"the 0.1.0 program");
+    assert_eq!(window.quits(), 0);
+
+    // Pane does not try it again by itself, however long it stays hidden.
+    dirs.relaunch.will(Starts::Reports);
+    launcher.set_window_presence(WindowPresence::Shown);
+    launcher.set_window_presence(WindowPresence::Hidden);
+    clock.advance(IDLE * 2);
+    let_the_schedule_look();
+    assert_eq!(dirs.relaunch.started().len(), 1);
+
+    // The row stays for the user, whose Enter restarts, shown.
+    launcher.set_window_presence(WindowPresence::Shown);
+    block_on(launcher.set_query(""));
+    select_title(&launcher, RESTART);
+    block_on(launcher.activate_selected());
+    assert_restarted(&launcher, "99.0.0");
+    assert_eq!(window.quits(), 1);
+    assert!(!dirs.relaunch.started()[1].contains(&"--hidden".to_owned()));
+}
+
 /// Every file under `folder`, by its path and contents.
 fn read_all(folder: &Path) -> Vec<(String, Vec<u8>)> {
     let mut files = Vec::new();

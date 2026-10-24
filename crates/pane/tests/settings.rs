@@ -1590,6 +1590,29 @@ fn a_failed_check_is_tried_again_from_the_page_and_finds_the_update(cx: &mut Tes
 }
 
 #[gpui::test]
+fn an_open_settings_window_holds_the_restart_pane_makes_by_itself(cx: &mut TestAppContext) {
+    let dirs = UpdateDirs::new();
+    dirs.running(b"the 0.1.0 program");
+    let (launcher, cx) = open_updating_launcher(cx, &dirs, "0.1.0");
+    let held = |cx: &mut VisualTestContext| {
+        cx.read_entity(&launcher, |window, _| {
+            window.launcher().restart_by_itself_held()
+        })
+    };
+    assert!(!held(cx));
+
+    // While Settings is open, Pane does not restart into an update by
+    // itself (ADR 0051): the restart would close it under the user.
+    let (_settings, mut settings_cx) = open_about(cx);
+    assert!(held(cx));
+    // Closed, the hold goes with it.
+    settings_cx.update(|window, _| window.remove_window());
+    cx.run_until_parked();
+    assert_eq!(settings_windows(cx).len(), 0, "Settings closed");
+    assert!(!held(cx));
+}
+
+#[gpui::test]
 fn the_page_offers_the_update_and_restarts_into_it_by_the_users_choice(cx: &mut TestAppContext) {
     let dirs = UpdateDirs::new();
     dirs.publish_update("99.0.0", b"the 99.0.0 program");

@@ -142,7 +142,7 @@ use aliases::AliasChoices;
 pub use aliases::AliasFlow;
 pub use aliases::AliasOutcome;
 use application_update::{Application, Updates};
-pub use application_update::{ApplicationUpdate, RESTART_ROW, UpdateChecks};
+pub use application_update::{ApplicationUpdate, RESTART_ROW, RestartHold, UpdateChecks};
 pub use argument_fields::{ArgumentFields, Choice, FieldKind, FormField};
 pub use capability_choices::{Capability, CapabilityProvider};
 pub use choice::{ChoiceExtension, ChoiceOutcome, ChoiceView};

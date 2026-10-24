@@ -1689,6 +1689,13 @@ impl LauncherWindow {
         }
     }
 
+    /// Starts the launcher hidden, its window never shown, as a Pane that
+    /// restarted into its update by itself does (ADR 0051): the next
+    /// summon shows it, and says Pane was updated.
+    pub fn start_hidden(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.hide(window, cx);
+    }
+
     /// Hides the launcher window: the Open Pane hotkey's hide path,
     /// Escape's end at root search, and the dismiss binding and back key
     /// the Keyboard page can rebind all come here. Hidden, not closed —

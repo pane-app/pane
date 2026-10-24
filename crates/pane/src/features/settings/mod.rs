@@ -324,6 +324,10 @@ pub struct SettingsWindow {
     /// The sidebar's sections list as it scrolls: a long Extensions group
     /// draws only the entries near its view (#165).
     sidebar_scroll: gpui::ScrollHandle,
+    /// Keeps Pane from restarting into its update by itself while this
+    /// window is open (ADR 0051), so the restart never closes it under the
+    /// user; it goes with the window.
+    _restart_hold: pane_core::RestartHold,
 }
 
 impl SettingsWindow {
@@ -418,6 +422,7 @@ impl SettingsWindow {
             search: search::State::new(cx),
             focuses: Focuses::default(),
             sidebar_scroll: gpui::ScrollHandle::new(),
+            _restart_hold: launcher.hold_restart_by_itself(),
         }
     }
 

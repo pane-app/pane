@@ -253,6 +253,9 @@ impl Launcher {
             if !same {
                 state.feedback.presence = presence;
             }
+            // Hidden, the time after which Pane restarts into a staged
+            // update by itself begins; shown, it ends (ADR 0051).
+            self.application_update_presence(&mut state, presence);
             // A failure the update record holds and has not announced
             // yet is announced now, the launcher being shown: a failure
             // recorded while it was hidden waits for this showing, and

@@ -75,6 +75,11 @@ impl InFlight {
         self.done.notify_all();
     }
 
+    /// Whether any still runs.
+    pub(super) fn running(&self) -> bool {
+        *self.lock() > 0
+    }
+
     /// Waits until none runs; `false` if one still does after `limit`.
     #[cfg(any(test, debug_assertions))]
     pub(super) fn settled(&self, limit: std::time::Duration) -> bool {
