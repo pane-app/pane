@@ -1100,8 +1100,9 @@ pane --install git:https://github.com/pane-app/calculator
 
 ### What it calculates
 
-Since #472 it reads what Raycast's calculator reads, offline. Its
-repository's README and sources say exactly what; in short:
+Since #472 it reads what Raycast's calculator reads, offline, and since
+#475 it converts currencies too. Its repository's README and sources say
+exactly what; in short:
 
 - arithmetic with `+ - * / ^`, `×`, `x`, `÷`, `−`, `mod` and their words,
   `5!`, `5²`, `√16`, constants (`pi`, `e`), functions (`sqrt`, `sin`, `ln`,
@@ -1118,10 +1119,14 @@ repository's README and sources say exactly what; in short:
   `5pm London in New York`, `1700000000 to date`), its places' time zones
   a table of its own with the daylight-saving rules they follow;
 - colours (#196): `#RGB` to `#RRGGBBAA`, `rgb()`, `rgba()`, `hsl()`,
-  `hsla()` and `oklch()`.
+  `hsla()` and `oklch()`;
+- currencies (#475): `100 usd in vnd`, `100 usd to vnd`, `$100 in eur`,
+  `€50 to usd`, `1000 yen to dong`, `100 dollars in euros`, crypto such as
+  `5 btc in eur`, in any case, by ISO code, symbol or name, and an amount
+  alone (`100 eur`) into the currency its "Your currency" preference
+  names (USD by default).
 
-Currencies are not converted (#475): their rates need a network. A query
-has an answer only if it calculates something: "42", "(5)", "pi" or "5 km"
+A query has an answer only if it calculates something: "42", "(5)", "pi" or "5 km"
 alone is no calculation, and incomplete or invalid input has no answer and
 lists nothing. A query longer than 256 characters, or nesting parentheses
 more than 64 deep, is not read, so that no query can exhaust the guest's
@@ -1144,7 +1149,32 @@ shown, as Raycast's does, and the Actions panel offers its further copies:
   midnight);
 - a colour, answered as uppercase hex (`#RRGGBBAA` while it is not fully
   opaque) with a swatch, as hex, RGB, HSL and OKLCH. A colour name is not
-  a colour, as Raycast leaves names out on purpose ("red" is also a word).
+  a colour, as Raycast leaves names out on purpose ("red" is also a word);
+- a currency, answered in the target's digits with its code
+  (`2,583,200 VND`, `86.10 EUR`), without its thousands grouped or its
+  code ("Copy Unformatted Answer"). Its section names the day of its rates
+  ("Currency · rates from 23 Oct").
+
+### Exchange rates
+
+The calculator uses the network for its exchange rates
+([ADR 0018](adr/0018-extensions-reach-the-network-through-wasi-http.md):
+it shows as using the network, and nothing is granted or refused). A
+currency answer never waits for it: the answer is computed from the rates
+the extension keeps in its cache, so it also works offline once they have
+been fetched, and before any have been, a currency query's one result
+says the rates are not loaded yet. The rates are fetched by its second
+command, **Refresh Currency Rates**, a no-view command that also runs as a
+[continuing service](services.md): when there are none, then once those
+kept are a day old (looking every hour, and an hour after a failed fetch),
+and at once when the user runs it. The source is fawazahmed0's currency
+API on jsDelivr, and when it fails ExchangeRate-API's open access
+endpoint, whose terms ask for attribution: an answer from its rates says
+"rates from … by Exchange Rate API". The package names its component
+twice (`dist/calculator.wasm`, `dist/rates/calculator.wasm`), because the
+runtime runs one call at a time in each component file's instance: with a
+file of its own, a fetch waiting on the network never holds the
+calculator's answers behind it.
 
 The moment is Pane's. The query is asked about at the moment the user
 stopped at it, by the clock root search's own dates are shown by, with the

@@ -1,8 +1,8 @@
 [
   { "id": "calculator", "title": "Calculator",
-    "description": "Answers calculations, conversions, dates and times typed into root search",
+    "description": "Answers calculations, conversions, currencies, dates and times typed into root search",
     "repository": "https://github.com/pane-app/calculator",
-    "tag": "v0.6.3", "commit": "428d1f9202f0b23ae42cd870dac9a3db98238e07" },
+    "tag": "v0.6.4", "commit": "9f96f40f1b7af6179023a05ecb154824f3f2b495" },
   { "id": "applications", "title": "Applications",
     "description": "Finds and opens the applications installed on this system",
     "repository": "https://github.com/pane-app/applications",

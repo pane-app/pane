@@ -3409,7 +3409,7 @@ without committing it.
 A release commits the built component under the path its `pane.json`
 names on its release branch and tags `v<version>`, as its repository's own
 workflow does. To try a default without building it, install it from its
-repository: `pane --install git:https://github.com/pane-app/calculator@v0.6.3`.
+repository: `pane --install git:https://github.com/pane-app/calculator@v0.6.4`.
 
 ### The samples
 
