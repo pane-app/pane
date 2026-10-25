@@ -4640,6 +4640,8 @@ checksum = "6e6eb142958d64335fb0e345c5b9ead2ecd6fc438c307e9d7d3c4fd428dbaf12"
 name = "pane"
 version = "0.1.2"
 dependencies = [
+ "ashpd",
+ "block2 0.6.2",
  "core-graphics",
  "crc32fast",
  "embed-resource",
@@ -4651,6 +4653,8 @@ dependencies = [
  "image",
  "lyon",
  "objc2 0.6.4",
+ "objc2-app-kit 0.3.2",
+ "objc2-foundation 0.3.2",
  "open",
  "pane-core",
  "raw-window-handle",

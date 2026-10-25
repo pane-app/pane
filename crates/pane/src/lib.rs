@@ -193,8 +193,8 @@ pub fn configure_visuals(cx: &mut App) -> gpui::Result<()> {
 
 /// Follows the operating system's reduced-motion preference for the whole
 /// app, once, before the first window opens: what is actually read on each
-/// system, what falls back where nothing is readable, and how a Windows
-/// change is applied while Pane runs are documented on the policy itself
+/// system, what falls back where nothing is readable, and how a change is
+/// applied while Pane runs are documented on the policy itself
 /// (`ui::motion`). Call before the first frame draws; the launcher's view
 /// transitions (and anything else that consults
 /// [`gpui::App::reduce_motion`]) then follow the preference.

@@ -670,7 +670,8 @@ fn measurement_scale() -> f32 {
 }
 
 /// Follows the operating system's reduced-motion preference for the whole
-/// app: sets [`App::reduce_motion`] from the native read now, and keeps
+/// app: sets [`App::reduce_motion`] from the native read (at once on
+/// Windows and macOS, as soon as the portal answers on Linux), and keeps
 /// following the preference where the system reports its changes (a change
 /// lands on the next drawn frame — see [`advance`]). Call once, at
 /// startup, before the first window opens.
@@ -686,20 +687,29 @@ fn measurement_scale() -> f32 {
 ///   closed to reduced motion, the safer side when a preference that
 ///   exists cannot be known (the discipline the material layer applies to
 ///   its own preference reads).
-/// - **macOS**: nothing yet — the pane crate links no AppKit, so no
-///   `NSWorkspace` preference is read. Static fallback: full motion.
-/// - **Linux**: nothing — no desktop exposes a standard reduced-motion
-///   preference to a non-toolkit client, and Pane links no portal client.
-///   Static fallback: full motion.
+/// - **macOS**: Reduce Motion in System Settings → Accessibility →
+///   Display, read through AppKit
+///   (`NSWorkspace.accessibilityDisplayShouldReduceMotion`), then watched
+///   through `NSWorkspaceAccessibilityDisplayOptionsDidChangeNotification`,
+///   which is delivered on the main queue — the app's own thread — and
+///   hopped into a task the same way. The read cannot fail, so there is no
+///   fail-closed case.
+/// - **Linux**: the desktop's settings as the XDG Settings portal exposes
+///   them (see [`DesktopMotion`] for the three keys and how they combine):
+///   the portal's own `org.freedesktop.appearance` `reduced-motion`, GNOME's
+///   `enable-animations` and KDE's `AnimationDurationFactor`. All three are
+///   watched through the portal's `SettingChanged` signal. The portal is
+///   asked asynchronously, in a task on the app's thread, so startup never
+///   waits on D-Bus: the first frames run full motion until the portal
+///   answers, a moment after launch. Where there is no session bus or no
+///   Settings portal, or no key is exposed, nothing is detected and the
+///   static fallback — full motion — stays.
 ///
 /// The two fallbacks differ on purpose. A failed read of a preference
-/// that exists is an unknown, so Pane reduces; a platform with no read
-/// wired at all falls back to its own default — full motion — which is a
-/// statement about Pane, not about the user: no detection is claimed
-/// where none runs. Wiring
-/// `NSWorkspace.accessibilityDisplayShouldReduceMotion` (and whatever a
-/// given Linux desktop exposes) is left for the settings work that
-/// introduces Pane's first macOS and portal dependencies.
+/// that exists is an unknown, so Pane reduces; a platform, or a desktop,
+/// with nothing to read falls back to its own default — full motion — which
+/// is a statement about Pane, not about the user: no detection is claimed
+/// where none runs.
 ///
 /// A development build also honors `PANE_TEST_REDUCE_MOTION`: when set,
 /// the app runs with reduced motion regardless of the system's setting,
@@ -714,14 +724,14 @@ pub(crate) fn observe_reduced_motion(cx: &mut App) {
         cx.set_reduce_motion(!forced.is_empty());
         return;
     }
+    #[cfg(any(target_os = "windows", target_os = "macos"))]
     cx.set_reduce_motion(system_reduced_motion());
-    // Windows reports changes to the preference as the user moves it; the
-    // other systems have nothing to watch (see the module docs). The hop
-    // is the one pane-core's changes and hotkey presses already take: an
-    // unbounded channel awaited in a task on the app's thread. The event
-    // says only that the setting moved, so the fresh value is read there,
-    // on the app's own thread, and applied; the task holds the watch for
-    // as long as Pane runs — when the task ends, dropping the watch
+    // Windows and macOS report changes to the preference as the user moves
+    // it. The hop is the one pane-core's changes and hotkey presses already
+    // take: an unbounded channel awaited in a task on the app's thread. The
+    // event says only that the setting moved, so the fresh value is read
+    // there, on the app's own thread, and applied; the task holds the watch
+    // for as long as Pane runs — when the task ends, dropping the watch
     // unsubscribes.
     #[cfg(target_os = "windows")]
     {
@@ -737,12 +747,31 @@ pub(crate) fn observe_reduced_motion(cx: &mut App) {
             .detach();
         }
     }
+    // macOS posts its notification on the main queue, so the channel only
+    // carries it into a task; the hop is otherwise Windows' own.
+    #[cfg(target_os = "macos")]
+    {
+        use futures::StreamExt as _;
+
+        let (report, mut changes) = futures::channel::mpsc::unbounded();
+        let watch = watch_reduced_motion(report);
+        cx.spawn(async move |cx| {
+            let _watch = watch;
+            while changes.next().await.is_some() {
+                let reduced = system_reduced_motion();
+                cx.update(|cx| cx.set_reduce_motion(reduced));
+            }
+        })
+        .detach();
+    }
+    #[cfg(target_os = "linux")]
+    follow_desktop_motion(cx);
 }
 
-/// The system's reduced-motion preference as this platform resolves it at
-/// startup. Windows reads the native setting (failing closed to reduced
-/// motion); the others have no read here and keep the default, full
-/// motion, as documented on [`observe_reduced_motion`].
+/// The system's reduced-motion preference as Windows or macOS reports it
+/// now. Windows fails closed to reduced motion; macOS's read cannot fail.
+/// Linux has no synchronous read: see [`follow_desktop_motion`].
+#[cfg(any(target_os = "windows", target_os = "macos"))]
 fn system_reduced_motion() -> bool {
     #[cfg(target_os = "windows")]
     {
@@ -757,15 +786,16 @@ fn system_reduced_motion() -> bool {
             Err(_) => true,
         }
     }
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(target_os = "macos")]
     {
-        false
+        // Reduce Motion in System Settings → Accessibility → Display.
+        objc2_app_kit::NSWorkspace::sharedWorkspace().accessibilityDisplayShouldReduceMotion()
     }
 }
 
-/// Starts watching the system's reduced-motion preference where the system
-/// reports changes, returning the running watch (whose drop stops it), or
-/// `None` where no changes are reported. Each time the setting moves, the
+/// Starts watching Windows' animation preference, returning the running
+/// watch (whose drop stops it), or `None` when the subscription cannot be
+/// made. Each time the setting moves, the
 /// watch reports the bare event — the event itself carries no value, so the
 /// fresh preference is re-read on the app's own thread when it is applied.
 #[cfg(target_os = "windows")]
@@ -796,5 +826,280 @@ struct Watch {
 impl Drop for Watch {
     fn drop(&mut self) {
         let _ = self.settings.RemoveAnimationsEnabledChanged(self.token);
+    }
+}
+
+/// Starts watching macOS's accessibility display options — Reduce Motion
+/// is one of them — returning the running watch, whose drop stops it. The
+/// notification says only that some display option moved, so each one is
+/// reported bare and the preference is re-read when it is applied.
+#[cfg(target_os = "macos")]
+fn watch_reduced_motion(report: futures::channel::mpsc::UnboundedSender<()>) -> Watch {
+    use std::ptr::NonNull;
+
+    use block2::RcBlock;
+    use objc2_app_kit::{NSWorkspace, NSWorkspaceAccessibilityDisplayOptionsDidChangeNotification};
+    use objc2_foundation::{NSNotification, NSOperationQueue};
+
+    let center = NSWorkspace::sharedWorkspace().notificationCenter();
+    let handler = RcBlock::new(move |_: NonNull<NSNotification>| {
+        let _ = report.unbounded_send(());
+    });
+    // SAFETY: the name is AppKit's own constant, read as the extern static
+    // it is; no object filter is passed; the main queue runs the handler on
+    // the app's thread, and all the handler touches is a channel sender,
+    // which may be used from any thread.
+    let observer = unsafe {
+        center.addObserverForName_object_queue_usingBlock(
+            Some(NSWorkspaceAccessibilityDisplayOptionsDidChangeNotification),
+            None,
+            Some(&NSOperationQueue::mainQueue()),
+            &handler,
+        )
+    };
+    Watch { center, observer }
+}
+
+/// A running native watch for the reduced-motion preference. Dropping it
+/// removes the observer.
+#[cfg(target_os = "macos")]
+struct Watch {
+    /// The workspace's notification center, which the observer is on.
+    center: objc2::rc::Retained<objc2_foundation::NSNotificationCenter>,
+    /// The observer the center returned for the block.
+    observer:
+        objc2::rc::Retained<objc2::runtime::ProtocolObject<dyn objc2::runtime::NSObjectProtocol>>,
+}
+
+#[cfg(target_os = "macos")]
+impl Drop for Watch {
+    fn drop(&mut self) {
+        let observer: &objc2::runtime::AnyObject = (*self.observer).as_ref();
+        // SAFETY: `observer` is the object this center returned when the
+        // block was added, which is what `removeObserver:` expects.
+        unsafe { self.center.removeObserver(observer) };
+    }
+}
+
+/// Follows the Linux desktop's reduced-motion preference through the XDG
+/// Settings portal (see [`DesktopMotion`]): a task on the app's thread
+/// connects to the portal, applies what it reads, and re-reads whenever the
+/// portal reports one of the keys changed. Nothing here blocks: until the
+/// portal answers, the app keeps the default it started with, full motion.
+/// With no session bus or no Settings portal the task ends there and full
+/// motion stays; a portal that cannot report changes still gets its first
+/// read applied.
+#[cfg(target_os = "linux")]
+fn follow_desktop_motion(cx: &mut App) {
+    use ashpd::desktop::settings::Settings;
+    use futures::StreamExt as _;
+
+    cx.spawn(async move |cx| {
+        let Ok(settings) = Settings::new().await else {
+            return;
+        };
+        // Subscribed before the first read, so a change between the two
+        // is still seen.
+        let changes = settings.receive_setting_changed().await;
+        let reduced = desktop_reduces_motion(&read_desktop_motion(&settings).await);
+        cx.update(|cx| cx.set_reduce_motion(reduced));
+        let Ok(mut changes) = changes else {
+            return;
+        };
+        while let Some(change) = changes.next().await {
+            let ours = DesktopMotion::KEYS
+                .iter()
+                .any(|&(namespace, key)| namespace == change.namespace() && key == change.key());
+            if ours {
+                let reduced = desktop_reduces_motion(&read_desktop_motion(&settings).await);
+                cx.update(|cx| cx.set_reduce_motion(reduced));
+            }
+        }
+    })
+    .detach();
+}
+
+/// Reads the three keys [`DesktopMotion`] combines from the Settings
+/// portal. A key the portal does not know (its `NotFound` error) is
+/// [`Reported::Absent`]; any other failure is [`Reported::Unreadable`].
+#[cfg(target_os = "linux")]
+async fn read_desktop_motion(settings: &ashpd::desktop::settings::Settings) -> DesktopMotion {
+    use ashpd::desktop::settings::ReducedMotion;
+
+    fn reported<T>(read: Result<T, ashpd::Error>) -> Reported<T> {
+        match read {
+            Ok(value) => Reported::Value(value),
+            Err(ashpd::Error::Portal(ashpd::PortalError::NotFound(_))) => Reported::Absent,
+            Err(_) => Reported::Unreadable,
+        }
+    }
+
+    let [appearance, gnome, kde] = DesktopMotion::KEYS;
+    DesktopMotion {
+        reduced_motion: reported(
+            settings
+                .read::<ReducedMotion>(appearance.0, appearance.1)
+                .await
+                .map(|motion| motion == ReducedMotion::ReducedMotion),
+        ),
+        enable_animations: reported(settings.read::<bool>(gnome.0, gnome.1).await),
+        animation_duration_factor: reported(
+            settings
+                .read::<AnimationDurationFactor>(kde.0, kde.1)
+                .await
+                .map(|factor| factor.0),
+        ),
+    }
+}
+
+/// KDE's animation speed as the portal hands it over: KDE's portal passes
+/// the kdeglobals entry on as the text the file holds, so both a number and
+/// text holding one are accepted.
+#[cfg(target_os = "linux")]
+struct AnimationDurationFactor(f64);
+
+#[cfg(target_os = "linux")]
+impl TryFrom<ashpd::zvariant::OwnedValue> for AnimationDurationFactor {
+    type Error = ashpd::zvariant::Error;
+
+    fn try_from(value: ashpd::zvariant::OwnedValue) -> Result<Self, Self::Error> {
+        if let Ok(factor) = value.downcast_ref::<f64>() {
+            return Ok(Self(factor));
+        }
+        value
+            .downcast_ref::<&str>()?
+            .trim()
+            .parse()
+            .map(Self)
+            .map_err(|_| ashpd::zvariant::Error::IncorrectType)
+    }
+}
+
+/// One desktop setting as the Settings portal reported it.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Reported<T> {
+    /// The desktop does not expose the setting: it says nothing.
+    Absent,
+    /// The setting's value.
+    Value(T),
+    /// The setting is there but its value could not be read or understood.
+    Unreadable,
+}
+
+/// What a Linux desktop says about motion, through the XDG Settings portal.
+/// There is no one standard key yet, so Pane reads the three the target
+/// desktops use and reduces motion when any of them asks for it (see
+/// [`desktop_reduces_motion`]).
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct DesktopMotion {
+    /// The portal's own `org.freedesktop.appearance` `reduced-motion`
+    /// (newer portals): true when it asks for reduced motion, false for no
+    /// preference.
+    reduced_motion: Reported<bool>,
+    /// GNOME's `org.gnome.desktop.interface` `enable-animations`: false
+    /// when the user turned animations off.
+    enable_animations: Reported<bool>,
+    /// KDE's `AnimationDurationFactor` in kdeglobals' `[KDE]` group
+    /// (System Settings' animation speed): 0 when it is set to instant.
+    animation_duration_factor: Reported<f64>,
+}
+
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+impl DesktopMotion {
+    /// The portal namespace and key of each field, in field order.
+    const KEYS: [(&str, &str); 3] = [
+        ("org.freedesktop.appearance", "reduced-motion"),
+        ("org.gnome.desktop.interface", "enable-animations"),
+        ("org.kde.kdeglobals.KDE", "AnimationDurationFactor"),
+    ];
+}
+
+/// Whether a Linux desktop's settings ask for reduced motion: when any key
+/// asks for it, and — as on Windows — when a key the desktop exposes cannot
+/// be read, the safer side of an unknown. A desktop that exposes none of
+/// the keys says nothing, and Pane keeps full motion.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn desktop_reduces_motion(desktop: &DesktopMotion) -> bool {
+    fn asks<T>(setting: Reported<T>, reduces: impl FnOnce(T) -> bool) -> bool {
+        match setting {
+            Reported::Absent => false,
+            Reported::Value(value) => reduces(value),
+            Reported::Unreadable => true,
+        }
+    }
+
+    asks(desktop.reduced_motion, |reduced| reduced)
+        || asks(desktop.enable_animations, |enabled| !enabled)
+        || asks(desktop.animation_duration_factor, |factor| factor <= 0.)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const SILENT: DesktopMotion = DesktopMotion {
+        reduced_motion: Reported::Absent,
+        enable_animations: Reported::Absent,
+        animation_duration_factor: Reported::Absent,
+    };
+
+    #[test]
+    fn a_desktop_that_exposes_nothing_keeps_full_motion() {
+        assert!(!desktop_reduces_motion(&SILENT));
+    }
+
+    #[test]
+    fn the_portals_own_preference_reduces_motion() {
+        let asks = |reduced| DesktopMotion {
+            reduced_motion: Reported::Value(reduced),
+            ..SILENT
+        };
+        assert!(desktop_reduces_motion(&asks(true)));
+        assert!(!desktop_reduces_motion(&asks(false)));
+    }
+
+    #[test]
+    fn gnome_with_animations_off_reduces_motion() {
+        let animations = |enabled| DesktopMotion {
+            enable_animations: Reported::Value(enabled),
+            ..SILENT
+        };
+        assert!(desktop_reduces_motion(&animations(false)));
+        assert!(!desktop_reduces_motion(&animations(true)));
+    }
+
+    #[test]
+    fn kde_at_instant_animation_speed_reduces_motion() {
+        let factor = |factor| DesktopMotion {
+            animation_duration_factor: Reported::Value(factor),
+            ..SILENT
+        };
+        assert!(desktop_reduces_motion(&factor(0.)));
+        assert!(!desktop_reduces_motion(&factor(0.5)));
+        assert!(!desktop_reduces_motion(&factor(1.)));
+    }
+
+    #[test]
+    fn any_key_asking_reduces_motion_even_when_another_does_not() {
+        // GNOME's portal can report no preference under its own key while
+        // GNOME's animations are off.
+        let desktop = DesktopMotion {
+            reduced_motion: Reported::Value(false),
+            enable_animations: Reported::Value(false),
+            ..SILENT
+        };
+        assert!(desktop_reduces_motion(&desktop));
+    }
+
+    #[test]
+    fn a_key_that_is_there_but_unreadable_fails_closed_to_reduced_motion() {
+        let desktop = DesktopMotion {
+            enable_animations: Reported::Value(true),
+            animation_duration_factor: Reported::Unreadable,
+            ..SILENT
+        };
+        assert!(desktop_reduces_motion(&desktop));
     }
 }
