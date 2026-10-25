@@ -937,7 +937,9 @@ Its events:
 
 Unless the view handles the search itself, Pane filters the items by the
 field's text with the root-search matcher ([root-search.md](root-search.md)),
-on the title, the subtitle and the item's `keywords`.
+on the title, the subtitle and the item's `keywords`. A word after
+punctuation is found by its start, as root search finds it: `scratch`
+finds `*scratch.txt - Notepad` (#540).
 
 ### Sections and items
 
