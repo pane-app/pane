@@ -677,36 +677,39 @@ fn a_recording_session_holds_the_keys_back_and_reports_what_was_pressed() {
     );
     recognizer.step(event(H, false));
 
-    // A lone tap of the Windows key, recognized by its timing, reported
-    // and held back — no mask needed, the release never reaching
-    // Windows.
+    // A lone tap of the Windows key, recognized by its timing and held
+    // back — no mask needed, the release never reaching Windows — is
+    // reported once the double-tap window closes with no second press
+    // (#539).
     assert_eq!(recognizer.step(at(LWIN, true, 0)), Decision::Swallow);
+    assert_eq!(recognizer.step(at(LWIN, false, 100)), Decision::Swallow);
+    assert_eq!(recognizer.recording_due(), Some(400));
+    assert_eq!(recognizer.recorded_due(399), None);
     assert_eq!(
-        recognizer.step(at(LWIN, false, 100)),
-        Decision::Recorded(Recorded::Tap {
+        recognizer.recorded_due(400),
+        Some(Recorded::Tap {
             modifier: WIN_AT,
             side: Side::Left,
         })
     );
+    assert_eq!(recognizer.recording_due(), None);
     // A double tap, likewise: the first press and its release — a lone
-    // tap in its own right — are held back, the release reporting the
-    // tap, and the second press, with nothing between, the double.
-    assert_eq!(recognizer.step(at(RCONTROL, true, 200)), Decision::Swallow);
+    // tap in its own right — are held back, and the second press, with
+    // nothing between, reports the double in the tap's place.
+    assert_eq!(recognizer.step(at(RCONTROL, true, 1000)), Decision::Swallow);
     assert_eq!(
-        recognizer.step(at(RCONTROL, false, 300)),
-        Decision::Recorded(Recorded::Tap {
-            modifier: CTRL_AT,
-            side: Side::Right,
-        })
+        recognizer.step(at(RCONTROL, false, 1100)),
+        Decision::Swallow
     );
     assert_eq!(
-        recognizer.step(at(RCONTROL, true, 500)),
+        recognizer.step(at(RCONTROL, true, 1300)),
         Decision::Recorded(Recorded::Double {
             modifier: CTRL_AT,
             side: Side::Right,
         })
     );
-    recognizer.step(at(RCONTROL, false, 600));
+    recognizer.step(at(RCONTROL, false, 1400));
+    assert_eq!(recognizer.recording_due(), None, "the double took the tap");
 
     // An auto-repeat of a key held is held back and reports nothing.
     recognizer.step(event(G, true));
@@ -734,6 +737,137 @@ fn a_recording_session_holds_the_keys_back_and_reports_what_was_pressed() {
             Decision::Pass,
             Decision::Pass,
         ]
+    );
+}
+
+#[test]
+fn a_recording_session_reports_a_lone_tap_once_the_double_tap_window_closes() {
+    // #539: the tap's release reports nothing yet, so a double tap can
+    // still come; with none, the window closing reports the tap.
+    let mut recognizer = Recognizer::default();
+    recognizer.recording(true);
+    assert_eq!(recognizer.step(at(CONTROL, true, 1000)), Decision::Swallow);
+    assert_eq!(recognizer.step(at(CONTROL, false, 1080)), Decision::Swallow);
+    // The window runs from the first press.
+    assert_eq!(recognizer.recording_due(), Some(1400));
+    assert_eq!(recognizer.recorded_due(1399), None);
+    let tap = Recorded::Tap {
+        modifier: CTRL_AT,
+        side: Side::Left,
+    };
+    assert_eq!(recognizer.recorded_due(1400), Some(tap));
+    // Reported once.
+    assert_eq!(recognizer.recorded_due(2000), None);
+
+    // A tap released after the window closed has nothing to wait for:
+    // its release reports it.
+    assert_eq!(recognizer.step(at(CONTROL, true, 3000)), Decision::Swallow);
+    assert_eq!(
+        recognizer.step(at(CONTROL, false, 3450)),
+        Decision::Recorded(tap)
+    );
+    assert_eq!(recognizer.recording_due(), None);
+
+    // A clock that wrapped closes the window too: the tap is never held
+    // for good.
+    recognizer.step(at(CONTROL, true, 5000));
+    recognizer.step(at(CONTROL, false, 5050));
+    assert_eq!(recognizer.recorded_due(10), Some(tap));
+
+    // The session ending drops a held tap.
+    recognizer.step(at(CONTROL, true, 6000));
+    recognizer.step(at(CONTROL, false, 6050));
+    recognizer.recording(false);
+    assert_eq!(recognizer.recording_due(), None);
+}
+
+#[test]
+fn a_recording_session_reports_a_double_tap_not_the_tap_before_it() {
+    // #539: Ctrl Ctrl, 120 ms apart, as the issue presses it. The first
+    // tap is held, and the second press reports the double in its place.
+    let mut recognizer = Recognizer::default();
+    recognizer.recording(true);
+    assert_eq!(
+        [
+            recognizer.step(at(CONTROL, true, 0)),
+            recognizer.step(at(CONTROL, false, 50)),
+            recognizer.step(at(CONTROL, true, 120)),
+            recognizer.step(at(CONTROL, false, 170)),
+        ],
+        [
+            Decision::Swallow,
+            Decision::Swallow,
+            Decision::Recorded(Recorded::Double {
+                modifier: CTRL_AT,
+                side: Side::Left,
+            }),
+            Decision::Swallow,
+        ]
+    );
+    // Nothing is left to report when the window closes.
+    assert_eq!(recognizer.recording_due(), None);
+    assert_eq!(recognizer.recorded_due(1000), None);
+
+    // The Windows key, likewise: held back throughout, the Start menu
+    // staying closed, and recorded as a double.
+    recognizer.step(at(LWIN, true, 2000));
+    recognizer.step(at(LWIN, false, 2060));
+    assert_eq!(
+        recognizer.step(at(LWIN, true, 2200)),
+        Decision::Recorded(Recorded::Double {
+            modifier: WIN_AT,
+            side: Side::Left,
+        })
+    );
+    assert_eq!(recognizer.step(at(LWIN, false, 2260)), Decision::Swallow);
+}
+
+#[test]
+fn a_recording_session_reports_the_first_tap_when_a_second_comes_late() {
+    // #539: the second press after the window closed is no double tap.
+    // Where it beats the timer, it reports the first tap, and begins a
+    // tap of its own, held in turn.
+    let mut recognizer = Recognizer::default();
+    recognizer.recording(true);
+    let tap = Recorded::Tap {
+        modifier: CTRL_AT,
+        side: Side::Left,
+    };
+    recognizer.step(at(CONTROL, true, 0));
+    assert_eq!(recognizer.step(at(CONTROL, false, 50)), Decision::Swallow);
+    assert_eq!(
+        recognizer.step(at(CONTROL, true, 700)),
+        Decision::Recorded(tap)
+    );
+    assert_eq!(recognizer.step(at(CONTROL, false, 750)), Decision::Swallow);
+    assert_eq!(recognizer.recording_due(), Some(1100));
+    assert_eq!(recognizer.recorded_due(1100), Some(tap));
+
+    // Another key pressed within the window says no double tap comes:
+    // the tap stands, and is reported in that key's place, as the tap
+    // ended the session before.
+    recognizer.step(at(CONTROL, true, 2000));
+    recognizer.step(at(CONTROL, false, 2050));
+    assert_eq!(recognizer.step(at(G, true, 2100)), Decision::Recorded(tap));
+    assert_eq!(recognizer.recording_due(), None);
+    recognizer.step(at(G, false, 2150));
+
+    // Another tool's mask key is nothing the user pressed: the tap waits
+    // on, and the second press still makes the double.
+    recognizer.step(at(CONTROL, true, 3000));
+    recognizer.step(at(CONTROL, false, 3050));
+    let mask = KeyEvent {
+        injected: true,
+        ..at(0xE8, true, 3060)
+    };
+    assert_eq!(recognizer.step(mask), Decision::Pass);
+    assert_eq!(recognizer.recording_due(), Some(3400));
+    assert_eq!(
+        recognizer.step(at(CONTROL, true, 3100)),
+        Decision::Recorded(Recorded::Double {
+            modifier: CTRL_AT,
+            side: Side::Left,
+        })
     );
 }
 

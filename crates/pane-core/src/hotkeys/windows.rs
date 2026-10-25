@@ -85,10 +85,10 @@ use ::windows::Win32::UI::Input::{
 };
 use ::windows::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, DefWindowProcW, EVENT_SYSTEM_FOREGROUND, GetForegroundWindow,
-    GetWindowThreadProcessId, HHOOK, KBDLLHOOKSTRUCT, LLKHF_EXTENDED, LLKHF_INJECTED, LLKHF_UP,
-    MSG, OBJID_WINDOW, PBT_APMRESUMEAUTOMATIC, PBT_APMRESUMESUSPEND, PostThreadMessageW,
-    SetWindowsHookExW, UnhookWindowsHookEx, WH_KEYBOARD_LL, WINEVENT_OUTOFCONTEXT, WM_HOTKEY,
-    WM_INPUT, WM_POWERBROADCAST, WM_WTSSESSION_CHANGE,
+    GetWindowThreadProcessId, HHOOK, KBDLLHOOKSTRUCT, KillTimer, LLKHF_EXTENDED, LLKHF_INJECTED,
+    LLKHF_UP, MSG, OBJID_WINDOW, PBT_APMRESUMEAUTOMATIC, PBT_APMRESUMESUSPEND, PostThreadMessageW,
+    SetTimer, SetWindowsHookExW, UnhookWindowsHookEx, WH_KEYBOARD_LL, WINEVENT_OUTOFCONTEXT,
+    WM_HOTKEY, WM_INPUT, WM_POWERBROADCAST, WM_WTSSESSION_CHANGE,
 };
 use ::windows::core::HRESULT;
 
@@ -1303,7 +1303,9 @@ fn unbind(id: u32) {
 
 /// The low-level keyboard hook's callback, called by the system on the
 /// thread that installed it while it pumps its messages. It only steps
-/// the recognizer and posts the press to the adapter's thread: it never
+/// the recognizer, posts the press to the adapter's thread and, while a
+/// recording session holds a lone tap, sets the timer that reports it
+/// (#539): it never
 /// allocates, takes no lock another thread holds, or calls anything
 /// outside the hook machinery. A panic must not unwind into Windows,
 /// which would end Pane, so it catches one and lets the event through.
@@ -1410,7 +1412,13 @@ fn decide(event: &KBDLLHOOKSTRUCT) -> (bool, Option<u32>, bool) {
                     post(state.adapter, WM_RECORDED_ENDED, 0);
                     return Some((false, None, false));
                 }
-                Some(match state.recognizer.step(key) {
+                let decision = state.recognizer.step(key);
+                // A lone tap the recognizer holds until the double-tap
+                // window closes (#539): the timer asks for it then.
+                if let Some(due) = state.recognizer.recording_due() {
+                    arm_tap_timer(state.window.handle(), due.saturating_sub(key.time));
+                }
+                Some(match decision {
                     Decision::Recorded(report) => {
                         post(state.adapter, WM_RECORDED, pack(report));
                         (true, None, false)
@@ -1446,6 +1454,48 @@ fn decide(event: &KBDLLHOOKSTRUCT) -> (bool, Option<u32>, bool) {
         .ok()
         .flatten()
         .unwrap_or((false, None, false))
+}
+
+/// The id of the watchdog window's timer that reports the lone tap a
+/// recording session holds once the double-tap window closes (#539).
+const TAP_TIMER: usize = 1;
+
+/// Sets the tap timer on the watchdog window `window` to fire in
+/// `delay` milliseconds, replacing one already set. Windows' timers fire
+/// no sooner than asked, so the window has closed when it does.
+fn arm_tap_timer(window: HWND, delay: u64) {
+    let delay = u32::try_from(delay).unwrap_or(u32::MAX).max(1);
+    // SAFETY: this thread's own window; the procedure is this module's,
+    // kept for as long as the process runs.
+    let _ = unsafe { SetTimer(Some(window), TAP_TIMER, delay, Some(tap_due)) };
+}
+
+/// The tap timer's procedure, on the hook thread as it dispatches the
+/// timer's message: the double-tap window closed, so the lone tap the
+/// recording session holds stands, and is posted to the adapter's thread
+/// as the hook posts what it recognizes (#539). `now` is the system's
+/// tick count, the clock the hook's event times are on. A panic must not
+/// unwind into Windows, which would end Pane, so it catches one.
+unsafe extern "system" fn tap_due(window: HWND, _message: u32, id: usize, now: u32) {
+    let _ = std::panic::catch_unwind(|| {
+        // SAFETY: this thread's own window and timer.
+        let _ = unsafe { KillTimer(Some(window), id) };
+        let _ = HOOKED.try_with(|hooked| {
+            let Ok(mut held) = hooked.try_borrow_mut() else {
+                return;
+            };
+            let Some(state) = held.as_mut() else {
+                return;
+            };
+            let now = u64::from(now);
+            if let Some(report) = state.recognizer.recorded_due(now) {
+                post(state.adapter, WM_RECORDED, pack(report));
+            } else if let Some(due) = state.recognizer.recording_due() {
+                // Still held: the window closes a moment later.
+                arm_tap_timer(window, due.saturating_sub(now));
+            }
+        });
+    });
 }
 
 /// Posts `message` with `word` to the adapter's thread `adapter`; a post
