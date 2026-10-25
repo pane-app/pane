@@ -265,7 +265,8 @@ fn main() {
     // Opening Pane.app while it runs reaches this Pane through Launch
     // Services, which never starts a second process of a bundle: it shows
     // the launcher, as a second start does elsewhere (ADR 0052).
-    let launcher_window = std::rc::Rc::new(std::cell::Cell::new(None));
+    let launcher_window: std::rc::Rc<std::cell::Cell<Option<gpui::WindowHandle<LauncherWindow>>>> =
+        std::rc::Rc::new(std::cell::Cell::new(None));
     #[cfg(target_os = "macos")]
     {
         let launcher_window = launcher_window.clone();
