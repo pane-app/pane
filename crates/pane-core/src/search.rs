@@ -5,7 +5,9 @@
 //! subtitle" and "subtitle title", and, for an installed command, its
 //! package's title — as a subsequence with a score: a
 //! letter matched at the text's first position scores 4, at a word
-//! start (after a separator) 3, elsewhere 2; a separator matched to a
+//! start (after a separator or any other punctuation or symbol, so
+//! `*scratch.txt` and `#general` start words) 3, elsewhere 2; a
+//! separator matched to a
 //! separator scores 1. Each gap between two consecutive matched
 //! positions costs 1; adjacency is free. A query separator that cannot
 //! be placed is skipped, counted as skipped and never a failure, while
@@ -123,11 +125,21 @@ pub(crate) enum Kind {
     File,
 }
 
-/// Whether `c` separates words for the scorer: whitespace, or one of
-/// `- . / ( ) [ ]`. Capital letters inside a word are not word starts in
-/// root search, so a change of case separates nothing.
+/// Whether `c` is a separator for the scorer: whitespace, or one of
+/// `- . / ( ) [ ]`, the query's characters it may skip. Capital letters
+/// inside a word are not word starts in root search, so a change of case
+/// separates nothing.
 fn is_separator(c: char) -> bool {
     c.is_whitespace() || matches!(c, '-' | '.' | '/' | '(' | ')' | '[' | ']')
+}
+
+/// Whether a letter after `c` starts a word: after a separator, or after
+/// any other punctuation or symbol (#540). So `*scratch.txt - Notepad`,
+/// Notepad's unsaved file, has the word `scratch`, and `#general` the
+/// word `general`. Only the text's words widen: a query's punctuation
+/// other than the separators must still be placed.
+fn ends_word(c: char) -> bool {
+    !c.is_alphanumeric()
 }
 
 /// `text` as it is compared caselessly, for aliases: NFC, lowercase, its
@@ -459,7 +471,7 @@ fn base(query: &[char], text: &[char], i: usize, j: usize) -> Option<i32> {
     (placed == text[j]).then(|| {
         if j == 0 {
             4
-        } else if is_separator(text[j - 1]) {
+        } else if ends_word(text[j - 1]) {
             3
         } else {
             2
@@ -1206,6 +1218,42 @@ mod matching_tests {
     }
 
     #[test]
+    fn a_title_starting_with_punctuation_is_found_by_its_first_word() {
+        let keys = texts(&[
+            ("*scratch.txt - Notepad", None),
+            ("● main.rs - pane - Visual Studio Code", None),
+            ("[Doki] New Game - 05.srt", None),
+            ("(Draft) Letter", None),
+            ("#general | Slack", None),
+            ("PANE-VD2-TARGET", None),
+        ]);
+        let high = SearchSensitivity::default();
+        // #540: the punctuation leading a title separates its first word,
+        // which a prefix of it finds at the default sensitivity.
+        assert_eq!(matched("scratch", &keys, high), [0]);
+        assert_eq!(matched("scr", &keys, high), [0]);
+        assert_eq!(matched("notepad", &keys, high), [0]);
+        assert_eq!(matched("main", &keys, high), [1]);
+        assert_eq!(matched("doki", &keys, high), [2]);
+        assert_eq!(matched("draft", &keys, high), [3]);
+        assert_eq!(matched("general", &keys, high), [4]);
+        assert_eq!(matched("gen", &keys, high), [4]);
+        assert_eq!(matched("target", &keys, high), [5]);
+        // A word inside one still does not match mid-word at High.
+        assert!(matched("cratch", &keys, high).is_empty());
+    }
+
+    #[test]
+    fn a_title_starting_with_its_word_still_ranks_above_one_after_punctuation() {
+        let keys = texts(&[("*scratch.txt", None), ("scratch.txt", None)]);
+        // The text's first position still scores more than a word start.
+        assert_eq!(
+            matched("scratch", &keys, SearchSensitivity::default()),
+            [1, 0]
+        );
+    }
+
+    #[test]
     fn aliases_are_compared_caselessly_not_transliterated() {
         let keys = [Keys::new("Downloader", None, None).with_alias(Some("café"))];
         // The accented alias is the user's own word: folding it away would
@@ -1373,6 +1421,16 @@ mod tests {
             [9..13]
         );
         assert_eq!(&"Search YouTube"[9..13], "uTub");
+    }
+
+    #[test]
+    #[allow(clippy::single_range_in_vec_init)]
+    fn a_word_after_leading_punctuation_highlights_its_letters() {
+        let high = SearchSensitivity::default();
+        assert_eq!(
+            title_matches("*scratch.txt - Notepad", None, "scr", high),
+            [1..4]
+        );
     }
 
     #[test]

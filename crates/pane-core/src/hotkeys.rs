@@ -1120,8 +1120,10 @@ pub struct HookHealth {
     /// trimmed working set cannot fault the callback past Windows' hook
     /// timeout.
     pub pinned: bool,
-    /// Why Pane gave up keeping the hook installed, if it did: its
-    /// hook-based bindings do nothing until Pane starts again.
+    /// Why Pane gave up keeping the hook installed for a while, if it
+    /// did: its hook-based bindings may do nothing until the watchdog
+    /// tries again after a pause, and this clears once the hook sees the
+    /// keys again (#538).
     pub given_up: Option<String>,
 }
 
@@ -1618,9 +1620,9 @@ mod tests {
         );
         // Giving up replaces the state: the reason, which says what
         // happened and what it leaves behind.
-        let why = "Windows removed Pane's keyboard hook 6 times within 30 seconds; Pane gave \
-                   up reinstalling it, and the hotkeys it dispatches do nothing until Pane \
-                   starts again";
+        let why = "Windows removed Pane's keyboard hook 6 times within 30 seconds; Pane \
+                   stopped reinstalling it for 30 seconds, and the hotkeys it dispatches may \
+                   do nothing until it tries again";
         let given_up = HookHealth {
             reinstalls: 6,
             pinned: true,
