@@ -412,6 +412,14 @@ _Avoid_: Pane CLI, `pane` (the application)
 The endpoint the running Pane listens on for `pane-ext`, which only the same user can open: a named pipe on Windows, a Unix-domain socket in a folder of the user's own elsewhere. `pane-ext dev` hands its builds over it and receives the package's development status and extension log back; closing it stops the development.
 _Avoid_: IPC, socket (one of its forms), single-instance channel
 
+**Instance lock**:
+The lock the running Pane holds on its data folder for as long as it runs, with an endpoint beside it that only the same user can open: a named mutex and pipe on Windows, a locked file and Unix-domain socket in the local channel's folder elsewhere (ADR 0052). The system lets go of it when Pane ends, however it ends. Not the local channel, which is `pane-ext`'s.
+_Avoid_: single-instance channel, local channel
+
+**Second start**:
+A start of Pane that finds the instance lock held: it asks the running Pane to show its launcher (with the package a `--install` named shown for installation) and exits, or exits without asking when started with `--hidden` or `--launch-at-login`. The new process of a restart into an update is not one: it waits for the old process to exit first.
+_Avoid_: second instance, duplicate Pane
+
 **Build failure**:
 A development build that did not succeed: nothing is replaced, and the package keeps running its installed code. Distinct from a startup failure, whose replacement was installed.
 _Avoid_: Crash, startup failure

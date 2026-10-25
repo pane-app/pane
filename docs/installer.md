@@ -1418,13 +1418,10 @@ with `&`).
   Pane starting removes a staging folder another Pane may be installing
   from. These are the same small warts the shared data folder already
   records, left as they are.
-- On one data folder, both acquire. Each fetches its revision into a
-  download folder of its own under `downloads/`, removed once its package
-  is dropped. One that installs the same default extension while the
-  other is installing it is told the install's own wording, "Already
-  installed …; use Update to replace the installed copy", wording a
-  default extension has no row for (a restarted Pane lists it). That is a
-  small wart of the shared install path, left as it is.
+- On one data folder, only one Pane runs ([ADR 0052](adr/0052-a-second-start-shows-the-running-pane-and-exits.md)):
+  a second start shows the running Pane's launcher and exits, so two
+  Panes never acquire into the same folder. Concurrent Panes need data
+  folders of their own (`PANE_DATA_DIR`), as the tests and smokes give.
 
 ## Tracking
 

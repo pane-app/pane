@@ -70,7 +70,7 @@ A background check that fails says nothing. It is written to Pane's log, About s
 - **A system notification or a tray badge** for a ready update. Raycast shows neither.
 - **A row offering the update before it is downloaded** ("Update Pane to <version>", whose Enter started the download). Raycast lists its item only once the update is ready, and a download the user has to start is the step this decision removes.
 - **A watchdog that starts Pane again** when the new version fails after the old one has exited (Raycast added one in its macOS 2.8). Deferred, with automatic rollback.
-- **A general single-instance guard**, where a second `pane` started while one runs shows the running one's launcher and exits. It would also stop double starts from Start or the setup's last page. It is a separate decision: the handoff here needs only the old process's id. Note that the glossary keeps the local channel for `pane-ext`, not as a single-instance channel.
+- **A general single-instance guard**, where a second `pane` started while one runs shows the running one's launcher and exits. Settled by [ADR 0052](0052-a-second-start-shows-the-running-pane-and-exits.md): a second start shows the running Pane's launcher and exits, through an instance lock and endpoint of its own rather than the local channel. The handoff here still needs only the old process's id: the new process takes the lock once the old one has exited.
 
 **Consequences.**
 

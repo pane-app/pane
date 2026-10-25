@@ -249,7 +249,12 @@ the builds run and print:
    (`%LOCALAPPDATA%\Pane\pane.exe`, `Pane.app` in `/Applications` or
    `~/Applications`, `~/.local/bin/pane`), else `pane` on the search
    path. It waits up to a minute for it to listen. Found nowhere, it says
-   where it looked and exits, stopping the build.
+   where it looked and exits, stopping the build. A Pane already running
+   on the same data folder takes that start as a second start and only
+   shows its launcher
+   ([ADR 0052](adr/0052-a-second-start-shows-the-running-pane-and-exits.md)),
+   so a development Pane beside an installed one needs `PANE_DATA_DIR`
+   as well as `PANE_CHANNEL`.
 3. It builds the package in the terminal, printing what the build prints,
    cargo's errors included, and stages it in a folder of its own in the
    user's cache folder (`pane-ext/<hash of the folder>`).

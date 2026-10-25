@@ -31,6 +31,7 @@ mod host_settings;
 pub mod hotkeys;
 mod http;
 pub mod icons;
+pub mod instance;
 mod integrity;
 pub mod keyboard;
 mod launch;
