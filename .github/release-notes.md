@@ -2,18 +2,18 @@
 
 ## What's new
 
-- **Updates like Raycast's** (#517, #521, #523): Pane checks for updates every few hours and downloads them by itself. **Restart to Update Pane**, first in the launcher, restarts into the new version with one Enter. After an update, **What's New** shows these notes for a day.
-- **Everything from the keyboard** (#511, #514, #516, #518, #519, #522, #524, #525): every Settings page and control can be reached with Tab and the arrow keys, and extension pages, confirmations and hotkey recorders work without a mouse. Forms submit from any field, dropdowns open with Ctrl+P, and links and long text in detail views can be reached and scrolled from the keyboard. The Actions panel adds **Uninstall Extension**, **Disable Command** and **Configure Extension**.
-- **Updates install while you're away**: once an update is downloaded and Pane has been hidden for ten minutes, with no command running, no extension being installed or updated, no form left with what you typed in it and Settings closed, Pane restarts into it by itself and stays hidden. The next time you open it, it says it was updated and shows What's New. Restart to Update Pane still works at any time.
-- **Quit Pane** (#520): a command in root search.
-- **App icons** (#489, #512): icons show on the first search after Pane starts, and they and the file index are no longer cleared when an extension is built.
-- **Each app listed once** (#515): an app that several shortcuts launch, such as Discord, shows up once.
-- **Extension development** (#487): `pane-ext dev` builds include the package's icons, help and assets.
-- **Updating from 0.1.1 or 0.1.0**: once more by hand. Pane finds this release by itself: choose **Update Pane to {version}** in the launcher, then quit Pane from its tray or menu-bar icon and start it again (or run the setup or installer of this release over it). From this version on, updates restart by themselves (see Updates below).
+- **Updates install while you're away** (#530, #531): once an update is downloaded and Pane has been hidden for ten minutes, with no command running, no extension being installed or updated, no form left with what you typed in it and Settings closed, Pane restarts into it by itself and stays hidden. The next time you open it, it says it was updated and shows What's New. Restart to Update Pane still works at any time.
+- **Back to root search after 90 seconds** (#532): as in Raycast, Pane opens on root search again once it has been hidden for 90 seconds. Change it under **Pop to root search** in Settings.
+- **Questions as pop-ups** (#533): Pane's own questions, such as uninstalling an extension, now show as alerts over the screen you were on, as Raycast's do. Uninstall has a **Delete saved data** checkbox, unticked.
+- **A back button on Pane's own pages** (#529): package previews, details, Logs and similar pages have a top bar with a back button.
+- **Key symbols on macOS** (#534): keycaps show ⌃ ⌥ ⇧ ⌘ and the macOS key symbols, as Raycast and macOS menus do, so long shortcuts fit a narrow window. Screen readers still read the full names.
+- **Reduce motion on macOS and Linux** (#535): Pane follows the system's reduce-motion setting there too, as it already did on Windows.
+- **Clearer extension crashes** (#536): when an extension stops before answering, Pane's message saying so is no longer covered by a toast the extension showed just before.
+- **Updating from 0.1.2**: Pane finds this release, downloads it and offers **Restart to Update Pane**. **From 0.1.1 or 0.1.0**: choose **Update Pane to {version}** in the launcher, then quit Pane from its tray or menu-bar icon and start it again (or run the setup or installer of this release over it).
 
 ## What was checked
 
-- **Windows (x86_64):** checked by hand: installed and used on a Windows PC, beside the automated checks CI runs on every change.
+- **Windows (x86_64):** built and smoke-tested by CI on every change. Version 0.1.2, which this release builds on, was installed and used by hand on a Windows PC; this release's own changes are checked by CI only.
 - **macOS (Apple silicon) and Linux (x86_64):** built and smoke-tested by CI only. They are **not yet tested by hand**, so treat them as experimental.
 
 ## Download
