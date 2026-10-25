@@ -296,24 +296,30 @@ def answer(path: str) -> None:
 
 
 def preview(path: str) -> None:
-    """Positive metadata evidence before Enter, replacing the removed blue border.
+    """Positive evidence of the package preview before Enter.
 
     Only used immediately after --install at the 760-logical-pixel startup
-    width. Scale from the screenshot for Retina/Windows DPI. The band below
-    the package heading contains its first metadata line; on root search it
-    is blank, below the placeholder and above the 64px header divider.
+    width. Scale from the screenshot for Retina/Windows DPI. Since #529 the
+    preview has the top bar in the search header's place: its back button
+    where the magnifier is, and the package's title beside it in the title
+    color. On a blank root search the same band holds only the search
+    field's placeholder, in the hint color, so title-colored text there is
+    the preview's. (The details line the check used to find sat under the
+    old heading, which the 64px top bar now covers.)
     """
     window = pane_window(path)
     scale = window.width / 760
-    band = window.crop((round(20 * scale), round(48 * scale),
-                        window.width - round(20 * scale), round(61 * scale)))
-    # Metadata is text, not a solid swatch: Linux glyph rasterization can
+    band = window.crop((round(44 * scale), round(16 * scale),
+                        round(380 * scale), round(48 * scale)))
+    # The title is text, not a solid swatch: Linux glyph rasterization can
     # leave few pixels within the exact-color tolerance. Use the same
     # antialias-aware, nearest-palette test as the other text assertions.
-    count = count_near(band, rgb(HOST_COLORS["details"]))
-    if count < 20:
-        raise SystemExit(f"{path}: package preview metadata not yet visible ({count} pixels)")
-    print(f"{path}: package preview metadata visible ({count} pixels)")
+    # Linux draws the title's glyphs thin (CI 40150674331: 17 pixels, 43
+    # on Windows); a blank root search draws none.
+    count = count_near(band, rgb("ededef"))
+    if count < 10:
+        raise SystemExit(f"{path}: package preview title not yet visible ({count} pixels)")
+    print(f"{path}: package preview title visible ({count} pixels)")
 
 
 def absent(path: str, color: str, allowance: int = 5) -> int:

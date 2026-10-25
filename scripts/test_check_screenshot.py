@@ -119,14 +119,15 @@ class ScreenshotChecks(unittest.TestCase):
         with self.assertRaises(SystemExit):
             check.same(first, self.save(image, "hover.png"))
 
-    def test_preview_requires_metadata_in_header_band_at_each_scale(self):
+    def test_preview_requires_the_top_bars_title_at_each_scale(self):
         image, draw = self.panel()
         draw.rectangle((90, 52, 250, 65), fill="#86878c")  # root placeholder
-        draw.rectangle((90, 110, 250, 112), fill="#a3a4a9")  # lower text
+        draw.rectangle((90, 110, 250, 112), fill="#ededef")  # a row's title, lower
         for scale in (1, 2):
             with self.assertRaises(SystemExit):
                 check.preview(self.save(image, scale=scale))
-        draw.rectangle((50, 80, 230, 83), fill="#a3a4a9")
+        draw.rectangle((90, 52, 250, 65), fill="#16171a")  # no placeholder
+        draw.rectangle((90, 55, 200, 60), fill="#ededef")  # the top bar's title
         for scale in (1, 2):
             check.preview(self.save(image, scale=scale))
 
