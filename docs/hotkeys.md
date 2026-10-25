@@ -173,6 +173,14 @@ has, is recorded as the modifier, which either side then presses
 (Ctrl+Alt+G, the Windows key alone). A right-hand one is recorded by its
 side (Right Ctrl).
 
+A lone tap is recorded once the double-tap window (400 ms from its press)
+closes with no second press, so the recorder can still take a double tap
+(#539). Tapping Ctrl twice within the window records Ctrl Ctrl
+(`double:ctrl`); tapping it once records Ctrl (`tap:ctrl`) a moment after
+the release. Another key pressed inside the window records the tap at
+once. The Windows key stays held back throughout, so recording it alone
+or doubled never opens the Start menu.
+
 What the session reports takes the same checks a keystroke does, with the
 same explanations. Escape and Tab still cancel, and Backspace or Delete
 pressed alone passes to the recorder as its clearing key (#494). The

@@ -24,7 +24,9 @@ use gpui::{
     WindowHandle, prelude::*, px,
 };
 use pane::{LauncherWindow, SettingsWindow};
-use pane_core::hotkeys::{HotkeyError, Hotkeys, Route, Shortcut};
+use pane_core::hotkeys::{
+    Decision, HotkeyError, Hotkeys, KeyEvent, Recognizer, Recorded, Route, Shortcut, Side,
+};
 use pane_core::{Launcher, LauncherView, PackageIdentity, Runtime, SavedData, Screen, Status};
 use tempfile::TempDir;
 
@@ -2398,4 +2400,101 @@ fn a_hotkey_cell_records_the_kinds_a_session_reports(cx: &mut TestAppContext) {
         tree.contains(&format!("Hotkey for Echo: {ctrl} {ctrl}")),
         "the refusal changed nothing: {tree}"
     );
+}
+
+/// The binding a recording session reports for what the recognizer
+/// recorded, as Windows' adapter names a tap or a double tap.
+fn recorded_shortcut(report: Recorded) -> Shortcut {
+    let (kind, modifier, side) = match report {
+        Recorded::Tap { modifier, side } => ("tap", modifier, side),
+        Recorded::Double { modifier, side } => ("double", modifier, side),
+        Recorded::Chord { .. } => panic!("no chord is pressed here"),
+    };
+    let name = ["ctrl", "alt", "shift", "super"][modifier];
+    let side = if side == Side::Right { "r" } else { "" };
+    Shortcut::parse(&format!("{kind}:{side}{name}")).unwrap()
+}
+
+#[gpui::test]
+fn a_hotkey_cell_records_a_double_tap_and_a_tap_after_its_window(cx: &mut TestAppContext) {
+    // #539: the recognizer Windows' hook runs feeds the cell's session,
+    // so the cell sees what the hook would send. A double tap of Ctrl,
+    // 120 ms apart, records Ctrl Ctrl: the first tap is held until the
+    // window closes, and the second press reports the double in its
+    // place. Before, the tap's release ended the recorder at once.
+    let data = tempfile::tempdir().unwrap();
+    let query = query_package(&data.path().join("sources").join("query"));
+    let hello = hello_package(&data.path().join("sources").join("hello"));
+    let (_window, settings, hotkeys, cx) = open_hooking(cx, &data, &[&query, &hello]);
+    let (echo_id, hello_id) = (command_id(&query), command_id(&hello));
+    let ctrl = if cfg!(target_os = "macos") {
+        "Control"
+    } else {
+        "Ctrl"
+    };
+    let key = |key: u32, pressed: bool, time: u64| KeyEvent {
+        key,
+        scan: 0,
+        pressed,
+        extended: false,
+        injected: false,
+        tag: 0,
+        time,
+    };
+    // VK_LCONTROL and VK_LSHIFT.
+    let (control, shift) = (0xA2, 0xA0);
+
+    let mut settings_cx = record_hotkey(&settings, cx, &echo_id);
+    let reported = hotkeys.reporters.lock().unwrap().clone();
+    let mut recognizer = Recognizer::default();
+    recognizer.recording(true);
+    for (event, decision) in [
+        key(control, true, 0),
+        key(control, false, 50),
+        key(control, true, 120),
+        key(control, false, 170),
+    ]
+    .map(|event| (event, recognizer.step(event)))
+    {
+        assert_ne!(decision, Decision::Pass, "{event:?} was held back");
+        if let Decision::Recorded(report) = decision {
+            reported[0].send(recorded_shortcut(report));
+            settings_cx.run_until_parked();
+        }
+    }
+    assert_eq!(recognizer.recorded_due(1000), None, "no tap is left");
+    let (label, _) = accessibility(&mut settings_cx);
+    assert_eq!(
+        label.as_deref(),
+        Some(format!("Hotkey for Echo: {ctrl} {ctrl}").as_str())
+    );
+    // The record is saved off the window's thread: waited for.
+    until(&mut settings_cx, |_| {
+        fs::read_to_string(data.path().join("extensions").join("hotkeys.json"))
+            .is_ok_and(|text| text.contains("\"double:ctrl\""))
+            .then_some(())
+    });
+
+    // A single tap of Shift: its release reports nothing yet, so the
+    // cell still listens for a second press; the window closing with
+    // none reports the tap, which the cell records as Shift.
+    let mut settings_cx = record_hotkey(&settings, cx, &hello_id);
+    let reported = hotkeys.reporters.lock().unwrap().clone();
+    let mut recognizer = Recognizer::default();
+    recognizer.recording(true);
+    assert_eq!(recognizer.step(key(shift, true, 0)), Decision::Swallow);
+    assert_eq!(recognizer.step(key(shift, false, 60)), Decision::Swallow);
+    let (label, _) = accessibility(&mut settings_cx);
+    assert!(
+        label
+            .as_deref()
+            .is_some_and(|label| label.starts_with("Recording; Hotkey for Say hello")),
+        "the cell listens through the window: {label:?}"
+    );
+    let due = recognizer.recording_due().expect("the tap is held");
+    let tap = recognizer.recorded_due(due).expect("the window closed");
+    reported[1].send(recorded_shortcut(tap));
+    settings_cx.run_until_parked();
+    let (label, _) = accessibility(&mut settings_cx);
+    assert_eq!(label.as_deref(), Some("Hotkey for Say hello: Shift"));
 }
