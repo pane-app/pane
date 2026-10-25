@@ -1,7 +1,8 @@
 //! A crash of Pane's extension runtime thread in the native window, on
 //! GPUI's test platform: the window redraws by itself with the explanation,
 //! a custom view open in the crashed runtime closes, Manage extensions shows
-//! why and, after a second crash, restarts it.
+//! why and, after a second crash, restarts it; a toast shown by the call
+//! whose answer the crash lost does not take the place of Pane's error.
 //!
 //! Faults are injected in debug builds only.
 #![cfg(debug_assertions)]
@@ -10,7 +11,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use gpui::{Entity, TestAppContext, VisualTestContext, prelude::*};
+use gpui::{Entity, Modifiers, MouseButton, TestAppContext, VisualTestContext, prelude::*, px};
 use pane::LauncherWindow;
 use pane_core::develop::Toolchains;
 use pane_core::{Fault, Launcher, LauncherView, Runtime, RuntimeStatus, Screen, Status};
@@ -24,7 +25,7 @@ use settle::{enter_flow, settle, settle_shown};
 #[path = "support/packages.rs"]
 mod packages;
 
-use packages::color_package;
+use packages::{assembled_package, color_package};
 
 /// A window whose launcher tells it of background changes, as Pane's does,
 /// with the package in `folder` installed.
@@ -176,4 +177,127 @@ fn a_runtime_crash_is_explained_and_the_runtime_restarted_from_the_window(cx: &m
     press_enter_on(&window, cx, "Say hello");
     let shown = settle_shown(&window, cx);
     assert!(matches!(shown, Status::Result(_)), "{shown:?}");
+}
+
+/// Moves the pointer off the window.
+fn pointer_leaves(cx: &mut VisualTestContext) {
+    cx.simulate_mouse_move(
+        gpui::point(px(-100.), px(-100.)),
+        None::<MouseButton>,
+        Modifiers::none(),
+    );
+    cx.run_until_parked();
+}
+
+/// Lets `time` pass on the test clock, and the window draw what it
+/// changed.
+fn wait(time: Duration, cx: &mut VisualTestContext) {
+    cx.executor().advance_clock(time);
+    cx.run_until_parked();
+}
+
+/// A window with the settings sample installed, its Greeting command
+/// open, and the pointer off the window.
+fn at_greeting<'a>(
+    cx: &'a mut TestAppContext,
+    sources: &TempDir,
+    data: &TempDir,
+) -> (Entity<LauncherWindow>, &'a mut VisualTestContext, Runtime) {
+    let folder = assembled_package("sample-settings", &sources.path().join("settings"));
+    let (window, cx, runtime) = open(cx, data, &folder);
+    settle(&window, cx);
+    pointer_leaves(cx);
+    press_enter_on(&window, cx, "Greeting");
+    (window, cx, runtime)
+}
+
+/// Runs Count with the runtime made to crash once Count has run (and
+/// shown its toast, "Counted …"), before its answer is sent, and waits
+/// until the window shows that the answer was lost.
+fn count_and_lose_the_answer(
+    runtime: &Runtime,
+    window: &Entity<LauncherWindow>,
+    cx: &mut VisualTestContext,
+) {
+    runtime.inject(Fault::CrashBeforeAnswer {
+        item: "count".into(),
+    });
+    press_enter_on(window, cx, "Count");
+    crashed(
+        runtime,
+        window,
+        cx,
+        |status| matches!(status, RuntimeStatus::Restarted { .. }),
+        "does not run this again",
+        |screen| matches!(screen, Screen::Command),
+    );
+}
+
+/// The toast a call showed before the runtime lost its answer does not
+/// take the place of Pane's error (#527), here when the window draws the
+/// error first: the error shows, and once it has had its time the footer
+/// is at rest — Count's toast does not come back.
+#[gpui::test]
+fn a_lost_calls_toast_does_not_follow_the_runtime_error(cx: &mut TestAppContext) {
+    let (sources, data) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let (window, cx, runtime) = at_greeting(cx, &sources, &data);
+
+    count_and_lose_the_answer(&runtime, &window, cx);
+
+    assert!(cx.debug_bounds("status-error").is_some());
+    assert!(
+        cx.debug_bounds("toast-success").is_none(),
+        "not Count's toast"
+    );
+    wait(Duration::from_millis(3100), cx);
+    let view = settle(&window, cx);
+    assert_eq!(view.status, Status::Idle, "the error had its time");
+    let launcher = cx.read_entity(&window, |window, _| window.launcher().clone());
+    assert_eq!(launcher.toast(), None);
+    assert!(cx.debug_bounds("toast").is_none(), "{view:?}");
+}
+
+/// The other order (#527): a toast of Count's is drawn first, with the
+/// pointer over it, and then the runtime loses Count's next answer. Pane's
+/// error takes the footer at once, and however long the pointer rests
+/// there, no toast of Count's comes back under it to be held: main run
+/// 40110558671's macOS frame 203 showed "Counted 2" for the whole 15
+/// seconds it was taken in, the error having had its time.
+#[gpui::test]
+fn a_hovered_toast_gives_way_to_the_runtime_error(cx: &mut TestAppContext) {
+    let (sources, data) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let (window, cx, runtime) = at_greeting(cx, &sources, &data);
+    press_enter_on(&window, cx, "Count");
+    let over = cx
+        .debug_bounds("toast")
+        .expect("Count's toast is drawn")
+        .center();
+    assert!(cx.debug_bounds("toast-success").is_some());
+    cx.simulate_mouse_move(over, None::<MouseButton>, Modifiers::none());
+    cx.run_until_parked();
+
+    count_and_lose_the_answer(&runtime, &window, cx);
+
+    assert!(cx.debug_bounds("status-error").is_some());
+    assert!(
+        cx.debug_bounds("toast-success").is_none(),
+        "not Count's toast"
+    );
+    // The error has its time, and the pointer is over the footer again, as
+    // a resting pointer is found over whatever the footer draws next.
+    wait(Duration::from_millis(3100), cx);
+    cx.simulate_mouse_move(over, None::<MouseButton>, Modifiers::none());
+    cx.run_until_parked();
+    let launcher = cx.read_entity(&window, |window, _| window.launcher().clone());
+    wait(Duration::from_secs(10), cx);
+    let view = settle(&window, cx);
+    assert_eq!(launcher.toast(), None, "{view:?}");
+    assert!(cx.debug_bounds("toast-success").is_none(), "{view:?}");
+
+    pointer_leaves(cx);
+    wait(Duration::from_millis(3100), cx);
+    let view = settle(&window, cx);
+    assert_eq!(view.status, Status::Idle, "the error had its time");
+    assert_eq!(launcher.toast(), None);
+    assert!(cx.debug_bounds("toast").is_none(), "{view:?}");
 }

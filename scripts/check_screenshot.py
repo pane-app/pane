@@ -35,6 +35,7 @@ Usage: python3 scripts/check_screenshot.py <png> <role or hex color> [min pixels
        python3 scripts/check_screenshot.py <png> answer
        python3 scripts/check_screenshot.py <png> progress|subtitle [min pixels]
        python3 scripts/check_screenshot.py --preview <png>
+       python3 scripts/check_screenshot.py --root <png>
 
 Selected rows must contain a broad connected wash, not just similarly colored
 text or icons. A computed answer is drawn as a card instead: selected, it
@@ -44,7 +45,8 @@ at least a card tall. Host color roles are hint, details, success, error and war
 progress and subtitle additionally restrict the region being checked.
 Literal hex colors remain available for extension-authored drawings.
 --preview waits for visible metadata below the package heading
-at the default startup size, where root search's header is empty. These are
+at the default startup size, where root search's header is empty; --root
+waits for root search, the one screen with no back button. These are
 behavior checks, not dark/light or native material acceptance evidence.
 """
 import sys
@@ -295,17 +297,15 @@ def answer(path: str) -> None:
     print(f"{path}: selected answer card wash contains {len(region)} pixels")
 
 
-def preview(path: str) -> None:
-    """Positive evidence of the package preview before Enter.
+def back_button(path: str) -> tuple[int, int]:
+    """How many pixels of the back button's place are its fill, and how
+    many a filled button takes at least.
 
-    Only used immediately after --install at the 760-logical-pixel startup
-    width. Scale from the screenshot for Retina/Windows DPI. Since #529 the
-    preview has the top bar in the search header's place: its back button,
-    a filled rounded square, where root search draws only its magnifier's
-    strokes on the header. (The details line the check used to find sat
-    under the old heading, which the 64px top bar now covers; the title
-    beside the button is too thin a sign on Linux, whose glyphs count a
-    handful of pixels.)
+    Every screen but root search has a back button in the magnifier's
+    place (#469, #482, #529): a filled rounded square, where root search
+    draws only its magnifier's strokes on the header. Measured at the
+    760-logical-pixel startup width, scaled from the screenshot for
+    Retina/Windows DPI.
     """
     window = pane_window(path)
     scale = window.width / 760
@@ -316,9 +316,36 @@ def preview(path: str) -> None:
     # r 41-44 on Linux and 38-56 on Windows, and a blank root search none.
     count = sum(1 for pixel in pixels_of(box)
                 if panel_surface(pixel) and pixel[0] >= 37)
-    if count < box.width * box.height // 3:
+    return count, box.width * box.height // 3
+
+
+def preview(path: str) -> None:
+    """Positive evidence of the package preview before Enter.
+
+    Only used immediately after --install. Since #529 the preview has the
+    top bar in the search header's place, with its back button
+    ([`back_button`]). (The details line the check used to find sat
+    under the old heading, which the 64px top bar now covers; the title
+    beside the button is too thin a sign on Linux, whose glyphs count a
+    handful of pixels.)
+    """
+    count, filled = back_button(path)
+    if count < filled:
         raise SystemExit(f"{path}: package preview's back button not yet visible ({count} pixels)")
     print(f"{path}: package preview's back button visible ({count} pixels)")
+
+
+def root(path: str) -> None:
+    """Evidence that the launcher shows root search: its window is drawn
+    with no back button in the magnifier's place ([`back_button`]), which
+    every other screen has. A smoke waits for it after the return to root
+    key before typing a query (#527)."""
+    count, filled = back_button(path)
+    # Root search draws none of the fill; a quarter of a button's is left
+    # for a stray antialiased pixel.
+    if count >= filled // 4:
+        raise SystemExit(f"{path}: not root search yet (a back button, {count} pixels)")
+    print(f"{path}: root search (no back button)")
 
 
 def absent(path: str, color: str, allowance: int = 5) -> int:
@@ -350,5 +377,7 @@ if __name__ == "__main__":
         locate(sys.argv[2], sys.argv[3])
     elif sys.argv[1] == "--preview":
         preview(sys.argv[2])
+    elif sys.argv[1] == "--root":
+        root(sys.argv[2])
     else:
         main(sys.argv[1], sys.argv[2], *(int(n) for n in sys.argv[3:4]))

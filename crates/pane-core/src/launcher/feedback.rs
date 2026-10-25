@@ -26,7 +26,9 @@
 //! the window deactivated or hid meanwhile or not; an animated toast stays
 //! until it is updated or hidden, or until the window deactivates or hides
 //! ([`Launcher::window_deactivated`]). Updating a toast that left shows it
-//! again. Choosing
+//! again. When the extension runtime crashes or stops responding, an
+//! extension's toast goes with it, so a toast of a call whose answer was
+//! lost never takes the place of Pane's explanation (#527). Choosing
 //! one of its actions calls its command's `handle-event` with the action's
 //! callback id, as an item's action does ([`Launcher::run_toast_action`]).
 //!
@@ -787,6 +789,20 @@ impl Launcher {
             command.map(str::to_owned),
             toast,
         );
+    }
+
+    /// Drops the launcher's toast if an extension's command showed it (or
+    /// it is Pane's failure toast for one): Pane's own toasts, of no
+    /// command, stay. Its command can no longer update it.
+    pub(super) fn drop_extension_toast(&self, state: &mut State) {
+        let extensions = state
+            .feedback
+            .toast
+            .as_ref()
+            .is_some_and(|current| !current.owner.as_os_str().is_empty());
+        if extensions {
+            state.feedback.toast = None;
+        }
     }
 
     /// Hides the toast of the command in `component` if it is still in the

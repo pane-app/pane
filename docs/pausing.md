@@ -212,6 +212,12 @@ caused a runtime crash, so it blames none.
   again by itself". None is sent again: an action that saved before its
   answer was lost stays done once, and running it again is the user's
   choice.
+- An extension's toast goes with the thread (#527). A call may show a
+  toast before its answer is lost (Count shows "Counted 2", then the
+  crash): Pane's explanation takes the footer whatever the window drew
+  first, the pointer resting on a toast holds the explanation rather than
+  the toast, and once the explanation has had its time no toast of the
+  lost call comes back. Pane's own toasts stay.
 - Its guest instances, custom views and streams go with the thread. A
   custom view on screen closes, returning to its command; a command's list
   and a form stay open (their next call starts a fresh instance).
@@ -812,13 +818,17 @@ next quits cleanly and starts again.
   - a second crash soon after stops it until **Restart the extension
     runtime**;
   - the settings sample's **Count**, whose answer a crash lost after it
-    saved, is not run again.
+    saved, is not run again, and the toast it showed first goes with the
+    runtime.
 - [`runtime.rs`](../crates/pane-core/src/runtime.rs) checks that a
   restarted thread never reuses a view id.
 - `runtime/supervisor.rs` tests the restart window with explicit times.
 - [`crates/pane/tests/runtime_crash.rs`](../crates/pane/tests/runtime_crash.rs):
   in the window, a crash closes the open custom view and redraws with the
-  explanation; the details and Restart rows render and work.
+  explanation; the details and Restart rows render and work; Count's
+  toast never takes the place of the error a lost answer shows, whether
+  the error is drawn first or a toast of Count's is drawn first with the
+  pointer over it.
 - The native smokes' runtime-crash phase (frames 200 to 209) does the
   same with real key events.
 

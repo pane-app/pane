@@ -86,6 +86,12 @@ impl Launcher {
             Screen::RuntimeDetails { .. } => self.keep_runtime_details(&mut state),
             _ => {}
         }
+        // A toast an extension showed goes with the runtime that ran it
+        // (#527): the call that showed it may be the one whose answer was
+        // lost (Count's "Counted 2", shown just before the crash), and the
+        // explanation must not give way to it once its own time has run,
+        // nor be kept from the user by a toast the pointer holds.
+        self.drop_extension_toast(&mut state);
         state.view.status = toast;
         drop(state);
         self.changed();
