@@ -296,7 +296,7 @@ impl State {
                 REOPENINGS
                     .iter()
                     .find(|&&(reopening, ..)| reopening == chosen)
-                    .map_or("RestoreView", |&(.., id)| id)
+                    .map_or("After90Seconds", |&(.., id)| id)
             },
             |id, cx| {
                 if let Some(&(reopening, ..)) = REOPENINGS.iter().find(|&&(.., of)| of == id) {

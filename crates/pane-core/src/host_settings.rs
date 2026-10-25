@@ -115,17 +115,16 @@ pub enum OpeningMonitor {
 /// Pane hotkey or by Escape at root search with an empty query — never
 /// quits Pane, and what the next opening starts from is this choice.
 ///
-/// The default restores a still-valid view, as the settings
-/// specification proposes provisionally; a view that is no longer valid —
-/// its command removed or its extension disabled — returns safely to
-/// root search either way.
+/// The default is Raycast's: restore a still-valid view when the launcher
+/// comes back within 90 seconds, start from root search otherwise. A view
+/// that is no longer valid — its command removed or its extension
+/// disabled — returns safely to root search whatever the choice.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Reopening {
     /// Show the view the launcher was left on, when it is still valid:
     /// never pop to root search.
     #[serde(rename = "restore-view")]
-    #[default]
     RestoreView,
     /// Start from root search, with an empty query, whatever was left.
     #[serde(rename = "root-search")]
@@ -133,6 +132,7 @@ pub enum Reopening {
     /// Restore the view if the launcher was hidden for less than 90
     /// seconds, start from root search otherwise.
     #[serde(rename = "after-90-seconds")]
+    #[default]
     After90Seconds,
     /// As [`Reopening::After90Seconds`], after 3 minutes.
     #[serde(rename = "after-3-minutes")]
@@ -467,7 +467,12 @@ impl HostSettings {
             show_taskbar: recorded.show_taskbar,
             launch_at_login: recorded.launch_at_login,
             opening_monitor: recorded.opening_monitor,
-            reopening: recorded.reopening,
+            reopening: recorded
+                .pop_to_root
+                .or(recorded
+                    .reopening
+                    .filter(|&old| old != Reopening::RestoreView))
+                .unwrap_or_default(),
             keyboard,
             window_mode: recorded.window_mode,
             compact_pinned: recorded.compact_pinned,
@@ -507,7 +512,8 @@ impl HostSettings {
             show_taskbar: self.show_taskbar,
             launch_at_login: self.launch_at_login,
             opening_monitor: self.opening_monitor,
-            reopening: self.reopening,
+            pop_to_root: Some(self.reopening),
+            reopening: None,
             keyboard: Some(self.keyboard.recorded()),
             window_mode: self.window_mode,
             compact_pinned: self.compact_pinned,
@@ -528,7 +534,8 @@ impl HostSettings {
 }
 
 /// The settings as the record holds them. Every field is written every
-/// time; missing fields read as the defaults. The record's fields are
+/// time, but for the old `reopening` one; missing fields read as the
+/// defaults. The record's fields are
 /// named as the house records name theirs, in camelCase.
 #[derive(serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -564,10 +571,20 @@ struct Recorded {
     /// provisional default.
     #[serde(default)]
     opening_monitor: OpeningMonitor,
-    /// What reopening the launcher shows; missing means restoring a
-    /// still-valid view, the provisional default.
-    #[serde(default)]
-    reopening: Reopening,
+    /// What reopening the launcher shows, as the Launcher page's Pop to
+    /// root search records it; missing means Raycast's default, after 90
+    /// seconds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pop_to_root: Option<Reopening>,
+    /// The same choice as Pane 0.1.2 and earlier recorded it, read when the
+    /// record has no `popToRoot` and never written. Those Panes defaulted
+    /// to `restore-view` (Never) and wrote every field on every save, so a
+    /// recorded `restore-view` is almost always the old default saved with
+    /// some other change, not a choice: it reads as the new default, as a
+    /// user who never touched the setting has it in Raycast. Any other
+    /// value was chosen and is kept.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    reopening: Option<Reopening>,
     /// The in-app navigation bindings, each action's id mapped to its
     /// binding's id, as [`Keyboard::recorded`] writes them; missing means
     /// this system's provisional defaults. An unknown action, a binding
@@ -697,7 +714,7 @@ mod tests {
         for field in [
             "\"background\": \"background-1.jpg\"",
             "\"backgroundEffect\": \"halftone\"",
-            "\"reopening\": \"after-90-seconds\"",
+            "\"popToRoot\": \"after-90-seconds\"",
             "\"windowMode\": \"compact\"",
             "\"compactPinned\": true",
             "\"pinnedLayout\": \"vertical\"",
@@ -787,9 +804,10 @@ mod tests {
             "the record is {text}"
         );
         assert!(
-            text.contains("\"reopening\": \"root-search\""),
+            text.contains("\"popToRoot\": \"root-search\""),
             "the record is {text}"
         );
+        assert!(!text.contains("\"reopening\""), "the record is {text}");
         // A record without the fields is one an older Pane wrote: the
         // defaults, not an error.
         assert_eq!(
@@ -798,7 +816,47 @@ mod tests {
         );
         assert_eq!(
             reading(r#"{ "version": 1 }"#).unwrap().reopening,
-            super::Reopening::RestoreView
+            super::Reopening::After90Seconds
+        );
+    }
+
+    #[test]
+    fn pop_to_root_defaults_to_after_90_seconds_and_an_explicit_never_is_kept() {
+        use super::Reopening;
+
+        // Raycast's default, for a fresh installation.
+        assert_eq!(HostSettings::default().reopening, Reopening::After90Seconds);
+        // Never, chosen in this Pane, is recorded as a choice and kept.
+        let dir = tempfile::tempdir().unwrap();
+        let never = HostSettings {
+            reopening: Reopening::RestoreView,
+            ..HostSettings::default()
+        };
+        never.save(dir.path()).unwrap();
+        assert_eq!(HostSettings::open(dir.path()).unwrap(), never);
+        // An older Pane's field: its `restore-view` was the old default it
+        // wrote with every save, so it reads as the new default; the other
+        // values were chosen and are kept.
+        for (old, reads) in [
+            ("restore-view", Reopening::After90Seconds),
+            ("root-search", Reopening::RootSearch),
+            ("after-90-seconds", Reopening::After90Seconds),
+            ("after-3-minutes", Reopening::After3Minutes),
+        ] {
+            assert_eq!(
+                reading(&format!(r#"{{ "version": 2, "reopening": "{old}" }}"#))
+                    .unwrap()
+                    .reopening,
+                reads,
+                "{old}"
+            );
+        }
+        // The new field wins over the old one.
+        assert_eq!(
+            reading(r#"{ "version": 2, "reopening": "root-search", "popToRoot": "restore-view" }"#)
+                .unwrap()
+                .reopening,
+            Reopening::RestoreView
         );
     }
 
@@ -1067,6 +1125,7 @@ mod tests {
             r#"{ "version": 1, "launchAtLogin": "yes" }"#,
             r#"{ "version": 1, "openingMonitor": "nearest" }"#,
             r#"{ "version": 1, "reopening": "blank" }"#,
+            r#"{ "version": 1, "popToRoot": "blank" }"#,
         ] {
             assert!(reading(text).is_err(), "{text} half-loads");
         }

@@ -584,10 +584,10 @@ fn reopening_restores_the_view_and_focuses_its_search_by_default(cx: &mut TestAp
     placement.layout(Some(Point { x: 100., y: 100. }), None);
     let (window, cx) = open(cx, Some(data.path()), &placement);
 
-    // A query typed into root search, then a dismissal: the default — the
-    // parent specification's provisional one — restores the view the
-    // launcher was left on, with its search focused, so typing lands in
-    // the query. Nothing is dispatched by the reopening.
+    // A query typed into root search, then a dismissal and a quick return:
+    // the default, After 90 seconds, restores the view the launcher was
+    // left on, with its search focused, so typing lands in the query.
+    // Nothing is dispatched by the reopening.
     cx.simulate_input("zz");
     let view = settle(&window, cx);
     assert_eq!(view.query(), Some("zz"));
@@ -630,7 +630,7 @@ fn choosing_root_search_starts_the_reopening_from_root_search(cx: &mut TestAppCo
     until_record_holds(
         &mut settings_cx,
         data.path(),
-        "\"reopening\": \"root-search\"",
+        "\"popToRoot\": \"root-search\"",
     );
 
     // A query typed, then a dismissal: the reopening starts from root
@@ -667,8 +667,8 @@ fn a_view_whose_command_is_gone_returns_safely_to_root_search(cx: &mut TestAppCo
         cx.add_window_view(|window, cx| LauncherWindow::new(launcher.clone(), window, cx));
 
     // Install the package and open its command: the view is a command's,
-    // which the default reopening restores while its package is installed
-    // and enabled.
+    // which the default reopening restores on a quick return while its
+    // package is installed and enabled.
     let installing = launcher.install_package(&folder);
     cx.foreground_executor().block_on(installing);
     // Typing the query redraws the window, which the install finished
@@ -794,7 +794,7 @@ fn the_recorded_choices_are_applied_by_a_fresh_application(cx: &mut TestAppConte
     until_record_holds(
         &mut settings_cx,
         data.path(),
-        "\"reopening\": \"root-search\"",
+        "\"popToRoot\": \"root-search\"",
     );
 
     // A fresh application over the same data folder: a new app, nothing
@@ -885,7 +885,7 @@ fn a_save_that_fails_is_reported_and_the_shown_choice_stays_what_was_saved(
     // rolled the reopening choice back to the default.
     let tree = a11y(&mut settings_cx);
     assert!(
-        tree.contains("\"value\": \"Never\""),
+        tree.contains("\"value\": \"After 90 seconds\""),
         "the shown choice is the one that was saved, {tree}"
     );
 
@@ -1054,7 +1054,26 @@ fn pops_to_root_after(
 }
 
 #[gpui::test]
-fn after_90_seconds_restores_a_quick_return_and_pops_a_late_one_to_root(cx: &mut TestAppContext) {
+fn after_90_seconds_is_the_default_and_restores_a_quick_return_and_pops_a_late_one_to_root(
+    cx: &mut TestAppContext,
+) {
+    let data = tempfile::tempdir().unwrap();
+    let placement = Rc::new(FakePlacement::default());
+    placement.layout(None, None);
+    let (window, cx) = open(cx, Some(data.path()), &placement);
+
+    // Nothing chosen: the page shows Raycast's default, After 90 seconds.
+    let (_settings, mut settings_cx) = open_launcher_page(cx);
+    let tree = a11y(&mut settings_cx);
+    assert!(
+        tree.contains("\"value\": \"After 90 seconds\""),
+        "the default is shown, {tree}"
+    );
+    pops_to_root_after(&window, cx, &placement, Duration::from_secs(90));
+}
+
+#[gpui::test]
+fn never_restores_the_view_however_long_the_launcher_was_hidden(cx: &mut TestAppContext) {
     let data = tempfile::tempdir().unwrap();
     let placement = Rc::new(FakePlacement::default());
     placement.layout(None, None);
@@ -1064,10 +1083,22 @@ fn after_90_seconds_restores_a_quick_return_and_pops_a_late_one_to_root(cx: &mut
     choose_reopening(
         &mut settings_cx,
         data.path(),
-        "launcher-reopening-After90Seconds",
-        "\"reopening\": \"after-90-seconds\"",
+        "launcher-reopening-RestoreView",
+        "\"popToRoot\": \"restore-view\"",
     );
-    pops_to_root_after(&window, cx, &placement, Duration::from_secs(90));
+    let default = Shortcut::open_pane_default();
+    cx.simulate_input("zz");
+    assert_eq!(settle(&window, cx).query(), Some("zz"));
+    dismiss(&window, &default, cx, &placement);
+    cx.executor().advance_clock(Duration::from_secs(3600));
+    press(&window, &default, cx);
+    cx.run_until_parked();
+    assert!(!hidden(&window, cx));
+    assert_eq!(
+        settle(&window, cx).query(),
+        Some("zz"),
+        "an hour away still restores the view"
+    );
 }
 
 #[gpui::test]
@@ -1082,7 +1113,7 @@ fn after_3_minutes_restores_a_quick_return_and_pops_a_late_one_to_root(cx: &mut 
         &mut settings_cx,
         data.path(),
         "launcher-reopening-After3Minutes",
-        "\"reopening\": \"after-3-minutes\"",
+        "\"popToRoot\": \"after-3-minutes\"",
     );
     pops_to_root_after(&window, cx, &placement, Duration::from_secs(180));
 }
@@ -1115,8 +1146,8 @@ fn the_delayed_reopening_and_the_vertical_layout_are_applied_by_a_fresh_applicat
     choose_reopening(
         &mut settings_cx,
         data.path(),
-        "launcher-reopening-After90Seconds",
-        "\"reopening\": \"after-90-seconds\"",
+        "launcher-reopening-After3Minutes",
+        "\"popToRoot\": \"after-3-minutes\"",
     );
     settings_cx.simulate_keystrokes(find_shortcut());
     settings_cx.simulate_input("pinned");
@@ -1161,8 +1192,13 @@ fn the_delayed_reopening_and_the_vertical_layout_are_applied_by_a_fresh_applicat
         "no strip in the vertical layout"
     );
 
-    // And the reopening waits 90 seconds before starting from root search.
-    pops_to_root_after(&window, fresh_cx, &fresh_placement, Duration::from_secs(90));
+    // And the reopening waits 3 minutes before starting from root search.
+    pops_to_root_after(
+        &window,
+        fresh_cx,
+        &fresh_placement,
+        Duration::from_secs(180),
+    );
 }
 
 #[gpui::test]
@@ -2433,7 +2469,7 @@ fn a_popup_reopened_during_its_exit_retargets_and_blocks_nothing(cx: &mut TestAp
     );
     click(&mut sc, "launcher-reopening-RootSearch");
     sc.run_until_parked();
-    until_record_holds(&mut sc, data.path(), "\"reopening\": \"root-search\"");
+    until_record_holds(&mut sc, data.path(), "\"popToRoot\": \"root-search\"");
 }
 
 /// Reduced motion lands the popup at its endpoint with no frame at all:

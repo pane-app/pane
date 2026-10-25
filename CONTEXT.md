@@ -108,6 +108,10 @@ _Avoid_: Item (an item belongs to a command's own list), search hit
 How strict root search's matching is, as the Launcher page records it: Low, Medium or High (the default). The choice applies on the next keystroke, the list the current query has already made staying as it is.
 _Avoid_: Filter, search mode
 
+**Pop to root search**:
+What the launcher shows when it opens again after it was hidden, as the Launcher page records it: root search Immediately, After 90 seconds (the default, as in Raycast) or After 3 minutes hidden, or Never (the view it was left on). A quicker return shows the view it was left on, when it is still valid; a command that closed the launcher asking to keep its screen is shown again whatever the choice.
+_Avoid_: Reopening (the old record field), restore view, reset
+
 **Result kind**:
 What invoking a root result reaches, shown on its row: Command, Application, File, Folder, Link or Fallback. The core derives it from the result's action, never from its title; Folder is a folder the file index found.
 _Avoid_: Type, category
