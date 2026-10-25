@@ -917,7 +917,8 @@ fn a_hud_draws_its_icon_its_title_and_its_message(cx: &mut TestAppContext) {
 }
 
 /// "Close" hides the window; summoned again, the launcher shows the
-/// command's screen, as the Launcher setting's default restores it.
+/// command's screen, as the Launcher setting's default restores it on a
+/// quick return.
 /// "Close to Root Search" returns to root search at once.
 #[gpui::test]
 fn close_hides_the_window_and_its_pop_decides_the_next_showing(cx: &mut TestAppContext) {

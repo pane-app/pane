@@ -1618,6 +1618,21 @@ fn a_form_left_holding_what_the_user_typed_holds_the_restart_pane_makes_by_itsel
 ) {
     let dirs = UpdateDirs::new();
     dirs.running(b"the 0.1.0 program");
+    // Pop to root search at Never, as a Pane that ran before recorded it:
+    // the next showing puts the form back however long Pane waits. At the
+    // default, After 90 seconds, it would be gone before a restart is due.
+    fs::write(
+        dirs.data.path().join("settings.json"),
+        "{ \"version\": 2, \"popToRoot\": \"restore-view\" }",
+    )
+    .unwrap();
+    cx.update(|cx| {
+        pane::settings::init_with_overrides(
+            Some(dirs.data.path().to_owned()),
+            pane::settings::Overrides::default(),
+            cx,
+        )
+    });
     let (launcher, cx) = open_updating_launcher(cx, &dirs, "0.1.0");
     let parent = TempDir::new().unwrap();
     let held = |cx: &mut VisualTestContext| {

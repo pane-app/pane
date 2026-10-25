@@ -472,6 +472,35 @@ input to those calls.
 | Escape | Clear the query; with an empty query, nothing. |
 | Ctrl+K (Cmd+K on macOS; the Keyboard page's Open actions), or the footer's Actions button | Open the selected result's Actions panel, or close it, waiting for the query's list as Enter does ([keys that wait](#keys-that-wait)). |
 
+### Pop to root search
+
+The Launcher page's **Pop to root search** decides what the launcher
+shows when it opens again after it was hidden: the view it was left on
+(a typed search, a command's screen or a form), or root search with an
+empty query. The choices are Raycast's:
+
+- **Immediately**: always root search.
+- **After 90 seconds** (the default, as in Raycast): the view it was
+  left on if the launcher comes back within 90 seconds, root search
+  otherwise.
+- **After 3 minutes**: the same, within 3 minutes.
+- **Never**: the view it was left on, however long it was hidden.
+
+A view that is no longer valid, its command removed or its extension
+disabled, opens on root search whatever the choice. A command that
+closed the launcher and asked to keep its screen is shown again
+whatever the choice; one that asked to pop to root is not
+([ADR 0037](adr/0037-a-command-declares-its-mode-and-host-functions-decide-what-happens-after-it-runs.md)).
+
+The choice is recorded in the settings record as `popToRoot`
+(`root-search`, `after-90-seconds`, `after-3-minutes` or
+`restore-view`). Pane 0.1.2 and earlier recorded it as `reopening`, with
+Never as the default, and wrote it with every saved setting. So Pane
+reads an old record's `restore-view` as the new default, After 90
+seconds, as Raycast users have it; an old record's other values were
+chosen and are kept. Never chosen in this Pane is recorded as
+`popToRoot` and kept.
+
 ### What Enter does
 
 Enter invokes the selected result:
