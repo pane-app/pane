@@ -9,10 +9,11 @@ Unmodified PNGs from `gui-smoke-Linux` artifacts. `package.png` was
 (source `b15cbdb`). These are dark/opaque Linux Xvfb captures at 760 by 460
 panel pixels, surrounded by the 1280 by 800 virtual desktop.
 
-The package preview is visibly ready. Its title, beside the top bar's back
-button, counts 17 pixels nearest the title color in the sampling band (Linux
-draws its glyphs thin; Windows counted 43 in the same run), over the
-10-pixel minimum. The root capture, whose band holds only the search field's
-placeholder in the hint color, counts zero. The regression tests require
+The package preview is visibly ready. The top bar's back button, a filled
+rounded square where root search draws only its magnifier, counts 538
+pixels of the button's gray in the sampling box (Windows counted 519 in the
+same run, under a resting pointer's hover wash), over the 192-pixel minimum.
+The root capture counts 9. (The package's title beside the button was too
+thin a sign: Linux drew 8 to 17 pixels of it.) The regression tests require
 package acceptance and root rejection; no desktop session or application
 launch is needed.

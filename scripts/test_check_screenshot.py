@@ -119,15 +119,15 @@ class ScreenshotChecks(unittest.TestCase):
         with self.assertRaises(SystemExit):
             check.same(first, self.save(image, "hover.png"))
 
-    def test_preview_requires_the_top_bars_title_at_each_scale(self):
+    def test_preview_requires_the_top_bars_back_button_at_each_scale(self):
         image, draw = self.panel()
+        draw.line((52, 56, 64, 68), fill="#86878c", width=2)  # root's magnifier
         draw.rectangle((90, 52, 250, 65), fill="#86878c")  # root placeholder
-        draw.rectangle((90, 110, 250, 112), fill="#ededef")  # a row's title, lower
+        draw.rectangle((48, 110, 72, 134), fill="#2a2b2e")  # a row's tile, lower
         for scale in (1, 2):
             with self.assertRaises(SystemExit):
                 check.preview(self.save(image, scale=scale))
-        draw.rectangle((90, 52, 250, 65), fill="#16171a")  # no placeholder
-        draw.rectangle((90, 55, 200, 60), fill="#ededef")  # the top bar's title
+        draw.rectangle((44, 46, 76, 78), fill="#2a2b2e")  # the top bar's back button
         for scale in (1, 2):
             check.preview(self.save(image, scale=scale))
 

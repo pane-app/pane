@@ -300,26 +300,25 @@ def preview(path: str) -> None:
 
     Only used immediately after --install at the 760-logical-pixel startup
     width. Scale from the screenshot for Retina/Windows DPI. Since #529 the
-    preview has the top bar in the search header's place: its back button
-    where the magnifier is, and the package's title beside it in the title
-    color. On a blank root search the same band holds only the search
-    field's placeholder, in the hint color, so title-colored text there is
-    the preview's. (The details line the check used to find sat under the
-    old heading, which the 64px top bar now covers.)
+    preview has the top bar in the search header's place: its back button,
+    a filled rounded square, where root search draws only its magnifier's
+    strokes on the header. (The details line the check used to find sat
+    under the old heading, which the 64px top bar now covers; the title
+    beside the button is too thin a sign on Linux, whose glyphs count a
+    handful of pixels.)
     """
     window = pane_window(path)
     scale = window.width / 760
-    band = window.crop((round(44 * scale), round(16 * scale),
-                        round(380 * scale), round(48 * scale)))
-    # The title is text, not a solid swatch: Linux glyph rasterization can
-    # leave few pixels within the exact-color tolerance. Use the same
-    # antialias-aware, nearest-palette test as the other text assertions.
-    # Linux draws the title's glyphs thin (CI 40150674331: 17 pixels, 43
-    # on Windows); a blank root search draws none.
-    count = count_near(band, rgb("ededef"))
-    if count < 10:
-        raise SystemExit(f"{path}: package preview title not yet visible ({count} pixels)")
-    print(f"{path}: package preview title visible ({count} pixels)")
+    box = window.crop((round(18 * scale), round(20 * scale),
+                       round(42 * scale), round(44 * scale)))
+    # The button's fill, and its hover wash under a resting pointer, are
+    # lighter grays than the header's own (r 27-34): CI 40152422799 measured
+    # r 41-44 on Linux and 38-56 on Windows, and a blank root search none.
+    count = sum(1 for pixel in pixels_of(box)
+                if panel_surface(pixel) and pixel[0] >= 37)
+    if count < box.width * box.height // 3:
+        raise SystemExit(f"{path}: package preview's back button not yet visible ({count} pixels)")
+    print(f"{path}: package preview's back button visible ({count} pixels)")
 
 
 def absent(path: str, color: str, allowance: int = 5) -> int:
