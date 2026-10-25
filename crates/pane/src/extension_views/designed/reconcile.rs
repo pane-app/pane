@@ -61,6 +61,10 @@ pub(crate) struct DesignedControls {
     /// the nodes' keys: a form's submission reads them while the answers
     /// that carry them have not landed (#241).
     pub(super) sent: HashMap<String, String>,
+    /// The values the view's form held when it first showed one, as a
+    /// submission collects them: the user changed it while what it holds
+    /// now differs (ADR 0051). `None` until a form shows.
+    pub(super) first_values: Option<Vec<(String, pane_core::FormValue)>>,
     /// The window's keystroke observer, while any drawn node asks for key
     /// events (`onKey`).
     keys: Option<Subscription>,
@@ -84,6 +88,7 @@ impl DesignedControls {
             view,
             state: HashMap::new(),
             sent: HashMap::new(),
+            first_values: None,
             keys: None,
         };
         let opened = controls.reconcile(tree, render, window, cx);

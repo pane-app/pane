@@ -33,7 +33,8 @@ use futures::executor::block_on;
 use pane_core::clipboard::ManualClock;
 use pane_core::restart::{Relaunch, Started};
 use pane_core::{
-    ApplicationUpdate, Launcher, ReleaseSource, Runtime, Status, Target, ToastSlot, WindowPresence,
+    ApplicationUpdate, Launcher, ReleaseSource, Reopening, Runtime, Status, Target, ToastSlot,
+    WindowPresence,
 };
 use tempfile::TempDir;
 
@@ -1615,17 +1616,37 @@ fn a_restart_by_itself_waits_for_what_holds_it() {
     assert!(launcher.restart_by_itself_held());
     assert!(dirs.relaunch.started().is_empty());
 
-    // So does a screen other than root search left on display, which a
-    // restart would lose.
-    launcher.manage_extensions();
+    // So does a form left holding what the user changed in it, as the
+    // window noted when it hid, which a restart would lose.
+    let parent = TempDir::new().unwrap();
+    launcher.show_create_form(parent.path());
+    launcher.note_unsaved_input(true, Reopening::RestoreView);
     drop(hold);
     clock.advance(Duration::from_secs(1));
     let_the_schedule_look();
     assert!(launcher.restart_by_itself_held());
     assert!(dirs.relaunch.started().is_empty());
 
-    // Back at root search with nothing held, the next look restarts.
-    assert!(launcher.back());
+    // Not where the next showing pops to root search sooner than the
+    // restart is due anyway, as Raycast's "after 90 seconds" does: the
+    // form is lost either way.
+    launcher.note_unsaved_input(true, Reopening::After90Seconds);
+    assert!(!launcher.restart_by_itself_held());
+    // Nor where the window found the form as it opened.
+    launcher.note_unsaved_input(true, Reopening::RestoreView);
+    assert!(launcher.restart_by_itself_held());
+    launcher.note_unsaved_input(false, Reopening::RestoreView);
+    assert!(!launcher.restart_by_itself_held());
+
+    // Another screen left on display holds nothing: the new version opens
+    // on root search. Pane holds the restart only for the form the
+    // input was typed into.
+    launcher.note_unsaved_input(true, Reopening::RestoreView);
+    launcher.manage_extensions();
+    assert!(!matches!(
+        launcher.view().screen,
+        pane_core::Screen::Root { .. }
+    ));
     assert!(!launcher.restart_by_itself_held());
     clock.advance(Duration::from_secs(1));
     wait_until("the restart by itself", || window.quits() == 1);

@@ -45,12 +45,15 @@
 //! [`IDLE_BEFORE_RESTART`] with an update staged, and nothing is running
 //! that a restart would cut short, Pane restarts into it by itself, the
 //! same way Enter does, and starts the new version hidden (`--hidden`).
-//! It waits while root search is not the screen left on display, while a
-//! command runs or an extension is set up, installed, updated, reloaded
-//! or removed, while clipboard history waits to be written, and while
-//! anything holds it ([`Launcher::hold_restart_by_itself`]: the Settings
-//! window, while it is open). A restart by itself that fails is not tried
-//! again by itself: the row stays for the user to choose.
+//! It waits while a command runs or an extension is set up, installed,
+//! updated, reloaded or removed, while clipboard history waits to be
+//! written, while a form left on display holds what the user changed in it
+//! ([`Launcher::note_unsaved_input`]) or the hotkey screen listens, and
+//! while anything holds it ([`Launcher::hold_restart_by_itself`]: the
+//! Settings window, while it is open). Any other screen left on display
+//! does not hold it: the new version opens on root search, as Raycast pops
+//! back to it after a while hidden. A restart by itself that fails is not
+//! tried again by itself: the row stays for the user to choose.
 //!
 //! **After the restart.** The new version, started with `--updated-from`
 //! ([`Launcher::with_updated_from`]), says "Updated to Pane <version>" the
@@ -72,15 +75,15 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard, Weak};
 use std::time::Duration;
 
 use super::{Changing, Launcher, Screen, State, Status, Unavailable, WeakLauncher, off_thread};
-use crate::Target;
 use crate::application_update::{
     self, Found, InstallFailure, Offer, Program, Record, RecordedFailure, Staged,
 };
-use crate::feedback::{Toast, ToastAction, ToastDoes, ToastStyle, WindowPresence};
+use crate::feedback::{NextShowing, Toast, ToastAction, ToastDoes, ToastStyle, WindowPresence};
 use crate::launcher::Entry;
 use crate::launcher::Row;
 use crate::releases::{Release, ReleaseSource};
 use crate::restart::{self, Relaunch};
+use crate::{Reopening, Target, ViewId};
 
 /// How often Pane checks for a newer version of itself while it runs, and
 /// how old the last check may be before showing the launcher checks again
@@ -191,6 +194,11 @@ pub(in crate::launcher) struct Updates {
     /// How many holds keep Pane from restarting by itself now
     /// ([`Launcher::hold_restart_by_itself`]).
     holds: Arc<AtomicUsize>,
+    /// The form whose fields held what the user changed when the launcher
+    /// last hid, and which the next showing would put back
+    /// ([`Launcher::note_unsaved_input`]): a restart by itself waits while
+    /// it is still the screen left on display.
+    unsaved: Option<FormShown>,
     /// The version a restart by itself failed to start, which Pane does not
     /// try again by itself: the row stays for the user to choose.
     by_itself_failed: Option<String>,
@@ -205,6 +213,26 @@ pub struct RestartHold(Arc<AtomicUsize>);
 impl Drop for RestartHold {
     fn drop(&mut self) {
         self.0.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+/// One form on display, of those whose fields hold what the user typed:
+/// a form Pane itself asks, by its number, or an extension's designed
+/// view, by its id. Another form opened in its place is another.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum FormShown {
+    Pane(u64),
+    Designed(ViewId),
+}
+
+impl FormShown {
+    /// The form `screen` shows, if it shows one.
+    fn on(screen: &Screen) -> Option<FormShown> {
+        match screen {
+            Screen::PaneForm(form) => Some(FormShown::Pane(form.id)),
+            Screen::DesignedView(view) => Some(FormShown::Designed(view.id)),
+            _ => None,
+        }
     }
 }
 
@@ -497,13 +525,20 @@ pub(in crate::launcher) fn busy(state: &State) -> Option<String> {
 }
 
 /// Whether Pane waits to restart into its update by itself, by what
-/// `state` shows: a restart would cut short what is running, or lose a
-/// screen the user left on display (ADR 0051). Clipboard history waiting
+/// `state` shows: a restart would cut short what is running, or lose what
+/// the user typed into a form left on display (ADR 0051). Any other screen
+/// left on display does not hold it: the new version opens on root
+/// search, as Raycast pops back to it after a while hidden. The hotkey
+/// screen holds it while its recorder listens. Clipboard history waiting
 /// to be written is told apart ([`Launcher::clipboard_waits_to_be_written`]).
 fn held_by_state(launcher: &Launcher, state: &State) -> bool {
     busy(state).is_some()
         || !state.changing.is_empty()
-        || !matches!(state.view.screen, Screen::Root { .. })
+        || matches!(state.view.screen, Screen::Hotkey { .. })
+        || state
+            .updates
+            .unsaved
+            .is_some_and(|form| FormShown::on(&state.view.screen) == Some(form))
         || matches!(state.view.status, Status::Running { .. })
         || state.launches.running()
         || state.designed_events.running()
@@ -706,10 +741,32 @@ impl Launcher {
         RestartHold(holds)
     }
 
+    /// Notes, as the launcher hides, whether the form it leaves on display
+    /// holds what the user changed in its fields (`unsaved`) — only the
+    /// window knows what is typed into a field. A restart by itself then
+    /// waits while that form stays on display, unless the next showing
+    /// would not put it back anyway: by the `reopening` choice, the
+    /// launcher pops to root search sooner than a restart by itself is
+    /// due, and no command that closed it asked to keep its screen. A
+    /// typed search, a list or any other screen holds nothing (ADR 0051).
+    pub fn note_unsaved_input(&self, unsaved: bool, reopening: Reopening) {
+        let mut state = self.lock();
+        let pops_first = reopening
+            .pops_after()
+            .is_some_and(|after| after < IDLE_BEFORE_RESTART);
+        let kept = state.feedback.next_showing == NextShowing::Restore || !pops_first;
+        state.updates.unsaved = if unsaved && kept {
+            FormShown::on(&state.view.screen)
+        } else {
+            None
+        };
+    }
+
     /// Whether Pane would wait now to restart into an update by itself,
-    /// were one due: something runs that a restart would cut short, a
-    /// screen other than root search is left on display, or something
-    /// holds it ([`Launcher::hold_restart_by_itself`]). For tests.
+    /// were one due: something runs that a restart would cut short, a form
+    /// left on display holds what the user changed, the hotkey screen
+    /// listens, or something holds it
+    /// ([`Launcher::hold_restart_by_itself`]). For tests.
     #[doc(hidden)]
     pub fn restart_by_itself_held(&self) -> bool {
         self.clipboard_waits_to_be_written() || held_by_state(self, &self.lock())

@@ -1711,6 +1711,13 @@ impl LauncherWindow {
         // A toast shown from now on is a HUD (#141), and a confirmation
         // shown is answered as not confirmed (#146).
         self.launcher.set_window_presence(WindowPresence::Hidden);
+        // A form left holding what the user changed keeps Pane from
+        // restarting into an update by itself while it stays, where the
+        // next showing would put it back (ADR 0051). Hidden, nothing is
+        // typed into it until it shows again.
+        let reopening = crate::settings::shared(cx).read(cx).reopening();
+        self.launcher
+            .note_unsaved_input(self.form_changed(cx), reopening);
         self.sync_confirmation(window, cx);
         self.pointer = None;
         // A hidden launcher keeps nothing armed for whatever shows next.
