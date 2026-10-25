@@ -693,7 +693,7 @@ async fn read_events<R: AsyncRead + Unpin>(read: R, events: std::sync::mpsc::Sen
 }
 
 #[cfg(windows)]
-mod platform {
+pub(crate) mod platform {
     use std::io;
     use std::path::{Path, PathBuf};
     use std::time::{Duration, Instant};
@@ -709,12 +709,12 @@ mod platform {
     /// How long a client waits for a pipe instance while every one is busy.
     const BUSY_LIMIT: Duration = Duration::from_secs(5);
 
-    pub(super) fn for_this_user() -> io::Result<PathBuf> {
+    pub(crate) fn for_this_user() -> io::Result<PathBuf> {
         Ok(PathBuf::from(format!(r"\\.\pipe\pane-{}", user_sid()?)))
     }
 
     /// The pipe, with an instance waiting for the next client.
-    pub(super) struct Listener {
+    pub(crate) struct Listener {
         path: PathBuf,
         /// Full control for this user, and nobody else.
         sddl: String,
@@ -722,7 +722,7 @@ mod platform {
     }
 
     impl Listener {
-        pub(super) fn bind(path: &Path) -> io::Result<Listener> {
+        pub(crate) fn bind(path: &Path) -> io::Result<Listener> {
             let sddl = format!("D:P(A;;GA;;;{})", user_sid()?);
             // The first instance: another Pane (or anyone) already
             // listening there makes this fail.
@@ -735,7 +735,7 @@ mod platform {
         }
 
         /// The next client's connection, once one connects.
-        pub(super) async fn accept(&mut self) -> io::Result<NamedPipeServer> {
+        pub(crate) async fn accept(&mut self) -> io::Result<NamedPipeServer> {
             if let Err(error) = self.next.connect().await {
                 self.next = create(&self.path, &self.sddl, false)?;
                 return Err(error);
@@ -760,7 +760,7 @@ mod platform {
         })?
     }
 
-    pub(super) async fn connect(path: &Path) -> io::Result<NamedPipeClient> {
+    pub(crate) async fn connect(path: &Path) -> io::Result<NamedPipeClient> {
         let deadline = Instant::now() + BUSY_LIMIT;
         loop {
             match ClientOptions::new().open(path) {
@@ -775,7 +775,7 @@ mod platform {
 }
 
 #[cfg(unix)]
-mod platform {
+pub(crate) mod platform {
     use std::io;
     use std::os::unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt};
     use std::path::{Path, PathBuf};
@@ -788,7 +788,7 @@ mod platform {
         unsafe { libc::getuid() }
     }
 
-    pub(super) fn for_this_user() -> io::Result<PathBuf> {
+    pub(crate) fn for_this_user() -> io::Result<PathBuf> {
         let runtime = std::env::var_os("XDG_RUNTIME_DIR")
             .filter(|folder| !folder.is_empty())
             .map(PathBuf::from)
@@ -801,13 +801,13 @@ mod platform {
     }
 
     /// The socket, until dropped: its file goes with it.
-    pub(super) struct Listener {
+    pub(crate) struct Listener {
         path: PathBuf,
         listener: UnixListener,
     }
 
     impl Listener {
-        pub(super) fn bind(path: &Path) -> io::Result<Listener> {
+        pub(crate) fn bind(path: &Path) -> io::Result<Listener> {
             if let Some(folder) = folder_of(path) {
                 own_folder(folder)?;
             }
@@ -835,7 +835,7 @@ mod platform {
 
         /// The next connection from this user; another user's is closed
         /// unanswered.
-        pub(super) async fn accept(&mut self) -> io::Result<UnixStream> {
+        pub(crate) async fn accept(&mut self) -> io::Result<UnixStream> {
             loop {
                 let (stream, _) = self.listener.accept().await?;
                 if stream.peer_cred().is_ok_and(|peer| peer.uid() == uid()) {
@@ -853,7 +853,7 @@ mod platform {
 
     /// Makes `folder` (whose parent must exist) the user's alone, or says
     /// why it is not.
-    fn own_folder(folder: &Path) -> io::Result<()> {
+    pub(crate) fn own_folder(folder: &Path) -> io::Result<()> {
         match std::fs::DirBuilder::new().mode(0o700).create(folder) {
             Ok(()) => return Ok(()),
             Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
@@ -867,17 +867,17 @@ mod platform {
     }
 
     /// The folder the socket at `path` is in, if it names one.
-    fn folder_of(path: &Path) -> Option<&Path> {
+    pub(crate) fn folder_of(path: &Path) -> Option<&Path> {
         let folder = path.parent()?;
         (!folder.as_os_str().is_empty()).then_some(folder)
     }
 
     /// Whether `metadata` is of a folder only this user can open.
-    fn is_own(metadata: &std::fs::Metadata) -> bool {
+    pub(crate) fn is_own(metadata: &std::fs::Metadata) -> bool {
         metadata.is_dir() && metadata.uid() == uid() && metadata.mode() & 0o077 == 0
     }
 
-    fn not_own(folder: &Path) -> io::Error {
+    pub(crate) fn not_own(folder: &Path) -> io::Error {
         io::Error::new(
             io::ErrorKind::PermissionDenied,
             format!(
@@ -890,7 +890,7 @@ mod platform {
     /// A connection to the socket at `path`, if its folder is this user's
     /// alone: a folder another user made in the temporary folder first is
     /// not trusted with the builds.
-    pub(super) async fn connect(path: &Path) -> io::Result<UnixStream> {
+    pub(crate) async fn connect(path: &Path) -> io::Result<UnixStream> {
         if let Some(folder) = folder_of(path)
             && let Ok(metadata) = std::fs::symlink_metadata(folder)
             && !is_own(&metadata)

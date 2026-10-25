@@ -1475,6 +1475,39 @@ impl LauncherWindow {
         self.show_until_done(pending, window, cx);
     }
 
+    /// Shows what `pane --install` named for installation: a folder, one
+    /// extension of a collection, an npm package or a Git repository.
+    pub fn preview_install(
+        &mut self,
+        install: &pane_core::instance::Install,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        use pane_core::instance::Install;
+        match install {
+            Install::Folder { folder } => self.preview_package(folder, window, cx),
+            Install::Collection { folder, id } => self.preview_collection(folder, id, window, cx),
+            Install::Npm { spec } => self.preview_npm(spec, window, cx),
+            Install::Git { spec } => self.preview_git(spec, window, cx),
+        }
+    }
+
+    /// Pane was started again while it runs (ADR 0052, #542), or Pane.app
+    /// opened again on macOS: the launcher is summoned, as the tray's Open
+    /// Pane summons it, with what a second `pane --install` named shown for
+    /// installation.
+    pub fn started_again(
+        &mut self,
+        install: Option<&pane_core::instance::Install>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.summon(window, cx);
+        if let Some(install) = install {
+            self.preview_install(install, window, cx);
+        }
+    }
+
     /// Asks for the folder to grant the package with `identity` with the
     /// platform's folder picker, then has Pane check and record it.
     /// Cancelling changes nothing. A debug build run by the native smokes

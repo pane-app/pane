@@ -6,19 +6,8 @@ use std::sync::Arc;
 use gpui::{App, prelude::*};
 use pane::LauncherWindow;
 use pane_core::develop::Toolchains;
+use pane_core::instance::{Install, Request, Started};
 use pane_core::{Launcher, Runtime, local_channel};
-
-/// What `--install` asks to show for installation.
-enum ToPreview {
-    Folder(PathBuf),
-    /// `npm:<name>` or `npm:<name>@<version>`.
-    Npm(String),
-    /// `git:<repository>[@<reference>]`, with `#<id>` naming one extension
-    /// of a collection the repository holds.
-    Git(String),
-    /// One extension of a collection in a folder: `<folder>#<id>`.
-    Collection(PathBuf, String),
-}
 
 /// `pane [--install <folder> | --install <folder>#<id> | --install
 /// npm:<package>[@<version>] | --install git:<repository>[@<reference>]]`:
@@ -34,7 +23,7 @@ enum ToPreview {
 /// into an update checks the program it swapped in.
 /// `pane --launch-at-login` turns on Settings' "Launch Pane at login" as Pane
 /// starts (see [`launch_at_login_asked`]).
-fn package_to_preview() -> Option<ToPreview> {
+fn package_to_preview() -> Option<Install> {
     let mut args = std::env::args_os().skip(1);
     while let Some(arg) = args.next() {
         if arg == "--version" {
@@ -45,18 +34,27 @@ fn package_to_preview() -> Option<ToPreview> {
             let source = args.next()?;
             let text = source.to_str();
             if let Some(spec) = text.and_then(|s| s.strip_prefix("npm:")) {
-                return Some(ToPreview::Npm(spec.to_owned()));
+                return Some(Install::Npm {
+                    spec: spec.to_owned(),
+                });
             }
             if let Some(spec) = text.and_then(|s| s.strip_prefix("git:")) {
-                return Some(ToPreview::Git(spec.to_owned()));
+                return Some(Install::Git {
+                    spec: spec.to_owned(),
+                });
             }
             // A folder path may name one extension of a collection at it:
             // the part after the last `#` is the id (a folder name may hold
             // a `#` of its own, so an id is named after the last one).
             if let Some((folder, id)) = text.and_then(|text| text.rsplit_once('#')) {
-                return Some(ToPreview::Collection(PathBuf::from(folder), id.to_owned()));
+                return Some(Install::Collection {
+                    folder: PathBuf::from(folder),
+                    id: id.to_owned(),
+                });
             }
-            return Some(ToPreview::Folder(PathBuf::from(source)));
+            return Some(Install::Folder {
+                folder: PathBuf::from(source),
+            });
         }
     }
     None
@@ -132,6 +130,38 @@ fn launch_at_login_asked() -> bool {
         .any(|arg| arg == "--launch-at-login")
 }
 
+/// One Pane at a time (ADR 0052, #542), as Raycast runs one: takes the
+/// instance lock of Pane's data folder, which this Pane then holds for as
+/// long as it runs. Where another Pane holds it, this start asks that Pane
+/// to show its launcher — with `preview` shown for installation, for a
+/// second `pane --install` — and exits; a `quiet` start (`--hidden`,
+/// `--launch-at-login`), which would show nothing of its own, exits once
+/// that Pane answers, asking nothing. A Pane still quitting holds the lock
+/// for a moment without answering, and this start takes it once it is
+/// free. `None` where the lock could not be taken, or its holder never
+/// answered: Pane then runs anyway, saying why.
+fn claim_instance(preview: Option<&Install>, quiet: bool) -> Option<pane_core::instance::Instance> {
+    let key = pane_core::instance::key(&pane::data_dir().unwrap_or_default());
+    let request = (!quiet).then(|| Request::Show {
+        install: preview.cloned().map(Install::absolute),
+    });
+    let limit = pane_core::instance::ANSWER_LIMIT;
+    match pane_core::instance::start(&key, request.as_ref(), limit) {
+        Ok(Started::First(instance)) => Some(instance),
+        Ok(Started::Answered) => std::process::exit(0),
+        Ok(Started::Unanswered(error)) => {
+            pane_core::diagnostic!(
+                "Another Pane holds this data folder and did not answer, so this one runs too: {error}"
+            );
+            None
+        }
+        Err(error) => {
+            pane_core::diagnostic!("Pane could not tell whether another Pane runs: {error}");
+            None
+        }
+    }
+}
+
 /// For the native smoke of the system functions: reveals the file
 /// `PANE_TEST_REVEAL` names and moves the one `PANE_TEST_TRASH` names to the
 /// Recycle Bin, as a command's `reveal` and `trash` do, and writes what each
@@ -187,6 +217,20 @@ fn main() {
     if let Some(waited) = restarted.wait_pid {
         hand_over(waited);
     }
+    // One Pane at a time (ADR 0052): a second start shows the running
+    // Pane's launcher and exits here, before it writes anything. This one
+    // holds the lock for as long as it runs, and listens for later starts
+    // at once, so a start while this one is still starting is answered as
+    // soon as the window is up.
+    let instance = claim_instance(preview.as_ref(), restarted.hidden || launch_at_login);
+    let started_again = instance.as_ref().and_then(|instance| {
+        instance
+            .listen()
+            .map_err(|error| {
+                pane_core::diagnostic!("A second start cannot reach this Pane: {error}");
+            })
+            .ok()
+    });
     // Whether this start is an update (ADR 0050): the version it runs is
     // recorded in the data folder, and one newer than the last start's
     // lists What's New for a day — an update the setup installed too. Read
@@ -216,6 +260,24 @@ fn main() {
     // even for a moment.
     #[cfg(target_os = "macos")]
     let application = application.with_activation_policy(gpui::MacActivationPolicy::Accessory);
+    // Opening Pane.app while it runs reaches this Pane through Launch
+    // Services, which never starts a second process of a bundle: it shows
+    // the launcher, as a second start does elsewhere (ADR 0052).
+    let launcher_window: std::rc::Rc<std::cell::Cell<Option<gpui::WindowHandle<LauncherWindow>>>> =
+        std::rc::Rc::new(std::cell::Cell::new(None));
+    #[cfg(target_os = "macos")]
+    {
+        let launcher_window = launcher_window.clone();
+        application.on_reopen(move |cx| {
+            if let Some(window) = launcher_window.get() {
+                let _ = window.update(cx, |launcher: &mut LauncherWindow, window, cx| {
+                    launcher.started_again(None, window, cx)
+                });
+            }
+        });
+    }
+    // Held, and the system lets go of it, until Pane ends.
+    let _instance = instance;
     application.run(move |cx: &mut App| {
         // Pane's own settings — the appearance preferences recorded in
         // settings.json, with the PANE_THEME/PANE_MATERIAL development
@@ -512,19 +574,30 @@ fn main() {
             cx.new(|cx| {
                 let mut launcher = LauncherWindow::new(launcher, window, cx);
                 launcher.follow_changes(changes, window, cx);
-                match &preview {
-                    Some(ToPreview::Folder(folder)) => launcher.preview_package(folder, window, cx),
-                    Some(ToPreview::Collection(folder, id)) => {
-                        launcher.preview_collection(folder, id, window, cx)
-                    }
-                    Some(ToPreview::Npm(spec)) => launcher.preview_npm(spec, window, cx),
-                    Some(ToPreview::Git(spec)) => launcher.preview_git(spec, window, cx),
-                    None => {}
+                if let Some(install) = &preview {
+                    launcher.preview_install(install, window, cx);
                 }
                 launcher
             })
         })
         .expect("failed to open the Pane window");
+        launcher_window.set(Some(window));
+        // A later start of Pane, which exited once this one answered it:
+        // the launcher is shown, with the install preview a second
+        // `pane --install` named (ADR 0052).
+        if let Some(mut started_again) = started_again {
+            cx.spawn(async move |cx| {
+                while let Some(Request::Show { install }) = started_again.next().await {
+                    let shown = window.update(cx, |launcher, window, cx| {
+                        launcher.started_again(install.as_ref(), window, cx)
+                    });
+                    if shown.is_err() {
+                        break;
+                    }
+                }
+            })
+            .detach();
+        }
         if !shown {
             window
                 .update(cx, |launcher, window, cx| launcher.start_hidden(window, cx))

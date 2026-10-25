@@ -64,6 +64,12 @@ Installed packages go in Pane's data folder:
 
 Set `PANE_DATA_DIR` to another folder to keep test installs out of it. The GUI smoke scripts use `<output-dir>/data`.
 
+## One Pane at a time
+
+As with Raycast, one Pane runs on a data folder ([ADR 0052](adr/0052-a-second-start-shows-the-running-pane-and-exits.md)). Starting Pane again while it runs (from Start, the setup's last page, a terminal, or `Pane.app` on macOS) shows the running Pane's launcher, and the new process exits. `pane --install <source>` started again shows the package for installation in the running Pane. A second start with `--hidden` or `--launch-at-login` exits without showing anything.
+
+To run a development Pane beside an installed one, give it a data folder of its own with `PANE_DATA_DIR`. To develop extensions against it with `pane-ext dev`, also give both a channel of their own with `PANE_CHANNEL` ([development mode](development-mode.md)).
+
 ## Repository layout
 
 - `wit/extension.wit`: the host/guest contract for one extension command: a list view, item actions, [forms](forms.md) and [designed views](designed-tree.md) (whose canvas is what a custom view was).
