@@ -48,13 +48,14 @@ mod windows {
 
     use gpui::{App, MouseDownEvent, Window};
     use raw_window_handle::{HasWindowHandle, RawWindowHandle};
-    use windows::Win32::Foundation::{HWND, LPARAM, POINT, WPARAM};
+    use windows::Win32::Foundation::{HWND, LPARAM, POINT, RECT, WPARAM};
     use windows::Win32::UI::Input::KeyboardAndMouse::{
         GetAsyncKeyState, GetKeyState, ReleaseCapture, VK_LBUTTON, VK_RBUTTON,
     };
     use windows::Win32::UI::WindowsAndMessaging::{
-        GetCursorPos, GetMessagePos, GetSystemMetrics, HTCAPTION, PostMessageW, SC_MOVE, SM_CXDRAG,
-        SM_CYDRAG, SM_SWAPBUTTON, WM_SYSCOMMAND,
+        GetCursorPos, GetMessagePos, GetSystemMetrics, GetWindowRect, HTCAPTION, IsZoomed,
+        PostMessageW, SC_MOVE, SM_CXDRAG, SM_CYDRAG, SM_SWAPBUTTON, SWP_NOACTIVATE, SWP_NOSIZE,
+        SWP_NOZORDER, SetWindowPos, WM_SYSCOMMAND,
     };
 
     /// How often a held press looks at the pointer: about a frame.
@@ -81,8 +82,8 @@ mod windows {
         let from = press_point();
         cx.spawn(async move |cx: &mut gpui::AsyncApp| {
             while held() {
-                if moved_past_drag_distance(from) {
-                    begin_move(hwnd, from);
+                if let Some(to) = moved_past_drag_distance(from) {
+                    begin_move(hwnd, from, to);
                     return;
                 }
                 cx.background_executor().timer(LOOK).await;
@@ -131,30 +132,47 @@ mod windows {
         }
     }
 
-    /// Whether the pointer is further from `from` than the system's drag
-    /// distance, the one its own drag detection uses.
-    fn moved_past_drag_distance(from: POINT) -> bool {
+    /// Where the pointer is, if it is further from `from` than the
+    /// system's drag distance, the one its own drag detection uses.
+    fn moved_past_drag_distance(from: POINT) -> Option<POINT> {
         let mut now = POINT::default();
         // SAFETY: `now` is a live point to write; the rest only read the
         // system's metrics.
         unsafe {
-            if GetCursorPos(&mut now).is_err() {
-                return false;
-            }
-            (now.x - from.x).abs() > GetSystemMetrics(SM_CXDRAG) / 2
-                || (now.y - from.y).abs() > GetSystemMetrics(SM_CYDRAG) / 2
+            GetCursorPos(&mut now).ok()?;
+            ((now.x - from.x).abs() > GetSystemMetrics(SM_CXDRAG) / 2
+                || (now.y - from.y).abs() > GetSystemMetrics(SM_CYDRAG) / 2)
+                .then_some(now)
         }
     }
 
-    /// Begins the system's move of the window by its caption, from the
-    /// press's point, as the press itself would have: posted, so the
+    /// Begins the system's move of the window by its caption, the pointer
+    /// having gone from the press's point `from` to `to`: posted, so the
     /// move's own message loop runs outside GPUI's update.
-    fn begin_move(hwnd: Hwnd, from: POINT) {
-        let point = LPARAM((((from.y as u16) as isize) << 16) | (from.x as u16) as isize);
-        // SAFETY: `hwnd` is the Settings window's; a release of a capture
-        // this thread may not hold does nothing, and a post to a window
-        // closed meanwhile fails harmlessly.
+    fn begin_move(hwnd: Hwnd, from: POINT, to: POINT) {
+        let point = LPARAM((((to.y as u16) as isize) << 16) | (to.x as u16) as isize);
+        // SAFETY: `hwnd` is the Settings window's; `rect` is a live
+        // rectangle to write; a release of a capture this thread may not
+        // hold does nothing, and a call on a window closed meanwhile fails
+        // harmlessly.
         unsafe {
+            // The move follows the pointer from where it is as the move
+            // begins, so the window first catches up with the way the
+            // pointer has come since the press: the point grabbed stays
+            // under the pointer. A maximized window is left where it is:
+            // the move restores it under the pointer itself.
+            let mut rect = RECT::default();
+            if !IsZoomed(hwnd.0).as_bool() && GetWindowRect(hwnd.0, &mut rect).is_ok() {
+                let _ = SetWindowPos(
+                    hwnd.0,
+                    None,
+                    rect.left + to.x - from.x,
+                    rect.top + to.y - from.y,
+                    0,
+                    0,
+                    SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
+                );
+            }
             let _ = ReleaseCapture();
             let _ = PostMessageW(
                 Some(hwnd.0),
