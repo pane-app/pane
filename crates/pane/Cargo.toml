@@ -56,6 +56,12 @@ tokio = { workspace = true, features = ["net", "sync"] }
 # (a configure request on the window's own X window); already in the tree
 # through pane-core's X11 adapters.
 x11rb = { workspace = true, features = ["randr"] }
+# The desktop's reduced-motion preference, read and watched through the XDG
+# Settings portal; already in the tree, with these features, through GPUI
+# CE's Linux platform, which reads the color scheme the same way.
+ashpd = { version = "0.13", default-features = false, features = ["async-io", "settings"] }
+# The stream of the portal's setting changes.
+futures.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
 # The displays the launcher's placement reads on macOS (the CoreGraphics
@@ -66,6 +72,15 @@ core-graphics = "0.24"
 # window behind the view; already in the tree through pane-core's macOS
 # adapters.
 objc2.workspace = true
+# The Reduce Motion preference (`NSWorkspace`'s accessibility display
+# options) and the notification that reports its changes, observed with a
+# block on the main queue; already in the tree through pane-core's macOS
+# adapters and GPUI CE's macOS platform.
+objc2-app-kit = { version = "0.3", default-features = false, features = ["NSAccessibility", "NSWorkspace"] }
+objc2-foundation = { version = "0.3", default-features = false, features = ["NSNotification", "NSOperation", "NSString", "block2"] }
+block2 = "0.6"
+# The channel that carries those changes into a task on the app's thread.
+futures.workspace = true
 
 # pane.exe's icon and version information (build.rs): a resource script
 # compiled with the Windows SDK's rc.exe, or llvm-rc when building for

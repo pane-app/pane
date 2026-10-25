@@ -248,6 +248,28 @@ the desktop.
 The retained glass starting tints are 70% dark and 80% light. They are
 not universal contrast guarantees.
 
+### Motion
+
+Pane's transitions (a view opened with the pointer, a Settings section, a
+Shortcuts group, a popup, the number hints) land at once, and the loading
+bar stays still, when the system asks for reduced motion. Pane follows the
+preference while it runs: a change applies on the next frame.
+
+- **Windows**: "Animation effects" in Settings (`UISettings.AnimationsEnabled`).
+  A failed read counts as reduced motion.
+- **macOS**: Reduce Motion in System Settings → Accessibility → Display
+  (`NSWorkspace.accessibilityDisplayShouldReduceMotion`).
+- **Linux**: read through the XDG Settings portal. Motion is reduced when
+  any of these asks for it: the portal's own `org.freedesktop.appearance`
+  `reduced-motion`, GNOME's `enable-animations` (Settings → Accessibility),
+  or KDE's animation speed set to instant (`AnimationDurationFactor` 0 in
+  kdeglobals). A key the desktop exposes but that cannot be read counts as
+  reduced motion. Without a Settings portal, or on a desktop that exposes
+  none of these keys, Pane runs full motion. The portal is asked after
+  startup, so the first moment after launch always runs full motion.
+
+The full policy is in `crates/pane/src/ui/motion.rs`.
+
 ## Validation
 
 The existing window and command-search integration suites exercise real
