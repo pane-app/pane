@@ -151,8 +151,8 @@ to_root() {
 # its title, its page's switch is its title too (the one that is an
 # AXCheckBox), its menu button "Actions for <title>" and the
 # menu's items Reload, Retry, Why Paused, Clear Cache, Develop, Stop
-# Developing and Uninstall; a confirmation's or a details screen's rows are
-# their titles; a command's alias and hotkey cells "Alias for <command>: …"
+# Developing and Uninstall; a question's alert is its question, its buttons
+# their labels; a details screen's rows are their titles; a command's alias and hotkey cells "Alias for <command>: …"
 # and "Hotkey for <command>: …", its fallback switch "Offer <command> as a
 # fallback"; the page's status line is the operation's outcome.
 #
@@ -658,14 +658,15 @@ grep -q '"token": "sample-token"' "$out/data/extensions/credentials.json" || { e
 grep -q '"last-greeting": "Good day to you"' "$out/data/extensions/cache.json" || { echo "greeting not cached"; exit 1; }
 
 # Clear the settings sample's cache from its page in Settings: Clear Cache,
-# an item of its Actions menu. Pane asks first, on the page, then deletes
-# only the cached greeting, without running the extension.
+# an item of its Actions menu. Pane asks first, with an alert over the
+# page, then deletes only the cached greeting, without running the
+# extension.
 start_pane
 open_extension "Settings sample"
 extension_action "Settings sample" "Clear Cache"
-a11y shown "Clear cache"   # the confirmation's row: what is deleted and what is kept above it
+a11y shown "Clear the cache of Settings sample?"   # the alert: what is kept, Clear Cache and Cancel
 capture 41-confirm-clear-cache.png
-a11y press "Clear cache"
+a11y press "Clear Cache"   # the alert's primary button (the menu is closed)
 a11y shown "Cleared the cache of Settings sample"
 capture 42-cache-cleared.png
 close_settings
@@ -730,9 +731,9 @@ stop_pane
 start_pane
 open_extension "Settings sample"
 extension_action "Settings sample" Uninstall
-a11y shown "Uninstall and keep saved data"   # the confirmation: what is removed and the saved data
+a11y shown "Uninstall Settings sample?"   # the alert: what is removed and the saved data
 capture 49-confirm-uninstall.png
-a11y press "Uninstall and keep saved data"
+a11y press Uninstall   # the alert's primary button: keeps the saved data
 a11y shown "Uninstalled Settings sample" prefix   # "...; its settings and content are kept"
 capture 50-uninstalled.png
 stop_pane
@@ -880,16 +881,17 @@ wait_for "$PANE_DATA_DIR/extensions/content.json" '"note": "Water the plants"' p
 key 53; sleep 1   # root search
 open_extension "Settings sample"
 extension_action "Settings sample" Uninstall
-a11y press "Uninstall and keep saved data"
+a11y shown "Uninstall Settings sample?"
+a11y press Uninstall   # keeping its saved data
 wait_for "$registry" '"retained"' present; sleep 1
 manage_extensions
 a11y press "Delete retained data of Settings sample"   # a row of the group's page
-# The confirmation itself, found by its row, not by a color: the group's
+# The alert itself, found by its question, not by a color: the group's
 # page shows hint lines too, so a color alone let the wrong screen pass
 # once (#58).
-a11y shown "Delete retained data"   # what is kept and what is not touched, above it
+a11y shown "Delete the retained data of Settings sample?"   # what is kept and what is not touched
 capture 63-confirm-delete-retained.png
-a11y press "Delete retained data"
+a11y press "Delete Data"
 wait_for "$registry" '"retained"' absent; sleep 1
 a11y shown "Deleted the retained data of Settings sample"
 capture 64-retained-deleted.png
@@ -1286,10 +1288,10 @@ fi
 # Disabling a required dependency: installed with the dependencies sample
 # (whose install and data folder are this phase's own), the JavaScript
 # operations sample's switch on its page in Settings asks first, listing
-# the Dependencies sample, which requires it, with Disable all and Cancel;
-# Cancel changes nothing, Disable all disables both, and the switch again
-# enables the JavaScript operations sample alone: the Dependencies sample
-# stays disabled, on record too.
+# the Dependencies sample, which requires it, in an alert with Disable All,
+# Disable Only and Cancel; Cancel changes nothing, Disable All disables
+# both, and the switch again enables the JavaScript operations sample
+# alone: the Dependencies sample stays disabled, on record too.
 export PANE_DATA_DIR=$out/disable-dependents-data
 rm -rf "$PANE_DATA_DIR"
 start_pane --install target/guests/packages/sample-dependencies
@@ -1297,13 +1299,14 @@ key 36; sleep 3   # Install
 operations="JavaScript operations sample"
 open_extension "$operations"
 a11y toggle "$operations"   # disable it: asks first
-a11y shown "Disable all 2"   # "Dependencies sample, which requires JavaScript operations sample · …", above it
+a11y shown "Disable All 2"   # "Dependencies sample, which requires JavaScript operations sample", above it
 capture 140-disable-dependents-asked.png
 a11y press Cancel
-a11y shown "Actions for $operations"   # its page again: both still enabled
+a11y absent "Disable All 2"   # the alert is gone
+a11y shown "Actions for $operations"   # its page: both still enabled
 capture 141-disable-dependents-cancelled.png
 a11y toggle "$operations"   # asks again
-a11y press "Disable all 2"
+a11y press "Disable All 2"
 a11y shown "Disabled JavaScript operations sample and Dependencies sample" prefix   # "..., which requires it"
 capture 142-disable-dependents-disabled.png
 a11y toggle "$operations"   # enable JavaScript operations sample
@@ -1585,8 +1588,8 @@ PY
 # (whose install and data folder are this phase's own), the JavaScript
 # operations sample's Uninstall (an item of its page's Actions menu in
 # Settings) asks first, listing the Dependencies sample, which requires it, and
-# each one's saved data, with Uninstall all keeping or deleting saved data
-# and Cancel; Cancel changes nothing, Uninstall all 2 (keeping) uninstalls
+# each one's saved data, in an alert with Uninstall All, "Delete saved
+# data" and Cancel; Cancel changes nothing, Uninstall All 2 (keeping) uninstalls
 # both, and installing the JavaScript operations sample again installs it
 # alone: the Dependencies sample is not restored, on record too.
 export PANE_DATA_DIR=$out/uninstall-dependents-data
@@ -1596,13 +1599,14 @@ key 36; sleep 3   # Install
 operations="JavaScript operations sample"
 open_extension "$operations"
 extension_action "$operations" Uninstall   # asks first
-a11y shown "Uninstall all 2 and keep saved data"   # "Dependencies sample, which requires JavaScript operations sample · …", above it
+a11y shown "Uninstall All 2"   # "Dependencies sample, which requires JavaScript operations sample", above it
 capture 180-uninstall-dependents-asked.png
 a11y press Cancel
-a11y shown "Actions for $operations"   # its page again: both still installed
+a11y absent "Uninstall All 2"   # the alert is gone
+a11y shown "Actions for $operations"   # its page: both still installed
 capture 181-uninstall-dependents-cancelled.png
 extension_action "$operations" Uninstall   # asks again
-a11y press "Uninstall all 2 and keep saved data"
+a11y press "Uninstall All 2"
 a11y shown "Uninstalled JavaScript operations sample and Dependencies sample" prefix   # "..., which requires it; …"
 capture 182-uninstall-dependents-uninstalled.png
 stop_pane

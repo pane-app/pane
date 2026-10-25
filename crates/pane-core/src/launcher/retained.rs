@@ -21,7 +21,9 @@ use std::future::Future;
 use std::time::Instant;
 
 use super::off_thread;
-use super::{Changing, Entry, Launcher, LauncherView, Question, Row, Screen, State, Status};
+use super::{
+    Alert, Answers, Changing, Entry, Launcher, LauncherView, Question, Row, Screen, State, Status,
+};
 use crate::extension_data::{DataKind, ExtensionData};
 use crate::packages::{PackageError, PackageIdentity, RetainedData, Standing};
 
@@ -65,31 +67,41 @@ impl Launcher {
             subtitle: Some(subtitle.into()),
             unavailable: None,
         };
+        state.ask_over();
         state.next_screen();
-        // Cancel first, so that Enter keeps the data, as uninstalling does.
         state.entries = vec![Entry::Cancel, Entry::DeleteRetained(identity.clone())];
+        // Delete is the alert's primary button, red, as Raycast's alerts
+        // put the destructive answer on Enter; Cancel is Escape.
+        state.answers = Answers {
+            primary: 1,
+            cancel: 0,
+            ..Answers::default()
+        };
         let source = match identity.local_folder() {
-            Some(folder) => format!("Its source folder {}", folder.display()),
-            None => "Its source".into(),
+            Some(_) => "Its source folder",
+            None => "Its source",
         };
         let kept = installation
             .data
             .kept_now(&DataKind::ALL)
             .describe(identity);
-        let details = vec![
-            format!("From {identity}"),
-            format!(
-                "{title} is not installed. Pane deletes the data it keeps for this source \
-                 itself; the extension is not downloaded and does not run."
-            ),
-            format!("Retained data: {}", kept.unwrap_or_else(|| "none".into())),
-            format!(
-                "{source}, files it saved elsewhere and other extensions' data are not touched."
-            ),
-        ];
+        let alert = Alert {
+            message: vec![
+                format!("From {identity}"),
+                format!("Retained data: {}", kept.unwrap_or_else(|| "none".into())),
+                format!(
+                    "{title} is not installed. {source}, files it saved elsewhere and other \
+                     extensions' data are not touched."
+                ),
+            ],
+            primary: "Delete Data".into(),
+            destructive: true,
+            secondary: None,
+            option: None,
+        };
         let screen = Screen::Confirm {
             question: Question::DeleteRetained(identity.clone()),
-            details,
+            alert,
         };
         state.view = LauncherView::new(screen, format!("Delete the retained data of {title}?"))
             .with_rows(vec![

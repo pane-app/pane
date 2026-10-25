@@ -345,12 +345,13 @@ pub enum Screen {
     /// toast's View Details, from the asked pass's ending toast, and from
     /// the Extensions group in Settings.
     UpdateResults { query: String },
-    /// `question` about an installed package before Pane acts on it, with
-    /// lines of information under the title, answered by choosing a row.
-    Confirm {
-        question: Question,
-        details: Vec<String>,
-    },
+    /// `question` about an installed package before Pane acts on it, the
+    /// view's title: asked as Raycast asks, with an alert over the screen
+    /// it was asked from ([`Launcher::beneath_question`]), which stays
+    /// drawn under it. `alert` says what the alert shows; its answers are
+    /// the view's rows, which [`Launcher::answer_question`] chooses from
+    /// the alert's buttons and checkbox.
+    Confirm { question: Question, alert: Alert },
     /// Why Pane's extension runtime stopped after its thread crashed, and
     /// what Pane did, as lines of information under the title, with a row
     /// that restarts it when Pane did not.
@@ -406,6 +407,57 @@ pub enum Question {
     /// together with the installed packages that require it, and whether to
     /// keep their saved data.
     UninstallDependents(PackageIdentity),
+}
+
+/// What the alert of a [`Screen::Confirm`] shows under its title (the
+/// view's): a short message, the primary button (Enter), an optional
+/// second answer, Cancel (Escape) and an optional checkbox, unticked at
+/// first, that changes what the primary button does.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Alert {
+    /// The message, one line per fact: what the question is about (its
+    /// source), what goes and what is kept.
+    pub message: Vec<String>,
+    /// The primary button's label.
+    pub primary: String,
+    /// Whether the primary button removes or deletes something: drawn in
+    /// the destructive color.
+    pub destructive: bool,
+    /// A second answer, between Cancel and the primary button, where the
+    /// question has one ("Disable Only X").
+    pub secondary: Option<String>,
+    /// The checkbox's label, where the question has one ("Delete saved
+    /// data"): ticked, the primary button does the bolder thing.
+    pub option: Option<String>,
+}
+
+/// An answer to a [`Screen::Confirm`]'s alert ([`Launcher::answer_question`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum QuestionAnswer {
+    /// The primary button, with the alert's checkbox ticked or not.
+    Primary { option: bool },
+    /// The second answer, where the alert has one.
+    Secondary,
+    /// Cancel: nothing is done, and the screen beneath shows again.
+    Cancel,
+}
+
+/// The rows of a [`Screen::Confirm`] its alert's answers choose: the
+/// primary button's, the primary button's with the checkbox ticked, the
+/// second answer's and Cancel's, by index into the view's rows.
+#[derive(Clone, Copy, Debug, Default)]
+struct Answers {
+    primary: usize,
+    option: Option<usize>,
+    secondary: Option<usize>,
+    cancel: usize,
+}
+
+/// The screen a question was asked over, as it was: drawn under the
+/// question's alert ([`Launcher::beneath_question`]).
+struct Beneath {
+    view: LauncherView,
+    entries: Vec<Entry>,
 }
 
 /// A selectable row.
@@ -633,7 +685,6 @@ impl LauncherView {
         match &self.screen {
             Screen::Package { details }
             | Screen::Extensions { details }
-            | Screen::Confirm { details, .. }
             | Screen::PauseDetails { details, .. }
             | Screen::WaitingDetails { details, .. }
             | Screen::Crash { details, .. }
@@ -643,6 +694,8 @@ impl LauncherView {
             | Screen::RuntimeDetails { details }
             | Screen::Hotkey { details, .. } => details,
             Screen::Choice(choice) => &choice.details,
+            // A question's alert says it in its message.
+            Screen::Confirm { alert, .. } => &alert.message,
             _ => &[],
         }
     }
@@ -834,6 +887,12 @@ struct State {
     view: LauncherView,
     /// What activating each row of the current screen does.
     entries: Vec<Entry>,
+    /// While a question shows ([`Screen::Confirm`]): which of its rows each
+    /// answer of its alert chooses.
+    answers: Answers,
+    /// While a question shows: the screen it was asked over, drawn under
+    /// its alert. Stale on other screens, where nothing reads it.
+    beneath: Option<Beneath>,
     /// Every root result in root search order, built when root search is
     /// shown or refreshed, so that searching only ranks them.
     root: Vec<RootResult>,
@@ -1271,6 +1330,18 @@ impl State {
     /// `identity` has ended.
     fn release(&mut self, identity: &PackageIdentity) {
         self.changing.remove(identity);
+    }
+
+    /// Keeps the screen on display as the one a question is about to be
+    /// asked over, to be drawn under its alert (see [`Beneath`]); a
+    /// question asked again over a question keeps the first one's screen.
+    fn ask_over(&mut self) {
+        if !matches!(self.view.screen, Screen::Confirm { .. }) {
+            self.beneath = Some(Beneath {
+                view: self.view.clone(),
+                entries: self.entries.clone(),
+            });
+        }
     }
 
     /// Notes that the user left the screen on display: replies for it are
@@ -1881,6 +1952,8 @@ impl Launcher {
             // Replaced by root search below.
             view: LauncherView::new(Screen::Command, ""),
             entries: Vec::new(),
+            answers: Answers::default(),
+            beneath: None,
             root: Vec::new(),
             computed: Vec::new(),
             staged: Vec::new(),
@@ -5502,17 +5575,27 @@ impl Launcher {
             subtitle: Some(subtitle.into()),
             unavailable: None,
         };
+        state.ask_over();
         state.next_screen();
         state.entries = vec![Entry::ClearCache(identity.clone()), Entry::Cancel];
-        let details = vec![
-            format!("From {identity}"),
-            "Pane deletes the data this extension keeps as its cache. Its settings, content and \
-             credentials are kept, and the extension does not run."
-                .into(),
-        ];
+        state.answers = Answers {
+            primary: 0,
+            cancel: 1,
+            ..Answers::default()
+        };
+        let alert = Alert {
+            message: vec![
+                format!("From {identity}"),
+                "Its settings, content and credentials are kept.".into(),
+            ],
+            primary: "Clear Cache".into(),
+            destructive: true,
+            secondary: None,
+            option: None,
+        };
         let screen = Screen::Confirm {
             question: Question::ClearCache(identity.clone()),
-            details,
+            alert,
         };
         state.view =
             LauncherView::new(screen, format!("Clear the cache of {title}?")).with_rows(vec![
@@ -5571,6 +5654,79 @@ impl Launcher {
             Ok(()) => Status::Result(format!("Cleared the cache of {title}")),
             Err(reason) => Status::Error(format!("Could not clear the cache of {title}: {reason}")),
         };
+    }
+
+    /// Answers the question on display ([`Screen::Confirm`]) as its alert's
+    /// `answer` says: chooses the row that answer stands for and activates
+    /// it, as Enter on it does. Does nothing on any other screen, or for an
+    /// answer the alert does not offer (a second answer it has none of; a
+    /// ticked checkbox it has none of is the primary button alone). Await
+    /// the returned future for the outcome.
+    pub fn answer_question(
+        &self,
+        answer: QuestionAnswer,
+    ) -> impl Future<Output = ()> + Send + 'static + use<> {
+        let mut state = self.lock();
+        let answers = state.answers;
+        let row = match (&state.view.screen, answer) {
+            (Screen::Confirm { .. }, QuestionAnswer::Primary { option }) => {
+                Some(answers.option.filter(|_| option).unwrap_or(answers.primary))
+            }
+            (Screen::Confirm { .. }, QuestionAnswer::Secondary) => answers.secondary,
+            (Screen::Confirm { .. }, QuestionAnswer::Cancel) => Some(answers.cancel),
+            _ => None,
+        };
+        let entry = row.and_then(|row| Some((row, state.entries.get(row).cloned()?)));
+        let pending = match entry {
+            Some((row, entry)) => {
+                state.view.selected = Some(row);
+                state.sent_from = None;
+                self.activation(&mut state, entry)
+            }
+            None => Pending::Nothing,
+        };
+        self.pending_work(&state, pending)
+    }
+
+    /// The screen the question on display was asked over, as it was then,
+    /// with what the window draws of its list ([`Launcher::presented_list`]
+    /// for that screen): what the question's alert is drawn over, dimmed,
+    /// as Raycast's alert keeps the view it was asked from. `None` on any
+    /// other screen.
+    pub fn beneath_question(&self) -> Option<(LauncherView, ListPresentation)> {
+        self.with_beneath(|state| (state.view.clone(), presentation::list_presentation(state)))
+    }
+
+    /// The presentation of row `index` of the screen beneath the question
+    /// on display, as [`Launcher::present_row`] gives a row of the screen
+    /// on display; the default without a question.
+    pub fn present_row_beneath(&self, index: usize) -> RowPresentation {
+        self.with_beneath(|state| {
+            if looks::loads_as_shown(state) {
+                presentation::want_row_icons(state, index);
+            }
+            presentation::row_presentation(state, index)
+        })
+        .unwrap_or_default()
+    }
+
+    /// Reads the screen beneath the question on display with `read`, as
+    /// though it were on display: its view and rows are put in the
+    /// question's place for the read, and back after. `None` without a
+    /// question.
+    fn with_beneath<T>(&self, read: impl FnOnce(&State) -> T) -> Option<T> {
+        let mut state = self.lock();
+        if !matches!(state.view.screen, Screen::Confirm { .. }) {
+            return None;
+        }
+        let mut beneath = state.beneath.take()?;
+        std::mem::swap(&mut state.view, &mut beneath.view);
+        std::mem::swap(&mut state.entries, &mut beneath.entries);
+        let read = read(&state);
+        std::mem::swap(&mut state.view, &mut beneath.view);
+        std::mem::swap(&mut state.entries, &mut beneath.entries);
+        state.beneath = Some(beneath);
+        Some(read)
     }
 
     /// Returns from a confirmation to the extension list without acting.

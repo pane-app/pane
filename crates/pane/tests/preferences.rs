@@ -638,9 +638,11 @@ fn the_disable_command_chord_turns_the_command_off(cx: &mut TestAppContext) {
     assert!(!package.command_enabled("tick"));
 }
 
-/// Uninstall Extension… opens the launcher's "Uninstall X?" confirmation,
-/// all by keys: Escape there returns to the search, and Enter on its first
-/// row uninstalls the extension, back on the search without its rows.
+/// Uninstall Extension… asks the launcher's "Uninstall X?" with an alert
+/// over the search, all by keys: the search stays drawn beneath it, Escape
+/// cancels it and returns to the search, and Enter (Uninstall, keeping the
+/// saved data) uninstalls the extension, back on the search without its
+/// rows.
 #[gpui::test]
 fn uninstall_extension_asks_and_is_answered_by_keys(cx: &mut TestAppContext) {
     let opened = opened(cx);
@@ -664,6 +666,11 @@ fn uninstall_extension_asks_and_is_answered_by_keys(cx: &mut TestAppContext) {
     );
     assert_eq!(view.title, "Uninstall Preferences sample?");
     assert!(!actions_open(&opened.window, cx));
+    assert!(cx.debug_bounds("confirmation").is_some(), "the alert");
+    assert!(
+        cx.debug_bounds("row-Tick").is_some(),
+        "the search it was asked from, beneath it"
+    );
 
     cx.simulate_keystrokes("escape");
     let view = settle(&opened.window, cx);

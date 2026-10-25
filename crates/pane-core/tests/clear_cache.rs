@@ -220,10 +220,15 @@ fn clearing_the_cache_keeps_settings_content_and_credentials(fixture: &Fixture) 
         view.details(),
         [
             format!("From {}", PackageIdentity::local(&folder).unwrap()),
-            "Pane deletes the data this extension keeps as its cache. Its settings, content and \
-             credentials are kept, and the extension does not run."
-                .to_string(),
+            "Its settings, content and credentials are kept.".to_string(),
         ]
+    );
+    let Screen::Confirm { alert, .. } = &view.screen else {
+        panic!("{:?}", view.screen);
+    };
+    assert_eq!(
+        (alert.primary.as_str(), alert.destructive),
+        ("Clear Cache", true)
     );
     assert_eq!(titles(&launcher), ["Clear cache", "Cancel"]);
     select_title(&launcher, "Clear cache");

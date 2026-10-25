@@ -2609,26 +2609,36 @@ fn disabling_a_required_extension_from_its_page_confirms_and_disables_all(cx: &m
     let (launcher, cx) = open_installed(cx, &data, &caller);
     let (_settings, mut settings_cx) = open_extensions(cx);
 
-    // The page's switch for the dependency enters the launcher's own flow
-    // and asks the required-dependent confirmation, in place of the page —
-    // the same question, rows and records the launcher's list asks.
+    // The page's switch for the dependency asks the launcher's
+    // required-dependent question, with an alert over the page — the same
+    // question, answers and records the launcher's list asks.
     open_page(&mut settings_cx, "Greeter");
     click_row(&mut settings_cx, "extension-row-Greeter");
-    for row in ["extension-row-Disable all 2", "extension-row-Cancel"] {
-        assert!(settings_cx.debug_bounds(row).is_some(), "{row} is drawn");
+    for part in [
+        "confirmation-primary",
+        "confirmation-secondary",
+        "confirmation-dismiss",
+    ] {
+        assert!(settings_cx.debug_bounds(part).is_some(), "{part} is drawn");
+    }
+    for line in [
+        "confirmation-line-These require Greeter, so Disable All disables them with it:",
+        "confirmation-line-Caller, which requires Greeter",
+    ] {
+        assert!(
+            settings_cx.debug_bounds(line).is_some(),
+            "the dependents are listed: {line}"
+        );
     }
     assert!(
         settings_cx
-            .debug_bounds(
-                "extension-detail-These extensions require Greeter, directly or through each \
-                 other, and cannot work without it, so they are disabled with it:"
-            )
+            .debug_bounds("extension-page-title-Greeter")
             .is_some(),
-        "the dependents are listed"
+        "the page stays drawn beneath the alert"
     );
 
     // Cancel keeps everything enabled and returns to the page.
-    click_row(&mut settings_cx, "extension-row-Cancel");
+    click_row(&mut settings_cx, "confirmation-dismiss");
     assert!(
         settings_cx
             .debug_bounds("extension-page-title-Greeter")
@@ -2650,7 +2660,7 @@ fn disabling_a_required_extension_from_its_page_confirms_and_disables_all(cx: &m
     // Disable all does what it says, through the same one-write change the
     // launcher's confirmation makes.
     click_row(&mut settings_cx, "extension-row-Greeter");
-    click_row(&mut settings_cx, "extension-row-Disable all 2");
+    click_row(&mut settings_cx, "confirmation-primary");
     until_text(
         &mut settings_cx,
         "Disabled Greeter and Caller, which requires it",
@@ -2699,30 +2709,48 @@ fn uninstalling_from_the_page_offers_the_saved_data_choice_and_keeps_it(cx: &mut
     let (launcher, cx) = open_installed(cx, &data, &folder);
     let (_settings, mut settings_cx) = open_extensions(cx);
 
-    // Uninstall, from the page's menu, asks first, with the saved-data
-    // choice the launcher's own confirmation offers.
+    // Uninstall, from the page's menu, asks first, with the alert the
+    // launcher window asks with: Uninstall, Cancel, and "Delete saved
+    // data", unticked.
     open_page(&mut settings_cx, "Settings sample");
     choose_in_menu(&mut settings_cx, "extension-row-Uninstall Settings sample");
-    for row in [
-        "extension-row-Uninstall and keep saved data",
-        "extension-row-Uninstall and delete saved data",
-        "extension-row-Cancel",
+    for part in [
+        "confirmation-primary",
+        "confirmation-destructive",
+        "confirmation-dismiss",
+        "confirmation-option",
     ] {
-        assert!(settings_cx.debug_bounds(row).is_some(), "{row} is drawn");
+        assert!(settings_cx.debug_bounds(part).is_some(), "{part} is drawn");
     }
     assert!(
         settings_cx
-            .debug_bounds("extension-detail-Saved data: 1 setting")
+            .debug_bounds("confirmation-option-ticked")
+            .is_none()
+    );
+    assert!(
+        settings_cx
+            .debug_bounds("confirmation-line-Saved data: 1 setting")
             .is_some(),
         "what is kept is listed"
     );
+    assert!(has_node(&mut settings_cx, "CheckBox", "Delete saved data"));
 
-    // Keeping the saved data uninstalls without running the extension and
-    // keeps the settings, as the same choice in the launcher does.
-    click_row(
-        &mut settings_cx,
-        "extension-row-Uninstall and keep saved data",
+    // Ticking the checkbox and unticking it again by clicks; then Uninstall
+    // keeps the saved data and uninstalls without running the extension,
+    // as the same answer in the launcher does.
+    click_row(&mut settings_cx, "confirmation-option");
+    assert!(
+        settings_cx
+            .debug_bounds("confirmation-option-ticked")
+            .is_some()
     );
+    click_row(&mut settings_cx, "confirmation-option");
+    assert!(
+        settings_cx
+            .debug_bounds("confirmation-option-ticked")
+            .is_none()
+    );
+    click_row(&mut settings_cx, "confirmation-primary");
     until_text(
         &mut settings_cx,
         "Uninstalled Settings sample; its settings and content are kept",
@@ -2790,10 +2818,11 @@ fn clearing_the_cache_from_the_page_asks_first(cx: &mut TestAppContext) {
         &mut settings_cx,
         "extension-row-Clear cache of Settings sample",
     );
-    for row in ["extension-row-Clear cache", "extension-row-Cancel"] {
-        assert!(settings_cx.debug_bounds(row).is_some(), "{row} is drawn");
+    for part in ["confirmation-primary", "confirmation-dismiss"] {
+        assert!(settings_cx.debug_bounds(part).is_some(), "{part} is drawn");
     }
-    click_row(&mut settings_cx, "extension-row-Clear cache");
+    assert!(has_node(&mut settings_cx, "Button", "Clear Cache"));
+    click_row(&mut settings_cx, "confirmation-primary");
     until_text(&mut settings_cx, "Cleared the cache of Settings sample");
     assert!(
         settings_cx
@@ -2981,20 +3010,27 @@ fn an_extension_is_uninstalled_from_its_page_with_the_keyboard_alone(cx: &mut Te
     );
 
     // Enter chooses it: the menu closes and the launcher's own "Uninstall
-    // Settings sample?" shows in place of the page, as a click on it shows.
+    // Settings sample?" is asked with an alert over the page, as a click
+    // on it asks.
     settings_cx.simulate_keystrokes("enter");
     settings_cx.run_until_parked();
     assert!(
         settings_cx.debug_bounds("extension-menu-popup").is_none(),
         "the menu closed"
     );
-    for row in [
-        "extension-row-Uninstall and keep saved data",
-        "extension-row-Uninstall and delete saved data",
-        "extension-row-Cancel",
+    for part in [
+        "confirmation-primary",
+        "confirmation-dismiss",
+        "confirmation-option",
     ] {
-        assert!(settings_cx.debug_bounds(row).is_some(), "{row} is drawn");
+        assert!(settings_cx.debug_bounds(part).is_some(), "{part} is drawn");
     }
+    assert!(
+        settings_cx
+            .debug_bounds("extension-page-title-Settings sample")
+            .is_some(),
+        "the page stays drawn beneath it"
+    );
     let view = cx.read_entity(&launcher, |window, _| window.launcher().view());
     assert!(
         matches!(view.screen, Screen::Confirm { .. }),
@@ -3003,38 +3039,37 @@ fn an_extension_is_uninstalled_from_its_page_with_the_keyboard_alone(cx: &mut Te
     );
     assert_eq!(settings_windows(cx).len(), 1, "Settings stays open");
 
-    // The confirmation takes the keyboard (#492): its answers' list, on
-    // the launcher's own selection — the first answer, drawn selected and
-    // read as the list's active answer.
+    // The alert takes the keyboard (#492): read as an alert dialog named
+    // by its question.
     assert!(has_node(
         &mut settings_cx,
-        "ListBox",
+        "AlertDialog",
         "Uninstall Settings sample?"
     ));
-    assert_eq!(focused(&mut settings_cx), "Uninstall and keep saved data");
-    let selected = |cx: &mut VisualTestContext| {
-        cx.read_entity(&launcher, |window, _| window.launcher().selected())
-    };
-    assert_eq!(selected(cx), Some(0));
-    assert!(has_selected_node(
-        &mut settings_cx,
-        "Uninstall and keep saved data"
-    ));
-    // Down and Up move it, as the launcher window's arrows do, stopping at
-    // either end; the row drawn selected follows.
-    settings_cx.simulate_keystrokes("down");
-    assert_eq!(selected(cx), Some(1));
-    assert!(has_selected_node(
-        &mut settings_cx,
-        "Uninstall and delete saved data"
-    ));
-    settings_cx.simulate_keystrokes("down down");
-    assert_eq!(selected(cx), Some(2), "Down stops at Cancel, the last");
-    settings_cx.simulate_keystrokes("up up up");
-    assert_eq!(selected(cx), Some(0), "Up stops at the first");
+    assert_eq!(focused(&mut settings_cx), "Uninstall Settings sample?");
+    // Tab walks its checkbox and its buttons in order and around, never
+    // leaving it; Shift+Tab walks back.
+    for part in [
+        "Delete saved data",
+        "Cancel",
+        "Uninstall",
+        "Delete saved data",
+    ] {
+        settings_cx.simulate_keystrokes("tab");
+        assert_eq!(focused(&mut settings_cx), part);
+    }
+    settings_cx.simulate_keystrokes("shift-tab");
+    assert_eq!(focused(&mut settings_cx), "Uninstall");
+    settings_cx.simulate_keystrokes("tab");
+    assert_eq!(focused(&mut settings_cx), "Delete saved data");
+    // Space on the checkbox ticks it, and again unticks it.
+    settings_cx.simulate_keystrokes("space");
+    assert!(checkbox_ticked(&mut settings_cx, "Delete saved data"));
+    settings_cx.simulate_keystrokes("space");
+    assert!(!checkbox_ticked(&mut settings_cx, "Delete saved data"));
 
-    // Enter answers it: the extension is uninstalled, its saved data kept,
-    // and Settings stays open.
+    // Enter presses Uninstall: the extension is uninstalled, its saved
+    // data kept, and Settings stays open.
     settings_cx.simulate_keystrokes("enter");
     until_text(
         &mut settings_cx,
@@ -3059,6 +3094,17 @@ fn has_selected_node(cx: &mut VisualTestContext, label: &str) -> bool {
     })
 }
 
+/// Whether the checkbox labelled `label` reads as ticked, as assistive
+/// technology sees it.
+fn checkbox_ticked(cx: &mut VisualTestContext, label: &str) -> bool {
+    let (_, json) = accessibility(cx);
+    let tree: serde_json::Value = serde_json::from_str(&json).unwrap();
+    tree["nodes"].as_object().unwrap().values().any(|node| {
+        let aria = &node["aria"];
+        aria["role"] == "CheckBox" && aria["label"] == label && aria["toggled"] == "True"
+    })
+}
+
 #[gpui::test]
 fn escape_on_the_uninstall_confirmation_cancels_it_and_leaves_settings_open(
     cx: &mut TestAppContext,
@@ -3072,11 +3118,15 @@ fn escape_on_the_uninstall_confirmation_cancels_it_and_leaves_settings_open(
     tab_to(&mut settings_cx, "Actions for Settings sample");
     settings_cx.simulate_keystrokes("enter end enter");
     settings_cx.run_until_parked();
-    assert_eq!(focused(&mut settings_cx), "Uninstall and keep saved data");
+    assert_eq!(focused(&mut settings_cx), "Uninstall Settings sample?");
+    // On one of its buttons too.
+    settings_cx.simulate_keystrokes("tab tab");
+    assert_eq!(focused(&mut settings_cx), "Cancel");
 
-    // Escape is the confirmation's Cancel (#492), as in the launcher
-    // window: nothing is uninstalled, the page shows again with the
-    // keyboard back on Actions…, and Settings stays open.
+    // Escape is the alert's Cancel (#492), as in the launcher window, and
+    // dismisses only the alert: nothing is uninstalled, the page shows
+    // without it with the keyboard back on Actions…, and Settings stays
+    // open.
     settings_cx.simulate_keystrokes("escape");
     settings_cx.run_until_parked();
     let view = cx.read_entity(&launcher, |window, _| window.launcher().view());

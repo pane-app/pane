@@ -93,7 +93,7 @@ pub use launch::{LaunchRecord, LaunchSource, LaunchType};
 pub use launcher::clipboard_view;
 pub use launcher::search_files;
 pub use launcher::{
-    AliasFlow, AliasOutcome, ApplicationUpdate, ArgumentFields, BuildFailure, Capability,
+    Alert, AliasFlow, AliasOutcome, ApplicationUpdate, ArgumentFields, BuildFailure, Capability,
     CapabilityProvider, Choice, ChoiceExtension, ChoiceOutcome, ChoiceView, CommandPreferences,
     CommandRegistration, ComputedAnswer, DISMISS_NOTICE, DISMISS_WHATS_NEW, DesignedDropdown,
     DesignedList, DesignedRow, DesignedViewSnapshot, Development, ExtensionDetails, ExtensionMark,
@@ -101,13 +101,13 @@ pub use launcher::{
     HotkeyOutcome, ItemAction, ItemActions, LOADING_MS, Launcher, LauncherView, ListPresentation,
     LogNotice, MANAGE_EXTENSIONS, OfficialExtension, OpenSubmenu, OperationKind,
     PackagePreferences, PaneForm, PaneFormField, PathPick, PinTarget, PreferenceField,
-    PreferencesTarget, Presentation, ProvidedCapability, QUIT_PANE, Question, QuickSlot,
-    RESTART_ROW, RequirementCycle, RequirementFix, RestartHold, ResultAction, ResultActionItem,
-    ResultActions, Row, RowKind, RowPresentation, Screen, Section, SelectedAction, SettingsTarget,
-    ShortcutCatalog, ShortcutCommand, ShortcutGroup, SlotChange, Status, SubmenuState,
-    UNEXPECTED_QUIT, Unavailable, UnboundShortcut, UnmetRequirement, UpdateChecks, UpdateHold,
-    UpdateResult, UpdateResults, UpdateResultsAction, WHATS_NEW_ROW, answer_sections,
-    root_sections,
+    PreferencesTarget, Presentation, ProvidedCapability, QUIT_PANE, Question, QuestionAnswer,
+    QuickSlot, RESTART_ROW, RequirementCycle, RequirementFix, RestartHold, ResultAction,
+    ResultActionItem, ResultActions, Row, RowKind, RowPresentation, Screen, Section,
+    SelectedAction, SettingsTarget, ShortcutCatalog, ShortcutCommand, ShortcutGroup, SlotChange,
+    Status, SubmenuState, UNEXPECTED_QUIT, Unavailable, UnboundShortcut, UnmetRequirement,
+    UpdateChecks, UpdateHold, UpdateResult, UpdateResults, UpdateResultsAction, WHATS_NEW_ROW,
+    answer_sections, root_sections,
 };
 pub use links::LinkOpener;
 pub use operations::{MAX_CALL_DEPTH, MAX_OPERATION_JSON};

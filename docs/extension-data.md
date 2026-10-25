@@ -206,12 +206,12 @@ Settings › Extensions has a row "Clear cache of <title>" for each package,
 after the enable/disable rows and in the same order. Its subtitle names the
 source, so copies with the same title can be told apart.
 
-Choosing the row asks first. The confirmation shows "Clear the cache of
-<title>?", the source, and "Pane deletes the data this extension keeps as
-its cache. Its settings, content and credentials are kept, and the
-extension does not run."
+Choosing the row asks first, with an alert over the page: "Clear the cache
+of <title>?", the source, and "Its settings, content and credentials are
+kept." The extension does not run.
 
-Choosing Clear cache deletes that identity's entry from `cache.json` and
+Clear Cache (Enter, drawn destructive) deletes that identity's entry from
+`cache.json` and
 returns to the list with "Cleared the cache of <title>". Cancel or Esc
 returns without deleting. Pane reads `cache.json` again just before, so
 values another Pane process saved meanwhile are kept.
@@ -257,22 +257,28 @@ Tracking: added for [#40](https://github.com/pane-app/pane/issues/40)
 
 Settings › Extensions has a row "Uninstall <title>" for each package, after
 the Clear cache rows. Its subtitle names the source. Choosing it asks first,
-"Uninstall <title>?", with:
+with an alert over the page (Raycast's alert: the page stays under it,
+dimmed), "Uninstall <title>?", with the message:
 
 - "From <source>";
-- "Pane removes its installed copy, its cache and its credentials on this
-  computer, and the extension does not run. Deleting a credential does not
-  sign you out of an online service.";
-- "Saved data: 1 setting and 1 content record" (or "none");
-- "Its source folder <path> and files it saved elsewhere are not touched."
+- "Its cache and credentials are removed; its source folder and files it
+  saved elsewhere are not touched." The extension does not run, and
+  deleting a credential does not sign you out of an online service;
+- "Saved data: 1 setting and 1 content record" (or "none").
 
 The package's **saved data** is its settings and content (and its
 [clipboard history](clipboard-history.md), since #35). That is what the
-choice is about. There are three rows:
+checkbox is about. The alert has:
 
-1. **Uninstall and keep saved data**. It comes first, so Enter keeps.
-2. **Uninstall and delete saved data**.
-3. **Cancel**, or Esc.
+1. **Uninstall** (Enter), drawn destructive. It keeps the saved data
+   unless the checkbox is ticked.
+2. **Delete saved data**, a checkbox, unticked when the alert shows, so
+   Enter keeps (the safe answer). Space or a click ticks it; ticked,
+   Uninstall deletes the saved data too.
+3. **Cancel** (Esc, or a click outside the alert).
+
+Tab moves between the checkbox and the buttons and stays in the alert;
+Enter on a button Tab reached presses that button.
 
 | Kind | Keep saved data | Delete saved data |
 |---|---|---|
@@ -285,7 +291,7 @@ choice is about. There are three rows:
 
 ### What happens
 
-Choosing a row applies at once in the launcher:
+Pressing Uninstall applies at once in the launcher:
 
 - The package leaves root search, Settings › Extensions and the targets of
   [operations](operations.md). A call to it is then "not-found".
@@ -367,19 +373,19 @@ The counts come from the files as they are when the list or the
 confirmation is shown, so a file repaired meanwhile is counted. Two
 identities with the same title are told apart by their source.
 
-Choosing the row asks first, "Delete the retained data of <title>?", with:
+Choosing the row asks first, with an alert, "Delete the retained data of
+<title>?", with the message:
 
 - "From <source>";
-- "<title> is not installed. Pane deletes the data it keeps for this source
-  itself; the extension is not downloaded and does not run.";
 - "Retained data: 1 setting and 1 content record" (every kind Pane still
   keeps for it);
-- "Its source folder <path>, files it saved elsewhere and other extensions'
-  data are not touched."
+- "<title> is not installed. Its source folder, files it saved elsewhere
+  and other extensions' data are not touched." Pane deletes the data
+  itself; the extension is not downloaded and does not run.
 
-It has two rows: **Cancel** (first and selected, so Enter keeps the data,
-as for uninstalling) and **Delete retained data**. Cancel and Esc return to
-the row.
+Its buttons are **Delete Data** (Enter, drawn destructive, as Raycast's
+alerts put the destructive answer on Enter) and **Cancel** (Esc, or a
+click outside the alert), which returns to the row.
 
 #### What deleting does
 

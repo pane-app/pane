@@ -48,7 +48,8 @@
 //! Right choose its neighbours). A window test walks every page with Tab
 //! and fails on a control a click presses that Tab never reaches (#498).
 //! Escape is layered, the innermost
-//! thing first: a control that takes it itself (a recorder, a select, the
+//! thing first: a question's alert ("Uninstall X?") takes it as its Cancel,
+//! a control that takes it itself (a recorder, a select, the
 //! search field, an open menu) keeps it, an Extensions flow screen takes it
 //! next, an armed reset on the Launcher page stands down, then any other
 //! control gives the keyboard back to the sidebar,
@@ -901,14 +902,13 @@ impl Render for SettingsWindow {
                     .map(|package| package.title().into())
             })
             .unwrap_or_else(|| self.pages[self.selected].title.into());
-        compose(
-            root,
-            title,
-            self.render_sidebar(&theme, window, cx),
-            self.render_page(&theme, window, cx),
-            &theme,
-            material,
-        )
+        let sidebar = self.render_sidebar(&theme, window, cx);
+        let page = self.render_page(&theme, window, cx);
+        // A question an extension's operation asks ("Uninstall X?") is an
+        // alert over the whole window, as Raycast's (see the Extensions
+        // pages' `question_layer`).
+        let question = extensions::question_layer(self, &theme, material, window, cx);
+        compose(root, title, sidebar, page, &theme, material).children(question)
     }
 }
 

@@ -14,7 +14,8 @@ use std::path::{Path, PathBuf};
 
 use futures::executor::block_on;
 use pane_core::{
-    CallError, Launcher, PackageIdentity, RetainedData, Runtime, SavedData, Screen, Status,
+    CallError, Launcher, PackageIdentity, QuestionAnswer, RetainedData, Runtime, SavedData, Screen,
+    Status,
 };
 use tempfile::TempDir;
 
@@ -309,27 +310,28 @@ fn uninstalling_and_keeping_saved_data_restores_it_on_reinstall(fixture: &Fixtur
     ask_to_uninstall(&launcher, "Settings sample", 0);
     let view = launcher.view();
     assert_eq!(view.title, "Uninstall Settings sample?");
+    // Asked with an alert: a short message, Uninstall in red, and the
+    // "Delete saved data" checkbox, which starts unticked.
     assert_eq!(
         view.details(),
         [
             format!("From {identity}"),
-            "Pane removes its installed copy, its cache and its credentials on this computer, \
-             and the extension does not run. Deleting a credential does not sign you out of an \
-             online service."
+            "Its cache and credentials are removed; its source folder and files it saved \
+             elsewhere are not touched."
                 .to_string(),
             "Saved data: 1 setting and 1 content record".to_string(),
-            format!(
-                "Its source folder {} and files it saved elsewhere are not touched.",
-                // As the identity names it: resolved by the operating system
-                // (macOS reports `/private/var/...` for a temporary
-                // `/var/...` folder, Windows the long form of `RUNNER~1`).
-                identity.local_folder().unwrap().display()
-            ),
         ]
     );
+    let Screen::Confirm { alert, .. } = &view.screen else {
+        panic!("{:?}", view.screen);
+    };
+    assert_eq!(alert.primary, "Uninstall");
+    assert!(alert.destructive);
+    assert_eq!(alert.option.as_deref(), Some("Delete saved data"));
+    assert_eq!(alert.secondary, None);
     assert_eq!(titles(&launcher), [KEEP_ROW, DELETE_ROW, "Cancel"]);
-    select_title(&launcher, KEEP_ROW);
-    block_on(launcher.activate_selected());
+    // Uninstall, unticked, keeps the saved data.
+    block_on(launcher.answer_question(QuestionAnswer::Primary { option: false }));
     let view = launcher.view();
     assert!(matches!(view.screen, Screen::Extensions { .. }));
     assert_eq!(
@@ -440,8 +442,8 @@ fn uninstalling_one_copy_keeps_the_other_identity_and_external_files(fixture: &F
         launcher.view().details()[0],
         format!("From {}", PackageIdentity::local(&development).unwrap())
     );
-    select_title(&launcher, DELETE_ROW);
-    block_on(launcher.activate_selected());
+    // Uninstall with "Delete saved data" ticked deletes it too.
+    block_on(launcher.answer_question(QuestionAnswer::Primary { option: true }));
     assert_eq!(
         launcher.view().status,
         Status::Result("Uninstalled Greeter and deleted its saved data".into())
@@ -721,22 +723,23 @@ fn retained_data_is_listed_and_deleted_without_the_extension(fixture: &Fixture) 
         view.details(),
         [
             format!("From {identity}"),
-            "Settings sample is not installed. Pane deletes the data it keeps for this source \
-             itself; the extension is not downloaded and does not run."
-                .to_string(),
             "Retained data: 1 setting and 1 content record".to_string(),
-            format!(
-                "Its source folder {}, files it saved elsewhere and other extensions' data are \
-                 not touched.",
-                identity.local_folder().unwrap().display()
-            ),
+            "Settings sample is not installed. Its source folder, files it saved elsewhere and \
+             other extensions' data are not touched."
+                .to_string(),
         ]
     );
+    let Screen::Confirm { alert, .. } = &view.screen else {
+        panic!("{:?}", view.screen);
+    };
+    assert_eq!(
+        (alert.primary.as_str(), alert.destructive),
+        ("Delete Data", true)
+    );
     assert_eq!(titles(&restarted), ["Cancel", DELETE_RETAINED_ROW]);
-    // Cancel is selected, so Enter keeps the data.
-    assert_eq!(view.selected, Some(0));
-    select_title(&restarted, DELETE_RETAINED_ROW);
-    block_on(restarted.activate_selected());
+    // The alert's primary button deletes it, as Raycast's alerts put the
+    // destructive answer on Enter.
+    block_on(restarted.answer_question(QuestionAnswer::Primary { option: false }));
     let view = restarted.view();
     assert!(matches!(view.screen, Screen::Extensions { .. }));
     assert_eq!(
@@ -886,7 +889,7 @@ fn retained_data_that_cannot_be_deleted_is_explained_and_stays_listed(fixture: &
     ask_to_delete_retained(&launcher, "Settings sample", 0);
     let details = launcher.view().details().to_vec();
     assert!(
-        details[2].starts_with(
+        details[1].starts_with(
             "Retained data: 1 setting and content records that cannot be read now (Cannot read "
         ),
         "{details:?}"
@@ -1066,7 +1069,7 @@ fn a_missing_kind_file_counts_as_empty(fixture: &Fixture) {
         [format!("Not installed · keeps 1 setting · {identity}")]
     );
     ask_to_delete_retained(&launcher, "Settings sample", 0);
-    assert_eq!(launcher.view().details()[2], "Retained data: 1 setting");
+    assert_eq!(launcher.view().details()[1], "Retained data: 1 setting");
     select_title(&launcher, DELETE_RETAINED_ROW);
     block_on(launcher.activate_selected());
     assert_eq!(

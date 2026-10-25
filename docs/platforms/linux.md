@@ -120,7 +120,7 @@ same Xvfb/lavapipe setup.
 ### Driving Settings through AT-SPI
 
 Extensions are managed in Settings since #168, where switches, menus and
-confirmation rows answer the pointer only. The smoke (and
+an alert's buttons answer the pointer only. The smoke (and
 `scripts/measure-linux.sh`) therefore works like this:
 
 - It opens Settings with root search's Manage Extensions command.
@@ -467,7 +467,8 @@ The last phase, after the web-link phase:
 1. Restarts Pane and chooses Uninstall in the Actions menu of the settings
    sample's page in Settings (since #168; "Uninstall Settings sample" in
    **Manage extensions…** in the run below), then the first choice,
-   "Uninstall and keep saved data".
+   "Uninstall and keep saved data" (since the alert, its Uninstall with
+   "Delete saved data" unticked).
 2. Checks that `installed.json` records the retained data, that the token
    is gone from `credentials.json`, and that the style and note are still in
    `settings.json` and `content.json`.
@@ -717,7 +718,7 @@ below). Then:
 
 - Pane asks first, listing the Dependencies sample.
 - Cancel returns with both enabled.
-- The switch and Disable all 2 disable both.
+- The switch and Disable all 2 (now the alert's Disable All 2) disable both.
 - The switch again enables the JavaScript operations sample alone.
 
 Afterwards `installed.json` must record exactly one disabled package.
@@ -841,7 +842,8 @@ extensions. Then:
 - Pane asks first, listing the Dependencies sample and the saved data of
   both.
 - Cancel returns with both installed.
-- Uninstall again and "Uninstall all 2 and keep saved data" uninstall both,
+- Uninstall again and "Uninstall all 2 and keep saved data" (now the alert's
+  Uninstall All 2) uninstall both,
   and `installed.json` must then hold no package.
 - Pane started again installs the JavaScript operations sample alone, and
   `installed.json` must then hold exactly one package.

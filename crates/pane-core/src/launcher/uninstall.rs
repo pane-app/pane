@@ -4,6 +4,10 @@
 //! packages are uninstalled as one would be, their records removed in the
 //! same write.
 //!
+//! The confirmation is an alert (see [`super::Screen::Confirm`]): Uninstall
+//! keeps the saved data, and deletes it too while its "Delete saved data"
+//! checkbox is ticked; unticked is the safe answer, so it starts unticked.
+//!
 //! Choosing a row of the confirmation applies at once in this launcher: the
 //! package leaves root search, the extension list and the operation
 //! targets, its instances stop, an open command of it closes and it can no
@@ -32,14 +36,18 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 use super::{
-    Changing, Entry, Launcher, LauncherView, Question, Row, Screen, State, Status, dependents,
-    off_thread,
+    Alert, Answers, Changing, Entry, Launcher, LauncherView, Question, Row, Screen, State, Status,
+    dependents, off_thread,
 };
 use crate::extension_data::{DataKind, ExtensionData};
 use crate::packages::{
     InstalledPackage, Leftover, PackageError, PackageIdentity, Pause, SavedData,
 };
 use crate::platform;
+
+/// The checkbox of an uninstall's alert: unticked, Uninstall keeps the
+/// saved data, the safe answer; ticked, it deletes it too.
+pub(super) const DELETE_SAVED_DATA: &str = "Delete saved data";
 
 /// An uninstall begun by [`Launcher::begin_uninstall`]: the packages,
 /// already removed from the launcher, the one asked about first, and where
@@ -88,7 +96,8 @@ impl Launcher {
 
     /// Asks whether to uninstall the installed package with `identity`,
     /// saying what is removed, what saved data it has and what is never
-    /// touched, with a choice to keep or delete that data.
+    /// touched: Uninstall keeps that data, unless "Delete saved data" is
+    /// ticked.
     pub(super) fn show_uninstall(&self, state: &mut State, identity: &PackageIdentity) {
         let Some(installation) = &self.installation else {
             return;
@@ -100,28 +109,40 @@ impl Launcher {
             subtitle: Some(subtitle.into()),
             unavailable: None,
         };
+        state.ask_over();
         state.next_screen();
         state.entries = vec![
             Entry::Uninstall(identity.clone(), SavedData::Keep),
             Entry::Uninstall(identity.clone(), SavedData::Delete),
             Entry::Cancel,
         ];
-        let source = match identity.local_folder() {
-            Some(folder) => format!("Its source folder {}", folder.display()),
-            None => "Its source".into(),
+        state.answers = Answers {
+            primary: 0,
+            option: Some(1),
+            secondary: None,
+            cancel: 2,
         };
-        let details = vec![
-            format!("From {identity}"),
-            "Pane removes its installed copy, its cache and its credentials on this computer, \
-             and the extension does not run. Deleting a credential does not sign you out of an \
-             online service."
-                .into(),
-            saved_data(&installation.data, identity),
-            format!("{source} and files it saved elsewhere are not touched."),
-        ];
+        let source = match identity.local_folder() {
+            Some(_) => "its source folder",
+            None => "its source",
+        };
+        let alert = Alert {
+            message: vec![
+                format!("From {identity}"),
+                format!(
+                    "Its cache and credentials are removed; {source} and files it saved \
+                     elsewhere are not touched."
+                ),
+                saved_data(&installation.data, identity),
+            ],
+            primary: "Uninstall".into(),
+            destructive: true,
+            secondary: None,
+            option: Some(DELETE_SAVED_DATA.into()),
+        };
         let screen = Screen::Confirm {
             question: Question::Uninstall(identity.clone()),
-            details,
+            alert,
         };
         state.view = LauncherView::new(screen, format!("Uninstall {title}?")).with_rows(vec![
             choice(
