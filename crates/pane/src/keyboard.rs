@@ -284,49 +284,77 @@ pub(crate) fn move_pin_bindings(earlier: bool) -> [Binding; 2] {
 }
 
 /// The keys `binding` is pressed with, as keycaps show them on this
-/// platform: every modifier its own cap, then the key. On Windows (and
-/// Linux) the Windows key leads, as Windows writes its own shortcuts
-/// ("Win+Alt+Left"), then Ctrl, Alt, Shift and Fn; macOS keeps its
-/// Control, Option, Shift, Command order. Enter shows the return symbol
-/// and the arrows their arrows, under their names; Escape shows "Esc".
-/// The sequence's name — what a hint announces — is the full binding,
-/// modifiers included: Shift+Enter is never shown or read as Enter.
+/// platform: [`binding_keys_on`] for the system Pane runs on.
 pub(crate) fn binding_keys(binding: &Binding) -> KeySequence {
+    binding_keys_on(binding, cfg!(target_os = "macos"))
+}
+
+/// The keys `binding` is pressed with, as keycaps show them on `macos` or
+/// elsewhere: every modifier its own cap, then the key. On Windows (and
+/// Linux) the Windows key leads, as Windows writes its own shortcuts
+/// ("Win+Alt+Left"), then Ctrl, Alt, Shift and Fn, as words. macOS keeps
+/// its Control, Option, Shift, Command order and shows each modifier's
+/// symbol (⌃ ⌥ ⇧ ⌘), as Raycast and macOS's own menus do (#117), so a long
+/// chord still fits a narrow launcher's footer. Enter shows the return
+/// symbol and the arrows their arrows; Escape shows "Esc", and macOS's
+/// symbols for its other named keys ([`key_cap`]). Every cap keeps its
+/// key's spelled-out name ("Control", "Page Down"), which the sequence's
+/// name — what a hint announces to assistive technology — joins: the full
+/// binding, modifiers included, so Shift+Enter is never read as Enter.
+fn binding_keys_on(binding: &Binding, macos: bool) -> KeySequence {
     let (control, alt, shift, platform, function) = binding.modifiers();
-    let modifiers: [(bool, &str); 5] = if cfg!(target_os = "macos") {
+    let modifiers: [(bool, &str, &str); 5] = if macos {
         [
-            (control, "Control"),
-            (alt, "Option"),
-            (shift, "Shift"),
-            (platform, "Command"),
-            (function, "Fn"),
+            (control, "⌃", "Control"),
+            (alt, "⌥", "Option"),
+            (shift, "⇧", "Shift"),
+            (platform, "⌘", "Command"),
+            (function, "Fn", "Fn"),
         ]
     } else {
         [
-            (platform, "Win"),
-            (control, "Ctrl"),
-            (alt, "Alt"),
-            (shift, "Shift"),
-            (function, "Fn"),
+            (platform, "Win", "Win"),
+            (control, "Ctrl", "Ctrl"),
+            (alt, "Alt", "Alt"),
+            (shift, "Shift", "Shift"),
+            (function, "Fn", "Fn"),
         ]
     };
     let mut keys: Vec<Key> = modifiers
         .into_iter()
-        .filter(|(held, _)| *held)
-        .map(|(_, name)| Key::new(name, name))
+        .filter(|(held, _, _)| *held)
+        .map(|(_, cap, name)| Key::new(cap, name))
         .collect();
     let name = key_name(binding.key());
-    let cap = match binding.key() {
-        "enter" => "↵".to_owned(),
-        "left" => "←".to_owned(),
-        "right" => "→".to_owned(),
-        "up" => "↑".to_owned(),
-        "down" => "↓".to_owned(),
-        "escape" => "Esc".to_owned(),
-        _ => name.clone(),
-    };
+    let cap = key_cap(binding.key(), macos).map_or_else(|| name.clone(), str::to_owned);
     keys.push(Key::new(cap, name));
     KeySequence { keys }
+}
+
+/// The symbol a named key's cap shows on `macos` or elsewhere, where it
+/// shows one rather than its name: Enter's return symbol and the arrows
+/// everywhere, "Esc" for Escape off macOS, and on macOS the symbols its
+/// menus and Raycast show — ⎋ Escape, ⇥ Tab, ⌫ Backspace (the key macOS
+/// labels Delete), ⌦ Delete (forward delete), ⇞ Page Up, ⇟ Page Down,
+/// ↖ Home and ↘ End. `None` for a key shown by its name ("Space", "V").
+fn key_cap(key: &str, macos: bool) -> Option<&'static str> {
+    Some(match (key, macos) {
+        ("enter", _) => "↵",
+        ("left", _) => "←",
+        ("right", _) => "→",
+        ("up", _) => "↑",
+        ("down", _) => "↓",
+        ("escape", false) => "Esc",
+        ("escape", true) => "⎋",
+        ("tab", true) => "⇥",
+        ("backspace", true) => "⌫",
+        ("delete", true) => "⌦",
+        ("pageup", true) => "⇞",
+        ("pagedown", true) => "⇟",
+        ("home", true) => "↖",
+        ("end", true) => "↘",
+        _ => return None,
+    })
 }
 
 /// The keys a command's global hotkey is pressed with, shown as
@@ -336,11 +364,18 @@ pub(crate) fn binding_keys(binding: &Binding) -> KeySequence {
 /// "Win", "Right Ctrl" — a double tap the name twice — "Ctrl Ctrl" —
 /// and a chord with a named side carries it — "Right Alt+Space". The
 /// numpad's keys keep their own names, distinct from their
-/// counterparts'.
+/// counterparts'. On macOS a chord's caps show the modifiers' symbols,
+/// as [`binding_keys`] does: "Right ⌥", named "Right Option".
 pub(crate) fn hotkey_keys(shortcut: &Shortcut) -> KeySequence {
+    hotkey_keys_on(shortcut, cfg!(target_os = "macos"))
+}
+
+/// [`hotkey_keys`] on `macos` or elsewhere. A tap or a double tap is
+/// named as this system names it, whichever `macos` says: macOS takes
+/// neither yet (`pane_core::hotkeys`), so its caps are Windows' words.
+fn hotkey_keys_on(shortcut: &Shortcut, macos: bool) -> KeySequence {
     match shortcut.kind() {
         Kind::Chord => {
-            let macos = cfg!(target_os = "macos");
             // The chord's modifiers, each with the side it names where one
             // is named (#260), in the order the platform writes them, then
             // the key — the caps of the binding of the key alone.
@@ -349,12 +384,13 @@ pub(crate) fn hotkey_keys(shortcut: &Shortcut) -> KeySequence {
                 .into_iter()
                 .filter_map(|at| shortcut.sides()[at].map(|side| (at, side)))
                 .map(|(at, side)| {
-                    let name = format!("{}{}", side_prefix(side), modifier_name(at, macos));
-                    Key::new(name.clone(), name)
+                    let (cap, name) = modifier_cap(at, macos);
+                    let side = side_prefix(side);
+                    Key::new(format!("{side}{cap}"), format!("{side}{name}"))
                 })
                 .collect();
             match Binding::new(false, false, false, false, false, shortcut.key()) {
-                Ok(alone) => keys.extend(binding_keys(&alone).keys),
+                Ok(alone) => keys.extend(binding_keys_on(&alone, macos).keys),
                 // Every hotkey key is a binding key; a future one that is
                 // not is still shown, by its own text.
                 Err(_) => keys.push(Key::new(shortcut.key().to_uppercase(), shortcut.key())),
@@ -383,18 +419,19 @@ fn side_prefix(side: Side) -> &'static str {
 }
 
 /// The modifier at `at` — control, alt, shift, then the Windows key —
-/// as a hotkey's cap names it on `macos` (Control, Option, Shift,
-/// Command) and elsewhere (Win, Ctrl, Alt, Shift), as [`binding_keys`]
-/// orders them.
-fn modifier_name(at: usize, macos: bool) -> &'static str {
+/// as a hotkey's cap shows it and names it on `macos` (⌃ Control,
+/// ⌥ Option, ⇧ Shift, ⌘ Command) and elsewhere (Win, Ctrl, Alt, Shift,
+/// shown as named), as [`binding_keys_on`] does.
+fn modifier_cap(at: usize, macos: bool) -> (&'static str, &'static str) {
     match (at, macos) {
-        (0, true) => "Control",
-        (0, false) => "Ctrl",
-        (1, true) => "Option",
-        (1, false) => "Alt",
-        (2, _) => "Shift",
-        (_, true) => "Command",
-        (_, false) => "Win",
+        (0, true) => ("⌃", "Control"),
+        (0, false) => ("Ctrl", "Ctrl"),
+        (1, true) => ("⌥", "Option"),
+        (1, false) => ("Alt", "Alt"),
+        (2, true) => ("⇧", "Shift"),
+        (2, false) => ("Shift", "Shift"),
+        (_, true) => ("⌘", "Command"),
+        (_, false) => ("Win", "Win"),
     }
 }
 
@@ -418,22 +455,34 @@ fn key_name(key: &str) -> String {
 mod tests {
     use super::*;
 
-    /// Ctrl's cap and name on this platform: macOS writes it out.
-    const CTRL: &str = if cfg!(target_os = "macos") {
-        "Control"
-    } else {
-        "Ctrl"
-    };
+    /// `binding`'s caps and name on `macos` or elsewhere.
+    fn sequence_on(binding: &str, macos: bool) -> (Vec<String>, String) {
+        let keys = binding_keys_on(&Binding::parse(binding).expect("the binding parses"), macos);
+        (caps(&keys), keys.name())
+    }
 
+    /// `binding`'s caps and name off macOS.
     fn sequence(binding: &str) -> (Vec<String>, String) {
-        let keys = binding_keys(&Binding::parse(binding).expect("the binding parses"));
-        let caps = keys.keys.iter().map(|key| key.cap.to_string()).collect();
-        (caps, keys.name())
+        sequence_on(binding, false)
+    }
+
+    /// `binding`'s caps and name on macOS.
+    fn sequence_macos(binding: &str) -> (Vec<String>, String) {
+        sequence_on(binding, true)
+    }
+
+    fn caps(keys: &KeySequence) -> Vec<String> {
+        keys.keys.iter().map(|key| key.cap.to_string()).collect()
     }
 
     #[test]
     fn enter_alone_is_one_return_cap_named_enter() {
-        assert_eq!(sequence("enter"), (vec!["↵".into()], "Enter".into()));
+        for macos in [false, true] {
+            assert_eq!(
+                sequence_on("enter", macos),
+                (vec!["↵".into()], "Enter".into())
+            );
+        }
     }
 
     #[test]
@@ -444,18 +493,77 @@ mod tests {
         );
         assert_eq!(
             sequence("ctrl-enter"),
-            (vec![CTRL.into(), "↵".into()], format!("{CTRL}+Enter"))
+            (vec!["Ctrl".into(), "↵".into()], "Ctrl+Enter".into())
         );
         assert_eq!(
             sequence("ctrl-shift-p"),
             (
-                vec![CTRL.into(), "Shift".into(), "P".into()],
-                format!("{CTRL}+Shift+P")
+                vec!["Ctrl".into(), "Shift".into(), "P".into()],
+                "Ctrl+Shift+P".into()
             )
         );
     }
 
-    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn macos_caps_show_the_modifiers_symbols_under_their_names() {
+        // Raycast's and macOS's own menus' symbols, in macOS's Control,
+        // Option, Shift, Command order (#117); the names stay spelled out
+        // for assistive technology (#93).
+        assert_eq!(
+            sequence_macos("shift-enter"),
+            (vec!["⇧".into(), "↵".into()], "Shift+Enter".into())
+        );
+        assert_eq!(
+            sequence_macos("cmd-k"),
+            (vec!["⌘".into(), "K".into()], "Command+K".into())
+        );
+        assert_eq!(
+            sequence_macos("ctrl-alt-shift-cmd-p"),
+            (
+                vec!["⌃".into(), "⌥".into(), "⇧".into(), "⌘".into(), "P".into()],
+                "Control+Option+Shift+Command+P".into()
+            )
+        );
+        assert_eq!(
+            sequence_macos("fn-f5"),
+            (vec!["Fn".into(), "F5".into()], "Fn+F5".into())
+        );
+    }
+
+    #[test]
+    fn macos_caps_show_the_named_keys_symbols_under_their_names() {
+        for (binding, cap, name) in [
+            ("escape", "⎋", "Escape"),
+            ("tab", "⇥", "Tab"),
+            ("backspace", "⌫", "Backspace"),
+            ("delete", "⌦", "Delete"),
+            ("pageup", "⇞", "Page Up"),
+            ("pagedown", "⇟", "Page Down"),
+            ("home", "↖", "Home"),
+            ("end", "↘", "End"),
+            ("left", "←", "Left"),
+            ("right", "→", "Right"),
+            ("up", "↑", "Up"),
+            ("down", "↓", "Down"),
+            ("space", "Space", "Space"),
+        ] {
+            assert_eq!(
+                sequence_macos(binding),
+                (vec![cap.into()], name.into()),
+                "{binding}"
+            );
+        }
+        // The chord the narrow footer's test binds (#117): four caps, one
+        // character each.
+        assert_eq!(
+            sequence_macos("ctrl-alt-shift-pagedown"),
+            (
+                vec!["⌃".into(), "⌥".into(), "⇧".into(), "⇟".into()],
+                "Control+Option+Shift+Page Down".into()
+            )
+        );
+    }
+
     #[test]
     fn the_windows_key_leads_and_arrows_show_as_arrows() {
         assert_eq!(
@@ -467,15 +575,20 @@ mod tests {
         );
     }
 
-    #[cfg(not(target_os = "macos"))]
     #[test]
     fn a_hotkey_shows_its_keys_as_a_binding_does() {
-        let keys = hotkey_keys(&Shortcut::parse("ctrl+shift+v").unwrap());
-        let caps: Vec<_> = keys.keys.iter().map(|key| key.cap.to_string()).collect();
-        assert_eq!(caps, ["Ctrl", "Shift", "V"]);
+        let keys = hotkey_keys_on(&Shortcut::parse("ctrl+shift+v").unwrap(), false);
+        assert_eq!(caps(&keys), ["Ctrl", "Shift", "V"]);
         assert_eq!(keys.name(), "Ctrl+Shift+V");
-        let keys = hotkey_keys(&Shortcut::parse("super+alt+space").unwrap());
+        let keys = hotkey_keys_on(&Shortcut::parse("super+alt+space").unwrap(), false);
         assert_eq!(keys.name(), "Win+Alt+Space");
+        // macOS shows the symbols, under the names, as a binding does.
+        let keys = hotkey_keys_on(&Shortcut::parse("ctrl+alt+g").unwrap(), true);
+        assert_eq!(caps(&keys), ["⌃", "⌥", "G"]);
+        assert_eq!(keys.name(), "Control+Option+G");
+        let keys = hotkey_keys_on(&Shortcut::parse("super+shift+pageup").unwrap(), true);
+        assert_eq!(caps(&keys), ["⇧", "⌘", "⇞"]);
+        assert_eq!(keys.name(), "Shift+Command+Page Up");
     }
 
     #[test]
@@ -484,9 +597,10 @@ mod tests {
         // "Right Ctrl" — and a double tap the name twice — "Ctrl Ctrl"
         // (#260): the cap, the announced name and the written-out binding
         // agree, as they do for a chord.
+        let macos = cfg!(target_os = "macos");
         let keys = hotkey_keys(&Shortcut::parse("tap:win").unwrap());
         let name = keys.name();
-        if cfg!(target_os = "macos") {
+        if macos {
             assert_eq!(name, "Command");
         } else if cfg!(target_os = "windows") {
             assert_eq!(name, "Win");
@@ -494,39 +608,30 @@ mod tests {
             assert_eq!(name, "Super");
         }
         let keys = hotkey_keys(&Shortcut::parse("tap:rctrl").unwrap());
-        let caps: Vec<_> = keys.keys.iter().map(|key| key.cap.to_string()).collect();
-        let ctrl = if cfg!(target_os = "macos") {
-            "Control"
-        } else {
-            "Ctrl"
-        };
-        assert_eq!(caps, [format!("Right {ctrl}").as_str()]);
+        let ctrl = if macos { "Control" } else { "Ctrl" };
+        assert_eq!(caps(&keys), [format!("Right {ctrl}")]);
         assert_eq!(keys.name(), format!("Right {ctrl}"));
         let keys = hotkey_keys(&Shortcut::parse("double:ctrl").unwrap());
         assert_eq!(keys.name(), format!("{ctrl} {ctrl}"));
         assert_eq!(keys.keys.len(), 1);
         // A chord with a named side carries it, with the other modifiers
-        // and the key as a binding shows them.
-        let keys = hotkey_keys(&Shortcut::parse("ralt+space").unwrap());
-        let alt = if cfg!(target_os = "macos") {
-            "Option"
-        } else {
-            "Alt"
-        };
-        assert_eq!(keys.name(), format!("Right {alt}+Space"));
-        let caps: Vec<_> = keys.keys.iter().map(|key| key.cap.to_string()).collect();
-        assert_eq!(caps, [format!("Right {alt}").as_str(), "Space"]);
+        // and the key as a binding shows them; macOS's cap is the symbol.
+        let right_alt = Shortcut::parse("ralt+space").unwrap();
+        let keys = hotkey_keys_on(&right_alt, false);
+        assert_eq!(keys.name(), "Right Alt+Space");
+        assert_eq!(caps(&keys), ["Right Alt", "Space"]);
+        let keys = hotkey_keys_on(&right_alt, true);
+        assert_eq!(keys.name(), "Right Option+Space");
+        assert_eq!(caps(&keys), ["Right ⌥", "Space"]);
         // The numpad's keys keep their own names, distinct from their
         // counterparts' (#260).
-        let keys = hotkey_keys(&Shortcut::parse("ctrl+numpad5").unwrap());
-        let caps: Vec<_> = keys.keys.iter().map(|key| key.cap.to_string()).collect();
-        assert_eq!(caps, [ctrl, "Num 5"]);
-        let keys = hotkey_keys(&Shortcut::parse("ctrl+enter").unwrap());
-        let caps: Vec<_> = keys.keys.iter().map(|key| key.cap.to_string()).collect();
-        assert_eq!(caps, [ctrl, "\u{21b5}"]);
-        let keys = hotkey_keys(&Shortcut::parse("ctrl+numpad_enter").unwrap());
-        let caps: Vec<_> = keys.keys.iter().map(|key| key.cap.to_string()).collect();
-        assert_eq!(caps, [ctrl, "Num Enter"]);
+        for (macos, ctrl) in [(false, "Ctrl"), (true, "⌃")] {
+            let caps_of =
+                |shortcut: &str| caps(&hotkey_keys_on(&Shortcut::parse(shortcut).unwrap(), macos));
+            assert_eq!(caps_of("ctrl+numpad5"), [ctrl, "Num 5"]);
+            assert_eq!(caps_of("ctrl+enter"), [ctrl, "\u{21b5}"]);
+            assert_eq!(caps_of("ctrl+numpad_enter"), [ctrl, "Num Enter"]);
+        }
     }
 
     #[test]
@@ -534,14 +639,18 @@ mod tests {
         assert_eq!(sequence("escape"), (vec!["Esc".into()], "Escape".into()));
         assert_eq!(
             sequence("ctrl-k"),
-            (vec![CTRL.into(), "K".into()], format!("{CTRL}+K"))
+            (vec!["Ctrl".into(), "K".into()], "Ctrl+K".into())
         );
         assert_eq!(
             sequence("ctrl-pagedown"),
             (
-                vec![CTRL.into(), "Page Down".into()],
-                format!("{CTRL}+Page Down")
+                vec!["Ctrl".into(), "Page Down".into()],
+                "Ctrl+Page Down".into()
             )
+        );
+        assert_eq!(
+            sequence_macos("ctrl-pagedown"),
+            (vec!["⌃".into(), "⇟".into()], "Control+Page Down".into())
         );
     }
 

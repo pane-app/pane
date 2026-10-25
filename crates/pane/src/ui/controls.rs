@@ -528,13 +528,20 @@ pub(crate) fn well_input(
 pub(crate) const RECORDING_TEXT: &str = "Press a shortcut…";
 
 /// A binding as a recorder writes it: its caps joined by " + ", as
-/// Discord's keybind field does ("Ctrl + Alt + Space").
+/// Discord's keybind field does ("Ctrl + Alt + Space"). On macOS, whose
+/// caps are the modifiers' symbols (#117), they are joined by a space, as
+/// Raycast's hotkey field shows them ("⌃ ⌥ Space").
 pub(crate) fn binding_text(keys: &crate::ui::keycap::KeySequence) -> String {
+    let separator = if cfg!(target_os = "macos") {
+        " "
+    } else {
+        " + "
+    };
     keys.keys
         .iter()
         .map(|key| key.cap.as_ref())
         .collect::<Vec<_>>()
-        .join(" + ")
+        .join(separator)
 }
 
 /// A key binding recorder, after Discord's keybind field: a 36-high well

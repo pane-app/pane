@@ -790,7 +790,7 @@ focus_settings
 press_hotkey   # Settings is in front: the recorder takes it
 wait_for "$PANE_DATA_DIR/extensions/hotkeys.json" '"ctrl+alt+g"' present
 a11y absent "Hotkey for Greeting: none"
-capture 53-hotkey-assigned.png   # the recorder shows Control+Option+G
+capture 53-hotkey-assigned.png   # the recorder shows ⌃ ⌥ G
 close_settings   # root search
 unfocus_pane
 capture 54-unfocused.png

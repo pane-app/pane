@@ -382,7 +382,7 @@ pub(crate) fn alert_layer<V: 'static>(
         .on_hover(hovering(Part::Secondary))
         .on_click(pressing(Part::Secondary))
     });
-    let dismiss_keys = one_key("Esc", "Escape");
+    let dismiss_keys = crate::keyboard::escape_keys();
     let dismiss = button(
         Part::Dismiss,
         "confirmation-dismiss",
