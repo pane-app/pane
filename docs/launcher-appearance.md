@@ -214,10 +214,18 @@ details, Logs, error overlay and hotkey screens. Their lines of
 information and their rows sit under it, and the keyboard stays on
 their rows (the Logs screen's, on its lines). The back button goes back one level, as Escape does.
 
-A confirmation ("Uninstall X?", "Clear cache of X?") keeps its plain
-heading, the title in the row title's 14/500 with no back button:
-Raycast asks those with an alert, not a page. The update results keep
-their heading above their search bar.
+A question ("Uninstall X?", "Clear the cache of X?") is no page: it is
+an alert over the screen it was asked from, as Raycast asks, and that
+screen stays drawn under it, under the Actions panel's dimmer. The alert
+is the confirmation dialog a command's `feedback.confirm` shows (#146),
+400 wide in the middle of the window: an extension glyph and the
+question in the row title's 14/500, a short message (one line per fact,
+scrolling past 180px, the first to give up its room in a short window),
+a checkbox where there is one, and the buttons at the right: Cancel
+(Esc), a second answer where there is one, and the primary button (↵),
+in the danger color when it removes something. The keyboard's focus ring
+marks the button or checkbox Tab is on. The update results keep their
+heading above their search bar.
 
 ### Status lines, forms and extension drawing
 

@@ -27,13 +27,16 @@
 //!
 //! Uninstalling a package that installed packages require, enabled or
 //! disabled, asks the same way, with each one's saved data and the choice
-//! of a single uninstall: Uninstall all keeping saved data, Uninstall all
-//! deleting it, or Cancel. Uninstall all uninstalls exactly the shown set,
+//! of a single uninstall: Uninstall All, which keeps the saved data unless
+//! its "Delete saved data" checkbox is ticked, or Cancel. Uninstall all
+//! uninstalls exactly the shown set,
 //! as uninstalling each would, recorded in one write. Installing the
 //! package again installs it alone.
 
-use super::uninstall::Uninstall;
-use super::{Change, Entry, Launcher, LauncherView, Question, Row, Screen, State, Status};
+use super::uninstall::{DELETE_SAVED_DATA, Uninstall};
+use super::{
+    Alert, Answers, Change, Entry, Launcher, LauncherView, Question, Row, Screen, State, Status,
+};
 use crate::dependencies::{self, Dependent};
 use crate::extension_data::DataKind;
 use crate::packages::{PackageError, PackageIdentity, SavedData};
@@ -113,15 +116,12 @@ impl Launcher {
             .collect();
         let mut details = vec![
             format!("From {identity}"),
-            format!(
-                "These extensions require {title}, directly or through each other, and cannot \
-                 work without it, so they are disabled with it:"
-            ),
+            format!("These require {title}, so Disable All disables them with it:"),
         ];
         details.extend(to_disable.iter().map(|dependent| {
             format!(
-                "{}, which requires {} · {}",
-                dependent.package.title, dependent.requires.title, dependent.package.identity
+                "{}, which requires {}",
+                dependent.package.title, dependent.requires.title
             )
         }));
         details.extend(already.iter().map(|dependent| {
@@ -132,8 +132,7 @@ impl Launcher {
         }));
         details.extend(waiting_lines(&state.packages, identity, &handled));
         details.push(format!(
-            "Each keeps its settings and saved data. Enabling {title} again does not enable \
-             them: enable each in Settings."
+            "Each keeps its settings and data; enabling {title} again does not enable them."
         ));
         let with = match to_disable.as_slice() {
             [dependent] => format!("{}, which requires it", dependent.package.title),
@@ -160,15 +159,29 @@ impl Launcher {
             ),
             choice("cancel", "Cancel".into(), "Keep them all enabled".into()),
         ];
+        state.ask_over();
         state.next_screen();
         state.entries = vec![
             Entry::DisableAll(identity.clone(), shown),
             Entry::DisableOnly(identity.clone()),
             Entry::Cancel,
         ];
+        state.answers = Answers {
+            primary: 0,
+            option: None,
+            secondary: Some(1),
+            cancel: 2,
+        };
+        let alert = Alert {
+            message: details,
+            primary: format!("Disable All {}", to_disable.len() + 1),
+            destructive: false,
+            secondary: Some(format!("Disable Only {title}")),
+            option: None,
+        };
         let screen = Screen::Confirm {
             question: Question::DisableDependents(identity.clone()),
-            details,
+            alert,
         };
         state.view = LauncherView::new(
             screen,
@@ -264,16 +277,13 @@ impl Launcher {
             .collect();
         let mut details = vec![
             format!("From {identity}"),
-            format!(
-                "These extensions require {title}, directly or through each other, so they are \
-                 uninstalled with it; installing {title} again does not install them again:"
-            ),
+            format!("These require {title}, so they are uninstalled with it:"),
         ];
         details.extend(closure.iter().map(|dependent| {
             let disabled = if dependent.enabled { "" } else { " (disabled)" };
             format!(
-                "{}{disabled}, which requires {} · {}",
-                dependent.package.title, dependent.requires.title, dependent.package.identity
+                "{}{disabled}, which requires {}",
+                dependent.package.title, dependent.requires.title
             )
         }));
         let handled: Vec<PackageIdentity> = closure
@@ -295,10 +305,7 @@ impl Launcher {
             .collect();
         details.push(format!("Saved data: {}", saved.join(" · ")));
         details.push(
-            "Pane removes the installed copy, cache and credentials of each, without running \
-             it; their source folders and files they saved elsewhere are not touched. Deleting \
-             a credential does not sign you out of an online service."
-                .into(),
+            "Their caches and credentials are removed; their sources are not touched.".into(),
         );
         let count = closure.len() + 1;
         let choice = |id: &str, title: String, subtitle: String| Row {
@@ -322,15 +329,29 @@ impl Launcher {
             ),
             choice("cancel", "Cancel".into(), "Keep them all installed".into()),
         ];
+        state.ask_over();
         state.screen_epoch += 1;
         state.entries = vec![
             Entry::UninstallAll(identity.clone(), shown.clone(), SavedData::Keep),
             Entry::UninstallAll(identity.clone(), shown, SavedData::Delete),
             Entry::Cancel,
         ];
+        state.answers = Answers {
+            primary: 0,
+            option: Some(1),
+            secondary: None,
+            cancel: 2,
+        };
+        let alert = Alert {
+            message: details,
+            primary: format!("Uninstall All {count}"),
+            destructive: true,
+            secondary: None,
+            option: Some(DELETE_SAVED_DATA.into()),
+        };
         let screen = Screen::Confirm {
             question: Question::UninstallDependents(identity.clone()),
-            details,
+            alert,
         };
         state.view = LauncherView::new(
             screen,

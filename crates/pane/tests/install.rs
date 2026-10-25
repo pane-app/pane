@@ -197,8 +197,9 @@ fn shifted_keys_scroll_a_previews_details_and_keep_the_selection(cx: &mut TestAp
 /// left names it by its own icon, as its package ships it, and its
 /// title; Manage extensions is named there too. A package's preview
 /// names itself in its top bar, beside the back button (#482), as
-/// Raycast's Store page does, and a confirmation keeps the plain heading
-/// that says what it asks: Raycast asks with an alert, not a page.
+/// Raycast's Store page does, and a question is an alert over the screen
+/// it was asked from, with no heading or top bar of its own, as Raycast
+/// asks.
 #[gpui::test]
 fn only_the_cores_own_screens_have_a_heading_line(cx: &mut TestAppContext) {
     let (sources, data) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
@@ -277,19 +278,25 @@ fn only_the_cores_own_screens_have_a_heading_line(cx: &mut TestAppContext) {
         "Manage extensions"
     );
 
-    // "Clear cache of Hello" asks first, on a screen titled with its
-    // question.
+    // "Clear cache of Hello" asks first, as Raycast asks: an alert over
+    // the list, which stays drawn beneath it, rather than a page with a
+    // heading or a top bar.
     cx.simulate_keystrokes("down down enter");
     let view = settle(&window, cx);
     assert!(matches!(view.screen, Screen::Confirm { .. }));
+    assert!(cx.debug_bounds("confirmation").is_some(), "the alert");
+    assert!(
+        cx.debug_bounds("row-Clear cache of Hello").is_some(),
+        "the list beneath it"
+    );
     assert_eq!(
         heading_and_footer_command(cx),
-        (true, false),
-        "a confirmation keeps its heading"
+        (false, true),
+        "Manage extensions' own chrome, beneath the alert"
     );
     assert!(
         cx.debug_bounds("top-bar").is_none() && cx.debug_bounds("search-back").is_none(),
-        "a confirmation has no top bar"
+        "a question has no top bar"
     );
 }
 
@@ -582,8 +589,9 @@ fn an_installed_package_cache_is_cleared_after_confirming(cx: &mut TestAppContex
         ]
     );
 
-    // The third row asks first, saying what is kept; Escape keeps the cache
-    // and returns to that row.
+    // The third row asks first, with an alert saying what is kept: Clear
+    // Cache in red on Enter, Cancel on Escape. Escape keeps the cache and
+    // returns to that row.
     cx.simulate_keystrokes("down down enter");
     let view = settle(&window, cx);
     assert!(
@@ -592,15 +600,24 @@ fn an_installed_package_cache_is_cleared_after_confirming(cx: &mut TestAppContex
         view.screen
     );
     assert_eq!(view.title, "Clear the cache of Hello?");
-    assert_eq!(titles(&view), ["Clear cache", "Cancel"]);
-    let kept = "detail-Pane deletes the data this extension keeps as its cache. Its settings, \
-                content and credentials are kept, and the extension does not run.";
+    assert!(cx.debug_bounds("confirmation-title").is_some());
+    let kept = "confirmation-line-Its settings, content and credentials are kept.";
     assert!(cx.debug_bounds(kept).is_some(), "what is kept is rendered");
+    assert!(
+        cx.debug_bounds("confirmation-destructive").is_some(),
+        "Clear Cache is drawn destructive"
+    );
+    assert!(cx.debug_bounds("confirmation-dismiss").is_some());
     cx.simulate_keystrokes("escape");
     let view = settle(&window, cx);
     assert!(matches!(view.screen, Screen::Extensions { .. }));
     assert_eq!((view.status, view.selected), (Status::Idle, Some(2)));
+    assert!(
+        cx.debug_bounds("confirmation").is_none(),
+        "the alert is gone"
+    );
 
+    // Enter on the row asks again, and Enter on the alert clears it.
     cx.simulate_keystrokes("enter");
     settle(&window, cx);
     cx.simulate_keystrokes("enter");
@@ -625,23 +642,26 @@ fn row_is_visible(cx: &mut VisualTestContext, element: &'static str) -> bool {
     element.top() >= list.top() && element.bottom() <= list.bottom()
 }
 
+/// A question asked from a scrolled list is an alert over it: the list
+/// stays where it was beneath it, and the alert's buttons are in the
+/// window however short it is, its message giving up its room first.
 #[gpui::test]
-fn a_short_confirmation_after_a_scrolled_extension_list_shows_its_first_choice(
+fn a_question_over_a_scrolled_extension_list_keeps_the_list_and_fits_the_window(
     cx: &mut TestAppContext,
 ) {
     for height in [420., 220.] {
-        assert_confirmation_scroll_reset(cx, height);
+        assert_question_over_scrolled_list(cx, height);
     }
 }
 
-fn assert_confirmation_scroll_reset(cx: &mut TestAppContext, height: f32) {
+fn assert_question_over_scrolled_list(cx: &mut TestAppContext, height: f32) {
     let (sources, data) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
     cx.executor().allow_parking();
     cx.update(pane::bind_keys);
     let launcher =
         Launcher::with_packages(Runtime::start(), vec![], data.path().join("extensions"));
-    // Long source paths, as in a real checkout, make the confirmation's
-    // details wrap, which moves and shrinks its list.
+    // Long source paths, as in a real checkout, make the alert's message
+    // wrap.
     let nested = sources
         .path()
         .join("code/pane/.claude/worktrees/agent-0123456789abcdef0/target/guests/packages");
@@ -652,8 +672,7 @@ fn assert_confirmation_scroll_reset(cx: &mut TestAppContext, height: f32) {
     }
     let (window, cx) =
         cx.add_window_view(|window, cx| LauncherWindow::new(launcher.clone(), window, cx));
-    // Both the regular and short window overflow the extension list. In
-    // the short window even the confirmation has less room than one row.
+    // Both the regular and short window overflow the extension list.
     cx.simulate_resize(gpui::size(gpui::px(640.), gpui::px(height)));
     launcher.back();
     assert!(matches!(
@@ -676,59 +695,41 @@ fn assert_confirmation_scroll_reset(cx: &mut TestAppContext, height: f32) {
         "the list is scrolled to its last row"
     );
 
-    // That row asks to uninstall the sixth package: a screen of three
-    // short rows, the first selected.
+    let scrolled = cx.debug_bounds("rows").expect("the list is rendered");
+
+    // That row asks to uninstall the sixth package, with an alert over the
+    // list.
     cx.simulate_keystrokes("enter");
     let view = settle(&window, cx);
-    assert_eq!(view.selected, Some(0));
-    // The first frame of the new screen scrolls with the list's size and
-    // rows as last laid out, those of the extension list, then again with
-    // the new ones once it laid them out; on a real platform nothing else
-    // may redraw the window, so when that moved the list it asks for the
-    // next frame, which draws it there (#165). The test platform delivers
-    // that frame, if asked for, when told to.
+    assert!(matches!(view.screen, Screen::Confirm { .. }));
     cx.update(|window, cx| window.simulate_next_frame(cx));
     cx.run_until_parked();
-    // Compare with this same confirmation opened in a fresh window, which
-    // has no inherited scroll offset. A row can start below the viewport's
-    // edge because of list padding; it must retain that natural position,
-    // not an offset left over from the extension list.
-    let list = cx.debug_bounds("rows").expect("the list is rendered");
-    let first = cx
-        .debug_bounds("row-Uninstall and keep saved data")
-        .expect("it is rendered");
-    if height == 220. {
-        assert!(
-            list.size.height < first.size.height,
-            "the short confirmation viewport is smaller than its first row"
-        );
-    }
-    let size = cx.update(|window, _| window.viewport_size());
-    let (fresh_window, fresh_cx) =
-        cx.add_window_view(|window, cx| LauncherWindow::new(launcher.clone(), window, cx));
-    fresh_cx.simulate_resize(size);
-    settle(&fresh_window, fresh_cx);
-    fresh_cx.update(|window, cx| window.simulate_next_frame(cx));
-    fresh_cx.run_until_parked();
-    let fresh_list = fresh_cx
-        .debug_bounds("rows")
-        .expect("the fresh list is rendered");
-    let fresh_first = fresh_cx
-        .debug_bounds("row-Uninstall and keep saved data")
-        .expect("the fresh first choice is rendered");
+    // The list beneath is the one the question was asked from, where it
+    // was: still scrolled to its last rows.
     assert_eq!(
-        list.size, fresh_list.size,
-        "the confirmation viewports match"
+        cx.debug_bounds("rows").expect("the list stays drawn"),
+        scrolled
     );
     assert!(
-        first.top() >= list.top(),
-        "the first choice's top is not clipped"
+        !row_is_visible(cx, "row-Hello"),
+        "the list beneath stays scrolled"
     );
-    assert_eq!(
-        first.top() - list.top(),
-        fresh_first.top() - fresh_list.top(),
-        "the selected first choice has its unscrolled position"
-    );
+    // The alert and its buttons are in the window.
+    let size = cx.update(|window, _| window.viewport_size());
+    for part in [
+        "confirmation",
+        "confirmation-primary",
+        "confirmation-dismiss",
+        "confirmation-option",
+    ] {
+        let bounds = cx
+            .debug_bounds(part)
+            .unwrap_or_else(|| panic!("{part} is drawn"));
+        assert!(
+            bounds.top() >= gpui::px(0.) && bounds.bottom() <= size.height,
+            "{part} is in the {height}px window: {bounds:?}"
+        );
+    }
 }
 
 #[gpui::test]
@@ -740,8 +741,9 @@ fn an_installed_package_is_uninstalled_after_choosing_what_to_keep(cx: &mut Test
     enter_flow(&window, cx);
     settle(&window, cx);
 
-    // The fourth row asks first, with a choice about the saved data; Escape
-    // keeps it installed and returns to that row.
+    // The fourth row asks first, with an alert: Uninstall in red, Cancel,
+    // and "Delete saved data", unticked. Escape keeps it installed and
+    // returns to that row.
     cx.simulate_keystrokes("down down down enter");
     let view = settle(&window, cx);
     assert!(
@@ -750,26 +752,40 @@ fn an_installed_package_is_uninstalled_after_choosing_what_to_keep(cx: &mut Test
         view.screen
     );
     assert_eq!(view.title, "Uninstall Hello?");
-    assert_eq!(
-        titles(&view),
-        [
-            "Uninstall and keep saved data",
-            "Uninstall and delete saved data",
-            "Cancel"
-        ]
-    );
     assert!(
-        cx.debug_bounds("detail-Saved data: none").is_some(),
+        cx.debug_bounds("confirmation-line-Saved data: none")
+            .is_some(),
         "the saved data is rendered"
+    );
+    assert!(cx.debug_bounds("confirmation-destructive").is_some());
+    assert!(cx.debug_bounds("confirmation-option").is_some());
+    assert!(
+        cx.debug_bounds("confirmation-option-ticked").is_none(),
+        "keeping the data is the default"
     );
     cx.simulate_keystrokes("escape");
     let view = settle(&window, cx);
     assert!(matches!(view.screen, Screen::Extensions { .. }));
     assert_eq!((view.status, view.selected), (Status::Idle, Some(3)));
 
+    // Space ticks the checkbox; Tab walks to Cancel, past the checkbox,
+    // and Enter there presses Cancel: nothing is uninstalled.
     cx.simulate_keystrokes("enter");
     settle(&window, cx);
-    cx.simulate_keystrokes("down enter");
+    cx.simulate_keystrokes("space");
+    settle(&window, cx);
+    assert!(cx.debug_bounds("confirmation-option-ticked").is_some());
+    cx.simulate_keystrokes("tab tab enter");
+    let view = settle(&window, cx);
+    assert!(matches!(view.screen, Screen::Extensions { .. }));
+    assert_eq!((view.status, view.selected), (Status::Idle, Some(3)));
+
+    // Asked again, the checkbox starts unticked; ticked, Enter uninstalls
+    // and deletes the saved data.
+    cx.simulate_keystrokes("enter");
+    settle(&window, cx);
+    assert!(cx.debug_bounds("confirmation-option-ticked").is_none());
+    cx.simulate_keystrokes("space enter");
     let view = settle(&window, cx);
     assert!(matches!(view.screen, Screen::Extensions { .. }));
     assert_eq!(
@@ -820,7 +836,9 @@ fn retained_data_is_deleted_from_the_extension_list_after_confirming(cx: &mut Te
     // Uninstall it, keeping its saved data.
     enter_flow(&window, cx);
     press_enter_on(&window, cx, "Uninstall Hello");
-    let view = press_enter_on(&window, cx, "Uninstall and keep saved data");
+    // The alert's Enter, its checkbox unticked.
+    cx.simulate_keystrokes("enter");
+    let view = settle(&window, cx);
     assert_eq!(
         titles(&view),
         [
@@ -833,29 +851,32 @@ fn retained_data_is_deleted_from_the_extension_list_after_confirming(cx: &mut Te
             .is_some()
     );
 
-    // It asks first, saying what is kept, with Cancel selected: Enter keeps
-    // the data and returns to its row, as Escape does.
+    // It asks first, with an alert saying what is kept: Escape keeps the
+    // data and returns to its row, as a click outside the alert does.
     let view = press_enter_on(&window, cx, "Delete retained data of Hello");
     assert_eq!(view.title, "Delete the retained data of Hello?");
-    assert_eq!(titles(&view), ["Cancel", "Delete retained data"]);
-    assert_eq!(view.selected, Some(0));
     assert!(
-        cx.debug_bounds("detail-Retained data: 1 setting").is_some(),
+        cx.debug_bounds("confirmation-line-Retained data: 1 setting")
+            .is_some(),
         "what is kept is rendered"
     );
-    cx.simulate_keystrokes("enter");
+    assert!(cx.debug_bounds("confirmation-destructive").is_some());
+    cx.simulate_keystrokes("escape");
     let view = settle(&window, cx);
     assert!(matches!(view.screen, Screen::Extensions { .. }));
     assert_eq!((view.status, view.selected), (Status::Idle, Some(0)));
     press_enter_on(&window, cx, "Delete retained data of Hello");
-    cx.simulate_keystrokes("escape");
+    let corner = gpui::point(px(4.), px(4.));
+    cx.simulate_click(corner, Modifiers::none());
     let view = settle(&window, cx);
     assert!(matches!(view.screen, Screen::Extensions { .. }));
     assert_eq!((view.status, view.selected), (Status::Idle, Some(0)));
     assert!(keeps_settings(&settings, &key));
 
+    // Enter on the alert is its primary button, Delete Data.
     press_enter_on(&window, cx, "Delete retained data of Hello");
-    let view = press_enter_on(&window, cx, "Delete retained data");
+    cx.simulate_keystrokes("enter");
+    let view = settle(&window, cx);
     assert!(matches!(view.screen, Screen::Extensions { .. }));
     assert_eq!(
         view.status,
@@ -991,32 +1012,26 @@ fn uninstalling_a_required_dependency_shows_its_dependent_and_the_choices_in_the
         view.title,
         "Uninstall Greeter and the extensions that require it?"
     );
-    assert_eq!(
-        titles(&view),
-        [
-            "Uninstall all 2 and keep saved data",
-            "Uninstall all 2 and delete saved data",
-            "Cancel"
-        ]
-    );
     for _ in 0..2 {
         window.update(cx, |_, cx| cx.notify());
         cx.run_until_parked();
     }
-    assert!(
-        cx.debug_bounds("detail-Saved data: Greeter none · Caller none")
-            .is_some(),
-        "the saved data is rendered"
-    );
-    // However long the details, the selected first choice is on screen.
-    assert!(row_is_visible(
-        cx,
-        "row-Uninstall all 2 and keep saved data"
-    ));
-    let list = cx.debug_bounds("rows").expect("the list is rendered");
-    assert!(list.bottom() <= gpui::px(420.), "{list:?}");
+    // The alert names the extension that requires it and each one's
+    // saved data, with Uninstall All on Enter and "Delete saved data".
+    for line in [
+        "confirmation-line-Caller, which requires Greeter",
+        "confirmation-line-Saved data: Greeter none · Caller none",
+    ] {
+        assert!(cx.debug_bounds(line).is_some(), "{line} is rendered");
+    }
+    assert!(cx.debug_bounds("confirmation-option").is_some());
+    // However long the message, the buttons are in the window.
+    let primary = cx
+        .debug_bounds("confirmation-primary")
+        .expect("Uninstall All is drawn");
+    assert!(primary.bottom() <= gpui::px(420.), "{primary:?}");
 
-    // Escape keeps both installed; the first choice uninstalls both.
+    // Escape keeps both installed; Enter on the alert uninstalls both.
     cx.simulate_keystrokes("escape");
     assert!(matches!(
         settle(&window, cx).screen,
@@ -1247,18 +1262,24 @@ fn disable_only_disables_the_dependency_alone_and_its_dependent_waits(cx: &mut T
     let (window, cx) = open(cx, &data);
     install(&window, cx, &caller);
 
-    // The row of the greeter asks about its dependents first, with Disable
-    // only between Disable all and Cancel.
+    // The row of the greeter asks about its dependents first, with an
+    // alert whose Disable Only stands between Cancel and Disable All.
     let view = click_in_extension_list(&window, cx, "row-Greeter");
-    assert_eq!(
-        titles(&view),
-        ["Disable all 2", "Disable only Greeter", "Cancel"]
+    assert!(matches!(view.screen, Screen::Confirm { .. }));
+    let secondary = cx
+        .debug_bounds("confirmation-secondary")
+        .expect("Disable Only is drawn");
+    for button in ["confirmation-dismiss", "confirmation-primary"] {
+        assert!(cx.debug_bounds(button).is_some(), "{button} is drawn");
+    }
+    assert!(
+        cx.debug_bounds("confirmation-destructive").is_none(),
+        "disabling removes nothing"
     );
-    assert_eq!(view.selected, Some(0));
-    assert!(cx.debug_bounds("row-Disable only Greeter").is_some());
 
-    // Choosing it disables the greeter alone.
-    let view = press_enter_on(&window, cx, "Disable only Greeter");
+    // Clicking it disables the greeter alone.
+    cx.simulate_click(secondary.center(), Modifiers::none());
+    let view = settle(&window, cx);
     assert_eq!(view.status, Status::Result("Disabled Greeter".into()));
     assert_eq!(view.rows[view.selected.unwrap()].title, "Greeter");
 

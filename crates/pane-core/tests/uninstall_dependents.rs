@@ -17,7 +17,8 @@ use std::path::PathBuf;
 
 use futures::executor::block_on;
 use pane_core::{
-    Launcher, PackageIdentity, Question, RetainedData, Runtime, SavedData, Screen, Status,
+    Launcher, PackageIdentity, Question, QuestionAnswer, RetainedData, Runtime, SavedData, Screen,
+    Status,
 };
 use tempfile::TempDir;
 
@@ -251,27 +252,23 @@ fn uninstalling_a_required_dependency_shows_its_dependents_and_their_data_and_ca
     ask_to_uninstall(&launcher, "Package a");
 
     let view = launcher.view();
-    assert_eq!(
-        view.screen,
-        Screen::Confirm {
-            question: Question::UninstallDependents(dirs.identity("a")),
-            details: view.details().to_vec(),
-        }
-    );
+    let Screen::Confirm { question, alert } = &view.screen else {
+        panic!("{:?}", view.screen);
+    };
+    assert_eq!(*question, Question::UninstallDependents(dirs.identity("a")));
+    // The alert's Uninstall All, in red, with the same "Delete saved
+    // data" checkbox a single uninstall has.
+    assert_eq!(alert.primary, "Uninstall All 3");
+    assert!(alert.destructive);
+    assert_eq!(alert.option.as_deref(), Some("Delete saved data"));
     assert_eq!(
         view.title,
         "Uninstall Package a and the extensions that require it?"
     );
     let details = view.details().to_vec();
     for line in [
-        format!(
-            "Package c, which requires Package a · {}",
-            dirs.identity("c")
-        ),
-        format!(
-            "Settings b, which requires Package c · {}",
-            dirs.identity("b")
-        ),
+        "Package c, which requires Package a".to_string(),
+        "Settings b, which requires Package c".to_string(),
         "Saved data: Package a none · Package c none · Settings b 1 setting".to_string(),
     ] {
         assert!(details.contains(&line), "{line:?} not in {details:#?}");
@@ -285,8 +282,10 @@ fn uninstalling_a_required_dependency_shows_its_dependents_and_their_data_and_ca
     assert_eq!(view.selected, Some(0));
     assert!(b_runs(&dirs));
 
-    assert_eq!(press(&launcher, "Cancel"), Status::Idle);
+    // The alert's Cancel.
+    block_on(launcher.answer_question(QuestionAnswer::Cancel));
     let view = launcher.view();
+    assert_eq!(view.status, Status::Idle);
     assert!(matches!(view.screen, Screen::Extensions { .. }));
     // Back on the row the user pressed.
     assert_eq!(
@@ -372,8 +371,10 @@ fn uninstall_all_deleting_saved_data_deletes_each_ones_settings() {
     let launcher = four(&dirs);
     ask_to_uninstall(&launcher, "Package a");
 
+    // Uninstall All with "Delete saved data" ticked.
+    block_on(launcher.answer_question(QuestionAnswer::Primary { option: true }));
     assert_eq!(
-        press(&launcher, DELETE_ALL_3),
+        launcher.view().status,
         Status::Result(
             "Uninstalled Package a and the 2 extensions that require it: Package c and \
              Settings b, and deleted their saved data"
@@ -394,10 +395,7 @@ fn a_disabled_dependent_is_listed_and_uninstalled_with_it() {
 
     ask_to_uninstall(&launcher, "Package c");
     let details = launcher.view().details().to_vec();
-    let line = format!(
-        "Settings b (disabled), which requires Package c · {}",
-        dirs.identity("b")
-    );
+    let line = "Settings b (disabled), which requires Package c".to_string();
     assert!(details.contains(&line), "{line:?} not in {details:#?}");
     assert_eq!(
         press(&launcher, "Uninstall all 2 and keep saved data"),

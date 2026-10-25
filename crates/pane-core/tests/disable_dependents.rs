@@ -14,7 +14,7 @@ use std::fs;
 use std::path::PathBuf;
 
 use futures::executor::block_on;
-use pane_core::{Launcher, PackageIdentity, Question, Runtime, Screen, Status};
+use pane_core::{Launcher, PackageIdentity, Question, QuestionAnswer, Runtime, Screen, Status};
 use tempfile::TempDir;
 
 #[path = "support/feedback.rs"]
@@ -243,30 +243,25 @@ fn disabling_a_required_dependency_shows_its_dependents_first_and_cancel_changes
     assert_eq!(toggle(&launcher, "Package a"), Status::Idle);
 
     let view = launcher.view();
-    assert_eq!(
-        view.screen,
-        Screen::Confirm {
-            question: Question::DisableDependents(dirs.identity("a")),
-            details: view.details().to_vec(),
-        }
-    );
+    let Screen::Confirm { question, alert } = &view.screen else {
+        panic!("{:?}", view.screen);
+    };
+    assert_eq!(*question, Question::DisableDependents(dirs.identity("a")));
+    // The alert's three answers: Disable All, Disable Only, Cancel.
+    assert_eq!(alert.primary, "Disable All 3");
+    assert_eq!(alert.secondary.as_deref(), Some("Disable Only Package a"));
+    assert_eq!((alert.destructive, alert.option.clone()), (false, None));
     assert_eq!(
         view.title,
         "Disable Package a and the extensions that require it?"
     );
     let details = view.details().join("\n");
     assert!(
-        details.contains(&format!(
-            "Package c, which requires Package a · {}",
-            dirs.identity("c")
-        )),
+        details.contains("Package c, which requires Package a"),
         "{details}"
     );
     assert!(
-        details.contains(&format!(
-            "Settings b, which requires Package c · {}",
-            dirs.identity("b")
-        )),
+        details.contains("Settings b, which requires Package c"),
         "{details}"
     );
     // An optional integration is not affected.
@@ -280,7 +275,8 @@ fn disabling_a_required_dependency_shows_its_dependents_first_and_cancel_changes
     assert!(all_enabled(&launcher));
     assert!(b_runs(&dirs));
 
-    assert_eq!(press(&launcher, "Cancel"), Status::Idle);
+    block_on(launcher.answer_question(QuestionAnswer::Cancel));
+    assert_eq!(launcher.view().status, Status::Idle);
     assert!(matches!(launcher.view().screen, Screen::Extensions { .. }));
     // Back on the row the user pressed.
     let view = launcher.view();
@@ -729,8 +725,10 @@ fn disable_only_disables_the_dependency_alone_and_its_dependents_wait() {
         )
     );
 
+    // The alert's second answer, Disable Only.
+    block_on(launcher.answer_question(QuestionAnswer::Secondary));
     assert_eq!(
-        press(&launcher, "Disable only Package p"),
+        launcher.view().status,
         Status::Result("Disabled Package p".into())
     );
     // The package alone: d and c stay enabled, and d waits for it.

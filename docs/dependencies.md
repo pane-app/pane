@@ -21,11 +21,11 @@ The design follows the accepted Q26 direction in the
   ([#46](https://github.com/pane-app/pane/issues/46),
   [Git](git.md#dependencies-from-git)), with the same plan.
 - Disabling a required dependency first shows the packages that require
-  it, with Disable all and Cancel
+  it, in an alert with Disable All, Disable Only and Cancel
   ([#43](https://github.com/pane-app/pane/issues/43),
   [below](#disabling-a-required-dependency)).
-- Uninstalling one shows them with their saved data, with Uninstall all
-  and Cancel ([#44](https://github.com/pane-app/pane/issues/44),
+- Uninstalling one shows them with their saved data, in an alert with
+  Uninstall All, its "Delete saved data" checkbox and Cancel ([#44](https://github.com/pane-app/pane/issues/44),
   [below](#uninstalling-a-required-dependency)).
 - A package that requires another can wait for it. While a required
   dependency is missing, disabled, [paused](pausing.md) or waiting itself,
@@ -356,33 +356,35 @@ data to lose.
 
 In **Settings › Extensions**, pressing the row of an enabled package that
 enabled packages require does not disable it yet. Pane first asks
-"Disable <title> and the extensions that require it?".
+"Disable <title> and the extensions that require it?", with an alert over
+the page, as Raycast asks: the page stays drawn under it.
 
 ### What the question shows
 
-- Its source, then every enabled package in its
+- Its source, then "These require <title>, so Disable All disables
+  them with it:" and every enabled package in its
   [required dependent closure](#the-closure), each as "<title>, which
-  requires <what brought it in> · <identity>", nearest first. Those in it
-  the user disabled already show as "Already disabled: …" and are not
-  changed.
+  requires <what brought it in>", nearest first. Those in it the user
+  disabled already show as "Already disabled: …" and are not changed.
 - When the package is the last installed provider of a capability that
   enabled packages outside the closure require, a line naming them:
   "Caller and Other will wait for acme:translate@1 until another
   extension provides it". With another provider left there is no line.
   Capabilities add no package to the closure, since another provider may
   serve.
-- "Each keeps its settings and saved data. Enabling <title> again does
-  not enable them: enable each in Settings › Extensions."
-- The rows **Disable all N** (N counts the package itself; first and
-  selected), **Disable only <title>** ("The extensions that require it
-  wait for it, and come back when it is enabled again") and **Cancel**
-  ("Keep them all enabled").
+- "Each keeps its settings and data; enabling <title> again does not
+  enable them."
+- The buttons **Disable All N** (N counts the package itself; Enter),
+  **Disable Only <title>** (the extensions that require it wait for it,
+  and come back when it is enabled again) and **Cancel** (Esc, or a click
+  outside the alert). The message scrolls when the list is long; the
+  buttons stay in view.
 
 ### Cancel, Disable all and Disable only
 
-Cancel, or Back, returns to the extension's page in Settings (the
-launcher to root search; to the extension list with the package's row
-selected where the tests show it as a screen). Nothing was changed,
+Cancel returns to the extension's page in Settings, without the alert
+(the launcher to root search; to the extension list with the package's
+row selected where the tests show it as a screen). Nothing was changed,
 recorded or stopped.
 
 **Disable all** disables the package and exactly the dependents shown.
@@ -459,16 +461,15 @@ In **Settings › Extensions**, choosing "Uninstall <title>" for a package
 that installed packages require does not show the
 [single uninstall](extension-data.md#uninstalling-an-extension) question.
 Pane asks "Uninstall <title> and the extensions that require it?"
-instead.
+instead, with the same kind of alert.
 
 ### What the question shows
 
-- Its source, then "These extensions require <title>, directly or through
-  each other, so they are uninstalled with it; installing <title> again
-  does not install them again:", then every package of its required
-  dependent closure (the same closure as
-  [disabling](#disabling-a-required-dependency)). Each shows as "<title>,
-  which requires <what brought it in> · <identity>", nearest first.
+- Its source, then "These require <title>, so they are uninstalled with
+  it:", then every package of its required dependent closure (the same
+  closure as [disabling](#disabling-a-required-dependency)). Each shows as
+  "<title>, which requires <what brought it in>", nearest first.
+  Installing <title> again does not install them again.
   Unlike disabling, disabled dependents are uninstalled too, shown as
   "<title> (disabled), which requires …": without the package they
   require they could never work again.
@@ -481,23 +482,23 @@ instead.
   provider.
 - "Saved data: Greeter none · Caller 1 setting and 1 content record":
   each package's settings and content (the one asked about first), the
-  data the choice is about.
-- "Pane removes the installed copy, cache and credentials of each,
-  without running it; their source folders and files they saved elsewhere
-  are not touched. Deleting a credential does not sign you out of an
-  online service."
-- The rows **Uninstall all N and keep saved data** (first and selected, as
-  in the single uninstall), **Uninstall all N and delete saved data** and
-  **Cancel** ("Keep them all installed"; Esc too).
+  data the checkbox is about.
+- "Their caches and credentials are removed; their sources are not
+  touched." None of them runs, and deleting a credential does not sign
+  you out of an online service.
+- The button **Uninstall All N** (Enter, drawn destructive), which keeps
+  the saved data unless the **Delete saved data** checkbox is ticked
+  (unticked when the alert shows, as in the single uninstall), and
+  **Cancel** (Esc, or a click outside the alert).
 
 ### Cancel and Uninstall all
 
-Cancel, or Back, returns to the extension's page in Settings (the
-launcher to root search; to the extension list with the Uninstall row
-selected where the tests show it as a screen). Nothing was removed,
+Cancel returns to the extension's page in Settings, without the alert
+(the launcher to root search; to the extension list with the Uninstall
+row selected where the tests show it as a screen). Nothing was removed,
 stopped or recorded.
 
-Uninstall all applies the chosen row to every package shown, exactly as
+Uninstall all applies the checkbox's choice to every package shown, exactly as
 uninstalling each alone would. Their commands leave root search, their
 instances stop, their managed copies, caches and credentials go, and
 their settings and content are kept as

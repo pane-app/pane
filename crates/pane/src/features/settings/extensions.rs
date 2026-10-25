@@ -36,11 +36,13 @@
 //! operations ([`pane_core::Launcher::extension_operations`]: what each
 //! is, whose, and whether it is on), each run through
 //! [`pane_core::Launcher::run_extension_operation`], which leaves the
-//! launcher on the screen the user had. The confirmations they ask for —
+//! launcher on the screen the user had. The questions they ask —
 //! disabling or uninstalling what other extensions require, the saved-data
-//! choice, deleting retained data — and the previews an install or an
-//! update check shows are the launcher's own screens, drawn here in place
-//! of the page from the launcher's live view, and answered here
+//! choice, deleting retained data — are the launcher's own, asked with an
+//! alert over the page ([`question_layer`],
+//! [`pane_core::Launcher::answer_question`]); the previews an install or
+//! an update check shows are the launcher's own screens, drawn here in
+//! place of the page from the launcher's live view, and answered here
 //! ([`pane_core::Launcher::select`],
 //! [`pane_core::Launcher::activate_selected`]); so every operation runs
 //! through the same code with the same records. A
@@ -68,11 +70,13 @@
 //! the items, Enter or Space chooses one, and Escape or Tab closes the
 //! menu and gives the keyboard back to its button, leaving Settings open.
 //! Enter in the install field shows the package. A flow screen drawn in
-//! place of the page — "Uninstall X?", a preview, a collection's choice,
-//! the update results — takes the keyboard when it shows, on the
-//! launcher's own selection: Up and Down move it, Enter answers, Space
-//! ticks a collection's extension, and Escape is Cancel or Back, never
-//! the window's close (#492). So the user's case — open an extension's
+//! place of the page — a preview, a collection's choice, the update
+//! results — takes the keyboard when it shows, on the launcher's own
+//! selection: Up and Down move it, Enter answers, Space ticks a
+//! collection's extension, and Escape is Back, never the window's close
+//! (#492). A question's alert ("Uninstall X?") takes it too: Enter is its
+//! primary button, Space ticks its checkbox, Tab moves between its parts
+//! and Escape is its Cancel. So the user's case — open an extension's
 //! page, Actions…, Uninstall, keep its data — needs no pointer.
 //!
 //! Synchronization is by reading, not copying: every frame re-reads the
@@ -100,16 +104,17 @@ use pane_core::clipboard::{Clock as _, SystemClock};
 use pane_core::{
     EXTENSION_API, ExtensionDetails, ExtensionMark, ExtensionOperation, InstalledPackage, Launcher,
     LauncherView, OperationKind, PackageIdentity, PackagePreferences, PreferenceField,
-    PreferenceKind, ProvidedCapability, RequirementCycle, RequirementFix, Screen, ShortcutCommand,
-    Status,
+    PreferenceKind, ProvidedCapability, QuestionAnswer, RequirementCycle, RequirementFix, Screen,
+    ShortcutCommand, Status,
 };
 
 use super::{MENU_BUTTON, Page, SettingsWindow, pressable, pressable_in, search};
 use crate::app::{launcher_changed_outside, row_icon};
+use crate::features::confirmation::{Alert, AlertFocus, Handlers, Part, Press, alert_layer};
 use crate::ui::controls;
 use crate::ui::extension_icon::{RowIcon, row_icon_at};
 use crate::ui::icon::{Glyph, TileSize};
-use crate::ui::material::popover_shadows;
+use crate::ui::material::{Material, popover_shadows};
 use crate::ui::select::{Choice, Model, Select};
 use crate::ui::theme::{Theme, pressed};
 use crate::ui::virtual_list::PageWindow;
@@ -317,9 +322,29 @@ pub(crate) struct State {
     /// button an Uninstall came from, say), which gets it back when the
     /// flow ends.
     flow_return: Option<FocusHandle>,
+    /// The focus of the alert a question of the launcher's is asked with
+    /// ([`question_layer`]), made the first time one shows and kept.
+    alert: Option<AlertFocus>,
+    /// The title of the question the last frame drew, if it drew one: a
+    /// change is when the alert takes the keyboard, or gives it back.
+    alert_shown: Option<String>,
+    /// Whether the alert's checkbox ("Delete saved data") is ticked.
+    alert_ticked: bool,
+    /// The alert's button under the pointer, washed.
+    alert_hover: Option<Part>,
+    /// What had the keyboard when the alert took it (the Actions… button
+    /// an Uninstall came from, say), which gets it back once it is answered.
+    alert_return: Option<FocusHandle>,
 }
 
 impl State {
+    /// The focus of the question's alert.
+    fn alert_focus(&mut self, cx: &mut Context<SettingsWindow>) -> AlertFocus {
+        self.alert
+            .get_or_insert_with(|| AlertFocus::new(cx))
+            .clone()
+    }
+
     /// The focus of a flow screen's list.
     fn flow_focus(&mut self, cx: &mut Context<SettingsWindow>) -> FocusHandle {
         self.flow_list
@@ -563,18 +588,18 @@ fn focus(
     false
 }
 
-/// Whether the launcher's screen is one an extension's operation opened:
-/// a confirmation, a package's preview, the choice of a collection's
-/// extensions (#308), pause, build, network, program or runtime details,
-/// or the update results. While it is, the pages draw it from the
-/// launcher's live view, so its confirmations show and are answered here;
-/// otherwise they read the launcher, whose screen stays wherever the user
-/// left it.
+/// Whether the launcher's screen is a page an extension's operation opened:
+/// a package's preview, the choice of a collection's extensions (#308),
+/// pause, build, network, program or runtime details, or the update
+/// results. While it is, the pages draw it from the launcher's live view,
+/// so it shows and is answered here; otherwise they read the launcher,
+/// whose screen stays wherever the user left it. A question the operation
+/// asks ("Uninstall X?") is no page: its alert is drawn over the page
+/// ([`question_layer`]).
 pub(crate) fn in_extension_flow(screen: &Screen) -> bool {
     matches!(
         screen,
-        Screen::Confirm { .. }
-            | Screen::Package { .. }
+        Screen::Package { .. }
             | Screen::Choice { .. }
             | Screen::PauseDetails { .. }
             | Screen::BuildDetails { .. }
@@ -585,10 +610,10 @@ pub(crate) fn in_extension_flow(screen: &Screen) -> bool {
     )
 }
 
-/// Whether the screen offers no Cancel row of its own (a confirmation's
-/// is its own): the details screens, a preview, the choice of a
-/// collection's extensions and the update results, where the page offers
-/// the way out the launcher window's Escape is.
+/// Whether the screen offers no row of its own to leave by: the details
+/// screens, a preview, the choice of a collection's extensions and the
+/// update results, where the page offers the way out the launcher window's
+/// Escape is.
 fn details_screen(screen: &Screen) -> bool {
     matches!(
         screen,
@@ -1720,9 +1745,9 @@ fn update_results_screen(
 // show one selection: when the screen shows, its list takes the keyboard
 // with the launcher's selected row drawn selected; Up, Down, Home and End
 // move it; Enter activates it; Space ticks a collection's extension. Escape
-// is Cancel on a confirmation and Back elsewhere ([`leave_flow`]), never
-// the window's close, as Raycast's Escape dismisses a dialog and not its
-// window. Tab reaches the Back button after the list.
+// is Back ([`leave_flow`]), never the window's close, as Raycast's Escape
+// dismisses a dialog and not its window. Tab reaches the Back button after
+// the list.
 
 /// The scroll anchor of a flow screen's row with `id`, which the arrows
 /// keep in view.
@@ -1923,10 +1948,10 @@ fn open_result(this: &mut SettingsWindow, key: &str, cx: &mut Context<SettingsWi
     this.show_extension(Some(key.to_owned()), cx);
 }
 
-/// Escape while the group's pages show: on a flow screen, Cancel on a
-/// confirmation and Back elsewhere ([`Launcher::back`], which on a
-/// confirmation is its Cancel), and `true`; `false` with no flow screen,
-/// where Escape is the window's.
+/// Escape while the group's pages show: on a flow screen, its Back
+/// ([`Launcher::back`]), and `true`; `false` with no flow screen, where
+/// Escape is the window's. (A question's alert takes its own Escape, its
+/// Cancel, before the window sees it.)
 pub(super) fn leave_flow(this: &mut SettingsWindow, cx: &mut Context<SettingsWindow>) -> bool {
     if !in_extension_flow(&this.launcher.screen()) {
         return false;
@@ -1936,6 +1961,117 @@ pub(super) fn leave_flow(this: &mut SettingsWindow, cx: &mut Context<SettingsWin
     launcher_changed_outside(cx);
     cx.notify();
     true
+}
+
+// ------------------------------------------------------- questions' alert
+//
+// A question an operation asks ("Uninstall X?", disabling what others
+// require, clearing a cache) is the launcher's own `Screen::Confirm`,
+// asked as Raycast asks: an alert over the page it was asked from, which
+// stays drawn under it, dimmed — the same alert the launcher window draws
+// (`features::confirmation`). It takes the keyboard when it shows: Enter
+// presses the primary button (or the focused one), Space ticks its
+// checkbox, Tab moves between its checkbox and buttons, and Escape is its
+// Cancel, never the window's close. Once it is answered, the keyboard
+// goes back to what had it, the Actions… button an Uninstall came from.
+
+/// The alert of the question the launcher asks, if it asks one, over the
+/// whole window; following it, the keyboard moves into it as it shows and
+/// back as it goes ([`follow_question`]).
+pub(super) fn question_layer(
+    this: &mut SettingsWindow,
+    theme: &Theme,
+    material: Material,
+    window: &mut Window,
+    cx: &mut Context<SettingsWindow>,
+) -> Option<AnyElement> {
+    let live = this.launcher.view();
+    let asked = matches!(live.screen, Screen::Confirm { .. }).then(|| live.title.clone());
+    follow_question(this, asked, window, cx);
+    let hovered = this.extensions.alert_hover;
+    let alert = Alert::of_question(&live, this.extensions.alert_ticked)?
+        .washed(|part| if hovered == Some(part) { 1. } else { 0. });
+    let focus = this.extensions.alert_focus(cx);
+    let handlers = Handlers {
+        press: Rc::new(
+            |this: &mut SettingsWindow,
+             press: Press,
+             _: &mut Window,
+             cx: &mut Context<SettingsWindow>| answer_question(this, press, cx),
+        ),
+        hover: Rc::new(
+            |this: &mut SettingsWindow,
+             part: Part,
+             over: bool,
+             cx: &mut Context<SettingsWindow>| {
+                if over {
+                    this.extensions.alert_hover = Some(part);
+                } else if this.extensions.alert_hover == Some(part) {
+                    this.extensions.alert_hover = None;
+                }
+                cx.notify();
+            },
+        ),
+    };
+    Some(alert_layer(
+        alert, &focus, handlers, theme, material, window, cx,
+    ))
+}
+
+/// Follows the question showing or not (`asked`, its title, this frame's):
+/// when one starts showing, its alert takes the keyboard and what had it
+/// is kept; when it ends with the keyboard still in the alert, that gets
+/// the keyboard back.
+fn follow_question(
+    this: &mut SettingsWindow,
+    asked: Option<String>,
+    window: &mut Window,
+    cx: &mut Context<SettingsWindow>,
+) {
+    if asked == this.extensions.alert_shown {
+        return;
+    }
+    let was_shown = this.extensions.alert_shown.is_some();
+    this.extensions.alert_shown = asked.clone();
+    this.extensions.alert_ticked = false;
+    this.extensions.alert_hover = None;
+    let focus = this.extensions.alert_focus(cx);
+    if asked.is_some() {
+        if !was_shown {
+            this.extensions.alert_return = window.focused(cx);
+        }
+        let dialog = focus.dialog().clone();
+        // Once this frame is drawn, the alert is there to focus.
+        window.defer(cx, move |window, cx| window.focus(&dialog, cx));
+        return;
+    }
+    let previous = this.extensions.alert_return.take();
+    if focus.holds(window)
+        && let Some(previous) = previous
+    {
+        window.defer(cx, move |window, cx| window.focus(&previous, cx));
+    }
+}
+
+/// A press on the question's alert: its checkbox ticks; its buttons
+/// answer ([`Launcher::answer_question`]), a click outside it being
+/// Cancel.
+fn answer_question(this: &mut SettingsWindow, press: Press, cx: &mut Context<SettingsWindow>) {
+    let answer = match press {
+        Press::Part(Part::Option) => {
+            this.extensions.alert_ticked = !this.extensions.alert_ticked;
+            cx.notify();
+            return;
+        }
+        Press::Part(Part::Primary) => QuestionAnswer::Primary {
+            option: this.extensions.alert_ticked,
+        },
+        Press::Part(Part::Secondary) => QuestionAnswer::Secondary,
+        Press::Part(Part::Dismiss) | Press::Outside => QuestionAnswer::Cancel,
+    };
+    this.extensions.outcome = None;
+    let pending = this.launcher.answer_question(answer);
+    keep_outcome_of(pending, cx);
 }
 
 /// One entry of a list on these pages as a Settings list item named `id`:

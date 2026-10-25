@@ -24,7 +24,7 @@
 use std::collections::BTreeMap;
 
 use super::clipboard_view::{CLIPBOARD_HISTORY, kept_items};
-use super::{Entry, Launcher, LauncherView, Question, Row, Screen, State, Status};
+use super::{Alert, Answers, Entry, Launcher, LauncherView, Question, Row, Screen, State, Status};
 use crate::clipboard::{CaptureState, Commands, DEFAULT_RETENTION_SECONDS, program_file_name};
 use crate::packages::PackageIdentity;
 
@@ -192,22 +192,33 @@ impl Launcher {
             subtitle: Some(subtitle.into()),
             unavailable: None,
         };
+        state.ask_over();
         state.next_screen();
         state.entries = vec![
             Entry::ClearClipboardHistory(identity.clone()),
             Entry::Cancel,
         ];
-        let details = vec![
-            format!("From {identity}"),
-            format!(
-                "Pane deletes the {} this extension kept. Recording goes on as it is, and it \
-                 cannot be undone.",
-                kept_items(kept)
-            ),
-        ];
+        state.answers = Answers {
+            primary: 0,
+            cancel: 1,
+            ..Answers::default()
+        };
+        let alert = Alert {
+            message: vec![
+                format!("From {identity}"),
+                format!(
+                    "Deletes the {} it kept; recording goes on. This cannot be undone.",
+                    kept_items(kept)
+                ),
+            ],
+            primary: "Clear History".into(),
+            destructive: true,
+            secondary: None,
+            option: None,
+        };
         let screen = Screen::Confirm {
             question: Question::ClearClipboardHistory(identity.clone()),
-            details,
+            alert,
         };
         state.view =
             LauncherView::new(screen, format!("Clear the history of {title}?")).with_rows(vec![

@@ -522,12 +522,13 @@ from the core's `Launcher::result_actions`:
     - "Disable Command" (Ctrl+Alt+Shift+D; Cmd+Option+Shift+D on macOS).
       It turns the command off, as its switch on that page does: the row
       leaves root search, and the status line says what was recorded.
-    - "Uninstall Extension…", drawn as destructive, with no key. It opens
-      the launcher's own "Uninstall X?" confirmation, the one the
-      extension list asks, and asks about the extensions that require it
-      too. Enter answers the selected row (keep or delete saved data, or
-      Cancel), and Escape leaves it. Either way the launcher returns to
-      this search, without the extension's rows once it is uninstalled.
+    - "Uninstall Extension…", drawn as destructive, with no key. It asks
+      the launcher's own "Uninstall X?", the question the extension list
+      asks, about the extensions that require it too, with an alert over
+      this search, which stays drawn under it: Enter is Uninstall, which
+      keeps the saved data unless Space ticked "Delete saved data", and
+      Escape is Cancel. Either way the launcher returns to this search,
+      without the extension's rows once it is uninstalled.
       While something else is happening to the extension (a reload, an
       update), the entry is dimmed and says why.
 

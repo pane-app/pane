@@ -79,6 +79,10 @@ pub(super) struct ListFrame {
 pub(super) struct ResultList {
     pub(super) list: VirtualList,
     frame: Option<Rc<ListFrame>>,
+    /// Whether the frame is the screen beneath a question's alert, whose
+    /// rows are presented as that screen's
+    /// ([`pane_core::Launcher::present_row_beneath`]).
+    pub(super) beneath: bool,
     #[cfg(any(test, debug_assertions))]
     pub(super) drawn_rows: std::collections::BTreeSet<usize>,
 }
@@ -89,6 +93,7 @@ impl ResultList {
         ResultList {
             list: VirtualList::new(geometry.row_min_height + geometry.row_list_gap),
             frame: None,
+            beneath: false,
             #[cfg(any(test, debug_assertions))]
             drawn_rows: Default::default(),
         }
@@ -266,7 +271,11 @@ impl LauncherWindow {
             return element;
         }
         let selected = frame.view.selected == Some(index);
-        let shown = self.launcher.present_row(index);
+        let shown = if self.results.beneath {
+            self.launcher.present_row_beneath(index)
+        } else {
+            self.launcher.present_row(index)
+        };
         let number = frame
             .row_numbers
             .get(index)

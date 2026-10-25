@@ -106,7 +106,7 @@ briefly" (an async WASI 0.3 clock import inside the guest), then Escape.
 
 Extensions are managed in Settings since #168
 ([ADR 0043](../adr/0043-extensions-are-managed-in-settings-one-page-per-extension.md)),
-where switches, menus and confirmation rows answer the pointer only. The
+where switches, menus and an alert's buttons answer the pointer only. The
 smoke opens Settings with root search's Manage Extensions command. It
 finds each control by its accessible name in the Settings window through
 System Events and presses it, clicking its center where it offers no
@@ -399,8 +399,8 @@ The disable-dependents phase (screenshots 140 to 143,
 [disabling a required dependency](../dependencies.md#disabling-a-required-dependency))
 uses a data folder of its own. It installs the dependencies sample and
 turns off the JavaScript operations sample's switch on its page in
-Settings (#168). Pane must ask first (its Disable all row shown). The
-smoke cancels, then chooses Disable all (the page's status says so) and
+Settings (#168). Pane must ask first (its alert's Disable All 2 shown). The
+smoke cancels, then chooses Disable All (the page's status says so) and
 enables the JavaScript sample again alone. `installed.json` must then
 record exactly one disabled package.
 

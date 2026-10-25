@@ -184,7 +184,8 @@ function To-Root { Send "+{ESC}"; Start-Sleep -Seconds 1 }
 # page's switch is its title too (the one with a toggle), its menu
 # button "Actions for <title>" and the menu's items Reload, Retry, Why
 # Paused, Clear Cache, Develop, Stop Developing and Uninstall; a
-# confirmation's or a details screen's rows are their titles; a
+# question's alert is its question, its buttons their labels; a details
+# screen's rows are their titles; a
 # command's alias and hotkey cells "Alias for <command>: …" and "Hotkey
 # for <command>: …", its fallback switch "Offer <command> as a
 # fallback"; the page's status line is the operation's outcome.
@@ -732,14 +733,15 @@ if (-not (Token-Kept)) { throw "credential not saved" }
 if (-not (Select-String -Quiet -SimpleMatch '"last-greeting": "Good day to you"' (Join-Path $data "extensions/cache.json"))) { throw "greeting not cached" }
 
 # Clear the settings sample's cache from its page in Settings: Clear Cache,
-# an item of its Actions menu. Pane asks first, on the page, then deletes
-# only the cached greeting, without running the extension.
+# an item of its Actions menu. Pane asks first, with an alert over the
+# page, then deletes only the cached greeting, without running the
+# extension.
 $process = Start-Pane "stderr-clear-cache.log"
 Open-Extension "Settings sample"
 Extension-Action "Settings sample" "Clear Cache"
-Wait-Shown "Clear cache"   # the confirmation's row: what is deleted and what is kept above it
+Wait-Shown "Clear the cache of Settings sample?"   # the alert: what is kept, Clear Cache and Cancel
 Capture "41-confirm-clear-cache.png"
-Press-Named "Clear cache"
+Press-Named "Clear Cache"   # the alert's primary button (the menu is closed)
 Wait-Shown "Cleared the cache of Settings sample"
 Capture "42-cache-cleared.png"
 Close-Settings
@@ -798,16 +800,17 @@ Stop-Pane $process
 # handler through the actions sample's "Open Website" there.
 
 # Uninstall the settings sample, keeping its saved data: Uninstall, the last
-# item of its page's Actions menu. Pane asks first, showing its saved data,
-# and the first choice keeps its settings and content while its copy and
-# credential go. Installing the same folder again finds its formal style
-# and note, signed out.
+# item of its page's Actions menu. Pane asks first with an alert showing
+# its saved data, and its Uninstall, "Delete saved data" left unticked,
+# keeps its settings and content while its copy and credential go.
+# Installing the same folder again finds its formal style and note,
+# signed out.
 $process = Start-Pane "stderr-uninstall.log"
 Open-Extension "Settings sample"
 Extension-Action "Settings sample" "Uninstall"
-Wait-Shown "Uninstall and keep saved data"   # the confirmation: what is removed and the saved data
+Wait-Shown "Uninstall Settings sample?"   # the alert: what is removed and the saved data
 Capture "49-confirm-uninstall.png"
-Press-Named "Uninstall and keep saved data"
+Press-Named "Uninstall"   # the alert's primary button (the menu is closed)
 Wait-Shown "Uninstalled Settings sample" -Prefix   # "...; its settings and content are kept"
 Capture "50-uninstalled.png"
 Stop-Pane $process
@@ -1083,7 +1086,8 @@ Wait-For (Join-Path $data "extensions/content.json") '"note": "Water the plants"
 Send "{ESC}"; Start-Sleep -Seconds 1   # root search
 Open-Extension "Settings sample"
 Extension-Action "Settings sample" "Uninstall"
-Press-Named "Uninstall and keep saved data"
+Wait-Shown "Uninstall Settings sample?"
+Press-Named "Uninstall"   # keeping its saved data
 Wait-For $registry '"retained"' $true; Start-Sleep -Seconds 1
 # A restart before the deletion: the retained record is what survives one
 # (that is its point).
@@ -1092,12 +1096,12 @@ $process = Start-Pane "stderr-retained.log"
 Start-Sleep -Seconds 2
 Manage-Extensions
 Press-Named "Delete retained data of Settings sample"   # a row of the group's page
-# The confirmation itself, found by its row, not by a color: the group's
+# The alert itself, found by its question, not by a color: the group's
 # page shows hint lines too, so a color alone let the wrong screen pass
 # once (#58).
-Wait-Shown "Delete retained data"   # what is kept and what is not touched, above it
+Wait-Shown "Delete the retained data of Settings sample?"   # what is kept and what is not touched
 Capture "63-confirm-delete-retained.png"
-Press-Named "Delete retained data"
+Press-Named "Delete Data"
 Wait-For $registry '"retained"' $false; Start-Sleep -Seconds 1
 Wait-Shown "Deleted the retained data of Settings sample"
 Capture "64-retained-deleted.png"
@@ -1501,10 +1505,10 @@ if ((Test-Path (Join-Path $jsToolchain "bin/*/toolchain.json")) -and (Get-Comman
 # Disabling a required dependency: installed with the dependencies sample
 # (whose install and data folder are this phase's own), the JavaScript
 # operations sample's switch on its page in Settings asks first, listing
-# the Dependencies sample, which requires it, with Disable all and Cancel;
-# Cancel changes nothing, Disable all disables both, and the switch again
-# enables the JavaScript operations sample alone: the Dependencies sample
-# stays disabled, on record too.
+# the Dependencies sample, which requires it, in an alert with Disable All,
+# Disable Only and Cancel; Cancel changes nothing, Disable All disables
+# both, and the switch again enables the JavaScript operations sample
+# alone: the Dependencies sample stays disabled, on record too.
 $data = Join-Path $OutDir "disable-dependents-data"
 if (Test-Path $data) { Remove-Item -Recurse -Force $data }
 $env:PANE_DATA_DIR = $data
@@ -1513,13 +1517,14 @@ Send "{ENTER}"; Start-Sleep -Seconds 3   # Install
 $operations = "JavaScript operations sample"
 Open-Extension $operations
 Press-Named $operations -Toggle   # disable it: asks first
-Wait-Shown "Disable all 2"   # "Dependencies sample, which requires JavaScript operations sample ...", above it
+Wait-Shown "Disable All 2"   # "Dependencies sample, which requires JavaScript operations sample", above it
 Capture "140-disable-dependents-asked.png"
 Press-Named "Cancel"
-Find-Named $operations -Toggle | Out-Null   # its page again: both still enabled
+Assert-Not-Shown "Disable All 2"   # the alert is gone
+Find-Named $operations -Toggle | Out-Null   # its page: both still enabled
 Capture "141-disable-dependents-cancelled.png"
 Press-Named $operations -Toggle   # asks again
-Press-Named "Disable all 2"
+Press-Named "Disable All 2"
 Wait-Shown "Disabled JavaScript operations sample and Dependencies sample" -Prefix   # "..., which requires it"
 Capture "142-disable-dependents-disabled.png"
 Press-Named $operations -Toggle   # enable JavaScript operations sample
@@ -1811,8 +1816,8 @@ if ($paused.Count -ne 0) { throw "a package was paused for the runtime's hang" }
 # (whose install and data folder are this phase's own), the JavaScript
 # operations sample's Uninstall (an item of its page's Actions menu in
 # Settings) asks first, listing the Dependencies sample, which requires it, and
-# each one's saved data, with Uninstall all keeping or deleting saved data
-# and Cancel; Cancel changes nothing, Uninstall all 2 (keeping) uninstalls
+# each one's saved data, in an alert with Uninstall All, "Delete saved
+# data" and Cancel; Cancel changes nothing, Uninstall All 2 (keeping) uninstalls
 # both, and installing the JavaScript operations sample again installs it
 # alone: the Dependencies sample is not restored, on record too.
 $data = Join-Path $OutDir "uninstall-dependents-data"
@@ -1823,13 +1828,14 @@ Send "{ENTER}"; Start-Sleep -Seconds 3   # Install
 $operations = "JavaScript operations sample"
 Open-Extension $operations
 Extension-Action $operations "Uninstall"   # asks first
-Wait-Shown "Uninstall all 2 and keep saved data"   # "Dependencies sample, which requires JavaScript operations sample ...", above it
+Wait-Shown "Uninstall All 2"   # "Dependencies sample, which requires JavaScript operations sample", above it
 Capture "180-uninstall-dependents-asked.png"
 Press-Named "Cancel"
-Find-Named "Actions for $operations" | Out-Null   # its page again: both still installed
+Assert-Not-Shown "Uninstall All 2"   # the alert is gone
+Find-Named "Actions for $operations" | Out-Null   # its page: both still installed
 Capture "181-uninstall-dependents-cancelled.png"
 Extension-Action $operations "Uninstall"   # asks again
-Press-Named "Uninstall all 2 and keep saved data"
+Press-Named "Uninstall All 2"
 Wait-Shown "Uninstalled JavaScript operations sample and Dependencies sample" -Prefix   # "..., which requires it; ..."
 Capture "182-uninstall-dependents-uninstalled.png"
 Stop-Pane $process

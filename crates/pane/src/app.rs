@@ -3157,12 +3157,32 @@ impl Render for LauncherWindow {
         ));
         // The view, and what the list draws of all its rows; each row's own
         // presentation is read as the list draws it (#165).
-        let (mut view, listing) = self.launcher.presented_list();
+        let (mut view, mut listing) = self.launcher.presented_list();
         #[cfg(any(test, debug_assertions))]
         {
             self.drawn = Some(view.clone());
-            self.drawn_over = self.actions.is_some() || self.launcher.confirmation().is_some();
+            self.drawn_over = self.actions.is_some()
+                || self.launcher.confirmation().is_some()
+                || matches!(view.screen, Screen::Confirm { .. });
             self.results.drawn_rows.clear();
+        }
+        // Pane's own question is an alert over the screen it was asked
+        // from, as Raycast asks (see `features::confirmation`): that screen
+        // is what this frame draws, as it was, under the alert's dimmer.
+        let question = matches!(view.screen, Screen::Confirm { .. }).then(|| view.clone());
+        let beneath = question
+            .as_ref()
+            .and_then(|_| self.launcher.beneath_question());
+        self.results.beneath = beneath.is_some();
+        match beneath {
+            Some((under, under_listing)) => (view, listing) = (under, under_listing),
+            // A question with nothing kept beneath it is drawn over an
+            // empty window.
+            None if question.is_some() => {
+                view.rows.clear();
+                view.selected = None;
+            }
+            None => {}
         }
         // The toast the footer shows, if any, and its time (#141): an
         // outcome of the status line is a toast too, timed here and
@@ -3177,12 +3197,24 @@ impl Render for LauncherWindow {
         // it (#146).
         if let Some(split) = self.render_search_files(&view, window, cx) {
             let visuals = crate::settings::launcher_visuals(cx);
-            let asked = self.render_confirmation_layer(&visuals.theme, visuals.material, cx);
+            let asked = self.render_confirmation_layer(
+                question.as_ref(),
+                &visuals.theme,
+                visuals.material,
+                window,
+                cx,
+            );
             return split.children(asked);
         }
         if let Some(split) = self.render_clipboard_history(&view, window, cx) {
             let visuals = crate::settings::launcher_visuals(cx);
-            let asked = self.render_confirmation_layer(&visuals.theme, visuals.material, cx);
+            let asked = self.render_confirmation_layer(
+                question.as_ref(),
+                &visuals.theme,
+                visuals.material,
+                window,
+                cx,
+            );
             return split.children(asked);
         }
         // The compact window mode shows only the search field until
@@ -3473,8 +3505,10 @@ impl Render for LauncherWindow {
         // screens) have the same top bar, named by their title, which
         // says what they are about, as Raycast's Store page of an
         // extension has its back button: their details and rows below
-        // it. A confirmation keeps its plain heading: Raycast asks with
-        // an alert, not a page, so it has no back button to show. The
+        // it. A question is an alert over the screen it was asked from,
+        // not a page: that screen is what is drawn here, and the alert
+        // over it (`features::confirmation`). The update results keep a
+        // plain heading above their search bar. The
         // heading and the footer's command are computed before the body
         // dispatch, which moves the screen. A heading or a top bar's
         // title is also its screen's drag region (the footer's command is
@@ -3487,9 +3521,10 @@ impl Render for LauncherWindow {
             | Screen::CommandSearch { .. }
             | Screen::PaneForm(_)
             | Screen::DesignedView(_)
-            | Screen::Extensions { .. } => None,
+            | Screen::Extensions { .. }
+            | Screen::Confirm { .. } => None,
             // The update results have their search bar under the heading.
-            Screen::Confirm { .. } | Screen::UpdateResults { .. } => {
+            Screen::UpdateResults { .. } => {
                 Some(shell::screen_heading(view.title.clone(), &theme).into_any_element())
             }
             _ => Some(
@@ -3625,9 +3660,9 @@ impl Render for LauncherWindow {
             }
         };
 
-        // The confirmation a command waits on, over everything (#146),
-        // added to the panel below.
-        let asked = self.render_confirmation_layer(&theme, material, cx);
+        // The confirmation a command waits on (#146), or Pane's own
+        // question, over everything, added to the panel below.
+        let asked = self.render_confirmation_layer(question.as_ref(), &theme, material, window, cx);
 
         // The launcher's content: the shared Geist family and base text
         // color on everything, the heading (or the search header, in
