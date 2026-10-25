@@ -220,10 +220,16 @@ letter that cannot be placed means no match. A query with no letters at
 all matches nothing, so a row of separators alone does not list every
 result that holds one.
 
-Separators are whitespace and `- . / ( ) [ ]`. Capital letters inside a
-word are not word starts. A query starting with "/" treats the first "/"
-in a title as a space. A query longer than two characters is checked in
-order first, so a text that cannot hold its letters is never scored.
+Separators are whitespace and `- . / ( ) [ ]`. A word starts after a
+separator or after any other punctuation or symbol, so a title that
+starts with one is found by its first word: `scratch` finds
+`*scratch.txt - Notepad`, `main` finds `● main.rs`, `general` finds
+`#general` (#540). That widens only the text's words: a query's
+punctuation other than the separators must still be placed. Capital
+letters inside a word are not word starts. A query starting with "/"
+treats the first "/" in a title as a space. A query longer than two
+characters is checked in order first, so a text that cannot hold its
+letters is never scored.
 
 ### Search sensitivity
 

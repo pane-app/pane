@@ -173,6 +173,14 @@ has, is recorded as the modifier, which either side then presses
 (Ctrl+Alt+G, the Windows key alone). A right-hand one is recorded by its
 side (Right Ctrl).
 
+A lone tap is recorded once the double-tap window (400 ms from its press)
+closes with no second press, so the recorder can still take a double tap
+(#539). Tapping Ctrl twice within the window records Ctrl Ctrl
+(`double:ctrl`); tapping it once records Ctrl (`tap:ctrl`) a moment after
+the release. Another key pressed inside the window records the tap at
+once. The Windows key stays held back throughout, so recording it alone
+or doubled never opens the Start menu.
+
 What the session reports takes the same checks a keystroke does, with the
 same explanations. Escape and Tab still cancel, and Backspace or Delete
 pressed alone passes to the recorder as its clearing key (#494). The
@@ -466,7 +474,17 @@ is installed only while a binding or a recording session needs it (#125,
 ADR 0039). It has:
 
 - locked pages
-- a raw-input watchdog that reinstalls a hook Windows silently removed
+- a raw-input watchdog that reinstalls a hook Windows silently removed.
+  It never counts Pane's own keys against the hook: before it counts a
+  key, it asks Windows which window is in front, since Windows calls no
+  low-level hook of Pane's while Pane is in front, and Pane can get the
+  foreground without a foreground event (closing a virtual desktop
+  hands it back that way, #538). After 6 reinstalls within 30 seconds
+  it pauses for 30 seconds, doubling while the failures go on, up to 5
+  minutes, and then tries again, so the hotkeys never stay dead until
+  Pane restarts. `pane.log` says when it pauses and when the hook sees
+  the keys again, and the Keyboard page shows the pause's reason until
+  then
 - modifiers re-read from the system on a session unlock, a resume and a
   contradiction
 - Pane's injected keys tagged and passed through untouched
@@ -689,6 +707,14 @@ extension cannot assign, read or declare one (no WIT or manifest change).
     back (the Windows key never reaching the system), reporting what was
     pressed, with Escape passing through and the keys free again once the
     session ends.
+  - The watchdog's counting, in the Windows adapter's own unit tests
+    ([`crates/pane-core/src/hotkeys/windows.rs`](../crates/pane-core/src/hotkeys/windows.rs),
+    #538), with no real input: keys typed while Pane is in front, with no
+    foreground event delivered, never reinstall the hook; a hook that
+    sees the keys is left alone; a removed one is reinstalled; one
+    removed again and again pauses, the pause doubling up to 5 minutes,
+    is tried again after each pause and is reported recovered when it
+    sees the keys; and removals far apart never give up.
   - macOS registers with the main run loop, which a test thread does not
     run, so only the GUI smoke checks it.
 - Native GUI smokes, one identical phase on all three systems

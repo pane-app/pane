@@ -163,6 +163,30 @@ taskbar button. HUDs are pop-ups, which no system lists.
 - On Wayland there is no protocol for it: whether the launcher is listed
   is up to the compositor.
 
+### The Settings window's titlebar
+
+On Windows and macOS the Settings window draws its own titlebar, 48
+pixels tall, with the page's name in its middle. Linux keeps the window
+manager's frame. The titlebar behaves as the system's own does, and as
+Raycast's Settings window does
+([#541](https://github.com/pane-app/pane/issues/541)):
+
+- On Windows the titlebar is the window's caption to the system
+  (`HTCAPTION`), beside Pane's own Minimize, Maximize and Close buttons.
+  Dragging it moves the window, with Aero Snap. A double click maximizes
+  the window, and another restores it. Right-clicking it opens the system
+  menu. Pane holds back only one thing: the system's move would begin at
+  the press. While it ran, it sometimes took the release and the second
+  press of a double click for itself, so the double click never arrived.
+  Now the move begins once the pointer has moved past the system's drag
+  distance with the button held (`crates/pane/src/titlebar_drag.rs`).
+  Tests on CI's Windows runner check that a press alone begins no move,
+  and double-click and drag the titlebar with the real pointer.
+- On macOS the traffic lights stay where AppKit puts them, and the drag
+  is AppKit's. A double click does what the system's "Double-click a
+  window's title bar to" setting says (zoom, minimize or nothing). No
+  test covers it, and it has not yet been checked on a Mac.
+
 ### What the launcher shows
 
 The actual query, command rows, selection, invocation and extension views

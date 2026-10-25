@@ -741,7 +741,7 @@ pub(crate) fn compose(
 /// The card that says the state of Pane's own keyboard hook (#259): one
 /// row under the page's actions, named [`HOOK`], saying the adapter's
 /// [`HookHealth::note`] under its name. A hook Pane gave up keeping
-/// installed says its reason in the warning ink; a working one's state
+/// installed for a while (#538) says its reason in the warning ink; a working one's state
 /// is the muted ink of a row's description. It takes no focus and no
 /// click — a jump from the search reveals it, and the sidebar keeps the
 /// window's keyboard focus.

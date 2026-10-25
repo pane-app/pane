@@ -41,13 +41,20 @@
 //! past Windows' hook timeout; if Windows refuses, the diagnostic says
 //! the pages are not pinned. A watchdog window that receives raw keyboard
 //! input notices when key events stop reaching the hook — Windows has
-//! silently removed it — and installs it again, giving up with a
-//! diagnostic after repeated failures within a short time. The raw input
-//! is registered only while no window of Pane's is in front: while the
-//! process that registered it has the foreground, Windows calls none of
-//! that process's low-level hooks, so a recording session would hear
+//! silently removed it — and installs it again. After repeated failures
+//! within a short time it pauses, with a diagnostic, and tries again
+//! after the pause, which doubles while the failures go on (up to five
+//! minutes); a hook that sees the keys again is logged as recovered, so
+//! the hotkeys never stay dead until Pane starts again (#538). The raw
+//! input is registered only while no window of Pane's is in front: while
+//! the process that registered it has the foreground, Windows calls none
+//! of that process's low-level hooks, so a recording session would hear
 //! nothing and the watchdog would take every key typed into Pane for a
-//! removed hook. The
+//! removed hook. The foreground event moves the registration, and each
+//! raw key event checks the window really in front before it counts, so
+//! a foreground event that never arrived (closing a virtual desktop
+//! hands the foreground back to Pane without one) cannot count Pane's
+//! own keys against the hook. The
 //! recognizer's modifiers are re-read from the system on a session
 //! unlock, on a resume and when an event contradicts them, so a release
 //! missed while the secure desktop had the keyboard never leaves a
@@ -85,10 +92,10 @@ use ::windows::Win32::UI::Input::{
 };
 use ::windows::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, DefWindowProcW, EVENT_SYSTEM_FOREGROUND, GetForegroundWindow,
-    GetWindowThreadProcessId, HHOOK, KBDLLHOOKSTRUCT, LLKHF_EXTENDED, LLKHF_INJECTED, LLKHF_UP,
-    MSG, OBJID_WINDOW, PBT_APMRESUMEAUTOMATIC, PBT_APMRESUMESUSPEND, PostThreadMessageW,
-    SetWindowsHookExW, UnhookWindowsHookEx, WH_KEYBOARD_LL, WINEVENT_OUTOFCONTEXT, WM_HOTKEY,
-    WM_INPUT, WM_POWERBROADCAST, WM_WTSSESSION_CHANGE,
+    GetWindowThreadProcessId, HHOOK, KBDLLHOOKSTRUCT, KillTimer, LLKHF_EXTENDED, LLKHF_INJECTED,
+    LLKHF_UP, MSG, OBJID_WINDOW, PBT_APMRESUMEAUTOMATIC, PBT_APMRESUMESUSPEND, PostThreadMessageW,
+    SetTimer, SetWindowsHookExW, UnhookWindowsHookEx, WH_KEYBOARD_LL, WINEVENT_OUTOFCONTEXT,
+    WM_HOTKEY, WM_INPUT, WM_POWERBROADCAST, WM_WTSSESSION_CHANGE,
 };
 use ::windows::core::HRESULT;
 
@@ -111,8 +118,18 @@ const RAW_BEFORE_REINSTALL: u32 = 6;
 const REINSTALL_WINDOW: Duration = Duration::from_secs(30);
 
 /// How many reinstallations within [`REINSTALL_WINDOW`] Pane gives up
-/// after, leaving the hook-based hotkeys dead until Pane starts again.
+/// after, pausing before it tries again (see [`FIRST_PAUSE`]).
 const REINSTALLS_BEFORE_GIVING_UP: u32 = 5;
+
+/// How long the watchdog stops reinstalling the hook after it gave up the
+/// first time: a hook that keeps being removed is not reinstalled in a
+/// tight loop, but the hotkeys never stay dead until Pane starts again
+/// (#538). Each give-up that follows straight after the pause doubles
+/// it, up to [`LONGEST_PAUSE`].
+const FIRST_PAUSE: Duration = Duration::from_secs(30);
+
+/// The longest the watchdog pauses before trying the hook again.
+const LONGEST_PAUSE: Duration = Duration::from_secs(300);
 
 /// How much the process's minimum working set is raised by, for the pages
 /// the hook pins: a lock that would not fit the working set fails, so the
@@ -180,7 +197,8 @@ struct Report {
     reinstalled: u32,
     /// Whether the hook's code and data pages are pinned in memory.
     pinned: bool,
-    /// Why Pane gave up reinstalling the hook, if it did.
+    /// Why Pane gave up reinstalling the hook for a while, until the
+    /// hook sees the keys again (#538).
     given_up: Option<String>,
     /// The low-level hook's handle, for the tests to remove behind the
     /// adapter's back; 0 while none is installed.
@@ -1084,8 +1102,16 @@ struct Hooked {
     /// the keys back and posts what it recognizes to the adapter's
     /// thread, which sends it to the session.
     recording: bool,
-    /// The key events the hook last reported seeing, for the watchdog's
-    /// comparison.
+    /// The watchdog's counters.
+    watchdog: Watchdog,
+}
+
+/// The watchdog's counters, which decide from each raw key event what to
+/// do about the hook. They make no Windows call, so the tests step them
+/// with no real input.
+#[derive(Default)]
+struct Watchdog {
+    /// The key events the hook last reported seeing, for the comparison.
     last_seen: u64,
     /// The raw key events since the hook last reported seeing one.
     unseen: u32,
@@ -1094,8 +1120,99 @@ struct Hooked {
     /// How many times the hook has been reinstalled in the current run,
     /// which gives up after too many within a short time.
     attempts: u32,
-    /// Whether Pane has given up reinstalling it.
-    given_up: bool,
+    /// Until when the watchdog reinstalls nothing, having given up.
+    paused_until: Option<Instant>,
+    /// How many give-ups followed one another, which the pause doubles
+    /// with.
+    pauses: u32,
+    /// Whether the current run of reinstallations followed a pause, so a
+    /// give-up in it pauses longer.
+    after_pause: bool,
+    /// Whether Pane gave up and has not seen the hook work since.
+    troubled: bool,
+}
+
+/// What the watchdog does about one raw key event.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Step {
+    /// Nothing: the hook is seeing the keys, Pane is in front, too few
+    /// went unseen yet, or the watchdog is paused.
+    Wait,
+    /// Windows removed the hook: install it again.
+    Reinstall,
+    /// Too many reinstallations within a short time: reinstall nothing
+    /// for `pause`, then try again.
+    GiveUp { attempts: u32, pause: Duration },
+    /// The hook sees the keys again after a give-up.
+    Recovered,
+}
+
+impl Watchdog {
+    /// Counts afresh: the raw input was registered or removed, so the
+    /// events before say nothing of the hook.
+    fn afresh(&mut self) {
+        self.unseen = 0;
+    }
+
+    /// Steps the counters with one raw key event at `now`: `seen` is how
+    /// many key events the hook has seen, and `pane_in_front` whether a
+    /// window of Pane's is in front, as the system says now. Pane's own
+    /// keys never count against the hook: while Pane has the foreground,
+    /// Windows calls none of its low-level hooks, however Pane got there
+    /// — a foreground event that never arrived (closing a virtual
+    /// desktop hands the foreground back to Pane without one) took every
+    /// key typed into Pane for a removed hook (#538).
+    fn raw(&mut self, seen: u64, pane_in_front: bool, now: Instant) -> Step {
+        if seen != self.last_seen {
+            self.last_seen = seen;
+            self.unseen = 0;
+            if self.troubled {
+                self.troubled = false;
+                self.paused_until = None;
+                return Step::Recovered;
+            }
+        }
+        if pane_in_front {
+            self.unseen = 0;
+            return Step::Wait;
+        }
+        if self.paused_until.is_some_and(|until| now < until) {
+            return Step::Wait;
+        }
+        self.paused_until = None;
+        self.unseen += 1;
+        if self.unseen < RAW_BEFORE_REINSTALL {
+            return Step::Wait;
+        }
+        self.unseen = 0;
+        if self
+            .first
+            .is_none_or(|first| now - first > REINSTALL_WINDOW)
+        {
+            // A fresh run: the pauses double only while each run gives
+            // up straight after the last pause.
+            if !self.after_pause {
+                self.pauses = 0;
+            }
+            self.after_pause = false;
+            self.first = Some(now);
+            self.attempts = 0;
+        }
+        self.attempts += 1;
+        if self.attempts <= REINSTALLS_BEFORE_GIVING_UP {
+            return Step::Reinstall;
+        }
+        let pause = FIRST_PAUSE
+            .saturating_mul(1 << self.pauses.min(8))
+            .min(LONGEST_PAUSE);
+        let attempts = self.attempts;
+        self.pauses += 1;
+        self.after_pause = true;
+        self.troubled = true;
+        self.paused_until = Some(now + pause);
+        self.first = None;
+        Step::GiveUp { attempts, pause }
+    }
 }
 
 impl Drop for Hooked {
@@ -1203,11 +1320,7 @@ fn start_hook(adapter: u32, report: Arc<Mutex<Report>>) -> Result<((), Option<HW
             adapter,
             report: report.clone(),
             recording: false,
-            last_seen: 0,
-            unseen: 0,
-            first: None,
-            attempts: 0,
-            given_up: false,
+            watchdog: Watchdog::default(),
         });
     });
     // The pages are pinned where the state now lives, in the thread's own
@@ -1303,7 +1416,9 @@ fn unbind(id: u32) {
 
 /// The low-level keyboard hook's callback, called by the system on the
 /// thread that installed it while it pumps its messages. It only steps
-/// the recognizer and posts the press to the adapter's thread: it never
+/// the recognizer, posts the press to the adapter's thread and, while a
+/// recording session holds a lone tap, sets the timer that reports it
+/// (#539): it never
 /// allocates, takes no lock another thread holds, or calls anything
 /// outside the hook machinery. A panic must not unwind into Windows,
 /// which would end Pane, so it catches one and lets the event through.
@@ -1410,7 +1525,13 @@ fn decide(event: &KBDLLHOOKSTRUCT) -> (bool, Option<u32>, bool) {
                     post(state.adapter, WM_RECORDED_ENDED, 0);
                     return Some((false, None, false));
                 }
-                Some(match state.recognizer.step(key) {
+                let decision = state.recognizer.step(key);
+                // A lone tap the recognizer holds until the double-tap
+                // window closes (#539): the timer asks for it then.
+                if let Some(due) = state.recognizer.recording_due() {
+                    arm_tap_timer(state.window.handle(), due.saturating_sub(key.time));
+                }
+                Some(match decision {
                     Decision::Recorded(report) => {
                         post(state.adapter, WM_RECORDED, pack(report));
                         (true, None, false)
@@ -1446,6 +1567,48 @@ fn decide(event: &KBDLLHOOKSTRUCT) -> (bool, Option<u32>, bool) {
         .ok()
         .flatten()
         .unwrap_or((false, None, false))
+}
+
+/// The id of the watchdog window's timer that reports the lone tap a
+/// recording session holds once the double-tap window closes (#539).
+const TAP_TIMER: usize = 1;
+
+/// Sets the tap timer on the watchdog window `window` to fire in
+/// `delay` milliseconds, replacing one already set. Windows' timers fire
+/// no sooner than asked, so the window has closed when it does.
+fn arm_tap_timer(window: HWND, delay: u64) {
+    let delay = u32::try_from(delay).unwrap_or(u32::MAX).max(1);
+    // SAFETY: this thread's own window; the procedure is this module's,
+    // kept for as long as the process runs.
+    let _ = unsafe { SetTimer(Some(window), TAP_TIMER, delay, Some(tap_due)) };
+}
+
+/// The tap timer's procedure, on the hook thread as it dispatches the
+/// timer's message: the double-tap window closed, so the lone tap the
+/// recording session holds stands, and is posted to the adapter's thread
+/// as the hook posts what it recognizes (#539). `now` is the system's
+/// tick count, the clock the hook's event times are on. A panic must not
+/// unwind into Windows, which would end Pane, so it catches one.
+unsafe extern "system" fn tap_due(window: HWND, _message: u32, id: usize, now: u32) {
+    let _ = std::panic::catch_unwind(|| {
+        // SAFETY: this thread's own window and timer.
+        let _ = unsafe { KillTimer(Some(window), id) };
+        let _ = HOOKED.try_with(|hooked| {
+            let Ok(mut held) = hooked.try_borrow_mut() else {
+                return;
+            };
+            let Some(state) = held.as_mut() else {
+                return;
+            };
+            let now = u64::from(now);
+            if let Some(report) = state.recognizer.recorded_due(now) {
+                post(state.adapter, WM_RECORDED, pack(report));
+            } else if let Some(due) = state.recognizer.recording_due() {
+                // Still held: the window closes a moment later.
+                arm_tap_timer(window, due.saturating_sub(now));
+            }
+        });
+    });
 }
 
 /// Posts `message` with `word` to the adapter's thread `adapter`; a post
@@ -1526,6 +1689,10 @@ unsafe extern "system" fn foreground_changed(
 /// watchdog took every key typed into Pane for a removed hook. While
 /// Pane is in front its own windows have the keys, so the watchdog has
 /// nothing to watch for; it counts afresh when Pane leaves the front.
+/// The foreground hook calls this, and so does the watchdog on each raw
+/// key event with the window the system says is in front: a foreground
+/// event that never arrived leaves the registration wrong only until the
+/// next key (#538).
 fn follow_raw_input(state: &mut Hooked, front: HWND) {
     let wanted = !is_pane(front);
     if wanted == state.raw {
@@ -1539,7 +1706,7 @@ fn follow_raw_input(state: &mut Hooked, front: HWND) {
     match changed {
         Ok(()) => {
             state.raw = wanted;
-            state.unseen = 0;
+            state.watchdog.afresh();
         }
         Err(problem) => crate::diagnostics::report_line(&format!(
             "the keyboard hook's watchdog could not {} the keyboard's raw input: {problem}",
@@ -1623,54 +1790,43 @@ fn def(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
 /// is installed again. The keys a tool injects reach the raw input as the
 /// keyboard's do but are not the keyboard's, so counting only the
 /// keyboard's own here would take a busy remapper for a removed hook.
+/// The window in front is the system's answer now, not the last
+/// foreground event's, and the raw input's registration follows it.
+/// After too many reinstallations within a short time the watchdog
+/// pauses rather than giving up for good, says so, and says so again
+/// when the hook works once more (#538).
 fn watch(state: &mut Hooked) {
-    if state.given_up {
-        return;
-    }
+    let front = front();
+    follow_raw_input(state, front);
     let seen = state.recognizer.events();
-    if seen != state.last_seen {
-        state.last_seen = seen;
-        state.unseen = 0;
+    match state.watchdog.raw(seen, is_pane(front), Instant::now()) {
+        Step::Wait => {}
+        Step::Reinstall => reinstall(state),
+        Step::GiveUp { attempts, pause } => {
+            // The hook stays as it is: if Windows did remove it, the
+            // reinstall after the pause replaces it, and if it was not
+            // removed after all, its hotkeys keep working.
+            let why = format!(
+                "Windows removed Pane's keyboard hook {attempts} times within {} seconds; Pane \
+                 stopped reinstalling it for {} seconds, and the hotkeys it dispatches may do \
+                 nothing until it tries again",
+                REINSTALL_WINDOW.as_secs(),
+                pause.as_secs()
+            );
+            crate::diagnostics::report_line(&why);
+            update(&state.report, |report| report.given_up = Some(why));
+        }
+        Step::Recovered => {
+            crate::diagnostics::report_line(
+                "Pane's keyboard hook sees the keys again; the hotkeys it dispatches work",
+            );
+            update(&state.report, |report| report.given_up = None);
+        }
     }
-    state.unseen += 1;
-    if state.unseen < RAW_BEFORE_REINSTALL {
-        return;
-    }
-    state.unseen = 0;
-    reinstall(state);
 }
 
-/// Installs the hook again: Windows has removed it. The attempts within a
-/// short time are counted, and after too many Pane gives up and says so,
-/// leaving the hook-based hotkeys dead until Pane starts again.
+/// Installs the hook again: Windows has removed it.
 fn reinstall(state: &mut Hooked) {
-    let now = Instant::now();
-    if state
-        .first
-        .is_none_or(|first| now - first > REINSTALL_WINDOW)
-    {
-        state.first = Some(now);
-        state.attempts = 0;
-    }
-    state.attempts += 1;
-    if state.attempts > REINSTALLS_BEFORE_GIVING_UP {
-        state.given_up = true;
-        // SAFETY: this thread's own hook; Windows has removed it, so this
-        // fails harmlessly and ends Pane's claim on it.
-        let _ = unsafe { UnhookWindowsHookEx(state.hook) };
-        let why = format!(
-            "Windows removed Pane's keyboard hook {} times within {} seconds; Pane gave up \
-             reinstalling it, and the hotkeys it dispatches do nothing until Pane starts again",
-            state.attempts,
-            REINSTALL_WINDOW.as_secs()
-        );
-        crate::diagnostics::report_line(&why);
-        update(&state.report, |report| {
-            report.hook = 0;
-            report.given_up = Some(why);
-        });
-        return;
-    }
     // SAFETY: this thread's own hook; Windows has removed it, so this
     // fails harmlessly and a fresh one takes its place either way.
     let _ = unsafe { UnhookWindowsHookEx(state.hook) };
@@ -1830,6 +1986,121 @@ fn raise_working_set(by: usize) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Steps `watchdog` with `count` raw key events at `now`, the hook
+    /// having seen `seen` events, and returns each step that was not a
+    /// wait.
+    fn raw_events(
+        watchdog: &mut Watchdog,
+        count: u32,
+        seen: u64,
+        pane_in_front: bool,
+        now: Instant,
+    ) -> Vec<Step> {
+        (0..count)
+            .map(|_| watchdog.raw(seen, pane_in_front, now))
+            .filter(|step| *step != Step::Wait)
+            .collect()
+    }
+
+    #[test]
+    fn keys_typed_into_pane_never_count_against_the_hook() {
+        // Pane got the foreground with no foreground event (#538): the
+        // raw input stayed registered and every key typed into Pane
+        // arrives, while the hook — which Windows does not call while
+        // Pane is in front — sees none of them.
+        let mut watchdog = Watchdog::default();
+        let now = Instant::now();
+        assert_eq!(raw_events(&mut watchdog, 1000, 0, true, now), []);
+        // Once another window is in front, the count starts afresh: the
+        // keys typed into Pane add nothing to it.
+        assert_eq!(
+            raw_events(&mut watchdog, RAW_BEFORE_REINSTALL - 1, 0, false, now),
+            []
+        );
+        assert_eq!(watchdog.raw(0, false, now), Step::Reinstall);
+    }
+
+    #[test]
+    fn a_hook_that_sees_the_keys_is_left_alone() {
+        let mut watchdog = Watchdog::default();
+        let now = Instant::now();
+        for seen in 1..1000 {
+            assert_eq!(watchdog.raw(seen, false, now), Step::Wait);
+        }
+    }
+
+    #[test]
+    fn a_removed_hook_is_reinstalled() {
+        let mut watchdog = Watchdog::default();
+        let now = Instant::now();
+        assert_eq!(watchdog.raw(3, false, now), Step::Wait);
+        // The hook stops seeing the keys: the sixth unseen one reinstalls
+        // it.
+        assert_eq!(
+            raw_events(&mut watchdog, RAW_BEFORE_REINSTALL, 3, false, now),
+            [Step::Reinstall]
+        );
+    }
+
+    #[test]
+    fn a_hook_removed_again_and_again_pauses_and_is_tried_again() {
+        let mut watchdog = Watchdog::default();
+        let start = Instant::now();
+        let burst = RAW_BEFORE_REINSTALL * (REINSTALLS_BEFORE_GIVING_UP + 1);
+        let mut expected = vec![Step::Reinstall; REINSTALLS_BEFORE_GIVING_UP as usize];
+        expected.push(Step::GiveUp {
+            attempts: REINSTALLS_BEFORE_GIVING_UP + 1,
+            pause: FIRST_PAUSE,
+        });
+        assert_eq!(raw_events(&mut watchdog, burst, 0, false, start), expected);
+        // Nothing is reinstalled during the pause.
+        let during = start + FIRST_PAUSE / 2;
+        assert_eq!(raw_events(&mut watchdog, 100, 0, false, during), []);
+        // After it, the hook is tried again; a give-up straight after
+        // doubles the pause, up to the longest.
+        let mut now = start + FIRST_PAUSE;
+        for pause in [60, 120, 240, 300, 300] {
+            expected.pop();
+            expected.push(Step::GiveUp {
+                attempts: REINSTALLS_BEFORE_GIVING_UP + 1,
+                pause: Duration::from_secs(pause),
+            });
+            assert_eq!(raw_events(&mut watchdog, burst, 0, false, now), expected);
+            now += Duration::from_secs(pause);
+        }
+        // The hook sees the keys again: recovered, and nothing paused.
+        assert_eq!(watchdog.raw(1, false, now), Step::Recovered);
+        assert_eq!(watchdog.raw(2, false, now), Step::Wait);
+    }
+
+    #[test]
+    fn a_hook_that_works_during_the_pause_recovers_at_once() {
+        let mut watchdog = Watchdog::default();
+        let start = Instant::now();
+        let burst = RAW_BEFORE_REINSTALL * (REINSTALLS_BEFORE_GIVING_UP + 1);
+        let steps = raw_events(&mut watchdog, burst, 0, false, start);
+        assert!(matches!(steps.last(), Some(Step::GiveUp { .. })));
+        assert_eq!(watchdog.raw(1, false, start), Step::Recovered);
+        // The pause is over: a later removal is reinstalled at once.
+        assert_eq!(
+            raw_events(&mut watchdog, RAW_BEFORE_REINSTALL, 1, false, start),
+            [Step::Reinstall]
+        );
+    }
+
+    #[test]
+    fn removals_far_apart_never_give_up() {
+        let mut watchdog = Watchdog::default();
+        let mut now = Instant::now();
+        for _ in 0..20 {
+            assert_eq!(
+                raw_events(&mut watchdog, RAW_BEFORE_REINSTALL, 0, false, now),
+                [Step::Reinstall]
+            );
+            now += REINSTALL_WINDOW + Duration::from_secs(1);
+        }
+    }
 
     #[test]
     fn a_recorded_report_crosses_the_threads_unchanged() {

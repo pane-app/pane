@@ -64,7 +64,11 @@
 //! stays closed — and each chord candidate (a key pressed with the
 //! modifiers held, each any side or the one named) and each lone tap and
 //! double tap recognized is reported ([`Recorded`]) for the recorder to
-//! check as the window's own recorder checks a keystroke. Escape and Tab
+//! check as the window's own recorder checks a keystroke. A lone tap is
+//! held until the double-tap window closes, so a second press can still
+//! make it a double tap (#539): the next press reports it, or the adapter
+//! asks for it when the window closes ([`Recognizer::recording_due`],
+//! [`Recognizer::recorded_due`]). Escape and Tab
 //! never reach it: the adapter lets them through, so the recorder's own
 //! cancellation keys work. Backspace and Delete pressed alone pass too,
 //! so the recorder's clearing key works (#494).
@@ -378,6 +382,26 @@ struct Tap {
     broken: bool,
 }
 
+/// A lone tap a recording session recognized and holds until the
+/// double-tap window closes (#539): a second press of the same key within
+/// [`DOUBLE_MS`] of the first is the double tap instead, so the tap is
+/// reported only once no second press can come.
+#[derive(Clone, Copy, Debug)]
+struct Pending {
+    /// The tap, as it is reported.
+    tap: Recorded,
+    /// When its press happened, in milliseconds of the recognizer's
+    /// clock: the double-tap window runs from it.
+    at: u64,
+}
+
+impl Pending {
+    /// When the double-tap window closes, and the tap stands.
+    fn due(&self) -> u64 {
+        self.at + DOUBLE_MS
+    }
+}
+
 /// One modifier's last lone press, which a second press of the same key
 /// within [`DOUBLE_MS`] completes as a double tap (#260).
 #[derive(Clone, Copy, Debug)]
@@ -438,6 +462,9 @@ pub struct Recognizer {
     /// Whether a recording session listens (#260): every key event is
     /// held back and what the user presses is reported.
     recording: bool,
+    /// The lone tap a recording session recognized and holds until the
+    /// double-tap window closes (#539).
+    pending: Option<Pending>,
     /// How many key events the keyboard reported, injected ones apart.
     physical: u64,
     /// How many key events the hook saw, Pane's own injected keys and
@@ -476,11 +503,68 @@ impl Recognizer {
             return;
         }
         self.recording = on;
+        self.pending = None;
         self.forget();
+    }
+
+    /// When the lone tap a recording session holds is due (#539): the
+    /// moment, in milliseconds of the recognizer's clock, the double-tap
+    /// window closes with no second press, and [`Recognizer::recorded_due`]
+    /// gives the tap. The adapter sets a timer for it; `None` while no tap
+    /// is held.
+    pub fn recording_due(&self) -> Option<u64> {
+        self.pending.as_ref().map(Pending::due)
+    }
+
+    /// The lone tap a recording session holds, once the double-tap window
+    /// closed at `now` with no second press (#539): it stands, and is
+    /// reported. `None` while no tap is held, or the window is still open.
+    /// A clock that went back — the hook's wraps every 49.7 days — closes
+    /// the window too, so the tap is never held for good.
+    pub fn recorded_due(&mut self, now: u64) -> Option<Recorded> {
+        let pending = self.pending?;
+        if now < pending.due() && now >= pending.at {
+            return None;
+        }
+        self.pending = None;
+        Some(pending.tap)
     }
 
     /// One key event, and what to do about it.
     pub fn step(&mut self, event: KeyEvent) -> Decision {
+        // A key pressed while a recording session holds a lone tap (#539):
+        // the same modifier's second press within the window is the double
+        // tap, and reports it in the tap's place; any other press says no
+        // double tap comes, so the tap stands and is reported now — the
+        // press's own report, if it makes one, gives way to it, as it did
+        // when the tap ended the session on its release.
+        // Pane's own keys and another tool's mask are nothing the user
+        // pressed (see `step_event`), and leave the tap held.
+        let theirs =
+            event.tag == INJECTED_TAG || (event.injected && MASK_KEYS.contains(&event.key));
+        let held = if event.pressed && !theirs {
+            self.pending.take()
+        } else {
+            None
+        };
+        let decision = self.step_event(event);
+        let Some(pending) = held else {
+            return decision;
+        };
+        match decision {
+            Decision::Recorded(Recorded::Double { .. }) => decision,
+            Decision::Resync => {
+                // The press was not taken in: the tap waits on.
+                self.pending = Some(pending);
+                decision
+            }
+            _ => Decision::Recorded(pending.tap),
+        }
+    }
+
+    /// One key event, as [`Recognizer::step`] takes it once a held tap
+    /// is set aside.
+    fn step_event(&mut self, event: KeyEvent) -> Decision {
         // Every event the hook saw, whatever its source: the watchdog's
         // evidence that the hook is still seeing the keyboard.
         self.events += 1;
@@ -667,10 +751,23 @@ impl Recognizer {
                     at: tap.at,
                 });
                 if self.recording {
-                    return Decision::Recorded(Recorded::Tap {
-                        modifier: at,
-                        side: physical.side(),
-                    });
+                    // The tap is held until the double-tap window closes
+                    // (#539): a second press within it is the double tap,
+                    // which a tap reported now would have ended the
+                    // session before. A release that comes after the
+                    // window closed leaves no double tap to wait for.
+                    let pending = Pending {
+                        tap: Recorded::Tap {
+                            modifier: at,
+                            side: physical.side(),
+                        },
+                        at: tap.at,
+                    };
+                    if event.time >= pending.due() {
+                        return Decision::Recorded(pending.tap);
+                    }
+                    self.pending = Some(pending);
+                    return Decision::Swallow;
                 }
                 fired = self.tap_binding(at, physical.side(), Kind::Tap);
             }
