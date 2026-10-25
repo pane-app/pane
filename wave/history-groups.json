@@ -1,0 +1,488 @@
+[
+  {
+    "first": "2bb70e155f100f7fcdd697d7f34e609724b8bad9",
+    "last": "9aa4e6535b0ab16146ef36beb01ba2d7019b69b3",
+    "subject": "Record the Pane specification and plan, and track the work in GitHub Issues",
+    "body": "Adds the Pane specification, the cross-platform plan and the extension\nruntime research, then publishes the first tickets and moves planning\nto GitHub Issues.",
+    "author": "hoangvu12 <hggaming91@gmail.com>",
+    "coauthors": [],
+    "date": "2026-09-28T03:59:46+07:00"
+  },
+  {
+    "first": "7e740f0e9e67d18a856e54126d59cc5823e7eb09",
+    "last": "51ce2e63a532e7b4476ac81cdfa8b5c65d08a097",
+    "subject": "Run the first Rust and JS/TS commands in Pane's native window",
+    "body": "Runs one Rust command in Pane's native window, validates the JS/TS\nWASI 0.3 backend and runs JS and TS versions of the sample command.\nApplies the licensing split and DCO, and records native Linux, macOS\nand Windows baselines with CI evidence.\n\nPRs: #2, #3, #5, #6, #7, #8",
+    "author": "wasimysaid <wasimysdev@gmail.com>",
+    "coauthors": [],
+    "date": "2026-09-28T03:46:44+02:00"
+  },
+  {
+    "first": "0ce76975d7bd73923d1c7750c99ff558caf2cd28",
+    "last": "b2b1320cdb11047779a7cea89ded12f3bf3486b6",
+    "subject": "Install local extension packages and show their forms and custom views",
+    "body": "Installs and runs a local extension package, submits and validates\nnative forms, declares platform availability and keeps the selected row\nin view. Disabling an extension keeps its settings, and a custom view\ncan choose a color.\n\nPRs: #9, #10, #19, #20, #21",
+    "author": "wasimysaid <wasimysdev@gmail.com>",
+    "coauthors": [],
+    "date": "2026-09-28T06:36:36+02:00"
+  },
+  {
+    "first": "d2f6f1c1230bfb4d545e57a574e4a0df399192d1",
+    "last": "d401d6fa34a66bc18f805fa4b11c639ddf8495d9",
+    "subject": "Find commands, calculator answers and quicklinks in root search",
+    "body": "Typing in root search finds and invokes commands, shows a calculator\nresult and opens persistent URL quicklinks. Extensions can call the\noperations another installed extension publishes.\n\nPRs: #22, #23, #27, #28",
+    "author": "wasimysaid <wasimysdev@gmail.com>",
+    "coauthors": [],
+    "date": "2026-09-28T15:31:07+02:00"
+  },
+  {
+    "first": "ddf9acaae0ae3f795cce48df7463cde25aa4c250",
+    "last": "3d5adb865989ba409a4abfd6f66461beaaf08c4b",
+    "subject": "Find applications, open commands by global hotkey and manage the extension lifecycle",
+    "body": "Root search finds and opens installed applications, and a global hotkey\nopens an extension command on Windows, macOS and Linux (X11 grabs,\nraised window). Extensions can be reloaded and their cache cleared,\npending calls stop on disable or reload, and uninstall asks what to do\nwith saved data.\n\nPRs: #11, #14, #24, #25, #26, #32, #33, #34, #39, #40",
+    "author": "wasimysaid <wasimysdev@gmail.com>",
+    "coauthors": [],
+    "date": "2026-09-28T18:16:11+02:00"
+  },
+  {
+    "first": "b40bd85db6cec0e4feb6d57b3c75613952ed1726",
+    "last": "52be4c2910c7e944f00979cb353e07c89a4e8e43",
+    "subject": "Develop local packages with reload on save, and manage dependencies",
+    "body": "Development mode builds, stages and reloads a local package on save,\nkills its processes and watches folders by identity. Extensions that\ncannot start are paused with Retry, retained data can be deleted, and\ncommands run through aliases and fallbacks. Required dependencies and\npackaged native helpers install, and dependents disable together.\n\nPRs: #12, #13, #15, #16, #31, #41, #42, #43",
+    "author": "wasimysaid <wasimysdev@gmail.com>",
+    "coauthors": [],
+    "date": "2026-09-28T21:47:50+02:00"
+  },
+  {
+    "first": "d40fb8cb8ceec239b5487844eb8a8557024cf096",
+    "last": "d12ed2cc620fda0a79c3fdd966acfd35b71aed4c",
+    "subject": "Keep Pane responsive when a guest crashes or hangs, and search files and the web",
+    "body": "Pane stays usable when its runtime thread crashes, and a watchdog stops\nunresponsive guests and stuck runtime threads, counting only a guest's\nown computing. Dependents uninstall together, and commands can find\nfiles in a chosen folder and search an online service.\n\nPRs: #17, #18, #29, #30, #44",
+    "author": "wasimysaid <wasimysdev@gmail.com>",
+    "coauthors": [],
+    "date": "2026-09-29T03:04:31+02:00"
+  },
+  {
+    "first": "0a5b31af30e435513b0ed38a972953cd97a07837",
+    "last": "f2e74b7cdbc3a394b62e1ea1675cb823949177ca",
+    "subject": "Install extensions from npm and Git, and keep opt-in clipboard history",
+    "body": "Extension packages install from npm and Git repositories. Clipboard\nhistory is opt-in, watched on Windows, expires and can be deleted. The\nwatchdog charges no web response or nested host call to a guest and is\nbounded by the thread's own time.\n\nPRs: #18, #35, #36, #45, #46",
+    "author": "wasimysaid <wasimysdev@gmail.com>",
+    "coauthors": [],
+    "date": "2026-09-29T13:13:37Z"
+  },
+  {
+    "first": "97bdad23ec79f2d816d617c98298d2fe0797ba3d",
+    "last": "cb3905fc26fce26c2523104070ac4fa1735038e2",
+    "subject": "Install Pane on every platform and run extension tasks and services",
+    "body": "Pane installs on Linux, Windows and macOS and acquires its default\nextensions. Extensions can run scheduled tasks and continuing services\nthat stop on disable, and clipboard history is watched on Linux and\nmacOS too.\n\nPRs: #37, #38, #47, #48, #51, #52, #53",
+    "author": "hoangvu12 <hggaming91@gmail.com>",
+    "coauthors": [],
+    "date": "2026-09-30T08:50:08Z"
+  },
+  {
+    "first": "878b17fdbca2757f899b9671c18f8d6c36819ca6",
+    "last": "e052aaf1418e05d3533e556d4099b5fee77fdd61",
+    "subject": "Offer Pane and extension updates on every platform",
+    "body": "Pane offers application updates by user choice on Windows, Linux and\nmacOS. npm extensions update at a safe boundary, and tracked Git\nextensions update without changing identity.\n\nPRs: #49, #50, #54, #55, #56",
+    "author": "hoangvu12 <hggaming91@gmail.com>",
+    "coauthors": [],
+    "date": "2026-10-01T01:36:35+07:00"
+  },
+  {
+    "first": "95b3f4ac9dfef64421c602dd3d2dded5ab760cd8",
+    "last": "5aeb03e0132bf27ac29dda047d1506ca93d28eb1",
+    "subject": "Measure resource use and choose the release's default extensions",
+    "body": "Measures Pane's per-platform resource use and sets its targets, steadies\nthe smokes, keeps the launcher's Developing Arc so automatic updates run,\nand makes calculator, applications, quicklinks, files and clipboard\nhistory the release's defaults.\n\nPRs: #4, #58, #59, #60",
+    "author": "hoangvu12 <hggaming91@gmail.com>",
+    "coauthors": [],
+    "date": "2026-10-01T23:39:47+07:00"
+  },
+  {
+    "first": "873cf53ac28469bbafce64cb1b8ca1178e8cb428",
+    "last": "b2e9ba0de305ae105d30b8c62e1ee8634e8e1ee2",
+    "subject": "Integrate the launcher UI on the maintained GPUI CE fork",
+    "body": "Separates launcher presentation ownership, pins the maintained GPUI CE\nfork with renderer regressions in CI, and applies shared dark and light\nvisuals with a bounded status footer. Records the Windows glass\nevidence, centralizes smoke color roles and rounds the Windows window.\n\nPRs: #61, #62, #63, #64",
+    "author": "hoangvu12 <hggaming91@gmail.com>",
+    "coauthors": [],
+    "date": "2026-10-02T18:11:49+07:00"
+  },
+  {
+    "first": "abb17668745f947f8bbba1f100683878a0cb62f2",
+    "last": "0c77e06c8e88efa30317e0d45166fce1a4fa272a",
+    "subject": "Open an independent Settings window and add command transitions",
+    "body": "Records the Settings and motion research, replaces the footer hints\nwith the selected primary action, opens Settings in its own window and\nadds subtle command open and back transitions. Adds a fast CI tier for\nmilestone worktrees.\n\nPRs: #70, #71, #72, #86",
+    "author": "hoangvu12 <hggaming91@gmail.com>",
+    "coauthors": [],
+    "date": "2026-10-03T09:36:20+07:00"
+  },
+  {
+    "first": "396b9323c2ea40a28e9242356976364172ac5c06",
+    "last": "dcd92e361e5b04085f36433ee0a74e61ba43e8c8",
+    "subject": "Fill the Settings pages for shortcuts, appearance, extensions and General",
+    "body": "Settings can browse commands and edit aliases, change and persist the\nappearance, manage extensions, record the Open Pane hotkey, choose\nlaunch at login and search its pages. The release matrix runs on main\nonly, and the CI tiers are documented.\n\nPRs: #73, #74, #75, #80, #81, #83",
+    "author": "hoangvu12 <hggaming91@gmail.com>",
+    "coauthors": [],
+    "date": "2026-10-03T18:21:24+07:00"
+  },
+  {
+    "first": "08f40eed32612053eebb48ecfab5b3a1ad4ebc0e",
+    "last": "62341f4e8e57f10b93997f45f5892c10a1a08cd7",
+    "subject": "Finish the Settings pages and the shared motion policy",
+    "body": "Adds section and group transitions, the About page's updates and\ndiagnostics, the Launcher page's placement choices, Keyboard page\nrebinding, the tray or menu-bar entry, command hotkey recording, the\nsearchable select and the popup, hover and press micro-transitions.\n\nPRs: #76, #77, #78, #79, #82, #85, #87, #88",
+    "author": "hoangvu12 <hggaming91@gmail.com>",
+    "coauthors": [],
+    "date": "2026-10-04T13:19:45+07:00"
+  },
+  {
+    "first": "40232584028a8cce138fe53f402df42d91ef0ec5",
+    "last": "5bd21c4ff0287772d250802b8f88995a1d77ac9c",
+    "subject": "Port the launcher and Settings to the reference design",
+    "body": "Sets up a Windows reference/native comparison workbench, then matches\nthe 760x518 frame, keycaps, tiles, root rows, footer and Actions panel,\nthe Settings shell, no-results card, clipboard split view, pinned home,\nAppearance controls and shared controls, and records the acceptance\nevidence.\n\nPRs: #91, #92, #93, #94, #95, #96, #97, #98, #99, #101, #102, #103",
+    "author": "hoangvu12 <hggaming91@gmail.com>",
+    "coauthors": [],
+    "date": "2026-10-05T16:35:34+07:00"
+  },
+  {
+    "first": "f68108c6b55f22f9cc30a77a0742a67b9b5d95e1",
+    "last": "1e69b64f5f8f727b9bbe52ac10a4e5b1c7fb4984",
+    "subject": "Redesign the launcher and Settings in the Raycast style",
+    "body": "Checks in the UI port's research, draws glyphs from the vendored reicon\nset and ports the launcher and Settings window to the Raycast-style\nredesign. Adds a user-chosen background image that lets the frost show\nthrough, quicker view arrival, keyboard opens that land at once and\ncontrols that press on pointer-down.",
+    "author": "hoangvu12 <hggaming91@gmail.com>",
+    "coauthors": [],
+    "date": "2026-10-06T09:37:18+07:00"
+  },
+  {
+    "first": "e482d409d9023389b0e613f7e120bb1d15340de7",
+    "last": "ed2b671d3d048b93905423899523d6e4d259ffe7",
+    "subject": "Bring docs and tests in line with the redesign and deepen the core modules",
+    "body": "Updates the docs and glossary, stops CI retries landing as commits,\ndeepens pane-core's launcher, downloads and test support, gives host\nsettings one commit path with rollback, separates window presence from\nLauncherWindow, covers the redesign with window tests and builds each\ncrate's integration tests as one binary.\n\nPRs: #106, #109, #110, #111, #112, #113, #118",
+    "author": "hoangvu12 <hggaming91@gmail.com>",
+    "coauthors": [],
+    "date": "2026-10-06T20:04:24+07:00"
+  },
+  {
+    "first": "7b8ed1d1b66c7fceee727aa629d2c27c2bdf988a",
+    "last": "7b8ed1d1b66c7fceee727aa629d2c27c2bdf988a",
+    "subject": "Give extension commands the full command model",
+    "body": "Serves other extensions' calls while one waits, caps guest memory at\n128 MiB, carries lists through a typed envelope with several actions per\nitem, runs no-view commands, and adds icons, accessories, submenus,\ntoasts, host functions, preferences, arguments and system programs.\n\nPRs: #120, #134, #135, #136, #160",
+    "author": "hoangvu12 <hggaming91@gmail.com>",
+    "coauthors": [],
+    "date": "2026-10-07T18:14:41+07:00"
+  },
+  {
+    "first": "21195229a1cde188b756d04c13b8621f1c2855cd",
+    "last": "104a5dacf08064dd6d84e41c6f2e504a77963303",
+    "subject": "Complete default extensions, application discovery and indexed file search",
+    "body": "Gives applications stable identities, discovery, watching, localized\nnames and icons; indexes the home folder with Pane's own engine and a\nRaycast-like Search Files; keeps images and files in clipboard history;\nmanages extensions per page in Settings and draws only visible rows.\n\nPRs: #161-#176, #178, #179, #180, #181",
+    "author": "hoangvu12 <hggaming91@gmail.com>",
+    "coauthors": [],
+    "date": "2026-10-08T21:41:35+07:00"
+  },
+  {
+    "first": "2570ffa53d10357baddeeeeea70f8f316bdc0ed1",
+    "last": "c16a90fed5c3c3eb164abc4bf5fd950e231890a9",
+    "subject": "Move to pane-app/pane and record how extensions are sourced and built",
+    "body": "Points live references at pane-app/pane after the repository moved, and\nrecords where extensions come from, how their API changes and how\npeople build them.\n\nPRs: #209, #210, #211",
+    "author": "hoangvu12 <hggaming91@gmail.com>",
+    "coauthors": [],
+    "date": "2026-10-09T03:05:19+07:00"
+  },
+  {
+    "first": "f1ad2e9a81dfb3d8f3cbc2f27286f7448969a027",
+    "last": "a8d6233345d52a59f84df1e4079aea50586bb786",
+    "subject": "Keep extension logs and make the SDKs and build tooling publishable",
+    "body": "Keeps each extension's log and shows it on a Logs screen, builds the\npatched componentizer in CI for every platform, moves development\nbuilds into a shared build crate and makes the SDKs publishable as\npane-extension and @pane-app/extension. Records the Raycast research.\n\nPRs: #119, #212, #213, #215, #216, #220, #227, #228",
+    "author": "hoangvu12 <hggaming91@gmail.com>",
+    "coauthors": [],
+    "date": "2026-10-09T10:17:27+07:00"
+  },
+  {
+    "first": "1eec9c0ed0aeb63788ee316342e0c2aca41dce68",
+    "last": "898fc0e15841b5ba0d904b794db35a07b053a256",
+    "subject": "Add pane-ext dev and the local channel, and land the quick fixes",
+    "body": "pane-ext dev drives the running Pane over a local channel, with its\nfailures in the log. The quick fixes bring the tray icon back after\nExplorer restarts, protect local secrets with DPAPI, announce the\nselected row, and keep a redacted log that reports unexpected quits.\n\nPRs: #129, #130, #131, #132, #133, #182, #217, #257, #271, #272",
+    "author": "hoangvu12 <hggaming91@gmail.com>",
+    "coauthors": [],
+    "date": "2026-10-09T12:23:20+07:00"
+  },
+  {
+    "first": "d5534f450d4db1ee110d08d7c7ed45befb5cd8c1",
+    "last": "a1f1ece83b8d05ddad411fed27dde3a9d6a4a3ab",
+    "subject": "Meet the file-index and idle-cost targets and record the evidence",
+    "body": "File queries answer within 10 ms at p95, changes re-index within 10 ms\nand 10,000 changes catch up within 1 s. While hidden, Pane re-extracts\nicons only when needed, lets its runtime timers sleep and shares\nclipboard history with its view. Records the measurements.\n\nPRs: #126, #183-#192, #273, #274, #275, #277, #288",
+    "author": "hoangvu12 <hggaming91@gmail.com>",
+    "coauthors": [],
+    "date": "2026-10-09T21:04:42+07:00"
+  },
+  {
+    "first": "99acb416b5933479090edd4207dbf8e51a95d148",
+    "last": "a70c84806cee6d28987567efcbb594dd616e65d1",
+    "subject": "Install the official extensions from pinned repositories",
+    "body": "First setup installs the default extensions from the commits this\nrelease pins, Settings marks them official, and their sources leave\nPane's repository with samples kept as fixtures. Smokes serve the\npinned repositories locally.\n\nPRs: #207, #278, #280, #282, #284, #285, #286, #291, #296, #297",
+    "author": "hoangvu12 <hggaming91@gmail.com>",
+    "coauthors": [],
+    "date": "2026-10-10T15:27:41+07:00"
+  },
+  {
+    "first": "091af4c1e57eca01b12f3f391c52600260be0a53",
+    "last": "45c0dd3473833814e549ced5f82149555caed03a",
+    "subject": "Check for extension updates on demand and record their results",
+    "body": "Records update results, shows them and announces background failures,\nchecks for extension updates on demand and updates all, and updates\ndefault extensions from their repositories' release tags.\n\nPRs: #127, #256, #267, #269, #293, #298",
+    "author": "hoangvu12 <hggaming91@gmail.com>",
+    "coauthors": [],
+    "date": "2026-10-10T20:27:08+07:00"
+  },
+  {
+    "first": "7cddcc14efdc416e19575b07b4940b5e59c31729",
+    "last": "a7c38c4c12fb3d9a799342317c6f362da355f5e8",
+    "subject": "Add Windows power features: paste, Run, System Commands, Switch Windows and game mode",
+    "body": "Pastes into the front application, adds Run with Win+R history, System\nCommands, Switch Windows and reading the selected text, falls back to a\nkeyboard hook, binds modifier taps and the Windows key alone, and adds\ngame mode. Fixes the release matrix after the merge and records the\nredesign's final state.\n\nPRs: #105, #125, #252-#255, #259-#266, #268, #292, #306, #315",
+    "author": "hoangvu12 <hggaming91@gmail.com>",
+    "coauthors": [],
+    "date": "2026-10-11T02:45:52+07:00"
+  },
+  {
+    "first": "292d00c53da2cafe65cb5d5673ec36e814618c8c",
+    "last": "292d00c53da2cafe65cb5d5673ec36e814618c8c",
+    "subject": "Complete extension authoring: check, pack, templates and the CLI",
+    "body": "Adds a crash overlay with the stack trace, the pane.json schema and\npane-ext check, JS/TS builds in pane-build, pane-ext pack, pane-ext as\n@pane-app/cli, templates with pane-ext new and npm create @pane-app,\nand Create Extension and Import Extension in Pane.\n\nPRs: #128, #214, #218, #219, #221, #222, #223, #224, #225, #290",
+    "author": "hoangvu12 <hggaming91@gmail.com>",
+    "coauthors": [],
+    "date": "2026-10-11T04:11:29+07:00"
+  },
+  {
+    "first": "1efad25bb9fd1f9733521d5f2e63938c4a1db1fe",
+    "last": "e2e8f83c586d479af2b6f3634c34ef928a33529e",
+    "subject": "Polish the launcher's text, toasts, HUD, selection and native materials",
+    "body": "Sets text levels by alpha with contrast floors, draws named glyphs on a\nneutral tile, shows outcomes as toasts and a HUD, refines the selection\nwash and loading bar, fires chords only on exact modifiers, backs out\nwith Backspace, and picks macOS vibrancy and an opaque Linux launcher.\n\nPRs: #66, #67, #123, #245-#251, #258, #289, #313",
+    "author": "hoangvu12 <hggaming91@gmail.com>",
+    "coauthors": [],
+    "date": "2026-10-11T07:17:14+07:00"
+  },
+  {
+    "first": "7b75f5f6bcf1c2d32e7e6ccedacc0794d0cb3c6d",
+    "last": "dea5972b2d1f119ffd72e05eb3fb577e62f3421b",
+    "subject": "Rank root search like Raycast, with fuzzy matching, learning and inline arguments",
+    "body": "Matches fuzzily and without accents, understands addresses and paths,\nranks with Raycast's comparator and keywords, publishes within 200 ms,\nbrowses typed folders, learns from choices with a reset, holds keys\nuntil the list is published, and adds inline arguments and recent\nqueries.\n\nPRs: #122, #193-#206, #295, #322",
+    "author": "hoangvu12 <hggaming91@gmail.com>",
+    "coauthors": [],
+    "date": "2026-10-11T19:08:34+07:00"
+  },
+  {
+    "first": "f430903530d99d44f05d06937b0eb933ab538515",
+    "last": "f430903530d99d44f05d06937b0eb933ab538515",
+    "subject": "Let extensions provide and use capabilities and register items at run time",
+    "body": "Packages provide and use named capabilities routed through Pane, with\nthe provider chosen in Settings, shown in the install preview and in\nManage extensions. Extensions register root items, timers, watchers\nand providers at run time and hand state to new code on reload.\n\nPRs: #151-#158, #276",
+    "author": "hoangvu12 <hggaming91@gmail.com>",
+    "coauthors": [],
+    "date": "2026-10-11T19:08:42+07:00"
+  },
+  {
+    "first": "13f5adededf5d26bb23e2fed9d7f95c9bd6fa5f4",
+    "last": "13f5adededf5d26bb23e2fed9d7f95c9bd6fa5f4",
+    "subject": "Pin the Windows default extensions and gate defaults by platform",
+    "body": "Pins the Windows defaults in defaults.json gated by platform, serves\ntheir repositories in tests, exercises them in the smokes and moves\ntheir builds out of Pane's repository.\n\nPRs: #300, #302, #303, #304, #305, #314",
+    "author": "hoangvu12 <hggaming91@gmail.com>",
+    "coauthors": [],
+    "date": "2026-10-11T19:40:53+07:00"
+  },
+  {
+    "first": "70ac5017fa90be0d5a1722aa89eb34e941da785c",
+    "last": "60b0aa5a159eda8460ecf273bad55253e43dd372",
+    "subject": "Install, update and develop extensions from collections",
+    "body": "Installs one, some or all of a collection's extensions, updates them\nfrom their own release tags, develops one from a collection folder,\nfollows renamed ids and fetches only the chosen folders. Fixes the tests\nthe removal of the five extensions left behind.\n\nPRs: #198, #307-#312, #316, #323, #324",
+    "author": "hoangvu12 <hggaming91@gmail.com>",
+    "coauthors": [],
+    "date": "2026-10-11T21:26:59+07:00"
+  },
+  {
+    "first": "d92b9a660c10f35b708bde9a811ea62c1970148d",
+    "last": "55d6e2e4e6e74e069a57fcc674638a4f21f88b9e",
+    "subject": "Draw extension views as a designed tree of layout primitives",
+    "body": "Extension views become a tree of layout primitives with shared\ncomponents and tokens, a navigation stack, timed and pushed re-renders,\nstate kept by key, and List, Detail, Grid, canvas and Form rebuilt on\nit. Fixes the accumulated release matrix's first two waves.\n\nPRs: #121, #235-#243, #294, #326, #327",
+    "author": "hoangvu12 <hggaming91@gmail.com>",
+    "coauthors": [],
+    "date": "2026-10-12T13:28:56+07:00"
+  },
+  {
+    "first": "5a28234e8ea7efbcb51432d4b09a543731de8c86",
+    "last": "5a28234e8ea7efbcb51432d4b09a543731de8c86",
+    "subject": "Version the extension API and ship 0.2 beside an adapter for 0.1",
+    "body": "Makes the WIT package's version the extension API number, fails lints\non incompatible changes without a new version, refuses extensions built\nfor versions Pane cannot run, ships API 0.2 with an adapter for 0.1 and\nrecords breaking changes in the release notes.\n\nPRs: #208, #317-#321, #325",
+    "author": "hoangvu12 <hggaming91@gmail.com>",
+    "coauthors": [],
+    "date": "2026-10-12T13:58:03+07:00"
+  },
+  {
+    "first": "a2d30fdbef1c24a61cb6d42a8d2985cbea058495",
+    "last": "db79d344a66da31153e8ac3b9990af3ae320765a",
+    "subject": "Fix the release matrix after the designed views and API 0.2 landed",
+    "body": "Moves the samples to API 0.2, fixes the WIT guard, the keycap parse and\nJS form children, retires the typed-form templates, and fixes the\nsearch event's self-deadlock, the search field's keyboard and the\nSwitch Windows view. Folds in matrix fix-forwards 4-10.\n\nPRs: #328-#334",
+    "author": "hoangvu12 <hggaming91@gmail.com>",
+    "coauthors": [],
+    "date": "2026-10-13T10:51:23+07:00"
+  },
+  {
+    "first": "a89058add3d8417ab389011d5a219e2a42a296e6",
+    "last": "005d16654859d3dd714887f0a6170f01e4d70934",
+    "subject": "Restore designed views' focus and deliver their events and web answers",
+    "body": "Restores the window's focus ask, traces designed events through the\npark, pump and wasi:http boundary, fixes the search samples' service\npreference and the Rust SDK's text styles, and makes the tests wait for\ndesigned answers. Folds in matrix fix-forwards 11-21.\n\nPRs: #335-#345",
+    "author": "hoangvu12 <hggaming91@gmail.com>",
+    "coauthors": [],
+    "date": "2026-10-14T10:22:02+07:00"
+  },
+  {
+    "first": "357cc768f469dca3b568b375c1023a07a6aa7f27",
+    "last": "1e6fad5d89f507c045a4efda0a8458729dbcaad2",
+    "subject": "Re-render designed views on every query and mint the Rust SDK's callback ids",
+    "body": "Treats the cleared listing as the empty state, drops a pending answer\nwith its text, mints callback ids in the Rust SDK's views and gives the\ntest twin the changes channel the real window has. Folds in matrix\nfix-forwards 22-37 and their diagnostics.\n\nPRs: #346-#361",
+    "author": "hoangvu12 <hggaming91@gmail.com>",
+    "coauthors": [],
+    "date": "2026-10-15T20:50:03+07:00"
+  },
+  {
+    "first": "4ea61de0d0f49ce2bfe49e03f502ba42917bd4c0",
+    "last": "3722e9f3a50014cafd946a98d99419beb897bb30",
+    "subject": "Answer designed-view events before async work and settle the smoke faces",
+    "body": "The JS SDK answers designed-view events before async work and TSX nodes\ncarry keys, search samples clear stale rows, and the smokes read toasts\nwithin their three seconds and log their own key injections. Folds in\nmatrix fix-forwards 38-48 and parallel fixes 1-2.\n\nPRs: #362-#374",
+    "author": "hoangvu12 <hggaming91@gmail.com>",
+    "coauthors": [],
+    "date": "2026-10-16T18:43:31+07:00"
+  },
+  {
+    "first": "c7dcab6ab0ce2c2ad310f036d7e3ebd34b1e4891",
+    "last": "8795a0a1ce1ca8faaa8d54592bd53c797312346c",
+    "subject": "Let a newer search supersede in-flight work and keep guest calls served across a park",
+    "body": "Holds the park's wake registration, aborts a superseded search's web\nrequests after the turn, puts the guest's calls back when the instance\nsurvives a park, and makes the operations samples call greet at its\nversion.\n\nPRs: #375-#380",
+    "author": "hoangvu12 <hggaming91@gmail.com>",
+    "coauthors": [],
+    "date": "2026-10-17T07:36:00+07:00"
+  },
+  {
+    "first": "7148641b792f41d0d6028c385c25703118e3384d",
+    "last": "fb5a11d5e99e1e7f132e546fd3295752646e43f3",
+    "subject": "Migrate the tests to state-reading waits and fix the dependencies fixtures",
+    "body": "Moves the settle family to state-reading waits, declares the form\ncommands the dependencies fixtures launch, stops the services thread\nwhen the launcher drops, and delivers every event a render raised with\nsearch events in query order.\n\nPRs: #381-#391",
+    "author": "hoangvu12 <hggaming91@gmail.com>",
+    "coauthors": [],
+    "date": "2026-10-17T18:34:21+07:00"
+  },
+  {
+    "first": "78f107283e579984d225fcacf6db9cfa0d5053e3",
+    "last": "2ee637aa0cf603a401b5a8e249a85c1b56a68d69",
+    "subject": "Let only a search supersede a view's work, and fix designed toasts, templates and canvases",
+    "body": "Only a search event supersedes a view's work in flight; toast details\nkeep their focus, the form template scaffolds again, a canvas without a\nrole draws and a key-asking canvas gets navigation keys, and held keys\nsettle their typing.\n\nPRs: #392-#398",
+    "author": "hoangvu12 <hggaming91@gmail.com>",
+    "coauthors": [],
+    "date": "2026-10-17T23:17:43+07:00"
+  },
+  {
+    "first": "2e4ec54b64fe1f86b74526bd227982a205def930",
+    "last": "3b9eca915724a92b2eced614f06703f9fe2f5113",
+    "subject": "Fix the pane-core census: command screens, form keys, reloads and updates",
+    "body": "Keyboard focus returns only when a designed view closes, form fields\nare keyed, designed fields keep Backspace and submit only on Enter, and\nthe census tranches fix canvas limits, late opens, Switch Windows,\nreloads, the update trio, recovery tests and the handoff samples.\n\nPRs: #399-#408",
+    "author": "hoangvu12 <hggaming91@gmail.com>",
+    "coauthors": [],
+    "date": "2026-10-18T15:34:30+07:00"
+  },
+  {
+    "first": "9a058893c22dd915e382337482ed0d3d8c821a9d",
+    "last": "2b460a2b5fade1718ebbb1b01e68fc6ff4039ba1",
+    "subject": "Finish the designed-era migration and remove the spent diagnostics",
+    "body": "Joins designed keys as bindings spell them, keeps a designed List's\ntyped-ahead text, fixes the registrations roots, measures text-only\ncanvases, colours the operations answer by outcome and removes the\ndiagnostic scaffolds.\n\nPRs: #409-#414",
+    "author": "hoangvu12 <hggaming91@gmail.com>",
+    "coauthors": [],
+    "date": "2026-10-19T06:27:40+07:00"
+  },
+  {
+    "first": "9e9bb3e89c13ddc0d4c67ae53d66f6359b720402",
+    "last": "a7a396a963fd2a02f88fccf2bc36a0ddf6bec020",
+    "subject": "Bring the GUI smokes back to green and pin the defaults for extension API 0.2",
+    "body": "Lets Pane's keyboard hook run while Pane is in front, tells assistive\ntechnology a hotkey's route, refuses root providers of another API\nshape, pins the defaults for API 0.2, pastes into elevated applications\nafter the target settles, and brings the GUI smokes back to green.\n\nPRs: #415-#420, #422, #423, #425",
+    "author": "hoangvu12 <hggaming91@gmail.com>",
+    "coauthors": [],
+    "date": "2026-10-21T06:18:14+07:00"
+  },
+  {
+    "first": "3dc963216cfb2eece363add03fc3a5d53f29bfc8",
+    "last": "0d6644ca77733e5c1ffd0e0efd4e9f902a540f82",
+    "subject": "List the official extensions at first setup and steady the real-input tests",
+    "body": "First setup lists the official extensions with the defaults ticked, a\nfailed Pane update's row is selected again, the macOS icon worker is\nthrottled correctly, and the real-input hung-target and selection tests\nrun on CI again.\n\nPRs: #426-#431",
+    "author": "hoangvu12 <hggaming91@gmail.com>",
+    "coauthors": [],
+    "date": "2026-10-21T11:34:55+07:00"
+  },
+  {
+    "first": "71dd4cc068d1412413e9db07d8bda1c3bcf257e1",
+    "last": "048811de7b37595e9c103ab2a588e5f1ba904fa5",
+    "subject": "Hide the macOS launcher's window controls and fix the remaining test races",
+    "body": "Keeps a filtered list row's icon, hides the macOS launcher's window\nbuttons and hides it on close, reads the selection by UI Automation,\ngives the Windows real-input tests native targets, and fixes the file\nindex, services and timers races.\n\nPRs: #436, #437, #438, #440, #441, #442, #443",
+    "author": "hoangvu12 <hggaming91@gmail.com>",
+    "coauthors": [],
+    "date": "2026-10-21T18:45:02+07:00"
+  },
+  {
+    "first": "d28343739c587330e699222ac740422868501587",
+    "last": "f3f550e68d8feba3092b41876def5c3e2b39567b",
+    "subject": "Publish the SDKs, archive the old notes and rewrite the README and docs",
+    "body": "The SDKs are published on crates.io and npm and the defaults are pinned\nto releases built from them. Old evidence, handoff and research notes\nmove to an archive tag, the README is short and shows the launcher, and\nthe human-facing docs are rewritten.\n\nPRs: #444-#450",
+    "author": "hoangvu12 <hggaming91@gmail.com>",
+    "coauthors": [],
+    "date": "2026-10-23T09:31:23+07:00"
+  },
+  {
+    "first": "482766ca12dd4aed2ca376bdc01b109e9a6dfae0",
+    "last": "caaf514b1a15b1e9ee92f1dec581de9209fe9f48",
+    "subject": "Release Pane through GitHub with app icons, version info and license notices",
+    "body": "Gives the packages an app icon, version info and license notices,\nkeeps Pane.app's Info.plist version current after an update, updates\nPane from GitHub Releases and drafts a prerelease when a version tag is\npushed.\n\nPRs: #452, #453, #454, #457, #459, #460, #461",
+    "author": "hoangvu12 <hggaming91@gmail.com>",
+    "coauthors": [],
+    "date": "2026-10-23T16:34:52+07:00"
+  },
+  {
+    "first": "781496e72702e98afd1f862ed1f3e33d5a762afe",
+    "last": "1054009e1187055a2aae2881be8b170f05660724",
+    "subject": "Install Pane from a setup .exe, .dmg or AppImage, and keep the launcher off the taskbar",
+    "body": "Keeps the launcher off the taskbar and Alt+Tab, installs Pane on\nWindows with a setup .exe, and on macOS from a .dmg and Linux from an\nAppImage.\n\nPRs: #458, #462, #463, #464, #465, #473",
+    "author": "hoangvu12 <hggaming91@gmail.com>",
+    "coauthors": [],
+    "date": "2026-10-23T23:13:34+07:00"
+  },
+  {
+    "first": "61f4eee34bad3f82b77633b7343d567b4e5a4f34",
+    "last": "989a8021285f7606fa771bbc61c7773687e4e287",
+    "subject": "Polish the launcher for Pane 0.1.0",
+    "body": "Arrow keys move a designed List's selection again, first setup shows\nthe official extensions' icons, the Windows-key tap works beside\nkey-masking tools and every hotkey press toggles the launcher, the\nanswer card is labelled and typeset, pushed views get a back button,\nand opening an app, file or link closes the launcher.\n\nPRs: #466-#472, #474, #476-#481",
+    "author": "hoangvu12 <hggaming91@gmail.com>",
+    "coauthors": [],
+    "date": "2026-10-24T02:35:48+07:00"
+  },
+  {
+    "first": "ab66313677ac9dcaedbb8539eca062d602196ded",
+    "last": "ab66313677ac9dcaedbb8539eca062d602196ded",
+    "subject": "Pin the calculator that converts currencies",
+    "body": "Moves the calculator's pin to v0.6.4, which converts currencies.\n\nPRs: #475, #484",
+    "author": "hoangvu12 <hggaming91@gmail.com>",
+    "coauthors": [],
+    "date": "2026-10-24T07:40:14+07:00"
+  },
+  {
+    "first": "5c642e4484b16d688f75731dfe26d33af976f01d",
+    "last": "5c642e4484b16d688f75731dfe26d33af976f01d",
+    "subject": "Give pushed views without a search bar a top bar with a back button",
+    "body": "A pushed view with no search bar now shows a top bar with a back\nbutton.\n\nPRs: #482, #485",
+    "author": "hoangvu12 <hggaming91@gmail.com>",
+    "coauthors": [],
+    "date": "2026-10-24T07:46:12+07:00"
+  },
+  {
+    "first": "f95529fa35fa4a765f4df186e58232b6c6143a67",
+    "last": "f95529fa35fa4a765f4df186e58232b6c6143a67",
+    "subject": "Move Pane to version 0.1.1",
+    "body": "The first point release after v0.1.0, so the in-app updater can be\ntried going from 0.1.0 to 0.1.1.\n\nPRs: #483",
+    "author": "hoangvu12 <hggaming91@gmail.com>",
+    "coauthors": [],
+    "date": "2026-10-24T08:12:06+07:00"
+  }
+]
