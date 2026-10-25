@@ -22,12 +22,15 @@
 //! its own (`PANE_DATA_DIR`, as the tests and smokes give) runs beside the
 //! installed one, and two Panes never share one data folder.
 //!
-//! A second start ([`ask`]) sends one JSON line, a [`Request`], and waits
-//! for the running Pane to answer `ok` before it exits. The running Pane's
-//! answer comes from a thread of its own, so even a busy window answers;
-//! the window then shows the launcher, with the install preview a second
-//! `pane --install` asked for. The start of a restart into an update
-//! (ADR 0050) takes the lock only after the Pane it replaces has exited.
+//! A second start ([`start`]) sends one JSON line, a [`Request`] (an empty
+//! line for a quiet start), and waits for the running Pane to answer `ok`
+//! before it exits. The running Pane's answer comes from a thread of its
+//! own, so even a busy window answers; the window then shows the launcher,
+//! with the install preview a second `pane --install` asked for. A Pane
+//! that is quitting no longer answers but holds the lock until the system
+//! has ended it, so a start tries the lock again while it waits. The start
+//! of a restart into an update (ADR 0050) takes the lock only after the
+//! Pane it replaces has exited.
 //!
 //! This is not the local channel (`pane-ext`'s, see
 //! [`crate::local_channel`]), whose endpoint a test or a development Pane
@@ -222,10 +225,13 @@ where
     let (read, mut write) = tokio::io::split(stream);
     let mut read = tokio::io::BufReader::new(read);
     let mut line = String::new();
-    if read.read_line(&mut line).await.is_err() {
-        return;
+    match read.read_line(&mut line).await {
+        Ok(0) | Err(_) => return,
+        Ok(_) => {}
     }
-    let _ = asked.send(parse(&line));
+    if let Some(request) = parse(&line) {
+        let _ = asked.send(request);
+    }
     let _ = write.write_all(b"ok\n").await;
     let _ = write.flush().await;
     // The connection stays until the second start has read the answer and
@@ -234,42 +240,74 @@ where
     let _ = tokio::time::timeout(Duration::from_secs(2), read.read_line(&mut rest)).await;
 }
 
-/// The request `line` says, or a plain [`Request::Show`] for one this Pane
-/// does not know.
-fn parse(line: &str) -> Request {
-    serde_json::from_str(line.trim()).unwrap_or(Request::Show { install: None })
+/// The request `line` says: `None` for an empty line (a quiet start only
+/// asking whether a Pane answers), and a plain [`Request::Show`] for one
+/// this Pane does not know.
+fn parse(line: &str) -> Option<Request> {
+    let line = line.trim();
+    if line.is_empty() {
+        return None;
+    }
+    Some(serde_json::from_str(line).unwrap_or(Request::Show { install: None }))
 }
 
-/// Asks the Pane holding the lock `key` names to do `request`, waiting up
-/// to `limit` for it to answer: it may still be starting.
-pub fn ask(key: &str, request: &Request, limit: Duration) -> io::Result<()> {
+/// What became of a start ([`start`]).
+pub enum Started {
+    /// This Pane holds the lock.
+    First(Instance),
+    /// The Pane holding the lock answered, and was asked what this start
+    /// asks: this start exits.
+    Answered,
+    /// A Pane held the lock throughout the wait without answering: this
+    /// one runs without the lock, rather than leave the user with no Pane.
+    Unanswered(io::Error),
+}
+
+/// Takes the instance lock of the data folder `key` names, or asks the Pane
+/// that holds it to do `request` (`None`: only whether it answers, for a
+/// quiet start), trying both again for up to `limit`. The Pane holding the
+/// lock may be starting, before it listens, or quitting: it no longer
+/// listens while the system ends it, which may take a few seconds, and the
+/// lock is free once it has ended. On Windows the calling thread owns the
+/// lock (see [`claim`]).
+pub fn start(key: &str, request: Option<&Request>, limit: Duration) -> io::Result<Started> {
     let endpoint = platform::endpoint(key)?;
-    platform::allow_foreground();
-    let mut line = serde_json::to_string(request).map_err(io::Error::other)?;
+    let mut line = match request {
+        Some(request) => serde_json::to_string(request).map_err(io::Error::other)?,
+        None => String::new(),
+    };
     line.push('\n');
+    let deadline = Instant::now() + limit;
+    loop {
+        if let Claim::First(instance) = claim(key)? {
+            return Ok(Started::First(instance));
+        }
+        if request.is_some() {
+            platform::allow_foreground();
+        }
+        let left = deadline.saturating_duration_since(Instant::now());
+        match send_within(&endpoint, &line, left.max(RETRY)) {
+            Ok(()) => return Ok(Started::Answered),
+            Err(error) if Instant::now() >= deadline => return Ok(Started::Unanswered(error)),
+            Err(_) => std::thread::sleep(RETRY),
+        }
+    }
+}
+
+/// [`send`], waited for at most `limit`, on a thread of its own: a Pane
+/// that takes the connection and never answers is not waited for past it.
+fn send_within(endpoint: &Path, line: &str, limit: Duration) -> io::Result<()> {
     let (answered, answer) = std::sync::mpsc::sync_channel(1);
-    // A thread of its own, so that a Pane that takes the connection and
-    // never answers is not waited for past the limit.
+    let (endpoint, line) = (endpoint.to_path_buf(), line.to_owned());
     std::thread::Builder::new()
         .name("pane-instance-ask".into())
         .spawn(move || {
-            let deadline = Instant::now() + limit;
-            let result = loop {
-                match send(&endpoint, &line) {
-                    Ok(()) => break Ok(()),
-                    Err(error) if Instant::now() >= deadline => break Err(error),
-                    Err(_) => std::thread::sleep(RETRY),
-                }
-            };
-            let _ = answered.send(result);
+            let _ = answered.send(send(&endpoint, &line));
         })?;
-    answer.recv_timeout(limit + RETRY).map_err(|_| {
+    answer.recv_timeout(limit).map_err(|_| {
         io::Error::new(
             io::ErrorKind::TimedOut,
-            format!(
-                "the running Pane did not answer within {} seconds",
-                limit.as_secs()
-            ),
+            "the running Pane took the request and did not answer",
         )
     })?
 }
@@ -445,7 +483,7 @@ mod tests {
         let plain = Request::Show { install: None };
         let line = serde_json::to_string(&plain).unwrap();
         assert_eq!(line, r#"{"request":"show"}"#);
-        assert_eq!(parse(&line), plain);
+        assert_eq!(parse(&line), Some(plain.clone()));
         let install = Request::Show {
             install: Some(Install::Collection {
                 folder: PathBuf::from("kit"),
@@ -453,10 +491,18 @@ mod tests {
             }),
         };
         let line = serde_json::to_string(&install).unwrap();
-        assert_eq!(parse(&line), install);
+        assert_eq!(parse(&line), Some(install));
         // A request a later Pane added still shows the launcher.
-        assert_eq!(parse(r#"{"request":"open-settings"}"#), plain);
-        assert_eq!(parse("not json"), plain);
+        assert_eq!(parse(r#"{"request":"open-settings"}"#), Some(plain.clone()));
+        assert_eq!(parse("not json"), Some(plain));
+        // A quiet start's empty line asks nothing.
+        assert_eq!(
+            parse(
+                "
+"
+            ),
+            None
+        );
     }
 
     #[test]
@@ -494,6 +540,20 @@ mod tests {
         (folder, key)
     }
 
+    /// `start` on a thread of its own: another process, in Pane, and on
+    /// Windows a mutex is its owning thread's again.
+    fn start_elsewhere(key: &str, request: Option<Request>, limit: Duration) -> &'static str {
+        let key = key.to_owned();
+        std::thread::spawn(move || match start(&key, request.as_ref(), limit) {
+            Ok(Started::First(_)) => "first",
+            Ok(Started::Answered) => "answered",
+            Ok(Started::Unanswered(_)) => "unanswered",
+            Err(_) => "error",
+        })
+        .join()
+        .unwrap()
+    }
+
     #[test]
     fn a_second_start_finds_the_first_and_asks_it() {
         let (_folder, key) = test_key();
@@ -501,17 +561,21 @@ mod tests {
             panic!("another Pane holds a fresh key");
         };
         let mut requests = instance.listen().unwrap();
-        // The second start runs on another thread (another process, in
-        // Pane): on Windows a mutex is its owning thread's again.
         let second = key.clone();
         let running = std::thread::spawn(move || matches!(claim(&second), Ok(Claim::Running)))
             .join()
             .unwrap();
         assert!(running, "the second start took the lock too");
+        // A quiet start only learns that the Pane answers, and asks nothing.
+        assert_eq!(
+            start_elsewhere(&key, None, Duration::from_secs(10)),
+            "answered"
+        );
         let asked = Request::Show {
             install: Some(Install::Npm { spec: "kit".into() }),
         };
-        ask(&key, &asked, Duration::from_secs(10)).unwrap();
+        let started = start_elsewhere(&key, Some(asked.clone()), Duration::from_secs(10));
+        assert_eq!(started, "answered");
         let runtime = tokio::runtime::Builder::new_current_thread()
             .build()
             .unwrap();
@@ -547,14 +611,38 @@ mod tests {
     }
 
     #[test]
-    fn nobody_answers_where_no_pane_runs() {
+    fn a_start_takes_the_lock_a_quitting_pane_lets_go_of() {
         let (_folder, key) = test_key();
-        let error = ask(
-            &key,
-            &Request::Show { install: None },
-            Duration::from_millis(300),
-        )
-        .unwrap_err();
-        assert!(!error.to_string().is_empty());
+        // A Pane quitting: it holds the lock, but no longer listens.
+        let Claim::First(instance) = claim(&key).unwrap() else {
+            panic!("another Pane holds a fresh key");
+        };
+        let ended = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(500));
+            instance
+        });
+        let show = Some(Request::Show { install: None });
+        let later = key.clone();
+        let starting =
+            std::thread::spawn(move || start_elsewhere(&later, show, Duration::from_secs(10)));
+        // The lock goes once the quitting Pane has ended (dropped here, on
+        // the thread that owns it).
+        drop(ended.join().unwrap());
+        assert_eq!(starting.join().unwrap(), "first");
+    }
+
+    #[test]
+    fn a_pane_that_never_answers_is_not_waited_for_past_the_limit() {
+        let (_folder, key) = test_key();
+        let Claim::First(_instance) = claim(&key).unwrap() else {
+            panic!("another Pane holds a fresh key");
+        };
+        let show = Some(Request::Show { install: None });
+        let started = Instant::now();
+        assert_eq!(
+            start_elsewhere(&key, show, Duration::from_millis(500)),
+            "unanswered"
+        );
+        assert!(started.elapsed() < Duration::from_secs(5));
     }
 }

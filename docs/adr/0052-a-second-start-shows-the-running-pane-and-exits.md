@@ -7,7 +7,9 @@ Accepted 2026-10-25 by the user's standing rule that Pane does what Raycast does
 **What.** Pane holds an **instance lock** on its data folder for as long as it runs, and listens for later starts beside it. A start that finds the lock held is a **second start**:
 
 - A plain second start asks the running Pane to show its launcher, as the tray's Open Pane does, and exits. A second `pane --install <source>` asks it to show that package for installation too, with a folder made absolute first.
-- A second start with `--hidden` or `--launch-at-login` exits without asking: neither shows anything of its own.
+- A second start with `--hidden` or `--launch-at-login` exits once the running Pane answers, asking nothing: neither shows anything of its own.
+- A Pane that is quitting stops answering, but holds the lock until the system has ended it, which can take a few seconds (the smokes saw it on Linux). A start meanwhile keeps trying the lock and runs as the one Pane once the lock is free, so quitting Pane and starting it again at once works.
+- If the lock stays held and nobody answers for 10 seconds, the start runs anyway, without the lock, and says why in its log. A Pane that never answers is broken or stuck, and the user who started Pane gets one.
 - `pane --version` and the selected-text worker exit before the lock is looked at.
 - The new process of a restart into an update (ADR 0050, ADR 0051) waits for the old process by its id first, as before, and only then takes the lock the old one let go of.
 - A second start writes nothing: it exits before the crash record, the log and What's New's record.
@@ -20,7 +22,7 @@ On macOS, opening `Pane.app` while it runs never starts a second process (Launch
 - macOS and Linux: an exclusive `flock` on `instance-<key>.lock` and the Unix-domain socket `instance-<key>`, in the local channel's folder of the user's own (`pane` in `$XDG_RUNTIME_DIR`, else `pane-<uid>` in the temporary folder).
 - `<key>` is a hash of the data folder's absolute path. A Pane with a data folder of its own (`PANE_DATA_DIR`, as the tests, the smokes and a development Pane beside an installed one use) runs beside the others. Two Panes never share one data folder.
 - The system lets go of the lock when Pane ends, however it ends, so a crash never blocks the next start.
-- The second start sends one JSON line (`{"request":"show"}`, with an `install`) and waits up to 10 seconds for `ok`, since the running Pane may itself still be starting. It exits either way. A request a later Pane added is read as a plain show.
+- The second start sends one JSON line (`{"request":"show"}`, with an `install`; an empty line for a quiet start) and waits for `ok`, trying the lock and the endpoint again for up to 10 seconds, since the running Pane may itself still be starting or quitting. A request a later Pane added is read as a plain show.
 
 **Rejected.**
 
@@ -31,5 +33,5 @@ On macOS, opening `Pane.app` while it runs never starts a second process (Launch
 **Consequences.**
 
 - [Building and running Pane](../building.md#one-pane-at-a-time) and the [installer's concurrent Panes](../installer.md#concurrent-panes) say so. The glossary adds Instance lock and Second start.
-- The smokes start Pane many times in sequence, each after the one before has exited, so none is a second start. They don't start Pane twice at once.
-- The guard's tests (`pane_core::instance`) cover the lock, the request and its answer, and a lock let go of.
+- The smokes start Pane many times in sequence. Each start comes after the one before was stopped, though not always after the system finished ending it, so a start may wait a moment for the lock. They don't start Pane twice at once.
+- The guard's tests (`pane_core::instance`) cover the lock, the request and its answer, a quiet start, a lock let go of or abandoned, a start that takes the lock a quitting Pane lets go of, and a holder that never answers.

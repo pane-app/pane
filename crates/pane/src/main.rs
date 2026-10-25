@@ -6,7 +6,7 @@ use std::sync::Arc;
 use gpui::{App, prelude::*};
 use pane::LauncherWindow;
 use pane_core::develop::Toolchains;
-use pane_core::instance::{Claim, Install, Request};
+use pane_core::instance::{Install, Request, Started};
 use pane_core::{Launcher, Runtime, local_channel};
 
 /// `pane [--install <folder> | --install <folder>#<id> | --install
@@ -135,27 +135,25 @@ fn launch_at_login_asked() -> bool {
 /// long as it runs. Where another Pane holds it, this start asks that Pane
 /// to show its launcher — with `preview` shown for installation, for a
 /// second `pane --install` — and exits; a `quiet` start (`--hidden`,
-/// `--launch-at-login`), which would show nothing of its own, exits without
-/// asking. `None` where the lock could not be taken at all: Pane then runs
-/// anyway, saying why.
+/// `--launch-at-login`), which would show nothing of its own, exits once
+/// that Pane answers, asking nothing. A Pane still quitting holds the lock
+/// for a moment without answering, and this start takes it once it is
+/// free. `None` where the lock could not be taken, or its holder never
+/// answered: Pane then runs anyway, saying why.
 fn claim_instance(preview: Option<&Install>, quiet: bool) -> Option<pane_core::instance::Instance> {
     let key = pane_core::instance::key(&pane::data_dir().unwrap_or_default());
-    match pane_core::instance::claim(&key) {
-        Ok(Claim::First(instance)) => Some(instance),
-        Ok(Claim::Running) => {
-            if !quiet {
-                let request = Request::Show {
-                    install: preview.cloned().map(Install::absolute),
-                };
-                if let Err(error) =
-                    pane_core::instance::ask(&key, &request, pane_core::instance::ANSWER_LIMIT)
-                {
-                    pane_core::diagnostic!(
-                        "Pane already runs, and did not show its launcher: {error}"
-                    );
-                }
-            }
-            std::process::exit(0);
+    let request = (!quiet).then(|| Request::Show {
+        install: preview.cloned().map(Install::absolute),
+    });
+    let limit = pane_core::instance::ANSWER_LIMIT;
+    match pane_core::instance::start(&key, request.as_ref(), limit) {
+        Ok(Started::First(instance)) => Some(instance),
+        Ok(Started::Answered) => std::process::exit(0),
+        Ok(Started::Unanswered(error)) => {
+            pane_core::diagnostic!(
+                "Another Pane holds this data folder and did not answer, so this one runs too: {error}"
+            );
+            None
         }
         Err(error) => {
             pane_core::diagnostic!("Pane could not tell whether another Pane runs: {error}");

@@ -417,7 +417,7 @@ The lock the running Pane holds on its data folder for as long as it runs, with 
 _Avoid_: single-instance channel, local channel
 
 **Second start**:
-A start of Pane that finds the instance lock held: it asks the running Pane to show its launcher (with the package a `--install` named shown for installation) and exits, or exits without asking when started with `--hidden` or `--launch-at-login`. The new process of a restart into an update is not one: it waits for the old process to exit first.
+A start of Pane that finds the instance lock held: it asks the running Pane to show its launcher (with the package a `--install` named shown for installation) and exits. Started with `--hidden` or `--launch-at-login`, it exits once that Pane answers, asking nothing. A Pane that is quitting holds the lock for a moment without answering, and the start takes the lock once it is free. The new process of a restart into an update is not one: it waits for the old process to exit first.
 _Avoid_: second instance, duplicate Pane
 
 **Build failure**:
