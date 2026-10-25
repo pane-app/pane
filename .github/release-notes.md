@@ -2,18 +2,16 @@
 
 ## What's new
 
-- **Updates install while you're away** (#530, #531): once an update is downloaded and Pane has been hidden for ten minutes, with no command running, no extension being installed or updated, no form left with what you typed in it and Settings closed, Pane restarts into it by itself and stays hidden. The next time you open it, it says it was updated and shows What's New. Restart to Update Pane still works at any time.
-- **Back to root search after 90 seconds** (#532): as in Raycast, Pane opens on root search again once it has been hidden for 90 seconds. Change it under **Pop to root search** in Settings.
-- **Questions as pop-ups** (#533): Pane's own questions, such as uninstalling an extension, now show as alerts over the screen you were on, as Raycast's do. Uninstall has a **Delete saved data** checkbox, unticked.
-- **A back button on Pane's own pages** (#529): package previews, details, Logs and similar pages have a top bar with a back button.
-- **Key symbols on macOS** (#534): keycaps show ⌃ ⌥ ⇧ ⌘ and the macOS key symbols, as Raycast and macOS menus do, so long shortcuts fit a narrow window. Screen readers still read the full names.
-- **Reduce motion on macOS and Linux** (#535): Pane follows the system's reduce-motion setting there too, as it already did on Windows.
-- **Clearer extension crashes** (#536): when an extension stops before answering, Pane's message saying so is no longer covered by a toast the extension showed just before.
-- **Updating from 0.1.2**: Pane finds this release, downloads it and offers **Restart to Update Pane**. **From 0.1.1 or 0.1.0**: choose **Update Pane to {version}** in the launcher, then quit Pane from its tray or menu-bar icon and start it again (or run the setup or installer of this release over it).
+- **The Windows key keeps working** (#543): on Windows, Pane's hotkeys could stop working until a restart. That happened when Pane came to the front without Windows saying so (closing a virtual desktop is one way) and you then typed into it. Now Pane checks which window is really in front, and the hotkeys never stay dead.
+- **Record a double tap** (#545): double-tapping a modifier in a hotkey recorder records it ("Ctrl Ctrl"). Before, it recorded a single tap. A single tap is now recorded once the double-tap window has passed.
+- **Find titles that start with punctuation** (#544): search finds `*notes.txt` by `notes`, and `[Group] Title` by `group`, in root search and in lists such as Switch Windows.
+- **Double-click the Settings title bar** (#546): this maximizes the Settings window and restores it, as other windows do. On macOS it follows the system's title bar setting.
+- **One Pane at a time** (#547): starting Pane while it runs (from Start, the setup or a second double-click) now shows the running Pane's launcher, as Raycast does, instead of starting a second Pane.
+- **Updating from 0.1.2 or 0.1.3**: Pane finds this release, downloads it and offers **Restart to Update Pane**, or restarts into it by itself while you're away. **From 0.1.1 or 0.1.0**: choose **Update Pane to {version}** in the launcher, then quit Pane from its tray or menu-bar icon and start it again (or run the setup or installer of this release over it).
 
 ## What was checked
 
-- **Windows (x86_64):** built and smoke-tested by CI on every change. Version 0.1.2, which this release builds on, was installed and used by hand on a Windows PC; this release's own changes are checked by CI only.
+- **Windows (x86_64):** built and smoke-tested by CI on every change. 0.1.3 was checked on a Windows 11 PC: the Windows key and its shortcuts, taps and double taps, paste, Switch Windows, the calculator, clipboard history, the compact window, glass, the Settings window and restart persistence. That check found the five problems this release fixes. Each fix was then checked again on the same PC, with a build of this release's code.
 - **macOS (Apple silicon) and Linux (x86_64):** built and smoke-tested by CI only. They are **not yet tested by hand**, so treat them as experimental.
 
 ## Download
