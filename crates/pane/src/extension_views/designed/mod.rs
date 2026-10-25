@@ -408,6 +408,7 @@ impl LauncherWindow {
                 let controls = self.designed.as_mut().expect("a view is open");
                 controls.reconcile(&tree, render, window, cx);
             }
+            self.note_first_values(cx);
             return;
         }
         // A view whose controls are gone closed: the keyboard goes with
@@ -435,6 +436,7 @@ impl LauncherWindow {
             .map(|(view, render, tree)| DesignedControls::new(view, &tree, render, window, cx));
         let asked = opened.as_ref().is_some_and(|(_, asked)| *asked);
         self.designed = opened.map(|(controls, _)| controls);
+        self.note_first_values(cx);
         if searches && !asked {
             self.query.focus(window, cx);
         }
@@ -837,6 +839,41 @@ impl LauncherWindow {
         );
         let form = collected.form?;
         Some((form, collected.values))
+    }
+
+    /// Keeps the values the open view's form holds the first time it
+    /// shows one — as the view opens, or with the first tree that names a
+    /// form — for [`Self::form_changed`] to compare with.
+    fn note_first_values(&mut self, cx: &gpui::App) {
+        if self
+            .designed
+            .as_ref()
+            .is_none_or(|controls| controls.first_values.is_some())
+        {
+            return;
+        }
+        let Some((_, values)) = self.collect_form(cx) else {
+            return;
+        };
+        if let Some(controls) = self.designed.as_mut() {
+            controls.first_values = Some(values);
+        }
+    }
+
+    /// Whether the form on screen holds what the user changed in it: the
+    /// values a submission would collect now are not those it first
+    /// showed. A view without a form, a list's search among them, holds
+    /// nothing to keep (ADR 0051).
+    pub(crate) fn form_changed(&self, cx: &gpui::App) -> bool {
+        let Some(first) = self
+            .designed
+            .as_ref()
+            .and_then(|controls| controls.first_values.as_ref())
+        else {
+            return false;
+        };
+        self.collect_form(cx)
+            .is_some_and(|(_, values)| values != *first)
     }
 
     /// Whether the field at `path` sits inside a form on this screen

@@ -1613,6 +1613,58 @@ fn an_open_settings_window_holds_the_restart_pane_makes_by_itself(cx: &mut TestA
 }
 
 #[gpui::test]
+fn a_form_left_holding_what_the_user_typed_holds_the_restart_pane_makes_by_itself(
+    cx: &mut TestAppContext,
+) {
+    let dirs = UpdateDirs::new();
+    dirs.running(b"the 0.1.0 program");
+    let (launcher, cx) = open_updating_launcher(cx, &dirs, "0.1.0");
+    let parent = TempDir::new().unwrap();
+    let held = |cx: &mut VisualTestContext| {
+        cx.read_entity(&launcher, |window, _| {
+            window.launcher().restart_by_itself_held()
+        })
+    };
+    let hide = |cx: &mut VisualTestContext| {
+        launcher.update_in(cx, |window, w, cx| window.start_hidden(w, cx));
+    };
+    let show = |cx: &mut VisualTestContext| {
+        launcher.update_in(cx, |window, w, cx| window.show_again(w, cx));
+    };
+
+    // A form left as it opened holds nothing a restart would lose (ADR
+    // 0051): the new version opens on root search.
+    launcher.update_in(cx, |window, w, cx| {
+        window.create_extension(parent.path(), w, cx)
+    });
+    settle(&launcher, cx);
+    hide(cx);
+    assert!(!held(cx));
+
+    // Typed into, then hidden, it holds the restart: what was typed would
+    // be lost.
+    show(cx);
+    launcher.update_in(cx, |window, w, cx| {
+        window.focus_designed_field("name", w, cx)
+    });
+    cx.simulate_input("Word Count");
+    hide(cx);
+    assert!(held(cx));
+
+    // Left for root search, nothing holds it anymore.
+    show(cx);
+    cx.simulate_keystrokes("escape");
+    let view = settle(&launcher, cx);
+    assert!(
+        matches!(view.screen, Screen::Root { .. }),
+        "{:?}",
+        view.screen
+    );
+    hide(cx);
+    assert!(!held(cx));
+}
+
+#[gpui::test]
 fn the_page_offers_the_update_and_restarts_into_it_by_the_users_choice(cx: &mut TestAppContext) {
     let dirs = UpdateDirs::new();
     dirs.publish_update("99.0.0", b"the 99.0.0 program");

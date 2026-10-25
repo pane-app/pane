@@ -807,14 +807,26 @@ It does so once the launcher has been hidden for 10 minutes. Showing it,
 expanded or collapsed, starts the 10 minutes over. It waits while any of
 these holds:
 
-- a screen other than root search is left on display (a command, a form,
-  a preview, the extension list or the hotkey screen);
+- a form left on display holds what the user changed in its fields (an
+  extension's form, or one of Pane's own, such as Create Extension), and
+  the next showing would put it back: with the Launcher page's **Pop to
+  root search** at **Never** (the default), or a command that closed the
+  launcher asked to keep its screen;
+- the hotkey screen is left on display, listening for keys;
 - a command the user ran, or a launch an extension asked for, is still
   running;
 - Pane is setting up, installing, enabling, disabling, reloading,
   updating or removing an extension;
 - clipboard history waits to be written;
 - the Settings window is open.
+
+Any other screen left on display does not hold it: a command's list, a
+search typed into it, a preview, a detail view or the extension list.
+The new version opens on root search, as Raycast pops back to root
+search after the launcher was hidden a while (90 seconds by default). With
+**Pop to root search** at **After 90 seconds** or **After 3 minutes**, a
+form's input is lost before the 10 minutes are up anyway, so a form
+holds nothing either.
 
 It looks again within a minute of the last of these ending. The restart
 is the one above, step for step, with one more argument: `--hidden`. The
