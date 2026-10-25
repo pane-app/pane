@@ -946,3 +946,35 @@ pub(super) fn search_typed(state: &State) -> bool {
         .as_ref()
         .is_some_and(|list| !list.search.trim().is_empty())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{Query, SearchSensitivity, matches};
+
+    /// Whether `query` finds the item titled `title`, with `keywords`, at
+    /// the default sensitivity.
+    fn finds(query: &str, title: &str, keywords: &[&str]) -> bool {
+        let keywords: Vec<String> = keywords.iter().map(|word| (*word).to_owned()).collect();
+        matches(
+            &Query::new(query),
+            SearchSensitivity::default(),
+            title,
+            None,
+            &keywords,
+        )
+    }
+
+    #[test]
+    fn a_title_starting_with_punctuation_is_found_by_its_first_word() {
+        // #540: Switch Windows' row for Notepad's unsaved file, with the
+        // program's name as a keyword, as pane-app/switch-windows sets it.
+        let notepad = "*scratch.txt - Notepad";
+        for query in ["scratch", "scr", "notepad"] {
+            assert!(finds(query, notepad, &["Notepad"]), "{query}");
+        }
+        assert!(finds("main", "● main.rs - Visual Studio Code", &[]));
+        assert!(finds("doki", "[Doki] New Game - 05.srt", &[]));
+        assert!(finds("target", "PANE-VD2-TARGET", &[]));
+        assert!(!finds("cratch", notepad, &[]));
+    }
+}
