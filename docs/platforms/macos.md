@@ -216,6 +216,25 @@ TypeScript sample and Enter ran it, and "zzz" showed No results
 [26-no-results.png](evidence/macos/26-no-results.png)). Input-method
 composition in the query field is still unverified here.
 
+## Keycaps (#117)
+
+On macOS the keycaps show the keys as Raycast and macOS's own menus do:
+the modifiers' symbols in macOS's order, ⌃ Control, ⌥ Option, ⇧ Shift,
+⌘ Command, and symbols for the named keys, ↵ Return, ⎋ Escape, ⇥ Tab,
+⌫ Delete (the key Pane's bindings call Backspace), ⌦ Forward Delete,
+⇞ Page Up, ⇟ Page Down, ↖ Home, ↘ End and the arrows. Space, Fn, the
+letters, digits and function keys show their names. The user chose
+this ("do like Raycast"), replacing the spelled-out caps #93 drew,
+which outgrew a narrow launcher's footer. Each cap keeps its key's
+spelled-out name for assistive technology: a hint reads
+"Control+Option+Shift+Page Down" while it shows ⌃ ⌥ ⇧ ⇟. A hotkey
+recorder writes the caps with spaces between them ("⌃ ⌥ G") where
+Windows and Linux write "Ctrl + Alt + G". Windows and Linux keep their
+words (Ctrl, Alt, Shift, Win, Esc). The mapping is
+`crates/pane/src/keyboard.rs`'s `binding_keys_on`, unit-tested for both
+spellings on every system. The bundled Geist Mono has no ⌃, ⌥, ⌘, ⎋, ⇞
+or ⇟ glyph, so macOS's own font fallback draws those.
+
 ## Calculator (#27)
 
 The smoke's installer phase (screenshots 501 and 502) covers the
