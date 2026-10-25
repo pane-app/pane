@@ -20,6 +20,9 @@ mod front;
 mod keyboard;
 mod links;
 mod off_taskbar;
+// The Settings titlebar exists only where the platform's own is hidden.
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+mod titlebar_drag;
 mod ui;
 
 pub mod placement;

@@ -971,12 +971,14 @@ fn titlebar(title: gpui::SharedString, theme: &ui::theme::Theme) -> Div {
     let label = settings_shell::titlebar_label(title, theme);
     let titlebar = titlebar.child(
         // The one place to grab the window by, outside the page and
-        // the sidebar.
+        // the sidebar; a double click maximizes or restores the window
+        // (see [`crate::titlebar_drag`]).
         div()
             .flex_1()
             .min_w(px(0.))
             .h_full()
             .window_control_area(WindowControlArea::Drag)
+            .on_mouse_down(gpui::MouseButton::Left, crate::titlebar_drag::pressed)
             .pl(inset)
             .flex()
             .items_center()
