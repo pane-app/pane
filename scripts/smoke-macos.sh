@@ -68,8 +68,20 @@ capture_until() {
 # of the same color, would then be taken for it (release run 37725624283's
 # macOS frame 91 showed the earlier answer).
 until_toast_gone() {
-  # Hover pauses the toast's timer. Move off the window without clicking
-  # or changing which control has the keyboard.
+  # Hover pauses the toast's timer.
+  pointer_off
+  local deadline=$((SECONDS + $2))
+  while :; do
+    capture toast-wait.png
+    python3 "$(dirname "$0")/check_screenshot.py" --absent "$out/toast-wait.png" "$1" >/dev/null 2>&1 && return 0
+    [ "$SECONDS" -lt "$deadline" ] || { echo "the $1 toast did not leave within $2 seconds"; exit 1; }
+    sleep 0.5
+  done
+}
+# Moves the pointer off the window, without clicking or changing which
+# control has the keyboard: a toast under the pointer keeps its time
+# paused (#249).
+pointer_off() {
   python3 - <<'PY'
 import ctypes
 class CGPoint(ctypes.Structure): _fields_ = [("x", ctypes.c_double), ("y", ctypes.c_double)]
@@ -79,13 +91,6 @@ cg.CGEventCreateMouseEvent.argtypes = [ctypes.c_void_p, ctypes.c_uint32, CGPoint
 cg.CGEventPost.argtypes = [ctypes.c_uint32, ctypes.c_void_p]
 cg.CGEventPost(0, cg.CGEventCreateMouseEvent(None, 5, CGPoint(1, 40), 0))
 PY
-  local deadline=$((SECONDS + $2))
-  while :; do
-    capture toast-wait.png
-    python3 "$(dirname "$0")/check_screenshot.py" --absent "$out/toast-wait.png" "$1" >/dev/null 2>&1 && return 0
-    [ "$SECONDS" -lt "$deadline" ] || { echo "the $1 toast did not leave within $2 seconds"; exit 1; }
-    sleep 0.5
-  done
 }
 # Prints "x y": where the screenshot shows the given color.
 locate() { python3 "$(dirname "$0")/check_screenshot.py" --locate "$out/$1" "$2"; }
@@ -136,6 +141,19 @@ PY
 to_root() {
   osascript -e 'tell application "System Events" to key code 53 using command down'
   sleep 1
+}
+# Waits, for at most $1 seconds, until the launcher shows root search (no
+# back button in the magnifier's place), so the query typed next goes to
+# it: main run 40118939287's macOS frame 204 showed that a query typed
+# blind after frame 203 went nowhere (#527).
+until_root() {
+  local deadline=$((SECONDS + $1))
+  while :; do
+    capture root-wait.png
+    python3 "$(dirname "$0")/check_screenshot.py" --root "$out/root-wait.png" >/dev/null 2>&1 && return 0
+    [ "$SECONDS" -lt "$deadline" ] || { echo "root search did not show within $1 seconds"; exit 1; }
+    sleep 0.5
+  done
 }
 
 # Extensions are managed in Settings (#168): root search's "Manage
@@ -1432,12 +1450,17 @@ key 36; sleep 2   # open Greeting in the restarted runtime
 for ((i = 0; i < 8; i++)); do key 125; done   # Count
 inject crash-before-answer:count
 # The answer is a toast, which leaves 3 seconds after it shows (#249): it is
-# captured as it shows, and the settle the fixed wait gave follows it.
+# captured as it shows, and the settle the fixed wait gave follows it. The
+# pointer leaves the window first: a toast under it keeps its time paused,
+# and main run 40110558671's frame 203 showed Count's own toast ("Counted
+# 2") all along (#527).
+pointer_off
 key 36   # counts, then the runtime crashes before answering
 capture_until 203-runtime-stopped.png error 15   # the runtime stopped; its answer is lost
 sleep 2
 [ "$(count)" = 2 ] || { echo "Count did not run once before the crash"; exit 1; }
-key 53; sleep 1
+to_root
+until_root 15
 type_text greet; sleep 1
 key 36; sleep 2   # Greeting: nothing runs
 capture 204-runtime-refused.png

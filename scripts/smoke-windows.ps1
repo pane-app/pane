@@ -171,6 +171,23 @@ function Focus-Pane($process) {
 # return to root key (Shift+Escape): Escape at a blank root search hides
 # the launcher since the redesign (1e61793), so it cannot be pressed blind.
 function To-Root { Send "+{ESC}"; Start-Sleep -Seconds 1 }
+# Waits, for at most $seconds, until the launcher shows root search (no
+# back button in the magnifier's place), so the query typed next goes to
+# it: main run 40118939287's macOS frame 204 showed that a query typed
+# blind after frame 203 went nowhere (#527).
+function Until-Root($seconds) {
+    $deadline = (Get-Date).AddSeconds($seconds)
+    while ($true) {
+        Capture "root-wait.png"
+        & {
+            $ErrorActionPreference = "Continue"
+            python "$PSScriptRoot/check_screenshot.py" --root (Join-Path $OutDir "root-wait.png") *> $null
+        }
+        if ($LASTEXITCODE -eq 0) { return }
+        if ((Get-Date) -gt $deadline) { throw "root search did not show within $seconds seconds" }
+        Start-Sleep -Milliseconds 250
+    }
+}
 
 # Extensions are managed in Settings (#168): root search's "Manage
 # Extensions" command opens the Settings window at its Extensions group,
@@ -1659,11 +1676,14 @@ Send "{DOWN 8}"   # Count
 Inject-Fault "crash-before-answer:count"
 # The answer is a toast, which leaves 3 seconds after it shows (#249): it is
 # captured as it shows, and the settle the fixed wait gave follows it.
+# Capture parks the pointer in the header, so no toast is held under it
+# (#527: on macOS one was).
 Send "{ENTER}"   # counts, then the runtime crashes before answering
 Capture-Until "203-runtime-stopped.png" "error" 15   # the runtime stopped; its answer is lost
 Start-Sleep -Seconds 2
 if ((Saved-Count) -ne "2") { throw "Count did not run once before the crash" }
-Send "{ESC}"; Start-Sleep -Seconds 1
+To-Root
+Until-Root 15
 Send "greet"; Start-Sleep -Seconds 1
 Send "{ENTER}"; Start-Sleep -Seconds 2   # Greeting: nothing runs
 Capture "204-runtime-refused.png"

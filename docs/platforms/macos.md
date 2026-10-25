@@ -439,7 +439,9 @@ installs the helper and settings samples and starts Pane with
    must stop growing), the note it saved kept, and the status line the
    error color.
 2. A second crash, injected before Count's answer, must leave the count
-   at 2 and the runtime stopped.
+   at 2 and the runtime stopped. The pointer leaves the window before
+   that Count, so no toast is held under it, and the return to root key
+   then waits for root search before the next query is typed (#527).
 3. Root search explains it, and the Extensions group's page in Settings
    shows why (its runtime rows, and the details behind one).
 4. A disable works, and Restart the extension runtime runs extensions

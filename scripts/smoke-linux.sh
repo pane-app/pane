@@ -157,8 +157,8 @@ capture_until() {
 # of the same color, would then be taken for it (release run 37725624283's
 # macOS frame 91 showed the earlier answer).
 until_toast_gone() {
-  # Hover pauses the toast's timer; move away without changing focus.
-  "$xdotool" mousemove 1 1
+  # Hover pauses the toast's timer.
+  pointer_off
   local deadline=$((SECONDS + $2))
   while :; do
     capture toast-wait.png
@@ -201,6 +201,22 @@ focus_launcher() {
 # return to root key (Shift+Escape): Escape at a blank root search hides
 # the launcher since the redesign (1e61793), so it cannot be pressed blind.
 to_root() { "$xdotool" key shift+Escape; sleep 1; }
+# Waits, for at most $1 seconds, until the launcher shows root search (no
+# back button in the magnifier's place), so the query typed next goes to
+# it: main run 40118939287's macOS frame 204 showed that a query typed
+# blind after frame 203 went nowhere (#527).
+until_root() {
+  local deadline=$((SECONDS + $1))
+  while :; do
+    capture root-wait.png
+    python3 "$(dirname "$0")/check_screenshot.py" --root "$out/root-wait.png" >/dev/null 2>&1 && return 0
+    [ "$SECONDS" -lt "$deadline" ] || { echo "root search did not show within $1 seconds"; exit 1; }
+    sleep 0.5
+  done
+}
+# Moves the pointer off the window without changing focus: a toast under
+# the pointer keeps its time paused (#249).
+pointer_off() { "$xdotool" mousemove 1 1; }
 
 # Extensions are managed in Settings (#168): root search's "Manage
 # Extensions" command opens the Settings window at its Extensions group,
@@ -1573,12 +1589,17 @@ if grep -q '"helper-wait": "finished"' "$PANE_DATA_DIR/extensions/settings.json"
 for ((i = 0; i < 8; i++)); do "$xdotool" key Down; done   # Count
 inject crash-before-answer:count
 # The answer is a toast, which leaves 3 seconds after it shows (#249): it is
-# captured as it shows, and the settle the fixed wait gave follows it.
+# captured as it shows, and the settle the fixed wait gave follows it. The
+# pointer leaves the window first: a toast under it keeps its time paused,
+# and main run 40110558671's macOS frame 203 showed Count's own toast
+# ("Counted 2") all along (#527).
+pointer_off
 "$xdotool" key Return   # counts, then the runtime crashes before answering
 capture_until 203-runtime-stopped.png error 15   # the runtime stopped; its answer is lost
 sleep 2
 [ "$(count)" = 2 ] || { echo "Count did not run once before the crash"; exit 1; }
-"$xdotool" key Escape; sleep 1
+to_root
+until_root 15
 "$xdotool" type --delay 50 greet; sleep 1
 "$xdotool" key Return; sleep 2   # Greeting: nothing runs
 capture 204-runtime-refused.png

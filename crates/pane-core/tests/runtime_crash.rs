@@ -437,6 +437,28 @@ fn an_action_whose_answer_was_lost_is_not_run_again() {
     );
 }
 
+/// Count shows its toast ("Counted 2") before the crash loses its answer:
+/// the toast goes with the runtime, so the footer's toast can only be
+/// Pane's explanation, now and once that has had its time (#527).
+#[test]
+fn a_toast_shown_before_the_crash_goes_with_the_runtime() {
+    let pane = Pane::new();
+    open_at(&pane.launcher, "Greeting", "Count");
+    pane.runtime.inject(Fault::CrashBeforeAnswer {
+        item: "count".into(),
+    });
+    block_on(pane.launcher.activate_selected());
+
+    assert!(matches!(pane.crashed(), RuntimeStatus::Restarted { .. }));
+    pane.toast("does not run this again");
+    assert_eq!(
+        pane.saved("content", &pane.settings, "count"),
+        Some("1".into()),
+        "Count ran, and showed its toast, before the crash"
+    );
+    assert_eq!(pane.launcher.toast(), None);
+}
+
 #[test]
 fn a_call_whose_answer_was_lost_says_it_was_not_run_again() {
     let pane = Pane::new();
