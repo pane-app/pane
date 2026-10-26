@@ -138,7 +138,9 @@ pub(crate) trait Output: Send + Sync {
 pub(crate) enum OpenError {
     /// There is no output device: `not-available`.
     NoDevice(String),
-    /// The device refused: `failed`.
+    /// The device refused: `failed`. Only the Windows adapter has a
+    /// device that can.
+    #[cfg_attr(not(windows), allow(dead_code))]
     Failed(String),
 }
 
