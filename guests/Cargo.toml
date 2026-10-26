@@ -33,6 +33,7 @@ members = [
     "sample-system-commands",
     "sample-switch-windows",
     "sample-files",
+    "sample-alerts",
     "fixtures/faulty",
     "fixtures/folder-files",
     "fixtures/quick",

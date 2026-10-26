@@ -8,7 +8,6 @@ version = "0.1.0"
 dependencies = [
  "pane-extension",
  "wasip3",
- "wit-bindgen",
 ]
 
 [[package]]
@@ -356,6 +355,14 @@ name = "sample-actions"
 version = "0.1.0"
 dependencies = [
  "pane-extension",
+]
+
+[[package]]
+name = "sample-alerts"
+version = "0.1.0"
+dependencies = [
+ "pane-extension",
+ "serde_json",
 ]
 
 [[package]]

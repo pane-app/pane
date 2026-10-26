@@ -63,13 +63,16 @@ const EXPORT_OPTIONS: [(&str, &str); 7] = [
 /// beyond what every command may import (`js-extension`). `run` and
 /// `windows` are Windows-only capabilities: a command importing them
 /// elsewhere has every call answer not-available, which is not a failure.
-const IMPORT_OPTIONS: [(&str, &str); 6] = [
+/// `alerts` (ADR 0053) answers not-available where Pane has no adapter
+/// yet, the same way.
+const IMPORT_OPTIONS: [(&str, &str); 7] = [
     ("files", "pane:extension/files@0.2.0"),
     ("fileIndex", "pane:extension/file-index@0.2.0"),
     ("typedFolder", "pane:extension/typed-folder@0.2.0"),
     ("clipboardHistory", "pane:extension/clipboard-history@0.2.0"),
     ("run", "pane:extension/run@0.2.0"),
     ("windows", "pane:extension/windows@0.2.0"),
+    ("alerts", "pane:extension/alerts@0.2.0"),
 ];
 /// The exports the adapter wraps, by `pane` option, each with the
 /// handlers that answer errors as text (see `guests/js/adapt.js`). The

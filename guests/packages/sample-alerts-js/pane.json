@@ -1,0 +1,21 @@
+{
+  "manifestVersion": 1,
+  "title": "JavaScript alerts sample",
+  "version": "0.1.0",
+  "apiVersion": "0.2",
+  "commands": [
+    {
+      "id": "set",
+      "title": "Set Short Alarm (JavaScript)",
+      "subtitle": "Rings in 5 seconds: a notification, a ringing sound and the Ringing screen",
+      "component": "sample_alerts_js.wasm",
+      "mode": "no-view"
+    },
+    {
+      "id": "ringing",
+      "title": "Ringing (JavaScript)",
+      "subtitle": "Snooze or dismiss the alarm that rings",
+      "component": "sample_alerts_js.wasm"
+    }
+  ]
+}

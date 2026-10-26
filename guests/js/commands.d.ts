@@ -75,6 +75,13 @@ declare module "pane:extension/commands@0.2.0" {
    * or unavailable here, an argument is not its own or a dropdown's value
    * not among its options, or the context is not JSON) throws an object
    * whose `payload` is the reason.
+   *
+   * A user-initiated launch from a call no window was shown for (a timer's
+   * firing, a schedule, a service) is an attention launch (ADR 0053): it
+   * may name only a view command of the caller's own package. It returns
+   * once the launch is queued, and Pane shows the launcher on the command,
+   * with the keyboard focus, once the user has stopped typing, no Alert is
+   * pending and Game mode does not hold the hotkeys (docs/alerts.md).
    */
   export function launch(
     target: CommandRef,

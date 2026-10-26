@@ -15,11 +15,11 @@ package pane:extension@0.2.0;
 // not import it. Windows first: on a system Pane has no adapter for yet,
 // every call answers `not-available`, which is never a reason to pause
 // the extension; that is macOS and Linux until #559. Rust
-// commands are to use it through pane-extension (`pane_extension::alerts`),
-// and JavaScript and TypeScript ones whose package.json sets
-// `"pane": { "alerts": true }` to import the module
-// "pane:extension/alerts@0.2.0" (#558). The header
-// follows `package`: comments above it would document the package, which
+// commands use it through pane-extension (`pane_extension::alerts`), and
+// JavaScript and TypeScript ones through `@pane-app/extension/alerts` or
+// the module "pane:extension/alerts@0.2.0", which a command imports once
+// its package.json sets `"pane": { "alerts": true }` (docs/alerts.md).
+// The header follows `package`: comments above it would document the package, which
 // extension.wit already does.
 
 /// A system notification and a ringing sound, as a command reaches them

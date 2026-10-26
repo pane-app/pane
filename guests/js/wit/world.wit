@@ -37,7 +37,8 @@
 // what Windows' Run dialog runs, sharing its history and completing the
 // command line as it is typed (wit/run.wit), `windows` the open windows
 // it may list and bring one of to the front (wit/windows.wit), Windows
-// only. The build
+// only, and `alerts` a system notification and a ringing sound it owns
+// (wit/alerts.wit, ADR 0053). The build
 // writes a world
 // `js-command` including this one with those exports and imports
 // (tools/componentize-js/pane_js.py).
