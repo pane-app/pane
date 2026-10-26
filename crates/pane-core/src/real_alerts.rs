@@ -14,7 +14,8 @@ pub(crate) fn opted_in() -> bool {
 pub(crate) fn record(text: &str) {
     use std::io::Write;
 
-    eprintln!("{text}");
+    // Standard output: only `diagnostics` writes to standard error.
+    println!("{text}");
     if let Some(summary) = std::env::var_os("GITHUB_STEP_SUMMARY")
         && let Ok(mut file) = std::fs::OpenOptions::new().append(true).open(summary)
     {
