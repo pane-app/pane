@@ -229,8 +229,14 @@ where
         Ok(0) | Err(_) => return,
         Ok(_) => {}
     }
-    if let Some(request) = parse(&line) {
-        let _ = asked.send(request);
+    // The start this answers exits without a log of its own: this Pane's
+    // log says it was started again.
+    match parse(&line) {
+        Some(request) => {
+            crate::diagnostic!("Pane was started again: this Pane shows its launcher");
+            let _ = asked.send(request);
+        }
+        None => crate::diagnostic!("Pane was started again quietly: this Pane answered it"),
     }
     let _ = write.write_all(b"ok\n").await;
     let _ = write.flush().await;
@@ -467,7 +473,13 @@ mod platform {
         {
             return Err(channel::not_own(folder));
         }
-        UnixStream::connect(path)
+        let stream = UnixStream::connect(path)?;
+        // A connection the system queued for a Pane that never takes it
+        // writes and reads nothing for ever: the thread asking gives up
+        // too, not only the start waiting for it.
+        stream.set_read_timeout(Some(super::ANSWER_LIMIT))?;
+        stream.set_write_timeout(Some(super::ANSWER_LIMIT))?;
+        Ok(stream)
     }
 
     /// macOS and X11 let the running Pane's window come forward as it is.
@@ -644,5 +656,82 @@ mod tests {
             "unanswered"
         );
         assert!(started.elapsed() < Duration::from_secs(5));
+    }
+
+    /// The socket file a Pane that ended left at the endpoint of `key`
+    /// (killed, it never removed it): bound, then let go of, which leaves
+    /// the file with nobody listening.
+    #[cfg(unix)]
+    fn leave_a_socket(key: &str) -> PathBuf {
+        let endpoint = platform::endpoint(key).unwrap();
+        drop(std::os::unix::net::UnixListener::bind(&endpoint).unwrap());
+        assert!(endpoint.exists(), "the socket file went with its listener");
+        endpoint
+    }
+
+    /// A Pane killed (SIGKILL, or a crash) leaves its socket file behind:
+    /// the next start takes the free lock and listens there all the same,
+    /// and a later start reaches it.
+    #[cfg(unix)]
+    #[test]
+    fn a_socket_an_ended_pane_left_is_replaced() {
+        let (_folder, key) = test_key();
+        let Claim::First(lock) = claim(&key).unwrap() else {
+            panic!("another Pane holds a fresh key");
+        };
+        leave_a_socket(&key);
+        drop(lock);
+        let show = Some(Request::Show { install: None });
+        let Started::First(instance) = start(&key, show.as_ref(), Duration::from_secs(10)).unwrap()
+        else {
+            panic!("the start did not take the free lock");
+        };
+        let _requests = instance.listen().unwrap();
+        assert_eq!(
+            start_elsewhere(&key, show, Duration::from_secs(10)),
+            "answered"
+        );
+    }
+
+    /// A lock held with only a socket file nobody listens on: a start is
+    /// refused at once each time, and runs once the limit has passed.
+    #[cfg(unix)]
+    #[test]
+    fn a_socket_nobody_listens_on_is_not_waited_for_past_the_limit() {
+        let (_folder, key) = test_key();
+        let Claim::First(_instance) = claim(&key).unwrap() else {
+            panic!("another Pane holds a fresh key");
+        };
+        let endpoint = leave_a_socket(&key);
+        let show = Some(Request::Show { install: None });
+        let started = Instant::now();
+        assert_eq!(
+            start_elsewhere(&key, show, Duration::from_millis(500)),
+            "unanswered"
+        );
+        assert!(started.elapsed() < Duration::from_secs(5));
+        let _ = std::fs::remove_file(endpoint);
+    }
+
+    /// Connected is not answered: a socket that queues the connection but
+    /// never takes it (a Pane whose listening thread is stuck) takes the
+    /// request without a word, and the start runs once the limit passed.
+    #[cfg(unix)]
+    #[test]
+    fn a_connection_never_taken_is_not_waited_for_past_the_limit() {
+        let (_folder, key) = test_key();
+        let Claim::First(_instance) = claim(&key).unwrap() else {
+            panic!("another Pane holds a fresh key");
+        };
+        let endpoint = platform::endpoint(&key).unwrap();
+        let _stuck = std::os::unix::net::UnixListener::bind(&endpoint).unwrap();
+        let show = Some(Request::Show { install: None });
+        let started = Instant::now();
+        assert_eq!(
+            start_elsewhere(&key, show, Duration::from_millis(500)),
+            "unanswered"
+        );
+        assert!(started.elapsed() < Duration::from_secs(5));
+        let _ = std::fs::remove_file(endpoint);
     }
 }

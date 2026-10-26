@@ -12,7 +12,7 @@ Accepted 2026-10-25 by the user's standing rule that Pane does what Raycast does
 - If the lock stays held and nobody answers for 10 seconds, the start runs anyway, without the lock, and says why in its log. A Pane that never answers is broken or stuck, and the user who started Pane gets one.
 - `pane --version` and the selected-text worker exit before the lock is looked at.
 - The new process of a restart into an update (ADR 0050, ADR 0051) waits for the old process by its id first, as before, and only then takes the lock the old one let go of.
-- A second start writes nothing: it exits before the crash record, the log and What's New's record.
+- A second start writes nothing: it exits before the crash record, the log and What's New's record. The running Pane's log says it was started again, so a start that exited is never silent. A start that runs without the lock writes why to its log as soon as the log is open.
 
 On macOS, opening `Pane.app` while it runs never starts a second process (Launch Services activates the one running), so Pane shows its launcher when the system says it was opened again. Starting the bundle's program directly is a second start like any other.
 
@@ -34,4 +34,4 @@ On macOS, opening `Pane.app` while it runs never starts a second process (Launch
 
 - [Building and running Pane](../building.md#one-pane-at-a-time) and the [installer's concurrent Panes](../installer.md#concurrent-panes) say so. The glossary adds Instance lock and Second start.
 - The smokes start Pane many times in sequence. Each start comes after the one before was stopped, though not always after the system finished ending it, so a start may wait a moment for the lock. They don't start Pane twice at once.
-- The guard's tests (`pane_core::instance`) cover the lock, the request and its answer, a quiet start, a lock let go of or abandoned, a start that takes the lock a quitting Pane lets go of, and a holder that never answers.
+- The guard's tests (`pane_core::instance`) cover the lock, the request and its answer, a quiet start, a lock let go of or abandoned, a start that takes the lock a quitting Pane lets go of, and a holder that never answers. On macOS and Linux they also cover a socket file a killed Pane left (replaced by the next Pane), a held lock with only such a file (the start runs after the limit), and a socket that queues the connection but never takes it (connected is not answered; the start runs after the limit, and the asking connection times out too).
