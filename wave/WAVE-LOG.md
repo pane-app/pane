@@ -1046,3 +1046,63 @@
 - (8) Pop-up questions merged #533 (179385a6; CI branch 40152987881, smoke 3 OS 40155400583): shared alert in features/confirmation.rs for Pane's own questions; Uninstall + "Delete saved data" checkbox; Delete retained data now Enter=Delete (red). ALSO FIXES main smoke, red since #529 (preview check looked where the top bar now is; main runs 40135323933, 40137376123). LESSON: two worktrees sharing one CARGO_TARGET_DIR overwrite each other's workspace crates; don't share a target between concurrent workers.
 - (8) STOPPED per user. Deleted pane-target-kb; C: free 157 GB. Only main worktree (empty locked dir confirm-popup-wt left). Waiting on main CI 40158661133 (179385a6) to confirm green. Unreleased on main since 0.1.2: #529 top bar, #530/#531 idle auto-install, #532 pop to root 90 s, #533 alert pop-ups.
 - (8) Main CI 40158661133 on 179385a6 GREEN (all tests + smokes on 3 OS). Wave stopped here.
+
+## 2026-10-25 — wave 9: #117 macOS keycap symbols (mac-chord-symbols)
+- Branch mac-chord-symbols @ 171f97f (worktree chord-wt). binding_keys_on/hotkey_keys_on: macOS caps ⌃⌥⇧⌘ + ⎋⇥⌫⌦⇞⇟↖↘, names stay spelled out; confirmation Esc via escape_keys; macOS recorder joins caps with spaces. #117 test un-ignored on macOS.
+- CI (branch) 40166556423 green; ci-fast keyboard filter 40166582291 green on 3 OS (narrow footer passes on macOS); macOS smoke 40166584196 green (screens 53 "⌃ ⌥ G", 24 "Actions ⌘ K" via font fallback; Geist Mono lacks ⌃⌥⌘⎋⇞⇟).
+- PR text: wave9/msg/mac-chord-symbols-pr.md. Not opened.
+
+## 2026-10-25 — wave 9: #104 reduced motion on macOS and Linux (reduced-motion-mac-linux)
+- Branch reduced-motion-mac-linux @ d345b5f (worktree motion-wt). macOS: NSWorkspace accessibilityDisplayShouldReduceMotion + display-options notification on main queue (block2 observer). Linux: ashpd Settings portal in a cx.spawn task (never blocks startup): appearance reduced-motion, GNOME enable-animations, KDE AnimationDurationFactor; any asks -> reduced, unreadable -> reduced, absent/no portal -> full; SettingChanged watched. Pure DesktopMotion mapping + 6 unit tests.
+- CI (branch) 40165852031 green (Lints macOS/Linux compile the cfg code); ci-fast ui::motion 40166929186 green on 3 OS; smokes macOS 40166966762, ubuntu 40166968856 (temp branch wave-motion-smoke-linux, deleted) green.
+- Local clippy -D warnings trips a pre-existing useless_conversion in pane-build (clippy 1.98), not ours. PR text: wave9/msg/reduced-motion-mac-linux-pr.md. Not opened.
+
+## 2026-10-25 — wave 9: #527 runtime-stopped error over a lost call's toast (fix/stopped-error-over-toast)
+- Branch fix/stopped-error-over-toast @ ab1e304 (worktree toast-wt). Cause confirmed by a window test: when the error replaces the toast, the hover clears, so the error times out after 3 s and "Counted 2" comes back under the resting pointer and is held (main run 40110558671 frame 203). Fix: note_runtime_crash drops an extension's toast (Pane's own stay); abandoned threads' host calls are already fenced.
+- Smokes: pointer_off before the crashing Enter (macOS, Linux; Windows Capture already parks it in the header); after 203 to_root + until_root (new check_screenshot.py --root = no back button) on all three.
+- CI (branch) 40167224799 green; smoke-only 40167255168 (all OS) green, 40170217288 and 40174611998 (macos-15) green. PR text: wave9/msg/fix-stopped-error-over-toast-pr.md. Not opened.
+
+## 2026-10-25 — wave 9 (new PC, C:\Users\HP MEDIA\Desktop\nguyenvu): fixes + RELEASED 0.1.3
+- Merged #534 (#117 macOS key symbols), #535 (#104 reduced motion macOS/Linux; issue left open for hand checks on real Mac/Linux), #536 (#527 runtime-stopped error wins over toast; macOS smoke 3/3 green).
+- #537 bump to 0.1.3 (d5c6abf1). Main CI 40182102043 green after rerun (macOS shard lost its runner). Tag v0.1.3; release run 40186904594 green, 14 assets; published full release, latest.
+- Hand-check list for #270/#108 at nguyenvu\wave9\hand-checks.md (user checks on this PC).
+
+## 2026-10-26 — #538 hook watchdog foreground (wave 9)
+- Branch fix/hook-watchdog-foreground @ 754d5603 (hook-wt). PR text: wave9\msg\fix-hook-watchdog-foreground-pr.md. Not opened.
+- Fix: watch() checks GetForegroundWindow before counting, and calls follow_raw_input to resync. Pane in front never counts. The permanent give-up is replaced by a pause (30 s doubling to 300 s, hook left in place), with log lines for the pause and the recovery. Counting moved to a pure `Watchdog` struct with 6 unit tests.
+- CI (branch) 40212732607 green; ci-fast 40212773279 (hotkey families) green; ci-fast 40214084438 binary(hotkey_adapters): Windows 8/8 pass, macOS leg "no tests to run" (filter artefact).
+- Local: sccache wrapper crashed with no message on a cold target; RUSTC_WRAPPER= worked.
+
+## 2026-10-26 — #540 match after leading punctuation (wave 9)
+- Branch match-after-leading-punctuation @ bde88e0, worktree match-wt. CI (branch) 40213079826 green; CLI packages 40213079741 cancelled.
+- search.rs: a letter after any non-alphanumeric char is a word start (scores 3); query-side separators unchanged. Fixes *scratch, ● main, #general in root search and designed List filtering (shared matcher).
+- Tests: search::matching_tests, search::tests highlight, new launcher::designed_list::tests. Docs: root-search.md, designed-tree.md. PR text in wave9/msg/match-after-leading-punctuation-pr.md.
+
+## 2026-10-26 — #539 record a double tap (wave 9)
+- Branch record-double-tap @ 0486de0, worktree dbltap-wt. CI (branch) 40213981086 green; Windows smoke (ci.yml only=smoke) 40214012875 green; CLI packages 40213982376 cancelled.
+- recognizer.rs: recording mode holds a lone tap until DOUBLE_MS from its press closes; same-key second press reports Double instead; any other press flushes the tap; new recording_due/recorded_due. windows.rs: hook callback arms a watchdog-window timer (SetTimer + TIMERPROC) that posts the held tap as WM_RECORDED.
+- Tests: 3 new recognizer tests + updated recording test; window test shortcuts::a_hotkey_cell_records_a_double_tap_and_a_tap_after_its_window (real Recognizer feeding the fake session). Docs: hotkeys.md. PR text in wave9/msg/record-double-tap-pr.md.
+
+## 2026-10-26 — #541 Settings titlebar double click (wave 9)
+- Branch settings-titlebar-double-click @ 3d797ac (2 commits), worktree titlebar-wt. CI (branch) 40221956046 green; ci-fast `settings_titlebar::` 40221981084 Windows green (earlier 40221093199 caught a drag lag, fixed). CLI packages cancelled. Probe branch wave-titlebar-probe deleted.
+- Cause: fork already answers HTCAPTION and DefWindowProc maximizes on WM_NCLBUTTONDBLCLK; the SC_MOVE loop begun by the first press sometimes ate the second click (real-input probes on CI: ~1 in 30; busy-thread theory disproved). Fix: crates/pane/src/titlebar_drag.rs stops the odd press, polls GetKeyState/GetAsyncKeyState + cursor, posts SC_MOVE|HTCAPTION past SM_CXDRAG/2 after catching the window up; even click_count goes to DefWindowProc. macOS: titlebar_double_click on click_count 2.
+- Tests: tests/settings_titlebar.rs (message-level, REAL_WINDOWS; real-input, REAL_INPUT CI-only). Docs: launcher-appearance.md. PR text wave9/msg/settings-titlebar-double-click-pr.md. Not hand-checked on a Win11 desktop or a Mac.
+
+## 2026-10-26 — #542 one Pane at a time (branch single-instance, head 75e0150)
+- New `pane_core::instance`. The instance lock is per data folder: a named mutex plus pipe on Windows, a flock plus socket in the local channel's folder on Unix. A second start shows the running launcher and exits. A second `--install` is forwarded. `--hidden` and `--launch-at-login` exit quietly. A restart waits by pid, then claims. macOS gets a reopen hook. ADR 0052; ADR 0050's deferred list points at it; the glossary adds Instance lock and Second start.
+- Lesson: on Linux a SIGTERM'd Pane sits in `Zl` for seconds, still holding fds (the lock) after its listener died. The first Linux smoke (40214684871) failed at the start right after the restarted Pane was stopped. Fix: a start retries the lock and the endpoint for 10 s, and runs anyway if the holder never answers.
+- CI (branch) 40222741997 green; smokes 40222780397 green on all 3 systems. PR text: wave9/msg/single-instance-pr.md (not opened).
+
+## 2026-10-26 — macOS smoke "preview did not appear" after the instance guard (fix/instance-second-start-hang)
+- Run 40240069595: the failing start was the capabilities phase's FIRST start (pid 28560, fresh key, took the lock, logged "started"); one unbroken 60-try poll 22:45:11-22:46:08. No second start happened; the guard was not on that path. The preview was lost in a live Pane; cause not found statically (no epoch bump found at start; macOS reopen hook can't pop a fresh window).
+- Older "still root search" failures (Oct 24-25) were the old metadata checker (preview was on screen), not this.
+- Branch adds: running Pane logs each start it answered; a lockless start logs why once its log opens; Unix asking stream has 10 s timeouts; a discarded install preview is logged; smokes print pane processes + pane.log on a lost preview; 3 Unix stale-socket tests; ADR 0052 + building.md.
+- Verified: CI (branch) 40247645674 green; ci-fast 40249183559 (instance:: x3 OS) green; smokes macOS 40247681809 + 40252116785, Linux 40256388093 green. Head ab4caf8. PR text in wave9/msg/fix-instance-second-start-hang-pr.md. Findings commented on #542.
+
+## 2026-10-26 — wave 9: hand check of 0.1.3 on this PC, five fixes, RELEASED 0.1.4
+- Hand check by the agent (injected input) on Windows 11 25H2, 150%: results posted on #270 and #108, both closed; #451 closed.
+- Found and fixed: #538 hook watchdog gave up after Pane got the foreground without an event (PR #543), #539 recording a double tap (#545), #540 match after leading punctuation (#544, commit subject has a stray "# "), #541 Settings titlebar double click (#546), #542 one Pane at a time (#547, ADR 0052). All rechecked on this PC with a build of main.
+- #549 serialised the titlebar tests with the other real-window tests (main run 40234693621 failed both side by side). #551 adds logs for hand-offs and lost previews.
+- Follow-ups: #550 titlebar double click still flaky on CI runners, #552 macOS --install preview sometimes lost (smoke flake; not the guard).
+- v0.1.4 from bdfaa1d4: main CI 40260000639 green, release run 40264125149, 14 assets, published latest.
+- Open: #104, #68 (need a real Mac/Linux), #550, #552.
