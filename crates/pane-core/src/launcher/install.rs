@@ -628,6 +628,12 @@ impl Launcher {
         };
         let mut state = self.lock();
         if state.screen_epoch != epoch {
+            // Said, as nothing on screen says it: a preview Pane was
+            // started with is lost this way too, not only one the user
+            // went back from.
+            crate::diagnostic!(
+                "pane: an install preview was checked after the launcher left the screen it was asked from, and is not shown"
+            );
             return;
         }
         self.show_preview(&mut state, &request, checked);

@@ -66,7 +66,7 @@ Set `PANE_DATA_DIR` to another folder to keep test installs out of it. The GUI s
 
 ## One Pane at a time
 
-As with Raycast, one Pane runs on a data folder ([ADR 0052](adr/0052-a-second-start-shows-the-running-pane-and-exits.md)). Starting Pane again while it runs (from Start, the setup's last page, a terminal, or `Pane.app` on macOS) shows the running Pane's launcher, and the new process exits. `pane --install <source>` started again shows the package for installation in the running Pane. A second start with `--hidden` or `--launch-at-login` exits without showing anything.
+As with Raycast, one Pane runs on a data folder ([ADR 0052](adr/0052-a-second-start-shows-the-running-pane-and-exits.md)). Starting Pane again while it runs (from Start, the setup's last page, a terminal, or `Pane.app` on macOS) shows the running Pane's launcher, and the new process exits. `pane --install <source>` started again shows the package for installation in the running Pane. A second start with `--hidden` or `--launch-at-login` exits without showing anything. The running Pane's log (`logs/pane.log` in its data folder) records each start it answered. A start whose running Pane never answers runs after 10 seconds anyway and logs why.
 
 To run a development Pane beside an installed one, give it a data folder of its own with `PANE_DATA_DIR`. To develop extensions against it with `pane-ext dev`, also give both a channel of their own with `PANE_CHANNEL` ([development mode](development-mode.md)).
 

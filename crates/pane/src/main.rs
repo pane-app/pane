@@ -138,28 +138,28 @@ fn launch_at_login_asked() -> bool {
 /// `--launch-at-login`), which would show nothing of its own, exits once
 /// that Pane answers, asking nothing. A Pane still quitting holds the lock
 /// for a moment without answering, and this start takes it once it is
-/// free. `None` where the lock could not be taken, or its holder never
-/// answered: Pane then runs anyway, saying why.
-fn claim_instance(preview: Option<&Install>, quiet: bool) -> Option<pane_core::instance::Instance> {
+/// free. Without the lock — it could not be taken, or its holder never
+/// answered — Pane runs anyway, and the second value says why, for the
+/// caller to say once Pane's log is open. The running Pane's log tells of
+/// a start it answered.
+fn claim_instance(
+    preview: Option<&Install>,
+    quiet: bool,
+) -> (Option<pane_core::instance::Instance>, Option<String>) {
     let key = pane_core::instance::key(&pane::data_dir().unwrap_or_default());
     let request = (!quiet).then(|| Request::Show {
         install: preview.cloned().map(Install::absolute),
     });
     let limit = pane_core::instance::ANSWER_LIMIT;
-    match pane_core::instance::start(&key, request.as_ref(), limit) {
-        Ok(Started::First(instance)) => Some(instance),
+    let why = match pane_core::instance::start(&key, request.as_ref(), limit) {
+        Ok(Started::First(instance)) => return (Some(instance), None),
         Ok(Started::Answered) => std::process::exit(0),
-        Ok(Started::Unanswered(error)) => {
-            pane_core::diagnostic!(
-                "Another Pane holds this data folder and did not answer, so this one runs too: {error}"
-            );
-            None
-        }
-        Err(error) => {
-            pane_core::diagnostic!("Pane could not tell whether another Pane runs: {error}");
-            None
-        }
-    }
+        Ok(Started::Unanswered(error)) => format!(
+            "Another Pane holds this data folder and did not answer, so this one runs too: {error}"
+        ),
+        Err(error) => format!("Pane could not tell whether another Pane runs: {error}"),
+    };
+    (None, Some(why))
 }
 
 /// For the native smoke of the system functions: reveals the file
@@ -222,7 +222,8 @@ fn main() {
     // holds the lock for as long as it runs, and listens for later starts
     // at once, so a start while this one is still starting is answered as
     // soon as the window is up.
-    let instance = claim_instance(preview.as_ref(), restarted.hidden || launch_at_login);
+    let (instance, without_lock) =
+        claim_instance(preview.as_ref(), restarted.hidden || launch_at_login);
     let started_again = instance.as_ref().and_then(|instance| {
         instance
             .listen()
@@ -250,6 +251,11 @@ fn main() {
     // write a diagnostic or panic: the log keeps what standard error says,
     // and the record tells whether the run before ended unexpectedly.
     let crash_record = pane::start_crash_record();
+    // Why this Pane runs without the instance lock, if it does, said now
+    // that the log is open.
+    if let Some(why) = without_lock {
+        pane_core::diagnostic!("{why}");
+    }
     let application = gpui_platform::application();
     // On macOS Pane is an accessory application, as menu-bar launchers
     // are (#458): no Dock icon and no Cmd+Tab entry, reached by its hotkey

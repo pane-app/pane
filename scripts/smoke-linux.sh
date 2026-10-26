@@ -402,8 +402,17 @@ start_pane() {
     done
     capture preview-wait.png
     python3 "$(dirname "$0")/check_screenshot.py" --preview "$out/preview-wait.png" \
-      || { echo "the --install preview did not appear (still root search)"; exit 1; }
+      || { echo "the --install preview did not appear (still root search)"; preview_lost; exit 1; }
   fi
+}
+
+# What a start whose --install preview never showed left to go by: the
+# Panes running, and the log of the data folder it started on.
+preview_lost() {
+  echo "Pane started as process $pane_pid; the Pane processes now:"
+  ps -eo pid,ppid,stat,etime,args | grep -E '^ *PID|[/]pane( |$)' || true
+  echo "$PANE_DATA_DIR/logs/pane.log:"
+  cat "$PANE_DATA_DIR/logs/pane.log" 2>/dev/null || true
 }
 
 stop_pane() {
