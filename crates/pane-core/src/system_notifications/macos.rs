@@ -304,9 +304,7 @@ mod tests {
 
     use super::*;
 
-    fn opted_in() -> bool {
-        std::env::var_os("PANE_TEST_REAL_ALERTS").is_some()
-    }
+    use crate::real_alerts::{opted_in, record};
 
     /// Set in the copy of the test program run inside a bundle.
     const IN_BUNDLE: &str = "PANE_TEST_NOTIFICATION_BUNDLE";
@@ -332,7 +330,9 @@ mod tests {
         }
         assert_eq!(bundle_identifier(), None);
         let answer = UserNotifications::new().notify(notice());
-        eprintln!("outside a bundle the notifier answered {answer:?}");
+        record(&format!(
+            "outside a bundle the notifier answered {answer:?}"
+        ));
         match answer {
             Err(NotifyError::NotAvailable(why)) => assert!(why.contains("Pane.app"), "{why}"),
             other => panic!("outside a bundle the notifier answered {other:?}"),
@@ -386,7 +386,8 @@ mod tests {
         let stdout = String::from_utf8_lossy(&output.stdout);
         let answered = stdout
             .lines()
-            .find_map(|line| line.strip_prefix(ANSWERED))
+            // On the line libtest names the test on.
+            .find_map(|line| line.split_once(ANSWERED).map(|(_, answer)| answer))
             .unwrap_or_else(|| {
                 panic!(
                     "the bundled copy answered nothing ({}): {stdout}\n{}",
@@ -394,10 +395,10 @@ mod tests {
                     String::from_utf8_lossy(&output.stderr)
                 )
             });
-        eprintln!(
+        record(&format!(
             "inside an unsigned bundle, after {:?}, the notifier answered {answered}",
             began.elapsed()
-        );
+        ));
         assert!(output.status.success(), "{}", output.status);
         assert!(
             answered.contains("dev.pane.notification-test"),

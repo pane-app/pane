@@ -50,6 +50,8 @@ mod platform;
 mod preferences;
 mod programs;
 mod protection;
+#[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
+mod real_alerts;
 mod registrations;
 pub mod releases;
 pub mod restart;

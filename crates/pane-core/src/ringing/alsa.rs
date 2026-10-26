@@ -315,9 +315,7 @@ mod tests {
 
     use super::*;
 
-    fn opted_in() -> bool {
-        std::env::var_os("PANE_TEST_REAL_ALERTS").is_some()
-    }
+    use crate::real_alerts::{opted_in, record};
 
     #[test]
     fn the_null_device_takes_the_sound_and_dropping_the_stream_closes_it() {
@@ -351,8 +349,8 @@ mod tests {
             return;
         }
         match AlsaOutput::default_device().open(48_000) {
-            Ok(_) => eprintln!("ALSA's default device opened"),
-            Err(OpenError::NoDevice(why)) => eprintln!("ALSA's default device: {why}"),
+            Ok(_) => record("ALSA's default device opened"),
+            Err(OpenError::NoDevice(why)) => record(&format!("ALSA's default device: {why}")),
             Err(OpenError::Failed(why)) => panic!("ALSA's default device failed: {why}"),
         }
     }

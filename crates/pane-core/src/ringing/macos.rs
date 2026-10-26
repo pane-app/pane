@@ -336,9 +336,7 @@ mod tests {
 
     use super::*;
 
-    fn opted_in() -> bool {
-        std::env::var_os("PANE_TEST_REAL_ALERTS").is_some()
-    }
+    use crate::real_alerts::{opted_in, record};
 
     #[test]
     fn the_queue_plays_and_dropping_it_stops_it_or_there_is_no_device() {
@@ -348,12 +346,12 @@ mod tests {
         let mut sink = match AudioQueue.open(48_000) {
             Ok(sink) => sink,
             Err(OpenError::NoDevice(why)) => {
-                eprintln!("the audio queue: {why}");
+                record(&format!("the audio queue: {why}"));
                 return;
             }
             Err(OpenError::Failed(why)) => panic!("the audio queue failed: {why}"),
         };
-        eprintln!("the audio queue opened on the default output device");
+        record("the audio queue opened on the default output device");
         assert_eq!(sink.room().unwrap(), BUFFERS * BUFFER_FRAMES);
         // A quiet half second, in two writes.
         let frames = vec![0.0f32; BUFFERS * BUFFER_FRAMES * 2];
@@ -381,7 +379,7 @@ mod tests {
             return;
         }
         let sound = alert_sound();
-        eprintln!("the alert sound is {}", sound.display());
+        record(&format!("the alert sound is {}", sound.display()));
         assert!(sound.is_file(), "{}", sound.display());
     }
 }

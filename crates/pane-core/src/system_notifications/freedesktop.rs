@@ -292,9 +292,7 @@ mod tests {
 
     use super::*;
 
-    fn opted_in() -> bool {
-        std::env::var_os("PANE_TEST_REAL_ALERTS").is_some()
-    }
+    use crate::real_alerts::{opted_in, record};
 
     /// A D-Bus bus of the test's own, with nothing on it to activate:
     /// `dbus-daemon` with a configuration of its own, its socket in a
@@ -460,7 +458,7 @@ mod tests {
             assert_eq!(shown.actions, ["default", "Open"]);
             assert_eq!(shown.suppress_sound, Some(true));
             assert_eq!(shown.desktop_entry.as_deref(), Some("pane"));
-            eprintln!("the stand-in service was asked to show {shown:?}");
+            record(&format!("the stand-in service was asked to show {shown:?}"));
         }
 
         // Another action, and a click on a notification Pane did not
@@ -534,7 +532,9 @@ mod tests {
         let notifier = Freedesktop::on(Some(bus.address.clone()));
 
         let answer = notifier.notify(notice(None, Arc::new(|| {})));
-        eprintln!("with no notification service the notifier answered {answer:?}");
+        record(&format!(
+            "with no notification service the notifier answered {answer:?}"
+        ));
         match answer {
             Err(NotifyError::NotAvailable(why)) => {
                 assert!(why.contains("No notification service"), "{why}")

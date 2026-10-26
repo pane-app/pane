@@ -684,7 +684,7 @@ impl Drop for WatchedSink {
 fn the_system_output_plays_a_ringing_and_dropping_it_stops_it() {
     use std::sync::atomic::{AtomicU64, AtomicUsize};
 
-    if std::env::var_os("PANE_TEST_REAL_ALERTS").is_none() {
+    if !crate::real_alerts::opted_in() {
         return;
     }
     #[cfg(target_os = "linux")]
@@ -711,7 +711,7 @@ fn the_system_output_plays_a_ringing_and_dropping_it_stops_it() {
     let id = match block_on(ringer.ring(ring).unwrap().started()) {
         Ok(id) => id,
         Err(RingError::NotAvailable(why)) if cfg!(target_os = "macos") => {
-            eprintln!("the system's output is not available: {why}");
+            crate::real_alerts::record(&format!("the system's output is not available: {why}"));
             return;
         }
         Err(other) => panic!("the system's output did not play: {other:?}"),
@@ -720,10 +720,10 @@ fn the_system_output_plays_a_ringing_and_dropping_it_stops_it() {
         frames.load(Ordering::SeqCst) >= 24_000
     });
     assert_eq!(open.load(Ordering::SeqCst), 1);
-    eprintln!(
-        "the system's output took {} frames",
+    crate::real_alerts::record(&format!(
+        "the system's output took {} frames of a ringing, then stopped",
         frames.load(Ordering::SeqCst)
-    );
+    ));
 
     ringer.release(id);
 
