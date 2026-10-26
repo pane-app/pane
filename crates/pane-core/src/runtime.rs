@@ -50,6 +50,7 @@ use wasmtime_wasi_http::{WasiHttpCtx, WasiHttpCtxView, WasiHttpView};
 
 use crate::http;
 
+mod alerts_functions;
 mod application_list;
 pub(crate) mod deadlines;
 mod designed;
@@ -110,7 +111,7 @@ pub use tree::{
 pub(crate) mod bindings {
     wasmtime::component::bindgen!({
         path: "../../wit",
-        world: "extension-with-typed-folder",
+        world: "extension-with-alerts",
         with: {
             // The host type behind each owned registration resource: the
             // registration's id in the registry (see `registrations`).
@@ -219,12 +220,12 @@ use bindings::pane::extension::preferences as preference_values;
 use bindings::pane::extension::registrations as registering;
 use bindings::pane::extension::view as view_host;
 use bindings::pane::extension::{
-    applications, cache, clipboard_history, content, credentials, settings,
-};
-use bindings::pane::extension::{
-    feedback as feedback_host, run as run_host, system as system_host,
+    alerts as alerts_host, feedback as feedback_host, run as run_host, system as system_host,
     system_commands as system_commands_host, typed_folder as typed_folder_host,
     window as window_host, windows as windows_host,
+};
+use bindings::pane::extension::{
+    applications, cache, clipboard_history, content, credentials, settings,
 };
 use events_bindings::exports::pane::extension::events;
 use indexed_bindings::exports::pane::extension::indexed_results;
@@ -3618,6 +3619,12 @@ impl Code {
             state
         })
         .expect("registering the open windows in a fresh linker cannot conflict");
+        // Notifications and ringing sounds answer "not available" until
+        // their adapters land (#555, #556).
+        alerts_host::add_to_linker::<_, wasmtime::component::HasSelf<_>>(&mut linker, |state| {
+            state
+        })
+        .expect("registering notifications and ringing sounds in a fresh linker cannot conflict");
         preference_values::add_to_linker::<_, wasmtime::component::HasSelf<_>>(
             &mut linker,
             |state| state,
@@ -3861,7 +3868,7 @@ impl Code {
                 ))
             })?;
         }
-        bindings::ExtensionWithTypedFolderPre::new(pre).map_err(interface)?;
+        bindings::ExtensionWithAlertsPre::new(pre).map_err(interface)?;
         Ok(Checked { network, programs })
     }
 }
@@ -6367,7 +6374,7 @@ impl Host {
         let which = previous::Which::of(&component, &self.code.engine);
         let bindings = match which {
             previous::Which::Current => previous::World::Current(
-                bindings::ExtensionWithTypedFolder::new(&mut store, &instance).map_err(load)?,
+                bindings::ExtensionWithAlerts::new(&mut store, &instance).map_err(load)?,
             ),
             previous::Which::Previous => previous::World::Previous(
                 previous::bindings::ExtensionWithTypedFolder::new(&mut store, &instance)

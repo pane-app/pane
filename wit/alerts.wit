@@ -1,0 +1,151 @@
+package pane:extension@0.2.0;
+
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+//
+// Getting the user's attention outside Pane's window (ADR 0053): a system
+// notification, and a ringing sound the extension owns. Any call may use
+// them, whatever its mode, and they are made for a call no window was
+// shown for (a timer's firing, a schedule, a service): a HUD lasts 1.2
+// seconds, and a toast and a confirmation need the window. Showing the
+// launcher on one of the extension's commands from such a call is not
+// here: it is `launch` of wit/commands.wit, user-initiated, as Raycast's
+// `launchCommand` is. Kept apart from the other files so a command that
+// does not use it is unchanged: the interface is imported by the
+// `extension-with-alerts` world, and a component that never calls it does
+// not import it. Windows first: on a system Pane has no adapter for yet,
+// every call answers `not-available`, which is never a reason to pause
+// the extension. Until #555 and #556 land, that is every system. Rust
+// commands are to use it through pane-extension (`pane_extension::alerts`),
+// and JavaScript and TypeScript ones whose package.json sets
+// `"pane": { "alerts": true }` to import the module
+// "pane:extension/alerts@0.2.0" (#558). The header
+// follows `package`: comments above it would document the package, which
+// extension.wit already does.
+
+/// A system notification and a ringing sound, as a command reaches them
+/// through Pane.
+interface alerts {
+  /// Why a call did not do what it asked. None of them is a reason to
+  /// pause the extension.
+  variant alerts-error {
+    /// Pane cannot do this here, and nothing went wrong in the extension:
+    /// no adapter on this system yet, notifications turned off for Pane or
+    /// for the system, no AppUserModelID Windows knows for this Pane, or
+    /// no sound output device. Says what, for the user; the command can
+    /// do something else.
+    not-available(string),
+    /// One of Pane's limits refused it: the ringing sounds a package or
+    /// all of them may have at once (2 and 8), or the notifications a
+    /// package may post in a minute (10). Says which.
+    limit(string),
+    /// It went wrong: why, for the user, such as a sound file that cannot
+    /// be read or decoded.
+    failed(string),
+  }
+
+  /// What clicking a notification opens: one of the calling package's
+  /// own commands, launched as `launch` of wit/commands.wit launches it
+  /// user-initiated, with `context` in its launch record.
+  record notification-click {
+    /// The command, by its id in the package's `pane.json`.
+    command: string,
+    /// JSON text, at most 1 MiB, passed as the launch record's context.
+    context: option<string>,
+  }
+
+  /// A system notification: plain text under Pane's name and icon, with
+  /// the package's title as its attribution, so the user can tell which
+  /// extension posted it.
+  record notification {
+    /// Cut with "…" past 200 characters, never refused for its length.
+    title: string,
+    /// More text under the title, cut with "…" past 1,000 characters.
+    message: option<string>,
+    /// What clicking it opens. Without one, or where the system does not
+    /// deliver the click to the running Pane, a click shows the launcher
+    /// as a second start of Pane does.
+    click: option<notification-click>,
+  }
+
+  /// Posts `notification` through the system's notification service (a
+  /// toast on Windows), silently: a sound is `ring`'s job. Answers once
+  /// the system took it, not once the user saw it: under Focus assist or
+  /// Do Not Disturb the system keeps it silent in its notification
+  /// center, which is still a success, and the extension cannot learn
+  /// which. Refused with `not-available` when it cannot be posted at all,
+  /// with `limit` past 10 a minute for the package, and with `failed`
+  /// when the click names no command of the package or its context is
+  /// not JSON within the limit.
+  notify: func(notification: notification) -> result<_, alerts-error>;
+
+  /// A sound Pane ships, the same on every system.
+  enum bundled-sound {
+    /// Insistent, for an alarm.
+    alarm,
+    /// A bell, for a timer or a reminder.
+    bell,
+    /// Gentle, for a reminder.
+    chime,
+  }
+
+  /// What `ring` plays.
+  variant sound {
+    /// One of the sounds Pane ships.
+    bundled(bundled-sound),
+    /// The sound the system's own sound scheme plays for notifications.
+    system,
+    /// A WAV or MP3 file, by its absolute path or a path relative to the
+    /// package's folder (so a package can ship its own), at most 10 MiB.
+    file(string),
+  }
+
+  /// How often `ring` plays its sound, back to back with no gap beyond
+  /// the sound's own silence. Every ringing ends by itself after 10
+  /// minutes, however it was asked.
+  variant repeat {
+    once,
+    /// From 1 to 100 times.
+    times(u32),
+    /// Until the handle is dropped, or the 10 minutes are up.
+    until-stopped,
+  }
+
+  /// A ringing sound the guest owns (ADR 0041). Dropping it stops the
+  /// sound at once; so does the instance holding it going away (a crash,
+  /// a stopped call, an unresponsive stop) and the generation ending (the
+  /// package is disabled, paused, reloaded, updated or uninstalled, or
+  /// Pane quits): nothing an extension rang outlives its code. Dropping
+  /// one that already ended does nothing.
+  resource ringing;
+
+  /// Starts playing `sound` as `repeat` says, at `volume` (0 to 100, a
+  /// percentage of the sound's full level at the output's own volume;
+  /// over 100 is 100), on a thread of Pane's own that neither the window
+  /// nor the runtime waits for. Pane never changes the system's volume:
+  /// a muted output plays silently, which is a success. Refused with
+  /// `not-available` when there is no output device or no adapter on
+  /// this system yet, with `limit` when the package already rings 2
+  /// sounds or Pane 8, and with `failed` when the file cannot be read or
+  /// decoded, `times` is outside its bounds, or this code of the
+  /// extension was replaced.
+  ring: func(sound: sound, repeat: repeat, volume: u8) -> result<ringing, alerts-error>;
+}
+
+/// The alerts import alone, for guest bindings.
+world alerts-user {
+  import alerts;
+}
+
+/// The world Pane hosts: a command that may also use extension data, call
+/// operations, find and open installed applications, run its package's
+/// native helpers and system programs, list the folder granted to its
+/// package, keep clipboard history, search the file index, run what the
+/// Run dialog runs, lock, log out, restart, shut down, sleep, hibernate
+/// or turn off the displays of the computer, list the open windows,
+/// bringing one of them to the front, list the entries of a folder the
+/// user typed, and post a system notification and ring a sound
+/// (wit/alerts.wit).
+world extension-with-alerts {
+  include extension-with-typed-folder;
+  import alerts;
+}
