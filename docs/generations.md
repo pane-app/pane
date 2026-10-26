@@ -198,7 +198,12 @@ resource:
 - a dynamic root item (a row of root search under one of its commands);
 - a timer;
 - a folder watcher;
-- a run-time provision of a capability its `pane.json` marks `atRunTime`.
+- a run-time provision of a capability its `pane.json` marks `atRunTime`;
+- a ringing sound (`ring` of [`wit/alerts.wit`](../wit/alerts.wit),
+  [ADR 0053](adr/0053-extensions-get-the-users-attention-through-a-notification-a-ringing-sound-and-the-launcher.md)),
+  which also ends by itself once it played as often as asked, after 10
+  minutes however it was asked, when Pane quits, and when its output
+  device goes away (written to the package's extension log).
 
 Each lasts until the first of three things happens: the guest drops the
 handle, the instance holding it goes away, or the generation ends in any of

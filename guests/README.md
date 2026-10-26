@@ -3749,6 +3749,12 @@ smokes that drive the samples register or install them themselves.
   written by hand, not by `pane-extension`, with fields Pane does not
   know, a newer version, a view Pane cannot show and trees and answers it
   cannot read ([list-tree.md](../docs/list-tree.md)).
+- `fixtures/alerts`: a test fixture that rings sounds through
+  `pane:extension/alerts` and keeps their handles, then ends its code
+  each way it can end (a trap, an endless computation, a stopped root
+  search), so the tests check that each way stops the sound
+  ([ADR 0053](../docs/adr/0053-extensions-get-the-users-attention-through-a-notification-a-ringing-sound-and-the-launcher.md)).
+  It generates the alerts bindings itself from the SDK's WIT.
 - `fixtures/designed`: a test fixture whose designed view's trees and
   answers are JSON written by hand, not by `pane-extension`. It has an
   unknown node with and without a fallback, a newer minor and another

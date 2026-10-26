@@ -48,6 +48,7 @@ members = [
     "fixtures/failing-start",
     "fixtures/refusing-view",
     "fixtures/trees",
+    "fixtures/alerts",
     "git/greeter",
 ]
 # `mixed-p2` deliberately uses std (WASI 0.2), and `helpers/echo` is a native

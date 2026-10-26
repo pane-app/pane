@@ -1,9 +1,10 @@
 //! The guest's side of the `alerts` host functions (`wit/alerts.wit`, ADR
-//! 0053): a system notification and a ringing sound. No system has an
-//! adapter yet, so every call answers `not-available`, which is never a
-//! reason to pause the extension; Windows' notification (#555) and ringing
-//! sound (#556) replace these answers. The interface is linked now so the
-//! world Pane hosts imports it, and a component built against it loads.
+//! 0053): a system notification and a ringing sound. No system has a
+//! notification adapter yet, so `notify` answers `not-available`, which is
+//! never a reason to pause the extension; Windows' notification (#555)
+//! replaces that answer. The ringing sound is `ringing_functions`'s (#556).
+//! The interface is linked so the world Pane hosts imports it, and a
+//! component built against it loads.
 //!
 //! Stopped code does nothing more: each function answers that the code was
 //! stopped, as the other host functions do.
@@ -40,23 +41,23 @@ impl alerts_host::Host for GuestState {
         Err(not_available("A system notification"))
     }
 
-    fn ring(
+    async fn ring(
         &mut self,
-        _sound: alerts_host::Sound,
-        _repeat: alerts_host::Repeat,
-        _volume: u8,
+        sound: alerts_host::Sound,
+        repeat: alerts_host::Repeat,
+        volume: u8,
     ) -> Result<Resource<alerts_host::Ringing>, alerts_host::AlertsError> {
         if let Some(stopped) = self.alerts_stopped() {
             return Err(stopped);
         }
-        Err(not_available("A ringing sound"))
+        self.ring_sound(sound, repeat, volume).await
     }
 }
 
 impl alerts_host::HostRinging for GuestState {
-    /// No ringing is ever made yet, so there is nothing to stop: a handle a
-    /// guest drops can only be one Pane never gave.
-    fn drop(&mut self, _ringing: Resource<alerts_host::Ringing>) -> wasmtime::Result<()> {
+    /// The handle is gone: so is the sound.
+    fn drop(&mut self, ringing: Resource<alerts_host::Ringing>) -> wasmtime::Result<()> {
+        self.drop_ringing(ringing);
         Ok(())
     }
 }
