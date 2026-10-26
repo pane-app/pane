@@ -57,6 +57,7 @@ mod designed;
 mod faults;
 mod host_functions;
 mod memory;
+mod notification_functions;
 mod previous;
 mod ringing_functions;
 mod run_functions;
@@ -3663,8 +3664,8 @@ impl Code {
             state
         })
         .expect("registering the open windows in a fresh linker cannot conflict");
-        // Notifications and ringing sounds answer "not available" until
-        // their adapters land (#555, #556).
+        // Notifications and ringing sounds (#555, #556): Windows' own, and
+        // "not available" on a system with no adapter for them yet.
         alerts_host::add_to_linker::<_, wasmtime::component::HasSelf<_>>(&mut linker, |state| {
             state
         })

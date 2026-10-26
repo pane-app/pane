@@ -256,6 +256,10 @@ fn main() {
     if let Some(why) = without_lock {
         pane_core::diagnostic!("{why}");
     }
+    // The AppUserModelID extensions' notifications are posted under, set
+    // and registered before any window is made (#555).
+    #[cfg(target_os = "windows")]
+    pane::prepare_notifications();
     let application = gpui_platform::application();
     // On macOS Pane is an accessory application, as menu-bar launchers
     // are (#458): no Dock icon and no Cmd+Tab entry, reached by its hotkey
@@ -345,7 +349,10 @@ fn main() {
         .with_system_commands(pane_core::system_commands::native())
         // What commands list of the open windows and which one they bring
         // to the front reaches the system's own windows (#263).
-        .with_switch_windows(pane_core::switch_windows::native());
+        .with_switch_windows(pane_core::switch_windows::native())
+        // What commands post as system notifications reaches the system's
+        // own notification service (#555).
+        .with_notifier(pane_core::system_notifications::native());
         // The applications' icons kept from before are read now, off this
         // thread, so root search's first rows draw them at once (#172).
         launcher.prepare_application_icons();

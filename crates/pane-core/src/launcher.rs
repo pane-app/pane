@@ -80,6 +80,7 @@ pub mod search_files;
 mod submenus;
 mod switch_windows;
 mod system_commands;
+mod system_notifications;
 pub(crate) mod typed_query;
 
 use crate::clipboard::{Capture, ClipboardSystem};
@@ -1151,6 +1152,9 @@ struct State {
     /// The open windows the `windows` host functions act on (see
     /// `switch_windows`).
     switch_windows: Arc<dyn crate::switch_windows::SwitchWindows>,
+    /// The system notifications commands post, and each package's posts
+    /// of the last minute (see `system_notifications`).
+    notifications: system_notifications::Notifications,
     /// The answers the user told Pane to remember for confirmations (see
     /// `confirmations`).
     confirmations: Record<confirmations::Confirmations>,
@@ -2033,6 +2037,7 @@ impl Launcher {
             run: crate::run::none(),
             system_commands: crate::system_commands::none(),
             switch_windows: crate::switch_windows::none(),
+            notifications: system_notifications::Notifications::default(),
             confirmations,
             confirmation_saves: Arc::default(),
             setup_needed: HashSet::new(),

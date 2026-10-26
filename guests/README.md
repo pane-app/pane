@@ -3776,7 +3776,11 @@ smokes that drive the samples register or install them themselves.
   each way it can end (a trap, an endless computation, a stopped root
   search), so the tests check that each way stops the sound
   ([ADR 0053](../docs/adr/0053-extensions-get-the-users-attention-through-a-notification-a-ringing-sound-and-the-launcher.md)).
-  It generates the alerts bindings itself from the SDK's WIT.
+  Where its manifest names it as the activation entry point, its timer
+  also posts system notifications as its settings say and writes what
+  each was answered to its content, and its list is titled with the
+  context it was launched with, so a notification's click is seen to
+  open it. It generates the alerts bindings itself from the SDK's WIT.
 - `fixtures/designed`: a test fixture whose designed view's trees and
   answers are JSON written by hand, not by `pane-extension`. It has an
   unknown node with and without a fallback, a newer minor and another

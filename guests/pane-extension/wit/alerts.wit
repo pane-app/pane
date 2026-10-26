@@ -14,7 +14,7 @@ package pane:extension@0.2.0;
 // `extension-with-alerts` world, and a component that never calls it does
 // not import it. Windows first: on a system Pane has no adapter for yet,
 // every call answers `not-available`, which is never a reason to pause
-// the extension. Until #555 and #556 land, that is every system. Rust
+// the extension; that is macOS and Linux until #559. Rust
 // commands are to use it through pane-extension (`pane_extension::alerts`),
 // and JavaScript and TypeScript ones whose package.json sets
 // `"pane": { "alerts": true }` to import the module

@@ -477,6 +477,14 @@ pub(crate) trait HostFunctions: Send + Sync {
     /// (`wit/windows.wit`): the launcher's
     /// ([`crate::Launcher::with_switch_windows`]).
     fn switch_windows(&self) -> Arc<dyn crate::switch_windows::SwitchWindows>;
+    /// `alerts.notify`: posts `notification` as a system notification
+    /// for the caller's package, or says why not
+    /// ([`crate::Launcher::with_notifier`]).
+    fn notify(
+        &self,
+        caller: &Caller,
+        notification: crate::system_notifications::GivenNotification,
+    ) -> Result<(), crate::system_notifications::NotifyError>;
     /// `feedback.confirm`: shows `confirmation` (or answers from a
     /// remembered answer, or refuses) at once, and answers what to await.
     fn confirm(&self, caller: &Caller, confirmation: GivenConfirmation) -> Asking;

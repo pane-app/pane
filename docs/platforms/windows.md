@@ -1097,6 +1097,47 @@ one is not) that only the runner can prove end to end.
 | The user's choice swaps the running program; the new one is used the next start | pending CI (frame 603) |
 | The new version reports itself; the old version's data and enablement are kept | pending CI (frames 604, 605) |
 
+## System notifications (#555)
+
+An extension's `notify` (`wit/alerts.wit`, [ADR 0053](../adr/0053-extensions-get-the-users-attention-through-a-notification-a-ringing-sound-and-the-launcher.md))
+is a WinRT toast (`ToastNotificationManager`, through the `windows`
+crate): silent, plain text, the extension's title as its attribution line.
+A toast from a desktop program that is not packaged shows only when
+Windows knows the program's AppUserModelID, so Pane makes sure it does:
+
+| Pane | What gives Windows the id |
+| --- | --- |
+| Installed by the setup | The Start menu shortcut carries `PaneApp.Pane`, and the setup registers it under `HKCU\Software\Classes\AppUserModelId\PaneApp.Pane`, which its uninstall removes |
+| Installed from the zip (`install.ps1`), or run from anywhere | Pane registers `PaneApp.Pane` under the same key at each start (its name, and its icon written to `%LOCALAPPDATA%\Pane\cache\notification-icon.png`); the script's shortcut carries no id |
+| A development build | The same, under its own id, `PaneApp.Pane.Development` ("Pane (development)"), so it never takes over the installed Pane's notifications or their settings |
+
+Every Pane also sets the id on its own process
+(`SetCurrentProcessExplicitAppUserModelID`) before any window is made.
+Before each post Pane asks Windows' setting for the id: an id Windows does
+not know, notifications turned off for Pane, for the user or by a policy,
+answer `not-available` with the reason, never a silent nothing. Under
+Focus assist or Do Not Disturb the toast goes silently to the notification
+center and the call still succeeds: Windows has no public way to tell.
+
+The click is the toast's `Activated` event, raised in Pane's process while
+it runs: it launches the extension's command through the launch path
+`launch` takes (user-initiated, with the context given), or shows the
+launcher when the notification named no command. Pane keeps the last 32
+toasts it posted, so their clicks still reach it from the notification
+center. A click Windows delivers when no Pane runs starts Pane's program
+(the shortcut's, or the registered id's), which shows the running Pane
+as a second start does ([ADR 0052](../adr/0052-a-second-start-shows-the-running-pane-and-exits.md)).
+
+What runs in CI: `system_notifications::` (pane-core's integration tests)
+installs the alerts fixture, whose timer posts while the launcher is
+hidden, with a stand-in notifier; the unit tests cover the cut text, the
+limit, the toast's XML and its escaping, the registration (under a scratch
+key of the test's own) and an unknown id answering `not-available`
+(Windows' setting asked, nothing posted). `scripts/check-windows-setup.ps1`
+checks the setup's shortcut carries the id and its uninstall removes the
+registration. The real toast and its click are checked by hand on
+Windows 11 and recorded on #555.
+
 ## Remaining limits
 
 - Only a CI runner (Windows Server) was used, not a Windows 10/11
