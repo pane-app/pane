@@ -5,7 +5,7 @@ name = "pane-extension"
 # pane.json names, writing version 1 of the list tree. A new API version
 # is a new minor (a new major from 1.0); a release that keeps the API is a
 # new patch.
-version = "0.2.0"
+version = "0.2.1"
 description = "Write Pane extensions in Rust: the bindings, host functions, extension UI builder and logging"
 repository = "https://github.com/pane-app/pane"
 homepage = "https://github.com/pane-app/pane"
