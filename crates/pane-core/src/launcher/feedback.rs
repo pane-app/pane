@@ -267,6 +267,10 @@ impl Launcher {
             }
             if !same {
                 state.feedback.presence = presence;
+                // Hidden, the user left what an attention launch opened.
+                if presence == WindowPresence::Hidden {
+                    state.attention.left();
+                }
             }
             // Hidden, the time after which Pane restarts into a staged
             // update by itself begins; shown, it ends (ADR 0051).
@@ -841,6 +845,7 @@ fn root_query_typed(state: &State) -> bool {
 fn hide_window(state: &mut State) {
     state.feedback.window.hide();
     state.feedback.presence = WindowPresence::Hidden;
+    state.attention.left();
     leave_if_animated(&mut state.feedback);
     confirmations::leave_confirmation(state);
 }

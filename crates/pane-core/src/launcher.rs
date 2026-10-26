@@ -45,6 +45,7 @@ mod application_icons;
 mod application_update;
 mod argument_fields;
 mod argument_form;
+mod attention;
 pub(crate) mod capability_choices;
 mod choice;
 mod choices;
@@ -1081,6 +1082,9 @@ struct State {
     /// Whether a command a guest launched wants Pane's window shown (see
     /// [`Launcher::take_window_request`]).
     window_wanted: bool,
+    /// The attention launches waiting to be shown, and whether one is
+    /// (see `attention`).
+    attention: attention::Attention,
     /// The launches guests asked for that are still running.
     launches: Arc<launching::InFlight>,
     /// The newest status of a developed package's builds, kept while
@@ -2011,6 +2015,7 @@ impl Launcher {
             sent_from: None,
             list_entered: false,
             window_wanted: false,
+            attention: attention::Attention::default(),
             launches: Arc::default(),
             runtime_slow: None,
             update_controls,
@@ -4587,6 +4592,9 @@ impl Launcher {
     }
 
     fn show_root(&self, state: &mut State, select: Option<(PathBuf, String)>) {
+        // Back at root search, the user left whatever an attention launch
+        // opened: the next may be shown (see `attention`).
+        state.attention.left();
         // The choice of a collection's extensions goes with the screen it
         // was shown on (#308), and the revision it holds with it.
         state.choice = None;

@@ -121,6 +121,11 @@ pub(crate) struct LaunchRequest {
     pub arguments: Vec<(String, String)>,
     /// JSON text, checked by Pane before the launch.
     pub context: Option<String>,
+    /// Whether a window was shown for the calling call: the user launched
+    /// the caller or works in its screen. A user-initiated launch from a
+    /// call without one (a timer's firing, a schedule, a service) is an
+    /// attention launch (ADR 0053).
+    pub windowed: bool,
 }
 
 /// What Pane does with a guest's launch request: starts it, or says why it

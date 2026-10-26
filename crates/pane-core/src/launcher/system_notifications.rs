@@ -5,8 +5,9 @@
 //! names the package (its title is the notification's attribution),
 //! checks the click and the limit, cuts the texts, and builds what a
 //! click does: a user-initiated launch of the package's command, through
-//! the path `launch` of `wit/commands.wit` takes (the attention launch's
-//! rules are that path's), or, without a click or when the launch is
+//! the path `launch` of `wit/commands.wit` takes, as the user's own action
+//! (not an attention launch: the user just clicked, so nothing waits for
+//! them to stop typing), or, without a click or when the launch is
 //! refused by then, the launcher shown as a second start shows it.
 
 use std::sync::Arc;
@@ -98,6 +99,10 @@ impl Launcher {
             launch_type: LaunchType::UserInitiated,
             arguments: Vec::new(),
             context: click.context,
+            // The click is the user's own action, as a hotkey is: the
+            // launcher is shown on the command at once, not held as an
+            // attention launch waiting for the user to stop typing.
+            windowed: true,
         });
         drop(guard);
         notifier.notify(Notice {

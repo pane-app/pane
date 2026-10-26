@@ -53,6 +53,7 @@ mod protection;
 mod registrations;
 pub mod releases;
 pub mod restart;
+mod ringing;
 pub mod run;
 mod runtime;
 pub mod schema;
@@ -127,6 +128,9 @@ pub use platform::Platform;
 pub use preferences::{HELP_FILE, Preference, PreferenceKind};
 pub use programs::runner::{MAX_PROGRAM_OUTPUT, SearchPath};
 pub use releases::ReleaseSource;
+#[cfg(any(test, debug_assertions))]
+#[doc(hidden)]
+pub use ringing::StandInSound;
 #[cfg(debug_assertions)]
 #[doc(hidden)]
 pub use runtime::Fault;

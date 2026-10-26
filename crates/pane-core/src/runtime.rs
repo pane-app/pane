@@ -59,6 +59,7 @@ mod host_functions;
 mod memory;
 mod notification_functions;
 mod previous;
+mod ringing_functions;
 mod run_functions;
 mod supervisor;
 mod system_command_functions;
@@ -120,6 +121,9 @@ pub(crate) mod bindings {
             "pane:extension/registrations.timer": crate::registrations::TimerHandle,
             "pane:extension/registrations.watcher": crate::registrations::WatcherHandle,
             "pane:extension/registrations.provision": crate::registrations::ProvisionHandle,
+            // A ringing sound is owned the same way: the ringing's id in
+            // the runtime's ringer (see `ringing`).
+            "pane:extension/alerts.ringing": crate::ringing::RingingHandle,
         },
         imports: {
             "pane:extension/operations": store,
@@ -150,6 +154,10 @@ pub(crate) mod bindings {
             // The open windows wait for their processes and the
             // foreground, off the runtime thread, which awaits them.
             "pane:extension/windows": async,
+            // Ringing a sound waits for the ringing's thread to read the
+            // sound and open the output, off the runtime thread, which
+            // awaits it.
+            "pane:extension/alerts.ring": async,
             // What a command registers at run time it owns as a resource:
             // interactions with the store's resource table can trap.
             "pane:extension/registrations": trappable,
@@ -1836,7 +1844,34 @@ impl Runtime {
     /// afterwards answer that the runtime stopped.
     pub fn quit(&self) {
         self.shared.helpers.stop_all();
+        self.shared.ringing.stop_all();
         let _ = self.send(Request::Quit);
+    }
+
+    /// Plays the sounds guests ring through `stand_in` from now on, so a
+    /// test makes no noise and sees what played. For tests only; debug
+    /// builds only.
+    #[cfg(any(test, debug_assertions))]
+    #[doc(hidden)]
+    pub fn use_stand_in_sound(&self, stand_in: Arc<crate::ringing::StandInSound>) {
+        self.shared.ringing.set_output(stand_in);
+    }
+
+    /// Stops every ringing sound after `limit` from now on, instead of
+    /// Pane's 10 minutes: the test's clock. For tests only; debug builds
+    /// only.
+    #[cfg(any(test, debug_assertions))]
+    #[doc(hidden)]
+    pub fn set_ringing_limit(&self, limit: std::time::Duration) {
+        self.shared.ringing.set_limit(limit);
+    }
+
+    /// How many sounds guests ring now, playing or starting. For tests
+    /// only; debug builds only.
+    #[cfg(any(test, debug_assertions))]
+    #[doc(hidden)]
+    pub fn ringing_sounds(&self) -> usize {
+        self.shared.ringing.count()
     }
 
     /// Ends the native helper processes running a file inside `folder`,
@@ -2286,17 +2321,22 @@ pub(crate) struct GuestState {
     /// timer firings and watcher changes are delivered to; a component
     /// that registers a timer or a watcher must.
     events: bool,
+    /// Plays the sounds the package rings (`pane:extension/alerts`),
+    /// which the instance's handles name (see `ringing`).
+    ringing: Arc<crate::ringing::Ringer>,
 }
 
 impl Drop for GuestState {
     /// The instance is going (its generation ended, it crashed, it was
     /// forgotten or the runtime stopped): so do the helpers it started,
-    /// and so do the registrations it holds and the activation entry
-    /// point it ran, whose instance going is what ends them (ADR 0041).
+    /// and so do the registrations and the ringing sounds it holds and the
+    /// activation entry point it ran, whose instance going is what ends
+    /// them (ADR 0041).
     fn drop(&mut self) {
         self.helpers.stop_owned_by(self.owner);
         self.registrations
             .instance_gone(&self.component, self.identity);
+        self.ringing.instance_gone(&self.component, self.identity);
     }
 }
 
@@ -2547,6 +2587,7 @@ impl launching::Host for GuestState {
                 .map(|argument| (argument.name, argument.value))
                 .collect(),
             context,
+            windowed: self.call.windowed,
         })
     }
 
@@ -3532,6 +3573,9 @@ struct Host {
     /// (the state handoff, ADR 0041), shared with the threads that replace
     /// this one.
     snapshots: SharedSnapshots,
+    /// Plays the sounds guests ring, shared with the threads that replace
+    /// this one (see `ringing`).
+    ringing: Arc<crate::ringing::Ringer>,
 }
 
 impl Code {
@@ -3620,8 +3664,8 @@ impl Code {
             state
         })
         .expect("registering the open windows in a fresh linker cannot conflict");
-        // Notifications and ringing sounds answer "not available" until
-        // their adapters land (#555, #556).
+        // Notifications and ringing sounds (#555, #556): Windows' own, and
+        // "not available" on a system with no adapter for them yet.
         alerts_host::add_to_linker::<_, wasmtime::component::HasSelf<_>>(&mut linker, |state| {
             state
         })
@@ -3914,6 +3958,7 @@ impl Host {
             clipboard: shared.clipboard.clone(),
             registrations: shared.registrations.clone(),
             snapshots: shared.snapshots.clone(),
+            ringing: shared.ringing.clone(),
         }
     }
 
@@ -6324,6 +6369,7 @@ impl Host {
                 registrations: self.registrations.clone(),
                 identity: (self.number, 0),
                 events: false,
+                ringing: self.ringing.clone(),
             },
         );
         store.limiter(|state| state);

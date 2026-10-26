@@ -234,6 +234,9 @@ pub(super) struct Shared {
     /// (the state handoff, ADR 0041): shared by every runtime thread, so a
     /// restarted one restores them too.
     pub(super) snapshots: super::SharedSnapshots,
+    /// The sounds the packages' guests ring, shared with every runtime
+    /// thread (see `ringing`).
+    pub(super) ringing: Arc<crate::ringing::Ringer>,
     crashes: Mutex<Option<CrashReport>>,
     slow: Mutex<Option<SlowReport>>,
     /// The limits guest calls and the watchdog apply.
@@ -309,9 +312,11 @@ impl Drop for Handled {
 
 impl Drop for Shared {
     /// The last handle is gone (Pane is quitting): so are the helpers,
-    /// which would otherwise outlive it. The thread stops with its requests.
+    /// which would otherwise outlive it, and the ringing sounds. The thread
+    /// stops with its requests.
     fn drop(&mut self) {
         self.helpers.stop_all();
+        self.ringing.stop_all();
         // A thread made to hang ends too.
         #[cfg(any(test, debug_assertions))]
         self.inject(Fault::Release);
@@ -350,6 +355,7 @@ impl Shared {
         helpers: Helpers,
         cache_dir: Option<PathBuf>,
     ) -> Result<Arc<Shared>, CallError> {
+        let logs = crate::extension_log::ExtensionLogs::default();
         let shared = Arc::new(Shared {
             helpers,
             applications,
@@ -361,7 +367,8 @@ impl Shared {
             view_asks: SharedViewAsks::default(),
             text_measures: SharedTextMeasures::default(),
             health: Arc::default(),
-            logs: Default::default(),
+            ringing: Arc::new(crate::ringing::Ringer::new(logs.clone())),
+            logs,
             next_view: Arc::default(),
             network: Arc::default(),
             registrations: Arc::default(),

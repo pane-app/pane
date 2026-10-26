@@ -17,6 +17,7 @@ mod background;
 mod extension_views;
 mod features;
 mod front;
+mod input_idle;
 mod keyboard;
 mod links;
 mod off_taskbar;
