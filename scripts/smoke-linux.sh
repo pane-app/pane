@@ -6,6 +6,8 @@
 # ImageMagick's `import`, capture), plus a Vulkan driver (Mesa's lavapipe works without
 # a GPU). Settings is driven through AT-SPI, which also needs dbus-launch
 # (dbus-x11), at-spi2-core, python3-gi and gir1.2-atspi-2.0 (see `a11y`).
+# The alerts phase (#559) needs ALSA's library (libasound2), whose null
+# device its sound goes to, and serves notifications with the same Python.
 # Set PANE_XVFB / PANE_XDOTOOL to use binaries outside PATH. Pane keeps
 # installed packages in <output-dir>/data, not the user's data folder.
 # The phases that set the default extensions up serve their repositories
@@ -59,8 +61,10 @@ defaults_server_pid=
 release_server_pid=
 a11y_bus_pid=
 dbus_pid=
+notification_service_pid=
 cleanup() {
   [ -n "$pane_pid" ] && kill "$pane_pid" 2>/dev/null || true
+  [ -n "$notification_service_pid" ] && kill "$notification_service_pid" 2>/dev/null || true
   [ -n "$npm_registry_pid" ] && kill "$npm_registry_pid" 2>/dev/null || true
   [ -n "$repository_server_pid" ] && kill "$repository_server_pid" 2>/dev/null || true
   [ -n "$defaults_server_pid" ] && kill "$defaults_server_pid" 2>/dev/null || true
@@ -1645,6 +1649,114 @@ unset PANE_TEST_RUNTIME_FAULTS
 if helpers_running; then echo "a helper outlived Pane"; exit 1; fi
 grep -q '"disabled": true' "$PANE_DATA_DIR/extensions/installed.json" || { echo "disable not recorded"; exit 1; }
 if grep -q '"paused"' "$PANE_DATA_DIR/extensions/installed.json"; then echo "a package was paused for the runtime's crash"; exit 1; fi
+# Alerts (#559): an extension's system notification and its ringing sound.
+# The alerts fixture (`cargo xtask guests`), installed as a package whose
+# activation entry point registers a timer, posts a notification each
+# second from a call no window was shown for. A stand-in notification
+# service (scripts/notification_service.py, on the smoke's own session
+# bus) records each one: it must arrive with the fixture's title and its
+# extension's title, silent. Hidden, the launcher comes back when the
+# service says the notification was clicked. ALSA's `default` device is
+# made a file plugin over its null device (ALSA_CONFIG_PATH, for this
+# Pane only), so the sound the runner has no card for is written to a
+# file: it grows while the alarm rings and stops growing once the fixture
+# drops the handle. What each call answered is in the fixture's content
+# (`answers`, `rang`). A data folder of its own.
+export PANE_DATA_DIR=$out/alerts-data
+rm -rf "$PANE_DATA_DIR"
+# The content value $1 the alerts fixture wrote, empty while it wrote none.
+alerts_content() {
+  python3 - "$PANE_DATA_DIR/extensions/content.json" "$1" <<'PY'
+import json, sys
+try:
+    packages = json.load(open(sys.argv[1], encoding="utf-8"))["packages"]
+except (OSError, ValueError, KeyError):
+    packages = {}
+print(next((values[sys.argv[2]] for values in packages.values() if sys.argv[2] in values), ""))
+PY
+}
+# Waits up to $2 seconds until the content value $1 starts with $3.
+until_alerts_content() {
+  local deadline=$((SECONDS + $2))
+  until case "$(alerts_content "$1")" in ("$3"*) true;; (*) false;; esac; do
+    [ "$SECONDS" -lt "$deadline" ] || { echo "the fixture's $1 is \"$(alerts_content "$1")\", not \"$3…\""; exit 1; }
+    sleep 0.5
+  done
+}
+alerts_package=$out/alerts-package
+rm -rf "$alerts_package"
+mkdir -p "$alerts_package"
+cp target/guests/alerts_fixture.wasm "$alerts_package/fixture.wasm"
+cat >"$alerts_package/pane.json" <<'JSON'
+{ "manifestVersion": 1, "title": "Alerts fixture", "version": "0.1.0", "apiVersion": "0.2",
+  "commands": [{ "id": "fixture", "title": "Alerts fixture", "component": "fixture.wasm" }],
+  "activate": "fixture.wasm" }
+JSON
+notifications=$out/alerts-notifications.jsonl
+rm -f "$notifications" "$notifications.ready" "$notifications.click"
+"$a11y_python" "$(dirname "$0")/notification_service.py" "$notifications" 2>>"$out/notification-service.log" &
+notification_service_pid=$!
+for _ in $(seq 100); do [ -e "$notifications.ready" ] && break; sleep 0.1; done
+[ -e "$notifications.ready" ] || { echo "the stand-in notification service did not start (see $out/notification-service.log)"; exit 1; }
+alerts_out=$(cd "$out" && pwd)
+sound=$alerts_out/alerts-sound.raw
+rm -f "$sound"
+printf '</usr/share/alsa/alsa.conf>\npcm.!default {\n  type file\n  slave.pcm "null"\n  file "%s"\n  format "raw"\n}\n' "$sound" \
+  >"$alerts_out/alerts-asound.conf"
+export ALSA_CONFIG_PATH=$alerts_out/alerts-asound.conf
+start_pane --install "$alerts_package"
+focus_launcher
+"$xdotool" key Return; sleep 2   # Install
+# The activation's timer posts by itself, with no window asked for it.
+until_alerts_content answers 60 posted
+wait_for "$notifications" '"summary": "Timer done"' present 100
+python3 - "$notifications" <<'PY'
+import json, sys
+shown = json.loads(open(sys.argv[1], encoding="utf-8").readline())
+expected = {"summary": "Timer done", "body": "Alerts fixture", "actions": ["default", "Open"]}
+for key, value in expected.items():
+    assert shown[key] == value, f"the notification's {key} is {shown[key]!r}, not {value!r}"
+assert shown["app_name"] in ("Pane", "Pane (development)"), shown["app_name"]
+assert shown["hints"].get("suppress-sound") is True, f"the notification is not silent: {shown['hints']}"
+assert shown["hints"].get("desktop-entry") == "pane", shown["hints"]
+PY
+capture 210-alerts-installed.png   # evidence: the launcher, the notifications going to the stand-in
+"$xdotool" type --delay 50 "alerts fixture"; sleep 1
+"$xdotool" key Return; sleep 2   # open Alerts fixture
+pointer_off
+"$xdotool" key Return   # Ring the alarm
+capture_until 211-alerts-ringing.png success 15   # "Ringing 1 sounds"
+until_alerts_content rang 15 "Ringing 1 sounds"
+sleep 1
+before=$(stat -c %s "$sound" 2>/dev/null || echo 0)
+sleep 1
+after=$(stat -c %s "$sound" 2>/dev/null || echo 0)
+[ "$after" -gt "$before" ] || { echo "the ringing sound did not reach ALSA (its file stayed at $after bytes)"; exit 1; }
+until_toast_gone success 15
+"$xdotool" key Down Down Down Return   # Drop the sounds
+capture_until 212-alerts-dropped.png success 15   # "Dropped the sounds"
+until_alerts_content rang 15 "Dropped the sounds"
+sleep 0.5
+before=$(stat -c %s "$sound")
+sleep 1
+after=$(stat -c %s "$sound")
+[ "$after" = "$before" ] || { echo "the ringing sound went on after its handle was dropped ($before, then $after bytes)"; exit 1; }
+# The click: with the launcher hidden, a click on the last notification
+# (it named no command) shows it again.
+to_root
+"$xdotool" key Escape; sleep 1   # hides the launcher
+viewable "$window" && { echo "the launcher did not hide"; exit 1; }
+tail -n 1 "$notifications" | python3 -c 'import json, sys; print(json.loads(sys.stdin.read())["id"])' >"$notifications.click.tmp"
+mv "$notifications.click.tmp" "$notifications.click"
+for _ in $(seq 50); do viewable "$window" && break; sleep 0.2; done
+viewable "$window" || { echo "a click on the notification did not show the launcher"; exit 1; }
+capture 213-alerts-clicked.png   # the launcher, shown by the click
+python3 "$(dirname "$0")/check_screenshot.py" --distinct "$out"/{210-alerts-installed,211-alerts-ringing,212-alerts-dropped}.png
+stop_pane
+unset ALSA_CONFIG_PATH
+kill "$notification_service_pid"; wait "$notification_service_pid" 2>/dev/null || true; notification_service_pid=
+# The sound itself is no evidence worth uploading.
+rm -f "$sound"
 # Recovering from an extension that stops responding (#18). The settings
 # sample's last item, Stop responding, computes without waiting for up to a
 # minute. The phase sets the runtime's limits through the fault file

@@ -3776,6 +3776,8 @@ smokes that drive the samples register or install them themselves.
   each way it can end (a trap, an endless computation, a stopped root
   search), so the tests check that each way stops the sound
   ([ADR 0053](../docs/adr/0053-extensions-get-the-users-attention-through-a-notification-a-ringing-sound-and-the-launcher.md)).
+  Each item's answer is also written to its content (`rang`), where the
+  macOS and Linux smokes read it (#559).
   Where its manifest names it as the activation entry point, its timer
   also posts system notifications as its settings say and writes what
   each was answered to its content, and its list is titled with the

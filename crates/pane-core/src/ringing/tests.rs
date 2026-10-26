@@ -9,7 +9,10 @@ use std::time::{Duration, Instant};
 
 use futures::executor::block_on;
 
-use super::sounds::{Source, Wav, wav_file};
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+use std::sync::atomic::Ordering;
+
+use super::sounds::{Source, Wav, aiff_file, wav_file};
 use super::*;
 use crate::generation::End;
 
@@ -344,9 +347,9 @@ fn every_bundled_sound_plays_at_its_level() {
     }
 }
 
-/// Where Pane has no adapter yet (macOS and Linux, #559), every ringing
-/// is not available, and nothing is held.
-#[cfg(not(windows))]
+/// Where Pane has no adapter (a system other than Windows, macOS and
+/// Linux), every ringing is not available, and nothing is held.
+#[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
 #[test]
 fn without_an_adapter_every_ringing_is_not_available() {
     let ringer = Arc::new(Ringer::new(ExtensionLogs::default()));
@@ -517,4 +520,219 @@ fn wav_files_of_each_encoding_are_read() {
     // An encoding Pane does not read itself is the system decoder's.
     assert!(Wav::read(file(2, 4, 1, false, &[0; 4])).unwrap().is_none());
     assert!(Wav::read(b"ID3 an mp3".to_vec()).unwrap().is_none());
+}
+
+/// macOS's system sounds are AIFF files: big-endian samples, the rate an
+/// 80-bit float, the samples past the sound chunk's offset; AIFF-C's
+/// uncompressed kinds too, and its compressed ones are refused.
+#[test]
+fn aiff_files_are_read() {
+    let frames = [[16_384i16, -16_384], [0, 32_767]];
+    let mut aiff = Wav::read_aiff(&aiff_file(44_100, &frames))
+        .unwrap()
+        .unwrap();
+    assert_eq!(aiff.rate(), 44_100);
+    let mut out = [0f32; 6];
+    assert_eq!(aiff.fill(&mut out), Ok(2));
+    assert_eq!(out[..4], [0.5, -0.5, 0.0, 32_767.0 / 32_768.0]);
+    assert_eq!(aiff.fill(&mut out), Ok(0));
+    aiff.rewind().unwrap();
+    assert_eq!(aiff.fill(&mut out), Ok(2));
+
+    /// `aiff_file`'s file as AIFF-C of `kind`, its samples replaced by
+    /// `samples`, mono.
+    fn aifc(kind: &[u8; 4], bits: u16, samples: &[u8]) -> Vec<u8> {
+        let plain = aiff_file(8_000, &[[0, 0]]);
+        let mut common = plain[20..38].to_vec();
+        common[0..2].copy_from_slice(&1u16.to_be_bytes());
+        common[6..8].copy_from_slice(&bits.to_be_bytes());
+        common.extend_from_slice(kind);
+        common.extend_from_slice(b"\0\0");
+        let mut file = b"FORM\0\0\0\0AIFC".to_vec();
+        file.extend_from_slice(b"COMM");
+        file.extend_from_slice(&(common.len() as u32).to_be_bytes());
+        file.extend_from_slice(&common);
+        file.extend_from_slice(b"SSND");
+        file.extend_from_slice(&(12 + samples.len() as u32).to_be_bytes());
+        // An offset of 4: four bytes before the first sample.
+        file.extend_from_slice(&4u32.to_be_bytes());
+        file.extend_from_slice(&[0; 4]);
+        file.extend_from_slice(&[0xEE; 4]);
+        file.extend_from_slice(samples);
+        file
+    }
+    for (bytes, what) in [
+        (aifc(b"NONE", 16, &16_384i16.to_be_bytes()), "big-endian"),
+        (aifc(b"sowt", 16, &16_384i16.to_le_bytes()), "little-endian"),
+        (aifc(b"fl32", 32, &0.5f32.to_be_bytes()), "float"),
+        (aifc(b"fl64", 64, &0.5f64.to_be_bytes()), "double"),
+        (aifc(b"NONE", 8, &[64]), "8-bit"),
+        (aifc(b"NONE", 24, &[0x40, 0, 0]), "24-bit"),
+    ] {
+        let mut aiff = Wav::read_aiff(&bytes)
+            .unwrap_or_else(|why| panic!("{what}: {why}"))
+            .unwrap();
+        assert_eq!(aiff.rate(), 8_000, "{what}");
+        let mut out = [0f32; 2];
+        assert_eq!(aiff.fill(&mut out), Ok(1), "{what}");
+        assert_eq!(out, [0.5, 0.5], "{what}: a mono sound plays on both sides");
+    }
+    let compressed = Wav::read_aiff(&aifc(b"ulaw", 8, &[0])).err().unwrap();
+    assert!(compressed.contains("compressed (ulaw)"), "{compressed}");
+    // Not an AIFF file at all: none.
+    assert!(Wav::read_aiff(&wav_file(8_000, &frames)).unwrap().is_none());
+}
+
+/// Linux's system sound is the freedesktop sound theme's, when it is a
+/// WAV file; an Ogg Vorbis one, and none, are not available, saying so.
+#[test]
+fn the_sound_theme_s_notification_sound_is_found_when_it_is_a_wav_file() {
+    let home = tempfile::tempdir().unwrap();
+    let system = tempfile::tempdir().unwrap();
+    let folders = [home.path().to_path_buf(), system.path().to_path_buf()];
+    let stereo = system.path().join("freedesktop/stereo");
+
+    let none = super::sounds::theme_sound(&folders).err().unwrap();
+    assert!(none.contains("not installed"), "{none}");
+
+    std::fs::create_dir_all(&stereo).unwrap();
+    std::fs::write(stereo.join("message-new-instant.oga"), b"OggS").unwrap();
+    let ogg = super::sounds::theme_sound(&folders).err().unwrap();
+    assert!(ogg.contains("Ogg Vorbis"), "{ogg}");
+
+    std::fs::write(stereo.join("bell.wav"), b"RIFF").unwrap();
+    assert_eq!(
+        super::sounds::theme_sound(&folders),
+        Ok(stereo.join("bell.wav"))
+    );
+    // The user's own theme folder comes first.
+    let mine = home.path().join("freedesktop/stereo");
+    std::fs::create_dir_all(&mine).unwrap();
+    std::fs::write(mine.join("message-new-instant.wav"), b"RIFF").unwrap();
+    assert_eq!(
+        super::sounds::theme_sound(&folders),
+        Ok(mine.join("message-new-instant.wav"))
+    );
+}
+
+/// The system's own output, with what it was given and whether a stream of
+/// it is open counted: what the real-output test watches.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+struct Watched {
+    output: Arc<dyn Output>,
+    open: Arc<std::sync::atomic::AtomicUsize>,
+    frames: Arc<std::sync::atomic::AtomicU64>,
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+struct WatchedSink {
+    sink: Box<dyn Sink>,
+    open: Arc<std::sync::atomic::AtomicUsize>,
+    frames: Arc<std::sync::atomic::AtomicU64>,
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+impl Output for Watched {
+    fn unavailable(&self) -> Option<String> {
+        self.output.unavailable()
+    }
+
+    fn open(&self, rate: u32) -> Result<Box<dyn Sink>, OpenError> {
+        let sink = self.output.open(rate)?;
+        self.open.fetch_add(1, Ordering::SeqCst);
+        Ok(Box::new(WatchedSink {
+            sink,
+            open: self.open.clone(),
+            frames: self.frames.clone(),
+        }))
+    }
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+impl Sink for WatchedSink {
+    fn room(&mut self) -> Result<usize, String> {
+        self.sink.room()
+    }
+
+    fn write(&mut self, frames: &[f32]) -> Result<(), String> {
+        self.sink.write(frames)?;
+        self.frames
+            .fetch_add((frames.len() / 2) as u64, Ordering::SeqCst);
+        Ok(())
+    }
+
+    fn idle(&mut self) -> Result<bool, String> {
+        self.sink.idle()
+    }
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+impl Drop for WatchedSink {
+    fn drop(&mut self) {
+        self.open.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+/// The real output plays a ringing, and dropping its handle stops it: on
+/// Linux into ALSA's `null` device (a CI runner has no sound card), on
+/// macOS into the default output device, when the runner has one (what it
+/// has is recorded in the test's output). Opted in with
+/// `PANE_TEST_REAL_ALERTS`, which CI's test jobs set on Linux and macOS
+/// (`.github/actions/setup`), so a developer's own Mac never sounds.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+fn the_system_output_plays_a_ringing_and_dropping_it_stops_it() {
+    use std::sync::atomic::{AtomicU64, AtomicUsize};
+
+    if std::env::var_os("PANE_TEST_REAL_ALERTS").is_none() {
+        return;
+    }
+    #[cfg(target_os = "linux")]
+    let output: Arc<dyn Output> = Arc::new(super::alsa::AlsaOutput::named("null"));
+    #[cfg(target_os = "macos")]
+    let output: Arc<dyn Output> = Arc::new(super::macos::AudioQueue);
+    let open = Arc::new(AtomicUsize::new(0));
+    let frames = Arc::new(AtomicU64::new(0));
+    let ringer = Arc::new(Ringer::new(ExtensionLogs::default()));
+    ringer.set_output(Arc::new(Watched {
+        output,
+        open: open.clone(),
+        frames: frames.clone(),
+    }));
+    let generation = Generation::new();
+    let ring = asked(
+        OWNER,
+        1,
+        &generation,
+        Sound::Bundled(Bundled::Alarm),
+        Repeat::UntilStopped,
+    );
+
+    let id = match block_on(ringer.ring(ring).unwrap().started()) {
+        Ok(id) => id,
+        Err(RingError::NotAvailable(why)) if cfg!(target_os = "macos") => {
+            eprintln!("the system's output is not available: {why}");
+            return;
+        }
+        Err(other) => panic!("the system's output did not play: {other:?}"),
+    };
+    until("the sound did not play", || {
+        frames.load(Ordering::SeqCst) >= 24_000
+    });
+    assert_eq!(open.load(Ordering::SeqCst), 1);
+    eprintln!(
+        "the system's output took {} frames",
+        frames.load(Ordering::SeqCst)
+    );
+
+    ringer.release(id);
+
+    until("the sound did not stop", || {
+        open.load(Ordering::SeqCst) == 0
+    });
+    let written = frames.load(Ordering::SeqCst);
+    std::thread::sleep(Duration::from_millis(100));
+    assert_eq!(frames.load(Ordering::SeqCst), written, "the sound went on");
+    assert_eq!(ringer.count(), 0);
+    assert_eq!(generation.undo_list(), Vec::<&str>::new());
 }

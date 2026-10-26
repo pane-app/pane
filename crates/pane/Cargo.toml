@@ -54,8 +54,10 @@ tokio = { workspace = true, features = ["net", "sync"] }
 # The displays the launcher's placement reads on X11 (the RandR monitors,
 # the pointer, the window manager's active window) and the move it applies
 # (a configure request on the window's own X window); already in the tree
-# through pane-core's X11 adapters.
-x11rb = { workspace = true, features = ["randr"] }
+# through pane-core's X11 adapters. How long the user's input has been
+# still, which an attention launch waits on (#559): the MIT-SCREEN-SAVER
+# extension's idle time (`screensaver`, a feature of the same crate).
+x11rb = { workspace = true, features = ["randr", "screensaver"] }
 # The desktop's reduced-motion preference, read and watched through the XDG
 # Settings portal; already in the tree, with these features, through GPUI
 # CE's Linux platform, which reads the color scheme the same way.

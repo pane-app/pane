@@ -4687,6 +4687,7 @@ name = "pane-core"
 version = "0.1.4"
 dependencies = [
  "any_ascii",
+ "block2 0.6.2",
  "bytes",
  "crc32fast",
  "flate2",
@@ -4700,11 +4701,13 @@ dependencies = [
  "hyper",
  "ignore",
  "libc",
+ "libloading",
  "memmap2",
  "notify",
  "objc2 0.6.4",
  "objc2-app-kit 0.3.2",
  "objc2-foundation 0.3.2",
+ "objc2-user-notifications",
  "pane-build",
  "pane-target",
  "png",
@@ -4726,6 +4729,7 @@ dependencies = [
  "wasmtime-wasi-http",
  "windows 0.62.2",
  "x11rb",
+ "zbus",
 ]
 
 [[package]]

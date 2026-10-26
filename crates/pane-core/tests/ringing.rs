@@ -575,20 +575,36 @@ fn a_ringing_stops_by_itself_at_the_limit() {
     installed.assert_not_paused();
 }
 
-/// Where Pane has no adapter for the system's notification sound yet, it
-/// is not available: an answer, not a failure.
-#[cfg(not(windows))]
+/// macOS's system sound is the user's alert sound, an AIFF file Pane reads
+/// itself (Tink when none was chosen): it plays.
+#[cfg(target_os = "macos")]
 #[test]
-fn the_system_sound_is_not_available_here_yet() {
+fn the_system_sound_plays() {
     let installed = Installed::new(&[]);
 
     assert_eq!(
         installed.run("Ring the system sound"),
-        Status::Result(
-            "refused: not-available: the system's notification sound is not available on this \
-             system yet"
-                .into()
-        )
+        Status::Result("Ringing 1 sounds".into())
+    );
+    installed.assert_not_paused();
+}
+
+/// Linux's system sound is the freedesktop sound theme's: it plays when it
+/// is a WAV file, and is not available, saying why, when it is an Ogg
+/// Vorbis file (as most distributions ship it) or the theme is not
+/// installed (as on a CI runner): an answer, not a failure.
+#[cfg(target_os = "linux")]
+#[test]
+fn the_system_sound_plays_or_says_why_not() {
+    let installed = Installed::new(&[]);
+
+    let answer = installed.run("Ring the system sound");
+    let Status::Result(text) = &answer else {
+        panic!("the system sound answered {answer:?}");
+    };
+    assert!(
+        text == "Ringing 1 sounds" || text.starts_with("refused: not-available: the desktop's"),
+        "{text}"
     );
     installed.assert_not_paused();
 }

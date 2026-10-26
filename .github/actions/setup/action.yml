@@ -33,7 +33,8 @@ runs:
         sudo apt-get install -y libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev \
           libxcb1-dev libfontconfig1-dev libfreetype-dev libvulkan1 mesa-vulkan-drivers \
           xvfb xdotool imagemagick mold \
-          dbus-x11 at-spi2-core python3-gi gir1.2-atspi-2.0
+          dbus-x11 at-spi2-core python3-gi gir1.2-atspi-2.0 \
+          dbus-daemon libasound2t64
 
     # The many test binaries each link Pane's whole dependency tree, so on
     # Linux they link with mold. The flag is scoped to the host triple,
@@ -94,13 +95,21 @@ runs:
     # - the Windows launcher window's taskbar test (#458) opens Pane's real
     #   windows on the runner's desktop and reads back their styles;
     # - the program containment adapter's test (a Job Object on Windows, a
-    #   process group elsewhere) starts and ends real processes of its own.
+    #   process group elsewhere) starts and ends real processes of its own;
+    # - the macOS and Linux alerts adapters' tests (#559) play through the
+    #   real sound output (ALSA's null device on Linux, the default output
+    #   device on macOS) and post through the real notifier (a stand-in
+    #   notification service on a D-Bus bus of the test's own on Linux,
+    #   with dbus-daemon and libasound2 installed above; the notification
+    #   center on macOS, from a bundle the test makes), which on a
+    #   developer's own computer would sound or show.
     - name: Opt in to the tests that need a CI runner
       if: inputs.tests == 'true'
       shell: bash
       run: |
         {
           echo "PANE_TEST_PROCESS_TREES=1"
+          if [ "$RUNNER_OS" != Windows ]; then echo "PANE_TEST_REAL_ALERTS=1"; fi
           if [ "$RUNNER_OS" != Linux ]; then echo "PANE_TEST_REAL_CLIPBOARD=1"; fi
           if [ "$RUNNER_OS" = Windows ]; then echo "PANE_TEST_SYSTEM_ICONS=1"; fi
           if [ "$RUNNER_OS" = Windows ]; then echo "PANE_TEST_REAL_INPUT=1"; fi
