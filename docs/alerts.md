@@ -65,7 +65,8 @@ handle the extension owns.
   Pane makes itself and are the same on every system; `system`, the
   sound the system's own sound scheme plays for notifications; or a WAV
   or MP3 file, by its absolute path or one relative to the package's
-  folder, at most 10 MiB.
+  folder, at most 10 MiB (MP3 on Windows only for now: on macOS and Linux
+  it answers `failed`).
 - **How often**: `once`, a number of times from 1 to 100, or until
   stopped, back to back.
 - **How loud**: 0 to 100, a percentage of the sound's full level at the
@@ -171,9 +172,11 @@ launch({ command: "ringing" }, "user-initiated", [], JSON.stringify({ timer: "te
 
 | | Windows | macOS | Linux |
 |---|---|---|---|
-| Notification | A toast (WinRT `ToastNotificationManager`), silent, under Pane's AppUserModelID | `not-available` until [#559](https://github.com/pane-app/pane/issues/559) | `not-available` until [#559](https://github.com/pane-app/pane/issues/559) |
-| Ringing sound | WASAPI in shared mode on a thread of Pane's own; Media Foundation decodes MP3 | `not-available` until #559 | `not-available` until #559 |
-| Attention launch | Waits for the user to stop typing (`GetLastInputInfo`) | Shown without waiting for typing to stop, until #559 can tell | As macOS |
+| Notification | A toast (WinRT `ToastNotificationManager`), silent, under Pane's AppUserModelID; `not-available` when Windows does not know the id or notifications are turned off | The notification center (`UNUserNotificationCenter`), for `Pane.app` only: `not-available` for the bare `pane` program, until the user allows it, when turned off, and most likely for any unsigned Pane (CI's runner refused an unsigned bundle with `UNErrorDomain` 1) | The freedesktop notification service on the D-Bus session bus, on X11 and Wayland, silent (`suppress-sound`), the extension's title on the body's last line; `not-available` with no session bus or no service on it |
+| Ringing sound | WASAPI in shared mode on a thread of Pane's own; `not-available` with no output device | An AudioToolbox audio queue on the default output device; `not-available` with none | ALSA's `default` device, which PipeWire, PulseAudio or the card serves; `not-available` without ALSA's library (`libasound.so.2`) or with no device |
+| A `file` sound | WAV, or MP3 through Media Foundation | WAV only; MP3 answers `failed` | WAV only; MP3 answers `failed` |
+| The `system` sound | The sound scheme's notification sound | The user's alert sound from Sound settings (an AIFF file), else Tink | The freedesktop sound theme's notification sound when it is a WAV file; most distributions ship it as Ogg Vorbis, which answers `not-available` saying so |
+| Attention launch | Waits for the user to stop typing (`GetLastInputInfo`) | Waits too (`CGEventSourceSecondsSinceLastEventType`) | Waits on X11 (its screen saver extension's idle time); shown without waiting on Wayland, which cannot tell |
 
 On Windows:
 
@@ -190,6 +193,18 @@ On Windows:
 - A device removed while a sound rings ends the sound, and the package's
   extension log says so.
 
+On macOS, a notification needs Pane to run as `Pane.app`: macOS gives a
+notification center only to an app, so the bare program (a development
+build) answers `not-available` saying so. `Pane.app` asks the user once,
+at the first post. Pane is not signed, and macOS most likely refuses an
+unsigned app's notifications outright, as it did on CI's runner; the
+answer then says so. The sound and the launcher still reach the user.
+
+On Linux, the notification shows under Pane's name and icon (the
+`pane.desktop` entry) and its click is the service's default action.
+The desktop's own Do Not Disturb keeps it quiet, and `notify` still
+answers success, as on Windows.
+
 ## Limits
 
 - At most 10 notifications per package in a minute. The eleventh answers
@@ -199,7 +214,7 @@ On Windows:
 - Every ringing stops by itself after 10 minutes, however it was asked:
   an alarm nobody is there to hear does not ring all day. An extension
   that wants more rings again.
-- A sound file is at most 10 MiB, WAV or MP3.
+- A sound file is at most 10 MiB, WAV or MP3 (MP3 on Windows only).
 - At most one attention launch waits per package.
 - Nothing here works while Pane is not running. Pane starts at sign-in
   and lives in the tray, so an alarm fires whenever the user is signed
