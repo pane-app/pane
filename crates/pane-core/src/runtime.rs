@@ -2586,6 +2586,7 @@ impl launching::Host for GuestState {
                 .map(|argument| (argument.name, argument.value))
                 .collect(),
             context,
+            windowed: self.call.windowed,
         })
     }
 

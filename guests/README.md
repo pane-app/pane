@@ -1403,6 +1403,28 @@ paused or unavailable on this system is refused with the reason, which the
 caller receives as an error. `launch` answers once the launch has started,
 not when the target has run.
 
+A `user-initiated` launch from a call no window was shown for (a timer
+firing, a schedule, a service) is an **attention launch** (ADR 0053): it
+shows Pane's launcher on the command, with the keyboard focus, so an
+alarm can put its "Snooze / Dismiss" screen in front of the user, as
+Raycast's `launchCommand` with `LaunchType.UserInitiated` does from a
+background command. It must name a view command of the caller's own
+package: another package's command, a no-view command, and one that
+waits are refused too. `launch` answers once it is queued. Pane then
+shows it when the user can take it:
+
+- while the user is typing, in another application or in Pane, it waits
+  for a second of no input, at most 10 seconds;
+- while the launcher shows an Alert (a confirmation), it waits until the
+  Alert is answered; any other screen makes way, and Settings stays
+  open;
+- while Game mode holds Pane's hotkeys, it waits until the game leaves
+  the front;
+- one is shown at a time, in the order asked: the next waits until the
+  user leaves the screen the first opened. Each extension has at most one
+  waiting; a newer one replaces it. A waiting one is dropped if its
+  extension is disabled, paused, reloaded, updated or uninstalled.
+
 The [no-view sample](sample-no-view) does all of this in Rust, and its
 [JavaScript](sample-no-view-js) and [TypeScript](sample-no-view-ts)
 copies do the same.

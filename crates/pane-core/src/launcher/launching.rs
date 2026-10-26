@@ -37,7 +37,8 @@
 //! target's, a dropdown's among its options. The launch starts on a
 //! thread of its own, so the caller's call never waits for the target (the
 //! target may need the caller's own instance, which the caller holds until
-//! it answers).
+//! it answers). A user-initiated launch from a call no window was shown for
+//! is an attention launch, which waits its turn (see `attention`).
 
 use std::sync::{Condvar, Mutex, MutexGuard};
 use std::time::Instant;
@@ -353,9 +354,18 @@ impl Launcher {
     /// required argument without a value shows the argument form. Called on
     /// the runtime thread, inside the caller's call: it never waits for the
     /// target, which runs on a thread of its own.
-    pub(super) fn launch_from_guest(&self, request: LaunchRequest) -> Result<(), String> {
+    ///
+    /// A user-initiated launch from a call no window was shown for is an
+    /// attention launch (ADR 0053, see `attention`): it may name only the
+    /// caller's own package's view commands, and a waiting command is
+    /// refused rather than passed to the waiting gate; once accepted it is
+    /// queued, and [`Launcher::attend`] shows it when the user can take it.
+    /// This is the one path every user-initiated launch takes, a system
+    /// notification's click included.
+    pub(crate) fn launch_from_guest(&self, request: LaunchRequest) -> Result<(), String> {
         let mut guard = self.lock();
         let state = &mut *guard;
+        let attention = request.launch_type == LaunchType::UserInitiated && !request.windowed;
         let caller = owner(&state.packages, &request.caller);
         let package = match &request.source {
             None => caller.ok_or(
@@ -378,6 +388,16 @@ impl Launcher {
             }
         };
         let title = package.title();
+        let package_key = package.identity.key();
+        if attention && caller.is_none_or(|caller| caller.identity.key() != package_key) {
+            // One extension never pushes another's screen in front of the
+            // user, busy elsewhere: the screen speaks for its package.
+            return Err(format!(
+                "{title} is another extension; from a call no window was shown for (a timer, \
+                 a schedule or a service), a command can show only its own extension's \
+                 commands"
+            ));
+        }
         if !package.enabled {
             return Err(format!(
                 "{title} is disabled; Pane does not enable it to launch its command, enable it \
@@ -408,6 +428,16 @@ impl Launcher {
             return Err(format!("{} of {title}: {reason}", registration.title));
         }
         let mode = package.mode_of(command);
+        if attention && mode == CommandMode::NoView {
+            return Err(format!(
+                "{} of {title} runs without a view, so there is no screen to show from a call \
+                 no window was shown for; launch it in the background",
+                registration.title
+            ));
+        }
+        if attention && let Some(reason) = state.waiting.reason_for(&package.identity, command) {
+            return Err(format!("{} of {title}: {}", registration.title, reason.row));
+        }
         if request.launch_type == LaunchType::Background && mode != CommandMode::NoView {
             return Err(format!(
                 "{} of {title} opens a view, so it cannot be launched in the background; \
@@ -439,6 +469,16 @@ impl Launcher {
             context: request.context,
             command: Some(request.command.clone()),
         };
+        if attention {
+            // Accepted means queued, not shown (see `attention`): its data
+            // as the package is now, so a waiting launch whose generation
+            // ends is dropped.
+            let data = self.data_in(state, &opening.component);
+            state.attention.ask(package_key, opening, data);
+            drop(guard);
+            self.changed();
+            return Ok(());
+        }
         if request.launch_type == LaunchType::UserInitiated {
             if mode == CommandMode::NoView {
                 // As the user invoking it where they are: the screen stays.
@@ -460,8 +500,23 @@ impl Launcher {
         // stops the launch.
         let data = self.data_in(state, &opening.component);
         let epoch = state.screen_epoch;
-        let launches = state.launches.clone();
         drop(guard);
+        self.start_launch(epoch, opening, data, false)?;
+        self.changed();
+        Ok(())
+    }
+
+    /// Starts `opening` on a thread of its own, so the caller never waits
+    /// for the target. Once an attention launch's opening has ended, the
+    /// launcher notes whether it opened anything (see `attention`).
+    pub(super) fn start_launch(
+        &self,
+        epoch: u64,
+        opening: Opening,
+        data: Option<PackageData>,
+        attention: bool,
+    ) -> Result<(), String> {
+        let launches = self.lock().launches.clone();
         launches.begin();
         let launcher = self.clone();
         let ended = launches.clone();
@@ -469,6 +524,9 @@ impl Launcher {
             .name("pane-launch".into())
             .spawn(move || {
                 futures::executor::block_on(launcher.launch_opening(epoch, opening, data));
+                if attention {
+                    launcher.attention_opened();
+                }
                 launcher.changed();
                 ended.end();
             });
@@ -476,7 +534,6 @@ impl Launcher {
             launches.end();
             return Err(format!("Pane could not start the launch: {error}"));
         }
-        self.changed();
         Ok(())
     }
 }

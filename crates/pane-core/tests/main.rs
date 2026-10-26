@@ -20,6 +20,7 @@ mod application_identity;
 mod application_names;
 mod application_update;
 mod arguments;
+mod attention_launch;
 mod capabilities;
 mod capability_waiting;
 mod clear_cache;

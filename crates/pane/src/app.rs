@@ -16,6 +16,8 @@ mod result_list;
 use std::future::Future;
 use std::mem::{Discriminant, discriminant};
 use std::path::Path;
+use std::rc::Rc;
+use std::time::Duration;
 
 use gpui::{
     App, ClipboardItem, Context, Div, Entity, EntityInputHandler, FocusHandle, Focusable, Hsla,
@@ -218,7 +220,18 @@ pub struct LauncherWindow {
     /// the last time the window looked (game mode, #125), so a change is
     /// the only thing it tells the entry again.
     tray_paused: bool,
+    /// Whether the window asks the launcher, every [`ATTENTION_POLL`],
+    /// whether to show an attention launch that waits (ADR 0053).
+    attending: bool,
+    /// How long the keyboard and the pointer have been still: the
+    /// system's ([`crate::input_idle`]), or what a test says.
+    input_idle: Rc<dyn Fn() -> Option<Duration>>,
 }
+
+/// How often the window asks the launcher whether to show an attention
+/// launch while one waits: soon enough after the user stops typing, or a
+/// game leaves the front, that the screen seems to come at once.
+const ATTENTION_POLL: Duration = Duration::from_millis(100);
 
 /// What the list was last scrolled for. When any of it changes, the list
 /// scrolls the least it can to keep the selected row visible: the screen,
@@ -374,6 +387,8 @@ impl LauncherWindow {
             presence: Presence::default(),
             taskbar_followed: crate::settings::ensure(cx).read(cx).show_taskbar(),
             tray_paused: false,
+            attending: false,
+            input_idle: Rc::new(crate::input_idle::input_idle),
             #[cfg(any(test, debug_assertions))]
             drawn: None,
             #[cfg(any(test, debug_assertions))]
@@ -583,7 +598,17 @@ impl LauncherWindow {
                             |this: &Self| !this.presence.hidden(),
                             |_| {},
                         );
+                        // An attention launch takes the keyboard focus, so
+                        // Enter and Escape act on what it opens at once,
+                        // as the Open Pane hotkey's summon focuses the
+                        // search (ADR 0053).
+                        if this.launcher.take_focus_request() {
+                            this.query.focus(window, cx);
+                        }
                     }
+                    // An attention launch waits: the window asks whether
+                    // to show it until none does.
+                    this.attend(window, cx);
                     // Game mode paused or resumed Pane's hotkeys for a
                     // game in front (#125): the tray icon's tooltip
                     // follows, on the window's thread as the entry's
@@ -614,6 +639,44 @@ impl LauncherWindow {
             }
         })
         .detach();
+    }
+
+    /// While an attention launch waits (ADR 0053), asks the launcher every
+    /// [`ATTENTION_POLL`] whether to show it, telling it how long the
+    /// keyboard and the pointer have been still; the launcher shows it
+    /// through the window request [`LauncherWindow::follow_changes`] reads.
+    /// Ends once none waits, and starts again with the next one.
+    fn attend(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.attending || !self.launcher.attention_waiting() {
+            return;
+        }
+        self.attending = true;
+        cx.spawn_in(window, async move |this, cx| {
+            loop {
+                let waiting = this.update(cx, |this, _| {
+                    this.launcher.attend((this.input_idle)());
+                    let waiting = this.launcher.attention_waiting();
+                    // Decided under the same update as the check, so a
+                    // launch queued from now on starts the asking again.
+                    this.attending = waiting;
+                    waiting
+                });
+                if !matches!(waiting, Ok(true)) {
+                    break;
+                }
+                cx.background_executor().timer(ATTENTION_POLL).await;
+            }
+        })
+        .detach();
+    }
+
+    /// Test support: has the window read how long the keyboard and the
+    /// pointer have been still from `idle` instead of the system, for an
+    /// attention launch (ADR 0053). Test and debug builds only.
+    #[cfg(any(test, debug_assertions))]
+    #[doc(hidden)]
+    pub fn set_input_idle(&mut self, idle: impl Fn() -> Option<Duration> + 'static) {
+        self.input_idle = Rc::new(idle);
     }
 
     /// Has the launcher drive this window for the host functions commands
