@@ -481,6 +481,39 @@ fn a_package_s_own_sound_plays_as_often_as_asked_and_ends_by_itself() {
     assert_eq!(installed.sound.peaks(), [0.25]);
 }
 
+/// A package's own MP3 and Ogg Vorbis files play on every system (#559):
+/// half a second of a tone at 22,050 Hz each, made for the tests
+/// (`src/ringing/fixtures`).
+#[test]
+fn a_package_s_mp3_and_ogg_vorbis_files_play() {
+    for (name, bytes) in [
+        (
+            "tone.mp3",
+            &include_bytes!("../src/ringing/fixtures/tone.mp3")[..],
+        ),
+        (
+            "tone.ogg",
+            &include_bytes!("../src/ringing/fixtures/tone.ogg")[..],
+        ),
+    ] {
+        let installed = Installed::new(&[("file", name)]);
+        fs::write(installed.location().join(name), bytes).unwrap();
+
+        assert_eq!(
+            installed.run("Ring the file"),
+            Status::Result("Ringing 1 sounds".into()),
+            "{name}"
+        );
+
+        installed.assert_stopped();
+        assert_eq!(installed.sound.rates(), [22_050], "{name}");
+        let [frames] = installed.sound.frames()[..] else {
+            panic!("{name} did not play once");
+        };
+        assert!((10_000..=14_000).contains(&frames), "{name}: {frames}");
+    }
+}
+
 #[test]
 fn times_outside_its_bounds_is_refused() {
     for times in ["0", "101"] {
@@ -589,10 +622,10 @@ fn the_system_sound_plays() {
     installed.assert_not_paused();
 }
 
-/// Linux's system sound is the freedesktop sound theme's: it plays when it
-/// is a WAV file, and is not available, saying why, when it is an Ogg
-/// Vorbis file (as most distributions ship it) or the theme is not
-/// installed (as on a CI runner): an answer, not a failure.
+/// Linux's system sound is the freedesktop sound theme's, an Ogg Vorbis file
+/// on most distributions (CI's runner installs `sound-theme-freedesktop`):
+/// it plays. Without the theme it is not available, saying why: an answer,
+/// not a failure.
 #[cfg(target_os = "linux")]
 #[test]
 fn the_system_sound_plays_or_says_why_not() {
@@ -602,10 +635,14 @@ fn the_system_sound_plays_or_says_why_not() {
     let Status::Result(text) = &answer else {
         panic!("the system sound answered {answer:?}");
     };
-    assert!(
-        text == "Ringing 1 sounds" || text.starts_with("refused: not-available: the desktop's"),
-        "{text}"
-    );
+    if Path::new("/usr/share/sounds/freedesktop/stereo").is_dir() {
+        assert_eq!(text, "Ringing 1 sounds");
+    } else {
+        assert!(
+            text.starts_with("refused: not-available: the desktop's sound theme"),
+            "{text}"
+        );
+    }
     installed.assert_not_paused();
 }
 

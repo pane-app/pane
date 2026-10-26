@@ -80,6 +80,12 @@ png = "0.18"
 # (Hunter WB, ISC, on the license allow list, no dependencies), whose
 # table romanises every script (é to e, đ to d, ß to ss, ligatures split).
 any_ascii = "0.3"
+# Decoding a ringing sound's MP3 file on macOS and Linux and its Ogg Vorbis
+# file on every system (#559; Windows keeps Media Foundation for MP3):
+# Symphonia, pure Rust and with no unsafe code (MPL-2.0, which deny.toml
+# allows and the source archive covers), with only the MP3 and Ogg Vorbis
+# parts: none of its default formats or SIMD.
+symphonia = { version = "0.6", default-features = false, features = ["mp3", "ogg", "vorbis"] }
 
 # Listing the Apps folder, reading what a shortcut opens (its target,
 # arguments and AppUserModelID property, through the shortcut interface and

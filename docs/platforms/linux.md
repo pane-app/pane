@@ -1443,12 +1443,11 @@ on Linux, on X11 and Wayland alike:
   linked: without it, and with no device that opens, `ring` answers
   `not-available`; Pane itself starts either way. The device is opened
   without blocking, so one another program holds answers `failed` at once.
-  A `file` sound must be a WAV file (Pane decodes MP3 on Windows only).
-  The `system` sound is the freedesktop sound theme's
-  `message-new-instant` (or `message`, or `bell`), found as the sound
-  theme specification says, when it is a WAV file. Most distributions
-  ship that theme as Ogg Vorbis, which Pane does not decode: it then
-  answers `not-available` saying so.
+  A `file` sound may be WAV, MP3 or Ogg Vorbis (the last two decoded by
+  Symphonia, pure Rust). The `system` sound is the freedesktop sound
+  theme's `message-new-instant` (or `message`, or `bell`), found as the
+  sound theme specification says: Ogg Vorbis on most distributions, or
+  WAV. Without the theme it answers `not-available` saying so.
 - **An attention launch** waits for the user to stop typing on X11, from
   the MIT-SCREEN-SAVER extension's idle time (`crates/pane/src/input_idle.rs`).
   Wayland offers an ordinary client no such measure, so there it does
@@ -1471,7 +1470,12 @@ What CI checks, on its `ubuntu-24.04` runner:
   device) and checks that dropping the handle closes the stream and
   nothing more is written. The stand-in sink's tests (`ringing::`,
   pane-core's integration tests) check every way the extension's code
-  ends stops the sound, on every system.
+  ends stops the sound, on every system. The MP3 and Ogg Vorbis tests
+  (`ringing::tests::mp3_and_ogg_vorbis_files_play`,
+  `ringing::a_package_s_mp3_and_ogg_vorbis_files_play`) decode tones made
+  for them, and `ringing::the_system_sound_plays_or_says_why_not` plays
+  the freedesktop theme's Ogg Vorbis sound (the runner installs
+  `sound-theme-freedesktop`).
 - The smoke's alerts phase (`scripts/smoke-linux.sh`, frames 210 to 213)
   installs the alerts fixture as a package whose activation's timer
   posts each second. A stand-in service

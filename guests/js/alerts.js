@@ -74,7 +74,7 @@ function sound(of) {
   if (of === "alarm" || of === "bell" || of === "chime") return { tag: "bundled", val: of };
   if (of === "system") return { tag: "system" };
   if (of != null && typeof of.file === "string") return { tag: "file", val: of.file };
-  throw new Error('ring needs "alarm", "bell", "chime", "system" or { file } with a WAV or MP3 file');
+  throw new Error('ring needs "alarm", "bell", "chime", "system" or { file } with a WAV, MP3 or Ogg Vorbis file');
 }
 
 /** `repeat` as the WIT carries it. */

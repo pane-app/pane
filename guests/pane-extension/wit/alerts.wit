@@ -95,8 +95,9 @@ interface alerts {
     bundled(bundled-sound),
     /// The sound the system's own sound scheme plays for notifications.
     system,
-    /// A WAV or MP3 file, by its absolute path or a path relative to the
-    /// package's folder (so a package can ship its own), at most 10 MiB.
+    /// A WAV, MP3 or Ogg Vorbis file, by its absolute path or a path
+    /// relative to the package's folder (so a package can ship its own),
+    /// at most 10 MiB.
     file(string),
   }
 

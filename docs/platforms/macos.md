@@ -1011,8 +1011,8 @@ on macOS:
   default output device: Core Audio mixes it with other applications'
   sound at the output's own volume and converts its rate. The frameworks
   are declared in Pane's own code, with no audio crate. No default output
-  device answers `not-available`. A `file` sound must be a WAV file (Pane
-  decodes MP3 on Windows only). The `system` sound is the alert sound the
+  device answers `not-available`. A `file` sound may be WAV, MP3 or Ogg
+  Vorbis (the last two decoded by Symphonia). The `system` sound is the alert sound the
   user chose in Sound settings (`com.apple.sound.beep.sound`), an AIFF
   file Pane reads itself, else Tink.
 - **An attention launch** waits for the user to stop typing, from Core

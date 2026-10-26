@@ -583,10 +583,10 @@ fn aiff_files_are_read() {
     assert!(Wav::read_aiff(&wav_file(8_000, &frames)).unwrap().is_none());
 }
 
-/// Linux's system sound is the freedesktop sound theme's, when it is a
-/// WAV file; an Ogg Vorbis one, and none, are not available, saying so.
+/// Linux's system sound is the freedesktop sound theme's, Ogg Vorbis or
+/// WAV, the most fitting name first; none is not available, saying so.
 #[test]
-fn the_sound_theme_s_notification_sound_is_found_when_it_is_a_wav_file() {
+fn the_sound_theme_s_notification_sound_is_found() {
     let home = tempfile::tempdir().unwrap();
     let system = tempfile::tempdir().unwrap();
     let folders = [home.path().to_path_buf(), system.path().to_path_buf()];
@@ -596,14 +596,15 @@ fn the_sound_theme_s_notification_sound_is_found_when_it_is_a_wav_file() {
     assert!(none.contains("not installed"), "{none}");
 
     std::fs::create_dir_all(&stereo).unwrap();
-    std::fs::write(stereo.join("message-new-instant.oga"), b"OggS").unwrap();
-    let ogg = super::sounds::theme_sound(&folders).err().unwrap();
-    assert!(ogg.contains("Ogg Vorbis"), "{ogg}");
-
     std::fs::write(stereo.join("bell.wav"), b"RIFF").unwrap();
     assert_eq!(
         super::sounds::theme_sound(&folders),
         Ok(stereo.join("bell.wav"))
+    );
+    std::fs::write(stereo.join("message-new-instant.oga"), b"OggS").unwrap();
+    assert_eq!(
+        super::sounds::theme_sound(&folders),
+        Ok(stereo.join("message-new-instant.oga"))
     );
     // The user's own theme folder comes first.
     let mine = home.path().join("freedesktop/stereo");
@@ -613,6 +614,96 @@ fn the_sound_theme_s_notification_sound_is_found_when_it_is_a_wav_file() {
         super::sounds::theme_sound(&folders),
         Ok(mine.join("message-new-instant.wav"))
     );
+}
+
+/// Half a second of an 880 Hz tone at 22,050 Hz, mono, at an eighth of full
+/// scale, made for these tests with ffmpeg (`fixtures/README.md`).
+const TONE_MP3: &[u8] = include_bytes!("fixtures/tone.mp3");
+const TONE_OGG: &[u8] = include_bytes!("fixtures/tone.ogg");
+
+/// An MP3 and an Ogg Vorbis file play on every system: Symphonia decodes
+/// them (Media Foundation an MP3 on Windows), at the file's rate, as often
+/// as asked, and on both sides.
+#[test]
+fn mp3_and_ogg_vorbis_files_play() {
+    let folder = tempfile::tempdir().unwrap();
+    for (name, bytes) in [("tone.mp3", TONE_MP3), ("tone.ogg", TONE_OGG)] {
+        let path = folder.path().join(name);
+        std::fs::write(&path, bytes).unwrap();
+        let (ringer, stand_in, _) = ringer();
+        let generation = Generation::new();
+
+        let answer = block_on(
+            ringer
+                .ring(asked(
+                    OWNER,
+                    1,
+                    &generation,
+                    Sound::File(path.clone()),
+                    Repeat::Times(2),
+                ))
+                .unwrap()
+                .started(),
+        );
+
+        assert!(answer.is_ok(), "{name}: {answer:?}");
+        assert_stopped(&ringer, &stand_in, &generation);
+        assert_eq!(stand_in.rates(), [22_050], "{name}");
+        let [frames] = stand_in.frames()[..] else {
+            unreachable!()
+        };
+        // Twice half a second, give or take the encoder's padding.
+        assert!((20_000..=28_000).contains(&frames), "{name}: {frames}");
+        let [peak] = stand_in.peaks()[..] else {
+            unreachable!()
+        };
+        assert!(peak > 0.1, "{name} played silence: {peak}");
+    }
+}
+
+/// Symphonia's own reading: a mono file plays on both sides, rewinding
+/// plays it again from the start, and a file that only looks like one is
+/// refused saying so.
+#[test]
+fn compressed_files_are_decoded_and_rewound() {
+    for (name, bytes) in [("tone.mp3", TONE_MP3), ("tone.ogg", TONE_OGG)] {
+        let mut sound =
+            super::compressed::Compressed::open(Path::new(name), bytes.to_vec()).unwrap();
+        assert_eq!(sound.rate(), 22_050, "{name}");
+        let mut out = vec![0f32; 4_096];
+        let mut first = 0;
+        let mut loudest = 0f32;
+        loop {
+            let frames = sound.fill(&mut out).unwrap();
+            if frames == 0 {
+                break;
+            }
+            for [left, right] in out[..frames * 2].as_chunks::<2>().0 {
+                assert_eq!(left, right, "{name}: a mono sound plays on both sides");
+                loudest = loudest.max(left.abs());
+            }
+            first += frames;
+        }
+        assert!(loudest > 0.1, "{name}: {loudest}");
+        sound.rewind().unwrap();
+        let mut again = 0;
+        loop {
+            let frames = sound.fill(&mut out).unwrap();
+            if frames == 0 {
+                break;
+            }
+            again += frames;
+        }
+        assert_eq!(first, again, "{name}");
+    }
+    let fake = super::compressed::Compressed::open(
+        Path::new("fake.ogg"),
+        b"OggS but nothing after".to_vec(),
+    );
+    let Err(why) = fake else {
+        panic!("a broken Ogg file was decoded");
+    };
+    assert!(why.contains("fake.ogg"), "{why}");
 }
 
 /// The system's own output, with what it was given and whether a stream of

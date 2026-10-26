@@ -19,7 +19,7 @@ Every package Pane's release is made of (`cargo xtask package-windows`, `package
 
 No JavaScript from npm ships in the program: the JS/TS SDK it embeds is Pane's own (`guests/js`).
 
-The three sounds an extension can ring by name (`alarm`, `bell` and `chime`, [ADR 0053](adr/0053-extensions-get-the-users-attention-through-a-notification-a-ringing-sound-and-the-launcher.md)) are no recordings: Pane's own code makes them when they are first rung (`crates/pane-core/src/ringing/sounds.rs`), so they are Pane's, under its licence, and add nothing to the notices. A recorded sound bundled later, even under CC0, is listed in `notices.rs` like a font.
+The three sounds an extension can ring by name (`alarm`, `bell` and `chime`, [ADR 0053](adr/0053-extensions-get-the-users-attention-through-a-notification-a-ringing-sound-and-the-launcher.md)) are no recordings: Pane's own code makes them when they are first rung (`crates/pane-core/src/ringing/sounds.rs`), so they are Pane's, under its licence, and add nothing to the notices. A recorded sound bundled later, even under CC0, is listed in `notices.rs` like a font. The tests' MP3 and Ogg Vorbis tones (`crates/pane-core/src/ringing/fixtures`) are generated tones made for Pane with ffmpeg, under Pane's licence, and are compiled into the tests only. The decoder of those formats, Symphonia (#559), is MPL-2.0: a crate, so its notice and licence text come from Cargo like any other's, and its source is in the release's source archive, as MPL-2.0 asks.
 
 ## Where the source is
 

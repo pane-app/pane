@@ -34,7 +34,7 @@ runs:
           libxcb1-dev libfontconfig1-dev libfreetype-dev libvulkan1 mesa-vulkan-drivers \
           xvfb xdotool imagemagick mold \
           dbus-x11 at-spi2-core python3-gi gir1.2-atspi-2.0 \
-          dbus-daemon libasound2t64
+          dbus-daemon libasound2t64 sound-theme-freedesktop
 
     # The many test binaries each link Pane's whole dependency tree, so on
     # Linux they link with mold. The flag is scoped to the host triple,

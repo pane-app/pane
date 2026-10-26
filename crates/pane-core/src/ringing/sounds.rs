@@ -1,10 +1,11 @@
 //! What a ringing plays, as stereo 32-bit float frames: the three sounds
 //! Pane ships, made for Pane by the code below (no recording, so no
-//! licence beyond Pane's own), a WAV file read here on every system, and
-//! on Windows an MP3 (or a WAV of another encoding) decoded by Media
-//! Foundation, and the system's notification sound: the sound scheme's on
-//! Windows, the alert sound on macOS (an AIFF file, read here too), and
-//! the freedesktop sound theme's on Linux when it is a WAV file.
+//! licence beyond Pane's own), a WAV file read here on every system, an
+//! MP3 decoded by Media Foundation on Windows (and a WAV of another
+//! encoding) and by Symphonia elsewhere, an Ogg Vorbis file decoded by
+//! Symphonia everywhere (`compressed`), and the system's notification
+//! sound: the sound scheme's on Windows, the alert sound on macOS (an AIFF
+//! file, read here too), and the freedesktop sound theme's on Linux.
 
 use std::f32::consts::TAU;
 use std::path::Path;
@@ -108,41 +109,32 @@ fn sound_folders() -> Vec<std::path::PathBuf> {
 }
 
 /// The `freedesktop` theme's sound for a notification under `folders`, the
-/// theme every desktop falls back to. Pane reads WAV files only off
-/// Windows, and the theme ships Ogg Vorbis (`.oga`) on most distributions:
-/// such a sound is not available, saying so.
+/// theme every desktop falls back to: Ogg Vorbis (`.oga`) on most
+/// distributions, which Pane decodes, or WAV.
 #[cfg(any(target_os = "linux", test))]
 pub(crate) fn theme_sound(folders: &[std::path::PathBuf]) -> Result<std::path::PathBuf, String> {
-    let mut ogg = None;
     for name in THEME_SOUNDS {
         for folder in folders {
             let stereo = folder.join("freedesktop/stereo");
-            let wav = stereo.join(format!("{name}.wav"));
-            if wav.is_file() {
-                return Ok(wav);
-            }
-            if ogg.is_none() {
-                ogg = ["oga", "ogg"]
-                    .iter()
-                    .map(|extension| stereo.join(format!("{name}.{extension}")))
-                    .find(|path| path.is_file());
+            let found = ["oga", "ogg", "wav"]
+                .iter()
+                .map(|extension| stereo.join(format!("{name}.{extension}")))
+                .find(|path| path.is_file());
+            if let Some(found) = found {
+                return Ok(found);
             }
         }
     }
-    Err(match ogg {
-        Some(path) => format!(
-            "the desktop's notification sound ({}) is an Ogg Vorbis file, and Pane plays WAV \
-             files only",
-            path.display()
-        ),
-        None => "the desktop's sound theme has no notification sound (the freedesktop sound \
-                 theme is not installed)"
+    Err(
+        "the desktop's sound theme has no notification sound (the freedesktop sound theme is \
+         not installed)"
             .into(),
-    })
+    )
 }
 
 /// Opens the system's sound file `path`: a WAV, an AIFF (macOS's sounds
-/// are), else whatever the system's decoder reads.
+/// are), an Ogg Vorbis file (Linux's are), else whatever the system's
+/// decoder reads.
 fn open_system_file(path: &Path) -> Result<Box<dyn Source>, String> {
     let shown = path.display();
     let bytes = read_sound(path)?;
@@ -169,37 +161,40 @@ fn read_sound(path: &Path) -> Result<Vec<u8>, String> {
     std::fs::read(path).map_err(|error| format!("{shown} cannot be read: {error}"))
 }
 
-/// Opens the sound file `path`: a WAV Pane reads itself, else whatever the
-/// system's decoder reads (an MP3 on Windows).
+/// Opens the sound file `path`: a WAV Pane reads itself, else an MP3 or an
+/// Ogg Vorbis file.
 fn open_file(path: &Path) -> Result<Box<dyn Source>, String> {
     open_read(path, read_sound(path)?)
 }
 
 /// Opens `bytes`, read from `path`, as [`open_file`] does.
 fn open_read(path: &Path, bytes: Vec<u8>) -> Result<Box<dyn Source>, String> {
-    let shown = path.display();
-    match Wav::read(bytes) {
-        Ok(Some(wav)) => return Ok(Box::new(wav)),
-        Ok(None) => {}
-        Err(why) => return Err(format!("{shown} is not a WAV file Pane can play: {why}")),
+    if !(bytes.len() >= 12 && &bytes[..4] == b"RIFF" && &bytes[8..12] == b"WAVE") {
+        return decoded(path, bytes);
     }
-    decoded(path)
+    match Wav::read(bytes) {
+        Ok(Some(wav)) => Ok(Box::new(wav)),
+        // A WAV of an encoding Pane does not read itself: Media Foundation
+        // reads it from the file on Windows.
+        Ok(None) => decoded(path, Vec::new()),
+        Err(why) => Err(format!(
+            "{} is not a WAV file Pane can play: {why}",
+            path.display()
+        )),
+    }
 }
 
-/// A file Pane does not read itself, through the system's decoder.
-fn decoded(path: &Path) -> Result<Box<dyn Source>, String> {
+/// A file Pane does not read itself: an MP3 or an Ogg Vorbis file, decoded
+/// by Symphonia, but for Windows' MP3s (and compressed WAVs), which Media
+/// Foundation decodes there.
+fn decoded(path: &Path, bytes: Vec<u8>) -> Result<Box<dyn Source>, String> {
     #[cfg(windows)]
-    {
-        super::windows::Decoded::open(path).map(|decoded| Box::new(decoded) as Box<dyn Source>)
+    if !bytes.starts_with(b"OggS") {
+        return super::windows::Decoded::open(path)
+            .map(|decoded| Box::new(decoded) as Box<dyn Source>);
     }
-    #[cfg(not(windows))]
-    {
-        Err(format!(
-            "{} is not a WAV file Pane can play; Pane decodes other sound files (an MP3) on \
-             Windows only",
-            path.display()
-        ))
-    }
+    super::compressed::Compressed::open(path, bytes)
+        .map(|compressed| Box::new(compressed) as Box<dyn Source>)
 }
 
 /// Frames in memory, played from the start.

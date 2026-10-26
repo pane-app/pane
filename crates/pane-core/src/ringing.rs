@@ -39,6 +39,7 @@ use crate::generation::{Generation, Registration};
 
 #[cfg(target_os = "linux")]
 mod alsa;
+mod compressed;
 #[cfg(target_os = "macos")]
 mod macos;
 mod sounds;
