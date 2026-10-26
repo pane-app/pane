@@ -236,7 +236,7 @@ use service_bindings::exports::pane::extension::service;
 /// place the two worlds meet, besides the host traits below.
 pub(crate) enum World {
     /// A component built for the current API.
-    Current(super::bindings::ExtensionWithTypedFolder),
+    Current(super::bindings::ExtensionWithAlerts),
     /// A component built for the previous version, run through the
     /// adapter.
     Previous(bindings::ExtensionWithTypedFolder),

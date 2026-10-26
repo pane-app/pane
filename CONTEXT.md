@@ -310,7 +310,19 @@ _Avoid_: Toast (inside the launcher), notification (the system's), tooltip
 
 **Alert**:
 A small dialog in the middle of the window, over the view it was asked from, which stays drawn under it, dimmed, as Raycast's alert is: its title, a short message, the primary button on Enter (red when it removes something), a second answer where there is one, Cancel on Escape, and a checkbox where there is one. A command's confirmation (with its "Don't ask again") and Pane's own questions about an extension ("Uninstall X?", disabling or uninstalling what others require, clearing a cache or a history, deleting retained data) are alerts, in the launcher and in Settings alike. Uninstall's "Delete saved data" checkbox starts unticked, so Enter keeps the saved data. The alert takes the keyboard: Tab moves between its checkbox and buttons and never leaves it, Enter presses the focused button or the primary one, Space ticks the checkbox, and Escape or a click outside it is Cancel, never the window's close.
-_Avoid_: Confirmation screen (it is not a page), dialog window (it is inside Pane's window), modal (in UI text)
+_Avoid_: Confirmation screen (it is not a page), dialog window (it is inside Pane's window), modal (in UI text), the `alerts` interface (a system notification and a ringing sound, outside the window)
+
+**System notification**:
+A notification an extension posts through the system's own notification service (a toast on Windows), from any call and with no window needed, such as a timer's firing: a title and a message under Pane's name, with the extension's title as its attribution, silent, and optionally a click that launches one of the extension's own commands with context. Pane answers once the system took it; under Focus assist or Do Not Disturb the system keeps it silent in its notification center, and the extension cannot tell (ADR 0053).
+_Avoid_: Toast (in the launcher's footer), HUD (Pane's own small window), Alert (a dialog in the launcher), notification alone where Pane's own messages could be meant
+
+**Ringing sound**:
+A sound an extension starts and owns as an owned registration: one Pane ships (alarm, bell, chime), the system's notification sound, or a WAV or MP3 file, played once, a number of times or until stopped, and never longer than 10 minutes. Dropping its handle stops it, and so do the instance holding it going away and its generation ending, so a disabled or crashed extension never rings on (ADR 0053).
+_Avoid_: Alarm (the clock extension's), alert sound, beep, notification sound (the system's, which a system notification does not play)
+
+**Attention launch**:
+A user-initiated launch of one of the calling package's own view commands, asked for from a call no window was shown for (a timer's firing, a schedule, a service): Pane shows the launcher on it and gives it the keyboard focus, waiting while the user is typing (up to 10 seconds), while an Alert is pending and while Game mode holds the hotkeys, and queuing one behind another so none takes another's screen. Its launch record is any command's launch: user-initiated, from a command, with the context passed. It is Raycast's `launchCommand` with the user-initiated type, called from a background command (ADR 0053).
+_Avoid_: Background launch (shows no window), popup, focus steal
 
 **Command search**:
 The search field an opened command has when it searches as the user types, such as one searching an online service; Pane sends the text typed there only to that command, stops a search the text has replaced, and never asks the command from root search.
