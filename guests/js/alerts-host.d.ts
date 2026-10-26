@@ -60,8 +60,8 @@ declare module "pane:extension/alerts@0.2.0" {
 
   /**
    * What `ring` plays: one of Pane's sounds, the system's notification
-   * sound, or a WAV or MP3 file (absolute, or relative to the package's
-   * folder; at most 10 MiB).
+   * sound, or a WAV, MP3 or Ogg Vorbis file (absolute, or relative to the
+   * package's folder; at most 10 MiB).
    */
   export type Sound =
     | { tag: "bundled"; val: BundledSound }

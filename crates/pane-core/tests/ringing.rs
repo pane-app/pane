@@ -481,6 +481,39 @@ fn a_package_s_own_sound_plays_as_often_as_asked_and_ends_by_itself() {
     assert_eq!(installed.sound.peaks(), [0.25]);
 }
 
+/// A package's own MP3 and Ogg Vorbis files play on every system (#559):
+/// half a second of a tone at 22,050 Hz each, made for the tests
+/// (`src/ringing/fixtures`).
+#[test]
+fn a_package_s_mp3_and_ogg_vorbis_files_play() {
+    for (name, bytes) in [
+        (
+            "tone.mp3",
+            &include_bytes!("../src/ringing/fixtures/tone.mp3")[..],
+        ),
+        (
+            "tone.ogg",
+            &include_bytes!("../src/ringing/fixtures/tone.ogg")[..],
+        ),
+    ] {
+        let installed = Installed::new(&[("file", name)]);
+        fs::write(installed.location().join(name), bytes).unwrap();
+
+        assert_eq!(
+            installed.run("Ring the file"),
+            Status::Result("Ringing 1 sounds".into()),
+            "{name}"
+        );
+
+        installed.assert_stopped();
+        assert_eq!(installed.sound.rates(), [22_050], "{name}");
+        let [frames] = installed.sound.frames()[..] else {
+            panic!("{name} did not play once");
+        };
+        assert!((10_000..=14_000).contains(&frames), "{name}: {frames}");
+    }
+}
+
 #[test]
 fn times_outside_its_bounds_is_refused() {
     for times in ["0", "101"] {
@@ -575,21 +608,41 @@ fn a_ringing_stops_by_itself_at_the_limit() {
     installed.assert_not_paused();
 }
 
-/// Where Pane has no adapter for the system's notification sound yet, it
-/// is not available: an answer, not a failure.
-#[cfg(not(windows))]
+/// macOS's system sound is the user's alert sound, an AIFF file Pane reads
+/// itself (Tink when none was chosen): it plays.
+#[cfg(target_os = "macos")]
 #[test]
-fn the_system_sound_is_not_available_here_yet() {
+fn the_system_sound_plays() {
     let installed = Installed::new(&[]);
 
     assert_eq!(
         installed.run("Ring the system sound"),
-        Status::Result(
-            "refused: not-available: the system's notification sound is not available on this \
-             system yet"
-                .into()
-        )
+        Status::Result("Ringing 1 sounds".into())
     );
+    installed.assert_not_paused();
+}
+
+/// Linux's system sound is the freedesktop sound theme's, an Ogg Vorbis file
+/// on most distributions (CI's runner installs `sound-theme-freedesktop`):
+/// it plays. Without the theme it is not available, saying why: an answer,
+/// not a failure.
+#[cfg(target_os = "linux")]
+#[test]
+fn the_system_sound_plays_or_says_why_not() {
+    let installed = Installed::new(&[]);
+
+    let answer = installed.run("Ring the system sound");
+    let Status::Result(text) = &answer else {
+        panic!("the system sound answered {answer:?}");
+    };
+    if Path::new("/usr/share/sounds/freedesktop/stereo").is_dir() {
+        assert_eq!(text, "Ringing 1 sounds");
+    } else {
+        assert!(
+            text.starts_with("refused: not-available: the desktop's sound theme"),
+            "{text}"
+        );
+    }
     installed.assert_not_paused();
 }
 

@@ -12,9 +12,10 @@ package pane:extension@0.2.0;
 // `launchCommand` is. Kept apart from the other files so a command that
 // does not use it is unchanged: the interface is imported by the
 // `extension-with-alerts` world, and a component that never calls it does
-// not import it. Windows first: on a system Pane has no adapter for yet,
-// every call answers `not-available`, which is never a reason to pause
-// the extension; that is macOS and Linux until #559. Rust
+// not import it. Windows, macOS and Linux each have an adapter; on a
+// system Pane has none for, and where the system cannot serve a call,
+// it answers `not-available`, which is never a reason to pause the
+// extension (docs/alerts.md says what each system answers). Rust
 // commands use it through pane-extension (`pane_extension::alerts`), and
 // JavaScript and TypeScript ones through `@pane-app/extension/alerts` or
 // the module "pane:extension/alerts@0.2.0", which a command imports once
@@ -94,8 +95,9 @@ interface alerts {
     bundled(bundled-sound),
     /// The sound the system's own sound scheme plays for notifications.
     system,
-    /// A WAV or MP3 file, by its absolute path or a path relative to the
-    /// package's folder (so a package can ship its own), at most 10 MiB.
+    /// A WAV, MP3 or Ogg Vorbis file, by its absolute path or a path
+    /// relative to the package's folder (so a package can ship its own),
+    /// at most 10 MiB.
     file(string),
   }
 

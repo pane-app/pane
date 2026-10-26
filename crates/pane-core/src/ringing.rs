@@ -19,9 +19,12 @@
 //! `ring` answers, so a file that cannot be read answers `failed` and a
 //! missing output device `not-available`, while the guest's call awaits
 //! the answer without holding the runtime thread. The audio itself goes
-//! through an [`Output`]: Windows' WASAPI in shared mode (`windows`), none
-//! elsewhere yet (every `ring` answers `not-available`), and a stand-in
-//! sink for tests, which plays nothing and records what it was given.
+//! through an [`Output`]: Windows' WASAPI in shared mode (`windows`),
+//! ALSA's `default` device on Linux, which PipeWire and PulseAudio serve
+//! as well as a bare sound card (`alsa`, #559), an AudioToolbox audio
+//! queue on macOS (`macos`, #559), none on any other system (every `ring`
+//! answers `not-available`), and a stand-in sink for tests, which plays
+//! nothing and records what it was given.
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -34,6 +37,11 @@ use tokio::sync::oneshot;
 use crate::extension_log::{ExtensionLogs, LogLevel};
 use crate::generation::{Generation, Registration};
 
+#[cfg(target_os = "linux")]
+mod alsa;
+mod compressed;
+#[cfg(target_os = "macos")]
+mod macos;
 mod sounds;
 #[cfg(any(test, debug_assertions))]
 mod stand_in;
@@ -138,9 +146,11 @@ pub(crate) trait Output: Send + Sync {
 pub(crate) enum OpenError {
     /// There is no output device: `not-available`.
     NoDevice(String),
-    /// The device refused: `failed`. Only the Windows adapter has a
-    /// device that can.
-    #[cfg_attr(not(windows), allow(dead_code))]
+    /// The device refused, or is busy with another program: `failed`.
+    #[cfg_attr(
+        not(any(windows, target_os = "linux", target_os = "macos")),
+        allow(dead_code)
+    )]
     Failed(String),
 }
 
@@ -158,19 +168,19 @@ pub(crate) trait Sink {
     fn idle(&mut self) -> Result<bool, String>;
 }
 
-/// No output on this system yet: every `ring` answers `not-available`.
-#[cfg(not(windows))]
+/// No output on this system: every `ring` answers `not-available`.
+#[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
 struct NoOutput;
 
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
 impl Output for NoOutput {
     fn unavailable(&self) -> Option<String> {
-        Some("a ringing sound is not available on this system yet".into())
+        Some("a ringing sound is not available on this system".into())
     }
 
     fn open(&self, _rate: u32) -> Result<Box<dyn Sink>, OpenError> {
         Err(OpenError::NoDevice(
-            "a ringing sound is not available on this system yet".into(),
+            "a ringing sound is not available on this system".into(),
         ))
     }
 }
@@ -181,7 +191,15 @@ fn system_output() -> Arc<dyn Output> {
     {
         Arc::new(windows::Wasapi)
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "linux")]
+    {
+        Arc::new(alsa::AlsaOutput::default_device())
+    }
+    #[cfg(target_os = "macos")]
+    {
+        Arc::new(macos::AudioQueue)
+    }
+    #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
     {
         Arc::new(NoOutput)
     }

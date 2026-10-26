@@ -80,6 +80,12 @@ png = "0.18"
 # (Hunter WB, ISC, on the license allow list, no dependencies), whose
 # table romanises every script (é to e, đ to d, ß to ss, ligatures split).
 any_ascii = "0.3"
+# Decoding a ringing sound's MP3 file on macOS and Linux and its Ogg Vorbis
+# file on every system (#559; Windows keeps Media Foundation for MP3):
+# Symphonia, pure Rust and with no unsafe code (MPL-2.0, which deny.toml
+# allows and the source archive covers), with only the MP3 and Ogg Vorbis
+# parts: none of its default formats or SIMD.
+symphonia = { version = "0.6", default-features = false, features = ["mp3", "ogg", "vorbis"] }
 
 # Listing the Apps folder, reading what a shortcut opens (its target,
 # arguments and AppUserModelID property, through the shortcut interface and
@@ -137,6 +143,17 @@ libc = "0.2"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 x11rb = { workspace = true, features = ["xkb", "xfixes"] }
+# An extension's system notification (#559) goes to the freedesktop
+# notification service on the D-Bus session bus, through zbus's blocking
+# API (MIT, already in the tree, with these default features, through GPUI
+# CE's Linux platform and `notify-rust`).
+zbus = "5"
+# The ringing sound (#559) plays through ALSA, which PulseAudio and
+# PipeWire both serve, from `libasound.so.2` loaded when first rung, so a
+# system without it answers `not-available` rather than Pane failing to
+# start, and building Pane needs no ALSA headers (`libloading`, ISC,
+# already in the tree through Vulkan's and Wayland's loaders).
+libloading = "0.8"
 
 # Global hotkeys on macOS through Carbon's RegisterEventHotKey, which needs no
 # Accessibility permission. The menu-bar entry of the tray (#79): NSStatusItem
@@ -155,7 +172,17 @@ global-hotkey = "0.8"
 # objc2-core-foundation's CGSize).
 objc2.workspace = true
 objc2-app-kit = { version = "0.3", default-features = false, features = ["NSControl", "NSMenu", "NSMenuItem", "NSPasteboard", "NSPasteboardItem", "NSResponder", "NSStatusBar", "NSStatusBarButton", "NSStatusItem", "NSView", "NSButton", "NSWorkspace", "NSImage", "NSImageRep", "NSBitmapImageRep", "objc2-core-foundation"] }
-objc2-foundation = { version = "0.3", default-features = false, features = ["NSArray", "NSData", "NSDictionary", "NSError", "NSFileManager", "NSGeometry", "NSString", "NSURL", "objc2-core-foundation", "std"] }
+objc2-foundation = { version = "0.3", default-features = false, features = ["NSArray", "NSBundle", "NSData", "NSDictionary", "NSError", "NSFileManager", "NSGeometry", "NSString", "NSURL", "NSUserDefaults", "objc2-core-foundation", "std"] }
+# An extension's system notification (#559): UserNotifications'
+# notification center, its authorization and requests, and the delegate
+# that hears a click; its completion handlers are blocks. Both already in
+# the tree through GPUI CE's macOS platform. Whether Pane runs from a
+# bundle (`NSBundle`) and the user's alert sound (`NSUserDefaults`) are
+# Foundation's, above. The ringing sound plays through AudioToolbox's
+# audio queue, declared in `ringing::macos` (the system's framework, no
+# crate).
+objc2-user-notifications = { version = "0.3", default-features = false, features = ["std", "block2", "UNNotification", "UNNotificationContent", "UNNotificationRequest", "UNNotificationResponse", "UNNotificationSettings", "UNNotificationTrigger", "UNUserNotificationCenter"] }
+block2 = "0.6"
 # The file index's change source (#175): an FSEvents stream opened from a
 # saved event id, so that FSEvents replays what changed while Pane was not
 # running and then reports live changes (MIT, already in the tree through

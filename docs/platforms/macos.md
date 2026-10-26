@@ -43,6 +43,7 @@ runner; no one has run it on a contributor's own Mac.
 | [Disabling (#43)](#disabling-required-dependents-43) and [uninstalling (#44)](#uninstalling-required-dependents-44) required dependents, [runtime crashes (#17)](#runtime-crashes-17), [extensions that stop responding (#18)](#extensions-that-stop-responding-18) | Not run on macOS yet |
 | [npm (#45)](#npm-packages-45) and [Git (#46)](#git-packages-46) packages, [files (#29)](#files-29), [searching inside a command (#30)](#searching-inside-a-command-30), [clipboard history (#35, #37)](#clipboard-history-35-37) and [its expiry (#36)](#clipboard-history-expiry-36) | Not run on macOS yet |
 | [Installing Pane (#52)](#installing-pane-and-acquiring-its-calculator-52), [updating it (#55)](#installing-a-pane-application-update-by-the-users-choice-55) | Pending CI |
+| [System notifications and the ringing sound (#559)](#alerts-system-notifications-and-the-ringing-sound-559) | The sound and the refusals passed on CI; an unsigned bundle is refused notifications; not seen or heard by a person |
 
 ## Tested combination
 
@@ -971,6 +972,80 @@ can only be proven end to end on the runner.
 | A damaged package is explained, everything untouched, the row retried | pending CI (frame 602) |
 | The user's choice swaps the running binary in the bundle; the new one is used the next start | pending CI (frame 603) |
 | The new version reports itself; the old version's data and enablement are kept | pending CI (frames 604, 605) |
+
+## Alerts: system notifications and the ringing sound (#559)
+
+An extension's `notify` and `ring` (`wit/alerts.wit`,
+[ADR 0053](../adr/0053-extensions-get-the-users-attention-through-a-notification-a-ringing-sound-and-the-launcher.md))
+on macOS:
+
+- **The notification** goes to UserNotifications' notification center
+  (`UNUserNotificationCenter`): its title, the message as its body, the
+  extension's title as its subtitle, and no sound. macOS gives a
+  notification center only to an app with a bundle identifier, and asking
+  for it from a program outside a bundle ends the process with an
+  Objective-C exception. So Pane checks its bundle first: the bare `pane`
+  program (a development build, the smoke's Pane) answers `not-available`,
+  "macOS posts notifications only for an app, and this Pane runs outside
+  Pane.app". `Pane.app` (`dev.pane.launcher`, which `install.sh` builds)
+  asks the user once, at the first post, waiting 3 seconds for the answer;
+  while the question is open, after a refusal, and when notifications are
+  turned off for Pane, the post answers `not-available` saying so. The
+  click comes to the center's delegate, a class of Pane's own, which also
+  has macOS show a notification while Pane is the frontmost app. The last
+  32 notifications' clicks are kept, as on Windows.
+- **What an unsigned Pane gets.** On CI's `macos-15` runner, a copy of the
+  test program in an app bundle of its own (signed only by the linker, ad
+  hoc, and not notarized, as `Pane.app` is) asked for permission and was
+  refused at once with `UNErrorDomain` error 1, "notifications not
+  allowed", without any question shown. Pane answers that as
+  `not-available`: "macOS does not allow notifications from this app
+  (UNErrorDomain 1, notifications not allowed); Pane is not signed, which
+  macOS may require". So an unsigned `Pane.app` most likely cannot post
+  notifications; whether a real `Pane.app` on a person's Mac is asked
+  instead is the first hand check on
+  [#559](https://github.com/pane-app/pane/issues/559). Signing Pane needs
+  Apple Developer credentials, which do not exist
+  ([installing Pane](#the-package)).
+- **The ringing sound** plays through an AudioToolbox audio queue on the
+  default output device: Core Audio mixes it with other applications'
+  sound at the output's own volume and converts its rate. The frameworks
+  are declared in Pane's own code, with no audio crate. No default output
+  device answers `not-available`. A `file` sound may be WAV, MP3 or Ogg
+  Vorbis (the last two decoded by Symphonia). The `system` sound is the alert sound the
+  user chose in Sound settings (`com.apple.sound.beep.sound`), an AIFF
+  file Pane reads itself, else Tink.
+- **An attention launch** waits for the user to stop typing, from Core
+  Graphics' `CGEventSourceSecondsSinceLastEventType` for any input of the
+  login session, which needs no permission
+  (`crates/pane/src/input_idle.rs`).
+
+What CI checks, on its `macos-15` runner, with `PANE_TEST_REAL_ALERTS`
+set by `.github/actions/setup`:
+
+- `system_notifications::macos::tests`: the bare test program answers
+  `not-available` without touching the center, and the bundled copy
+  above records what the center answers. `ringing::macos::tests`: the
+  audio queue opens on the runner's default output device, takes half a
+  second of silence, hands its buffers back as they play, and stops at
+  once when dropped; the alert sound is a file.
+  `ringing::tests::the_system_output_plays_a_ringing_and_dropping_it_stops_it`
+  rings the alarm through the real audio queue and checks that dropping
+  the handle closes it and nothing more is written. The integration test
+  `ringing::the_system_sound_plays` plays the alert sound (Tink on the
+  runner) through the stand-in sink. The stand-in sink's tests check every
+  way the extension's code ends stops the sound, on every system.
+- The smoke's alerts phase (`scripts/smoke-macos.sh`, frames 210 to 212)
+  installs the alerts fixture as a package whose activation's timer posts
+  each second: the bare program's posts answer `not-available` as above.
+  It rings the alarm, which plays or answers that there is no output
+  device, and drops it; what each call answered is kept in
+  `alerts-answers.txt` with the evidence.
+
+Not checked by CI, and so by hand on a Mac (the steps are on
+[#559](https://github.com/pane-app/pane/issues/559)): what `Pane.app`
+itself is answered, that a person sees the notification and hears the
+sound, and that an attention launch waits while they type.
 
 ## Text input and accessibility findings
 

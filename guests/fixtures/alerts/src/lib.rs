@@ -12,7 +12,8 @@
 //! sounds" drops every handle held; "Ring and crash" rings the alarm, then
 //! traps; "Ring and spin" rings the alarm, then computes without end, so
 //! Pane stops it as unresponsive. Each answers a toast: how many sounds
-//! the instance holds, or the refusal it met. Root search's query "ring
+//! the instance holds, or the refusal it met, which it also writes to its
+//! content (`rang`), where the smokes read it. Root search's query "ring
 //! and wait" rings the alarm, then waits 30 seconds before answering, so a
 //! test stops the call meanwhile by asking something else.
 //!
@@ -58,6 +59,9 @@ const FIRED: &str = "fired";
 
 /// The content key holding what the last firing's posts answered.
 const ANSWERS: &str = "answers";
+
+/// The content key holding what the last item answered.
+const RANG: &str = "rang";
 
 /// The activation's timer's handle, kept with the instance: dropping it
 /// stops the timer.
@@ -148,9 +152,12 @@ fn outcome(item_id: &str) -> Result<String, String> {
     }
 }
 
-/// Runs the item `item_id` and shows what it answered.
+/// Runs the item `item_id` and shows what it answered, also writing it to
+/// the content key [`RANG`], where the smokes read it.
 async fn act(item_id: &str) -> Result<(), String> {
-    show_toast(Toast::success(outcome(item_id)?));
+    let answer = outcome(item_id)?;
+    content::set(RANG, &answer)?;
+    show_toast(Toast::success(answer));
     Ok(())
 }
 

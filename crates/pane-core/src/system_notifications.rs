@@ -16,11 +16,18 @@
 //! command through the launch path a user-initiated `launch` takes, or
 //! shows the launcher as a second start does.
 //!
-//! Only the Windows half is Windows' ([`windows`]): a toast through WinRT's
-//! `ToastNotificationManager`, under Pane's AppUserModelID ([`APP_ID`]).
+//! Each system's half is its own: on Windows a toast through WinRT's
+//! `ToastNotificationManager`, under Pane's AppUserModelID ([`APP_ID`])
+//! (`windows`); on Linux the freedesktop notification service on the
+//! D-Bus session bus (`freedesktop`, #559); on macOS UserNotifications'
+//! notification center, for a Pane running as `Pane.app` (`macos`, #559).
 //! Elsewhere [`native`] answers that notifications are not available
-//! there yet (#559), which is not a failure.
+//! there, which is not a failure.
 
+#[cfg(target_os = "linux")]
+mod freedesktop;
+#[cfg(target_os = "macos")]
+mod macos;
 #[cfg(target_os = "windows")]
 mod windows;
 
@@ -128,21 +135,30 @@ pub trait Notifier: Send + Sync + 'static {
     fn notify(&self, notice: Notice) -> Result<(), NotifyError>;
 }
 
-/// This system's notifications: Windows' toasts on Windows; elsewhere one
-/// that answers that notifications are not available there yet.
+/// This system's notifications: Windows' toasts, the freedesktop
+/// notification service on Linux, macOS's notification center; elsewhere
+/// one that answers that notifications are not available there.
 pub fn native() -> Arc<dyn Notifier> {
     #[cfg(target_os = "windows")]
     {
         Arc::new(windows::Toasts::new(APP_ID))
     }
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(target_os = "linux")]
+    {
+        Arc::new(freedesktop::Freedesktop::session())
+    }
+    #[cfg(target_os = "macos")]
+    {
+        Arc::new(macos::UserNotifications::new())
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
     {
         let here = crate::platform::Platform::current().map_or_else(
             || format!("this system ({})", std::env::consts::OS),
             |platform| platform.to_string(),
         );
         Arc::new(Unavailable(format!(
-            "System notifications are not available on {here} yet"
+            "System notifications are not available on {here}"
         )))
     }
 }

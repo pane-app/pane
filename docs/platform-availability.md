@@ -186,6 +186,20 @@ unverified natively.
   installed, and when a built-in command of it loads.
 - Other runtime availability (a missing app or setting) is not modelled. A
   command reports that as an error from its action.
+- A host capability that a system cannot serve at run time answers
+  `not-available` with the reason instead: it is not a declaration, and
+  the package stays available. The alerts capability
+  ([ADR 0053](adr/0053-extensions-get-the-users-attention-through-a-notification-a-ringing-sound-and-the-launcher.md))
+  works on all three systems, with these answers where it cannot (#555,
+  #556, #559):
+
+  | | Windows | macOS | Linux |
+  | --- | --- | --- | --- |
+  | System notification | A toast; not available when Windows does not know Pane's AppUserModelID or notifications are turned off | The notification center, for `Pane.app` only: not available for the bare program, until the user allows it, or when they turned it off | The freedesktop notification service on the D-Bus session bus, on X11 and Wayland: not available with no session bus or no service on it |
+  | Ringing sound | WASAPI: not available with no output device | An audio queue: not available with no output device | ALSA's `default` device (PipeWire, PulseAudio or the card): not available without ALSA's library or with no device |
+  | A `file` sound | WAV, MP3 or Ogg Vorbis | WAV, MP3 or Ogg Vorbis | WAV, MP3 or Ogg Vorbis |
+  | The `system` sound | The sound scheme's notification sound | The user's alert sound (AIFF), else Tink | The freedesktop theme's (usually Ogg Vorbis); not available without the theme |
+  | An attention launch waits for typing to stop | Yes | Yes | On X11 (its screen saver extension); not on Wayland, where it does not wait |
 - Whether an unavailable item should be hidden instead is left open by Q34.
   Pane lists and explains it.
 - Disabling an extension (#10) is a separate state and is not an

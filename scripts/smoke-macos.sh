@@ -1506,6 +1506,67 @@ unset PANE_TEST_RUNTIME_FAULTS
 if helpers_running; then echo "a helper outlived Pane"; exit 1; fi
 grep -q '"disabled": true' "$PANE_DATA_DIR/extensions/installed.json" || { echo "disable not recorded"; exit 1; }
 if grep -q '"paused"' "$PANE_DATA_DIR/extensions/installed.json"; then echo "a package was paused for the runtime's crash"; exit 1; fi
+# Alerts (#559): an extension's system notification and its ringing sound.
+# The alerts fixture (`cargo xtask guests`), installed as a package whose
+# activation entry point registers a timer, posts a notification each
+# second from a call no window was shown for. The smoke's Pane is the bare
+# program, not Pane.app, so macOS gives it no notification center: the
+# post must answer not-available saying so, never crash. The alarm then
+# rings through the default output device, or answers that the runner has
+# none, and the fixture drops its handle. What each call answered is in
+# the fixture's content (`answers`, `rang`), copied to alerts-answers.txt
+# for the record. A data folder of its own.
+export PANE_DATA_DIR=$out/alerts-data
+rm -rf "$PANE_DATA_DIR"
+# The content value $1 the alerts fixture wrote, empty while it wrote none.
+alerts_content() {
+  python3 - "$PANE_DATA_DIR/extensions/content.json" "$1" <<'PY'
+import json, sys
+try:
+    packages = json.load(open(sys.argv[1], encoding="utf-8"))["packages"]
+except (OSError, ValueError, KeyError):
+    packages = {}
+print(next((values[sys.argv[2]] for values in packages.values() if sys.argv[2] in values), ""))
+PY
+}
+# Waits up to $2 seconds until the content value $1 starts with $3 or,
+# when given, $4.
+until_alerts_content() {
+  local deadline=$((SECONDS + $2))
+  until case "$(alerts_content "$1")" in ("$3"*) true;; ("${4:-$3}"*) true;; (*) false;; esac; do
+    [ "$SECONDS" -lt "$deadline" ] || { echo "the fixture's $1 is \"$(alerts_content "$1")\", not \"$3…\""; exit 1; }
+    sleep 0.5
+  done
+}
+alerts_package=$out/alerts-package
+rm -rf "$alerts_package"
+mkdir -p "$alerts_package"
+cp target/guests/alerts_fixture.wasm "$alerts_package/fixture.wasm"
+cat >"$alerts_package/pane.json" <<'JSON'
+{ "manifestVersion": 1, "title": "Alerts fixture", "version": "0.1.0", "apiVersion": "0.2",
+  "commands": [{ "id": "fixture", "title": "Alerts fixture", "component": "fixture.wasm" }],
+  "activate": "fixture.wasm" }
+JSON
+start_pane --install "$alerts_package"
+key 36; sleep 2   # Install
+# The activation's timer posts by itself, with no window asked for it.
+until_alerts_content answers 60 "not-available: macOS posts notifications only for an app"
+echo "notify: $(alerts_content answers)" >"$out/alerts-answers.txt"
+capture 210-alerts-installed.png   # evidence: the launcher after the notifications were refused
+type_text "alerts fixture"; sleep 1
+key 36; sleep 2   # open Alerts fixture
+pointer_off
+key 36   # Ring the alarm
+capture_until 211-alerts-ringing.png success 15   # "Ringing 1 sounds", or no output device
+until_alerts_content rang 15 "Ringing 1 sounds" "refused: not-available: there is no sound output device"
+echo "ring: $(alerts_content rang)" >>"$out/alerts-answers.txt"
+sleep 2
+until_toast_gone success 15
+key 125; key 125; key 125; key 36   # Drop the sounds
+capture_until 212-alerts-dropped.png success 15   # "Dropped the sounds"
+until_alerts_content rang 15 "Dropped the sounds"
+cat "$out/alerts-answers.txt"
+stop_pane
 # Recovering from an extension that stops responding (#18). The settings
 # sample's last item, Stop responding, computes without waiting for up to a
 # minute. The phase sets the runtime's limits through the fault file

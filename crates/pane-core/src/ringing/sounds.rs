@@ -1,8 +1,11 @@
 //! What a ringing plays, as stereo 32-bit float frames: the three sounds
 //! Pane ships, made for Pane by the code below (no recording, so no
-//! licence beyond Pane's own), a WAV file read here on every system, and
-//! on Windows an MP3 (or a WAV of another encoding) decoded by Media
-//! Foundation, and the system's notification sound.
+//! licence beyond Pane's own), a WAV file read here on every system, an
+//! MP3 decoded by Media Foundation on Windows (and a WAV of another
+//! encoding) and by Symphonia elsewhere, an Ogg Vorbis file decoded by
+//! Symphonia everywhere (`compressed`), and the system's notification
+//! sound: the sound scheme's on Windows, the alert sound on macOS (an AIFF
+//! file, read here too), and the freedesktop sound theme's on Linux.
 
 use std::f32::consts::TAU;
 use std::path::Path;
@@ -49,7 +52,7 @@ pub(crate) fn open(sound: &Sound) -> Result<Box<dyn Source>, RingError> {
         Sound::Bundled(bundled) => Ok(Box::new(Frames::new(BUNDLED_RATE, made(*bundled)))),
         Sound::System => {
             let path = system_sound()?;
-            open_file(&path).map_err(|why| {
+            open_system_file(&path).map_err(|why| {
                 RingError::NotAvailable(format!(
                     "the system's notification sound cannot be played: {why}"
                 ))
@@ -65,17 +68,86 @@ fn system_sound() -> Result<std::path::PathBuf, RingError> {
     {
         super::windows::notification_sound().map_err(RingError::NotAvailable)
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "macos")]
+    {
+        Ok(super::macos::alert_sound())
+    }
+    #[cfg(target_os = "linux")]
+    {
+        theme_sound(&sound_folders()).map_err(RingError::NotAvailable)
+    }
+    #[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
     {
         Err(RingError::NotAvailable(
-            "the system's notification sound is not available on this system yet".into(),
+            "the system's notification sound is not available on this system".into(),
         ))
     }
 }
 
-/// Opens the sound file `path`: a WAV Pane reads itself, else whatever the
-/// system's decoder reads (an MP3 on Windows).
-fn open_file(path: &Path) -> Result<Box<dyn Source>, String> {
+/// The freedesktop sound theme's names for a notification's sound, the
+/// most fitting first.
+#[cfg(any(target_os = "linux", test))]
+const THEME_SOUNDS: [&str; 3] = ["message-new-instant", "message", "bell"];
+
+/// The folders the freedesktop sound theme specification looks for themes
+/// in: `$XDG_DATA_HOME/sounds`, then each of `$XDG_DATA_DIRS`' `sounds`.
+#[cfg(target_os = "linux")]
+fn sound_folders() -> Vec<std::path::PathBuf> {
+    use std::path::PathBuf;
+    let home = std::env::var_os("XDG_DATA_HOME")
+        .filter(|home| !home.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".local/share")));
+    let dirs = std::env::var("XDG_DATA_DIRS")
+        .ok()
+        .filter(|dirs| !dirs.is_empty())
+        .unwrap_or_else(|| "/usr/local/share:/usr/share".into());
+    home.into_iter()
+        .chain(dirs.split(':').map(PathBuf::from))
+        .map(|folder| folder.join("sounds"))
+        .collect()
+}
+
+/// The `freedesktop` theme's sound for a notification under `folders`, the
+/// theme every desktop falls back to: Ogg Vorbis (`.oga`) on most
+/// distributions, which Pane decodes, or WAV.
+#[cfg(any(target_os = "linux", test))]
+pub(crate) fn theme_sound(folders: &[std::path::PathBuf]) -> Result<std::path::PathBuf, String> {
+    for name in THEME_SOUNDS {
+        for folder in folders {
+            let stereo = folder.join("freedesktop/stereo");
+            let found = ["oga", "ogg", "wav"]
+                .iter()
+                .map(|extension| stereo.join(format!("{name}.{extension}")))
+                .find(|path| path.is_file());
+            if let Some(found) = found {
+                return Ok(found);
+            }
+        }
+    }
+    Err(
+        "the desktop's sound theme has no notification sound (the freedesktop sound theme is \
+         not installed)"
+            .into(),
+    )
+}
+
+/// Opens the system's sound file `path`: a WAV, an AIFF (macOS's sounds
+/// are), an Ogg Vorbis file (Linux's are), else whatever the system's
+/// decoder reads.
+fn open_system_file(path: &Path) -> Result<Box<dyn Source>, String> {
+    let shown = path.display();
+    let bytes = read_sound(path)?;
+    match Wav::read_aiff(&bytes) {
+        Ok(Some(aiff)) => return Ok(Box::new(aiff)),
+        Ok(None) => {}
+        Err(why) => return Err(format!("{shown} is not an AIFF file Pane can play: {why}")),
+    }
+    open_read(path, bytes)
+}
+
+/// The bytes of the sound file `path`, at most [`MAX_FILE_BYTES`].
+fn read_sound(path: &Path) -> Result<Vec<u8>, String> {
     let shown = path.display();
     let size = std::fs::metadata(path)
         .map_err(|error| format!("{shown} cannot be read: {error}"))?
@@ -86,29 +158,43 @@ fn open_file(path: &Path) -> Result<Box<dyn Source>, String> {
             size.div_ceil(1024 * 1024)
         ));
     }
-    let bytes = std::fs::read(path).map_err(|error| format!("{shown} cannot be read: {error}"))?;
-    match Wav::read(bytes) {
-        Ok(Some(wav)) => return Ok(Box::new(wav)),
-        Ok(None) => {}
-        Err(why) => return Err(format!("{shown} is not a WAV file Pane can play: {why}")),
-    }
-    decoded(path)
+    std::fs::read(path).map_err(|error| format!("{shown} cannot be read: {error}"))
 }
 
-/// A file Pane does not read itself, through the system's decoder.
-fn decoded(path: &Path) -> Result<Box<dyn Source>, String> {
-    #[cfg(windows)]
-    {
-        super::windows::Decoded::open(path).map(|decoded| Box::new(decoded) as Box<dyn Source>)
+/// Opens the sound file `path`: a WAV Pane reads itself, else an MP3 or an
+/// Ogg Vorbis file.
+fn open_file(path: &Path) -> Result<Box<dyn Source>, String> {
+    open_read(path, read_sound(path)?)
+}
+
+/// Opens `bytes`, read from `path`, as [`open_file`] does.
+fn open_read(path: &Path, bytes: Vec<u8>) -> Result<Box<dyn Source>, String> {
+    if !(bytes.len() >= 12 && &bytes[..4] == b"RIFF" && &bytes[8..12] == b"WAVE") {
+        return decoded(path, bytes);
     }
-    #[cfg(not(windows))]
-    {
-        Err(format!(
-            "{} is not a WAV file Pane can play, and other sound files are not decoded on this \
-             system yet",
+    match Wav::read(bytes) {
+        Ok(Some(wav)) => Ok(Box::new(wav)),
+        // A WAV of an encoding Pane does not read itself: Media Foundation
+        // reads it from the file on Windows.
+        Ok(None) => decoded(path, Vec::new()),
+        Err(why) => Err(format!(
+            "{} is not a WAV file Pane can play: {why}",
             path.display()
-        ))
+        )),
     }
+}
+
+/// A file Pane does not read itself: an MP3 or an Ogg Vorbis file, decoded
+/// by Symphonia, but for Windows' MP3s (and compressed WAVs), which Media
+/// Foundation decodes there.
+fn decoded(path: &Path, bytes: Vec<u8>) -> Result<Box<dyn Source>, String> {
+    #[cfg(windows)]
+    if !bytes.starts_with(b"OggS") {
+        return super::windows::Decoded::open(path)
+            .map(|decoded| Box::new(decoded) as Box<dyn Source>);
+    }
+    super::compressed::Compressed::open(path, bytes)
+        .map(|compressed| Box::new(compressed) as Box<dyn Source>)
 }
 
 /// Frames in memory, played from the start.
@@ -251,7 +337,7 @@ fn normalized(mut sound: Vec<f32>) -> Vec<f32> {
     sound
 }
 
-/// A WAV file's samples, read as they are played.
+/// A WAV file's samples, or an AIFF file's, read as they are played.
 pub(crate) struct Wav {
     bytes: Vec<u8>,
     /// Where the samples start and end in `bytes`.
@@ -263,28 +349,50 @@ pub(crate) struct Wav {
     at: usize,
 }
 
-/// How a WAV file's samples are stored.
+/// How a WAV or AIFF file's samples are stored.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Encoding {
-    /// Unsigned 8-bit integers.
+    /// Unsigned 8-bit integers (WAV).
     U8,
+    /// Signed 8-bit integers (AIFF).
+    I8,
     /// Signed little-endian integers of this many bytes (2, 3 or 4).
     Int(usize),
     /// Little-endian floats of this many bytes (4 or 8).
     Float(usize),
+    /// Signed big-endian integers of this many bytes (2, 3 or 4: AIFF).
+    IntBig(usize),
+    /// Big-endian floats of this many bytes (4 or 8: AIFF-C).
+    FloatBig(usize),
 }
 
 impl Encoding {
     fn bytes(self) -> usize {
         match self {
-            Encoding::U8 => 1,
-            Encoding::Int(bytes) | Encoding::Float(bytes) => bytes,
+            Encoding::U8 | Encoding::I8 => 1,
+            Encoding::Int(bytes)
+            | Encoding::Float(bytes)
+            | Encoding::IntBig(bytes)
+            | Encoding::FloatBig(bytes) => bytes,
         }
     }
 
     /// The sample at the start of `bytes`, from -1 to 1.
     fn sample(self, bytes: &[u8]) -> f32 {
         match self {
+            // Big-endian: read as the little-endian sample of the same
+            // width, its bytes turned round.
+            Encoding::IntBig(width) | Encoding::FloatBig(width) => {
+                let mut little = [0; 8];
+                for (at, byte) in bytes[..width].iter().rev().enumerate() {
+                    little[at] = *byte;
+                }
+                match self {
+                    Encoding::IntBig(_) => Encoding::Int(width).sample(&little),
+                    _ => Encoding::Float(width).sample(&little),
+                }
+            }
+            Encoding::I8 => f32::from(bytes[0] as i8) / 128.0,
             Encoding::U8 => (f32::from(bytes[0]) - 128.0) / 128.0,
             Encoding::Int(2) => f32::from(i16::from_le_bytes([bytes[0], bytes[1]])) / 32_768.0,
             Encoding::Int(3) => {
@@ -377,9 +485,106 @@ impl Wav {
         }))
     }
 
+    /// Reads `bytes` as an AIFF or AIFF-C file of uncompressed samples, as
+    /// macOS's sounds are: `None` when it is none; why, when it is one Pane
+    /// cannot play.
+    pub(crate) fn read_aiff(bytes: &[u8]) -> Result<Option<Wav>, String> {
+        if bytes.len() < 12 || &bytes[..4] != b"FORM" {
+            return Ok(None);
+        }
+        let compressed = match &bytes[8..12] {
+            b"AIFF" => false,
+            b"AIFC" => true,
+            _ => return Ok(None),
+        };
+        let mut common = None;
+        let mut data = None;
+        let mut at = 12;
+        while at + 8 <= bytes.len() {
+            let id = &bytes[at..at + 4];
+            let size =
+                u32::from_be_bytes([bytes[at + 4], bytes[at + 5], bytes[at + 6], bytes[at + 7]])
+                    as usize;
+            let body = at + 8;
+            let end = body.saturating_add(size).min(bytes.len());
+            match id {
+                b"COMM" => common = Some(&bytes[body..end]),
+                // The sound data chunk starts with the offset of its first
+                // sample past its eight bytes of header, and a block size.
+                b"SSND" if end - body >= 8 => {
+                    let offset = u32::from_be_bytes([
+                        bytes[body],
+                        bytes[body + 1],
+                        bytes[body + 2],
+                        bytes[body + 3],
+                    ]) as usize;
+                    data = Some((body + 8).saturating_add(offset).min(end)..end);
+                }
+                _ => {}
+            }
+            // Chunks are padded to an even size.
+            at = body.saturating_add(size).saturating_add(size % 2);
+        }
+        let common = common.ok_or("it has no common chunk")?;
+        let data = data.ok_or("it has no sound data")?;
+        if common.len() < 18 || (compressed && common.len() < 22) {
+            return Err("its common chunk is too short".into());
+        }
+        let channels = usize::from(u16::from_be_bytes([common[0], common[1]]));
+        let bits = u16::from_be_bytes([common[6], common[7]]);
+        let rate = extended(&common[8..18]);
+        let kind: &[u8] = if compressed { &common[18..22] } else { b"NONE" };
+        let width = usize::from(bits.div_ceil(8));
+        let encoding = match (kind, width) {
+            (b"NONE", 1) => Encoding::I8,
+            (b"NONE", 2..=4) => Encoding::IntBig(width),
+            (b"sowt", 2..=4) => Encoding::Int(width),
+            (b"fl32" | b"FL32", _) => Encoding::FloatBig(4),
+            (b"fl64" | b"FL64", _) => Encoding::FloatBig(8),
+            _ => {
+                return Err(format!(
+                    "its samples are compressed ({}), which Pane does not decode",
+                    String::from_utf8_lossy(kind)
+                ));
+            }
+        };
+        if channels == 0 {
+            return Err("it has no channels".into());
+        }
+        if !(1_000.0..=384_000.0).contains(&rate) {
+            return Err(format!(
+                "its rate of {rate} samples a second is not a sound's"
+            ));
+        }
+        if (data.end - data.start) < encoding.bytes() * channels {
+            return Err("it holds no sound".into());
+        }
+        Ok(Some(Wav {
+            bytes: bytes.to_vec(),
+            data,
+            encoding,
+            channels,
+            rate: rate.round() as u32,
+            at: 0,
+        }))
+    }
+
     fn frames(&self) -> usize {
         (self.data.end - self.data.start) / (self.encoding.bytes() * self.channels)
     }
+}
+
+/// An 80-bit IEEE 754 extended float, big-endian, as AIFF writes its rate.
+fn extended(bytes: &[u8]) -> f64 {
+    let exponent = i32::from(u16::from_be_bytes([bytes[0] & 0x7F, bytes[1]]));
+    let mantissa = u64::from_be_bytes([
+        bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7], bytes[8], bytes[9],
+    ]);
+    if exponent == 0 && mantissa == 0 {
+        return 0.0;
+    }
+    let value = mantissa as f64 * 2f64.powi(exponent - 16_383 - 63);
+    if bytes[0] & 0x80 != 0 { -value } else { value }
 }
 
 impl Source for Wav {
@@ -417,6 +622,34 @@ impl Source for Wav {
         self.at = 0;
         Ok(())
     }
+}
+
+/// An AIFF file of `frames` (interleaved stereo 16-bit, big-endian) at
+/// `rate`, as macOS's sounds are.
+#[cfg(test)]
+pub(crate) fn aiff_file(rate: u32, frames: &[[i16; 2]]) -> Vec<u8> {
+    let data = (frames.len() * 4) as u32;
+    let mut file = Vec::with_capacity(54 + data as usize);
+    file.extend_from_slice(b"FORM");
+    file.extend_from_slice(&(46 + data).to_be_bytes());
+    file.extend_from_slice(b"AIFFCOMM");
+    file.extend_from_slice(&18u32.to_be_bytes());
+    file.extend_from_slice(&2u16.to_be_bytes());
+    file.extend_from_slice(&(frames.len() as u32).to_be_bytes());
+    file.extend_from_slice(&16u16.to_be_bytes());
+    // The rate as an 80-bit extended float: its mantissa's highest bit set,
+    // the exponent saying where the point is.
+    let shift = 31 - rate.leading_zeros();
+    file.extend_from_slice(&(16_383 + shift as u16).to_be_bytes());
+    file.extend_from_slice(&(u64::from(rate) << (63 - shift)).to_be_bytes());
+    file.extend_from_slice(b"SSND");
+    file.extend_from_slice(&(8 + data).to_be_bytes());
+    file.extend_from_slice(&[0; 8]);
+    for [left, right] in frames {
+        file.extend_from_slice(&left.to_be_bytes());
+        file.extend_from_slice(&right.to_be_bytes());
+    }
+    file
 }
 
 /// A WAV file of `frames` (interleaved stereo 16-bit) at `rate`: what the

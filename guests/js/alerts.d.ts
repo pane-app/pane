@@ -51,8 +51,8 @@ export function notify(notification: Notification): void;
 /**
  * What {@link ring} plays: a sound Pane ships (`"alarm"`, insistent;
  * `"bell"`; `"chime"`, gentle), the system's own notification sound, or
- * a WAV or MP3 file by its absolute path or one relative to the package's
- * folder, at most 10 MiB.
+ * a WAV, MP3 or Ogg Vorbis file by its absolute path or one relative to
+ * the package's folder, at most 10 MiB.
  */
 export type Sound = "alarm" | "bell" | "chime" | "system" | { file: string };
 
