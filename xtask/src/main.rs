@@ -255,6 +255,7 @@ fn guests() -> Result<(), String> {
                 "sample_system_commands",
                 "sample_switch_windows",
                 "sample_files",
+                "sample_alerts",
                 "faulty",
                 "folder_files",
                 "quick",
@@ -532,7 +533,7 @@ fn git_sample(root: &Path, out: &Path) -> Result<(), String> {
 /// The default extensions' packages are not here: their sources left this
 /// repository for their own (#285), and a Pane release installs them from
 /// the commits its pins name (`crates/pane/defaults.json`).
-const SAMPLE_PACKAGES: [(&str, &str); 92] = [
+const SAMPLE_PACKAGES: [(&str, &str); 95] = [
     ("sample-rust", "sample_rust"),
     ("sample-settings", "sample_settings"),
     ("sample-js", "sample_js"),
@@ -549,6 +550,9 @@ const SAMPLE_PACKAGES: [(&str, &str); 92] = [
     ("sample-registrations", "sample_registrations"),
     ("sample-registrations-js", "sample_registrations_js"),
     ("sample-registrations-ts", "sample_registrations_ts"),
+    ("sample-alerts", "sample_alerts"),
+    ("sample-alerts-js", "sample_alerts_js"),
+    ("sample-alerts-ts", "sample_alerts_ts"),
     ("sample-handoff", "sample_handoff"),
     ("sample-handoff-js", "sample_handoff_js"),
     ("sample-handoff-ts", "sample_handoff_ts"),

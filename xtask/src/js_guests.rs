@@ -19,7 +19,7 @@ use serde_json::json;
 
 /// (component file in `guests/prebuilt/` and `target/guests/`, source
 /// package) of each prebuilt JS/TS sample.
-pub(crate) const SAMPLES: [(&str, &str); 59] = [
+pub(crate) const SAMPLES: [(&str, &str); 61] = [
     ("sample_js", "guests/sample-js"),
     ("sample_ts", "guests/sample-ts"),
     ("sample_settings_js", "guests/sample-settings-js"),
@@ -32,6 +32,8 @@ pub(crate) const SAMPLES: [(&str, &str); 59] = [
     ("sample_capabilities_ts", "guests/sample-capabilities-ts"),
     ("sample_registrations_js", "guests/sample-registrations-js"),
     ("sample_registrations_ts", "guests/sample-registrations-ts"),
+    ("sample_alerts_js", "guests/sample-alerts-js"),
+    ("sample_alerts_ts", "guests/sample-alerts-ts"),
     ("sample_handoff_js", "guests/sample-handoff-js"),
     ("sample_handoff_ts", "guests/sample-handoff-ts"),
     ("sample_applications_js", "guests/sample-applications-js"),
@@ -96,7 +98,7 @@ pub(crate) const SAMPLES: [(&str, &str); 59] = [
 /// Pane's WIT, copied beside the world in `guests/js/wit`: all of it, so
 /// a component's digest changes with any part of the contract it is
 /// built against.
-const PANE_WIT: [&str; 21] = [
+const PANE_WIT: [&str; 22] = [
     "extension.wit",
     "commands.wit",
     "feedback.wit",
@@ -118,6 +120,7 @@ const PANE_WIT: [&str; 21] = [
     "typed-folder.wit",
     "windows.wit",
     "view.wit",
+    "alerts.wit",
 ];
 
 /// Toolchain inputs that decide what a component contains: the wasm parts

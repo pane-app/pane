@@ -2915,6 +2915,51 @@ extension is the one that lists them (ADR 0040). The windows samples are a
 [TypeScript](sample-switch-windows-ts/src/index.ts) command answering the
 same, one item per window, each switching to it.
 
+## Getting the user's attention
+
+A command whose code runs while Pane's window is hidden (a timer's
+firing, a schedule, a service) can get the user's attention three ways
+(ADR 0053, [alerts](../docs/alerts.md)):
+
+- a system notification, whose click opens one of its own commands with
+  context (`notify`);
+- a ringing sound it owns, which rings until it drops the handle and
+  never outlives its code (`ring`);
+- Pane's launcher shown on one of its own view commands: `launch`,
+  user-initiated, an attention launch
+  ([Launching another command](#launching-another-command)).
+
+The first two are `pane:extension/alerts`
+([wit/alerts.wit](../wit/alerts.wit)): `pane_extension::alerts` in Rust,
+and `@pane-app/extension/alerts` in JavaScript and TypeScript, whose
+package.json sets `"pane": { "alerts": true }` to import the interface.
+On a system Pane has no adapter for yet (macOS and Linux, for now), every
+call answers `not-available`, which is not a failure.
+
+```rust
+use pane_extension::alerts::{self, BundledSound, Notification, Repeat, Sound};
+
+alerts::notify(&Notification::new("Short alarm").on_click("ringing", None))?;
+let ringing = alerts::ring(&Sound::Bundled(BundledSound::Alarm), Repeat::UntilStopped, 100)?;
+// Kept in the component's state until Dismiss drops it.
+```
+
+```ts
+import { notify, ring } from "@pane-app/extension/alerts";
+
+notify({ title: "Short alarm", click: { command: "ringing" } });
+const ringing = ring("alarm", { repeat: "until-stopped" });
+// Kept in the module's state until Dismiss calls ringing.dispose().
+```
+
+Dropping the handle stops the sound, and so do a crash, a disable and the
+other ends of the code. The command that stops it is served by the
+component that rang, which keeps the handle. The alerts samples, in
+[Rust](sample-alerts/src/lib.rs),
+[JavaScript](sample-alerts-js/src/index.js) and
+[TypeScript](sample-alerts-ts/src/index.ts), are a short alarm with a
+"Ringing" screen whose Snooze and Dismiss stop the sound.
+
 ## Packaging and installing a local extension
 
 A package is a folder with a `pane.json` manifest at its root and the
@@ -3672,6 +3717,14 @@ smokes that drive the samples register or install them themselves.
   "Answer an error" answers an error; and "Crash" traps. Their packages
   are `packages/sample-schedule` and its `-js`/`-ts` copies. Held alike by
   `crates/pane-core/tests/schedules.rs`.
+- `sample-alerts`, `sample-alerts-js`, `sample-alerts-ts`: the alerts
+  sample in Rust, JavaScript and TypeScript, a short alarm
+  ([Getting the user's attention](#getting-the-users-attention)). "Set
+  Short Alarm" registers a timer for 5 seconds later; when it fires, the
+  sample rings the bundled alarm, posts a notification and shows the
+  launcher on "Ringing", whose Snooze and Dismiss stop the sound. Their
+  packages are `packages/sample-alerts` and its `-js`/`-ts` copies. Held
+  alike by `crates/pane-core/tests/alerts.rs`.
 - `sample-actions`, `sample-actions-js`, `sample-actions-ts`: the actions
   sample in Rust, JavaScript and TypeScript (#137). It has:
   - items with several actions in sections, a destructive one, shortcuts
@@ -3782,7 +3835,7 @@ smokes that drive the samples register or install them themselves.
   also posts system notifications as its settings say and writes what
   each was answered to its content, and its list is titled with the
   context it was launched with, so a notification's click is seen to
-  open it. It generates the alerts bindings itself from the SDK's WIT.
+  open it. It uses the SDK's `pane_extension::alerts`.
 - `fixtures/designed`: a test fixture whose designed view's trees and
   answers are JSON written by hand, not by `pane-extension`. It has an
   unknown node with and without a fallback, a newer minor and another

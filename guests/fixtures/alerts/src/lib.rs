@@ -40,14 +40,7 @@ use pane_extension::registrations::{self, Events};
 use pane_extension::root::WallTime;
 use pane_extension::{Command, List, commands, content, settings};
 
-mod bindings {
-    wit_bindgen::generate!({
-        path: "../../pane-extension/wit",
-        world: "alerts-user",
-    });
-}
-
-use bindings::pane::extension::alerts::{
+use pane_extension::alerts::{
     AlertsError, BundledSound, Notification, NotificationClick, Repeat, Ringing, Sound, notify,
     ring,
 };

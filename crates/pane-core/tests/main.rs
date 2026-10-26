@@ -10,6 +10,7 @@
 // here would replace them.
 #![allow(clippy::duplicate_mod)]
 
+mod alerts;
 mod aliases;
 mod application_adapters;
 mod application_cache;

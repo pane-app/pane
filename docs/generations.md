@@ -252,6 +252,9 @@ that made them.
   answer is discarded. Other kinds of background work (timers,
   subscriptions a guest keeps by itself) are not part of the extension API
   yet; when they are, they belong the same way.
+- An [attention launch](alerts.md#showing-the-launcher) still waiting to
+  be shown is dropped when its package's generation ends, as its
+  [ringing sound](alerts.md) is stopped.
 
 ## The state handoff
 
