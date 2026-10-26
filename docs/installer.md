@@ -94,7 +94,11 @@ it, with no administrator prompt (`PrivilegesRequired=lowest`):
   first install lets the user choose another folder; an upgrade keeps the
   folder of the install it upgrades.
 - A `Pane` shortcut goes to the user's Start menu, the same
-  `Pane.lnk` the script makes.
+  `Pane.lnk` the script makes. It carries Pane's AppUserModelID,
+  `PaneApp.Pane`, which Windows shows an extension's
+  [system notifications](platforms/windows.md#system-notifications-555)
+  under, and the setup registers the id for the user
+  (`HKCU\Software\Classes\AppUserModelId\PaneApp.Pane`).
 - An entry in Settings → Apps: Pane, by pane-app, with its version and
   Pane's icon, from which Pane is uninstalled. It is the current user's
   `Uninstall` key for the setup's AppId,
@@ -120,9 +124,9 @@ settings and Pane's own settings.
 
 Uninstalling (Settings → Apps, or `unins000.exe` in the install folder)
 closes a Pane running from the install, removes the program, the shortcut,
-the Apps entry and Pane's sign-in registration when it starts this
-install, and then asks whether to remove Pane's data too
-(`%LOCALAPPDATA%\Pane\data`, `cache` and `logs`). No is the default, and a
+the AppUserModelID's registration, the Apps entry and Pane's sign-in
+registration when it starts this install, and then asks whether to remove
+Pane's data too (`%LOCALAPPDATA%\Pane\data`, `cache` and `logs`). No is the default, and a
 silent uninstall's answer, so the data is kept for a later install.
 
 For a silent install, as an administrator's script would run it:
@@ -154,14 +158,21 @@ installs for one user:
   Start-menu entry the [applications](applications.md) extension finds.
 
 No desktop entry is made, because an installer that asks no questions
-puts nothing on the desktop. The script checks what it installed by
+puts nothing on the desktop. The script's shortcut carries no
+AppUserModelID; Pane registers its id for the user itself when it starts
+(`HKCU\Software\Classes\AppUserModelId\PaneApp.Pane`, with the icon it
+writes to its cache folder), as a Pane run from the unpacked zip without
+the script does, so extensions'
+[system notifications](platforms/windows.md#system-notifications-555)
+show either way. The script checks what it installed by
 running `pane --version` (its exit code: Pane is a window-subsystem
 program, so the version text is read from a redirected stream).
 
 Pane keeps its own data in `%LOCALAPPDATA%\Pane\data` and its caches in
 `%LOCALAPPDATA%\Pane\cache`, inside the same per-user folder the program
 is installed to. To uninstall, remove `pane.exe` and the shortcut, and
-that data folder if you want it gone too.
+that data folder if you want it gone too; the AppUserModelID's key above
+can go as well.
 
 The declared baseline is Windows Server 2025 (x86_64), the system
 [CI runs](platforms/windows.md#tested-combination). The program needs

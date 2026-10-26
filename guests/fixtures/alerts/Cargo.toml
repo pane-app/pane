@@ -1,0 +1,16 @@
+[package]
+name = "alerts-fixture"
+version = "0.1.0"
+edition.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+pane-extension.workspace = true
+# The alerts interface's bindings, generated here from the SDK's copy of the
+# WIT until `pane_extension::alerts` has them (#558); the same version the
+# SDK generates its own with, so the tree gains nothing.
+wit-bindgen = { version = "=0.62.0", default-features = false, features = ["macros"] }

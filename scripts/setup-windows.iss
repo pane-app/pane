@@ -93,8 +93,17 @@ Type: filesandordirs; Name: "{app}\update"
 
 [Icons]
 ; The same shortcut install.ps1 makes, so an install made by the script
-; keeps one Pane entry in the Start menu.
-Name: "{userprograms}\Pane"; Filename: "{app}\pane.exe"; WorkingDir: "{app}"; Comment: "Pane, a desktop launcher"
+; keeps one Pane entry in the Start menu. It carries Pane's AppUserModelID,
+; the one Pane sets on its own process (pane-core's system_notifications,
+; ADR 0053): Windows shows an extension's notifications under it, and
+; counts Pane's windows as the shortcut's.
+Name: "{userprograms}\Pane"; Filename: "{app}\pane.exe"; WorkingDir: "{app}"; Comment: "Pane, a desktop launcher"; AppUserModelID: "PaneApp.Pane"
+
+[Registry]
+; Pane's AppUserModelID registered for the user, as Pane registers it itself
+; at each start (adding the icon it writes to its cache folder), so that its
+; uninstall removes the registration with the program.
+Root: HKCU; Subkey: "Software\Classes\AppUserModelId\PaneApp.Pane"; ValueType: string; ValueName: "DisplayName"; ValueData: "Pane"; Flags: uninsdeletekey
 
 [Run]
 ; "Start Pane when I sign in" is Pane's own launch-at-login setting: Pane

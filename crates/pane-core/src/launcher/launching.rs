@@ -483,7 +483,7 @@ impl Launcher {
 
 /// Checks the context a command passes another: JSON text within the
 /// limit an operation's input has.
-fn check_context(context: &str) -> Result<(), String> {
+pub(super) fn check_context(context: &str) -> Result<(), String> {
     if context.len() > MAX_OPERATION_JSON {
         return Err(format!(
             "the context is {} bytes; at most {MAX_OPERATION_JSON} are passed",

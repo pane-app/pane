@@ -198,6 +198,19 @@ impl HostFunctions for Hosted {
             })
     }
 
+    fn notify(
+        &self,
+        caller: &Caller,
+        notification: crate::system_notifications::GivenNotification,
+    ) -> Result<(), crate::system_notifications::NotifyError> {
+        match self.0.upgrade() {
+            Some(launcher) => launcher.notify(caller, notification),
+            None => Err(crate::system_notifications::NotifyError::NotAvailable(
+                "Pane is stopping".into(),
+            )),
+        }
+    }
+
     fn confirm(&self, caller: &Caller, confirmation: GivenConfirmation) -> Asking {
         match self.0.upgrade() {
             Some(launcher) => launcher.ask_to_confirm(caller, confirmation),

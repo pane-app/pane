@@ -32,12 +32,12 @@ impl GuestState {
 impl alerts_host::Host for GuestState {
     fn notify(
         &mut self,
-        _notification: alerts_host::Notification,
+        notification: alerts_host::Notification,
     ) -> Result<(), alerts_host::AlertsError> {
         if let Some(stopped) = self.alerts_stopped() {
             return Err(stopped);
         }
-        Err(not_available("A system notification"))
+        self.post_notification(notification)
     }
 
     fn ring(

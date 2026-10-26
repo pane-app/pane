@@ -23,6 +23,7 @@ $ErrorActionPreference = "Stop"
 $entry = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\{0737054E-4FDB-4FAD-8AD1-20C980B0C16E}_is1"
 $run = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run"
 $link = Join-Path $env:APPDATA "Microsoft\Windows\Start Menu\Programs\Pane.lnk"
+$appId = "HKCU:\Software\Classes\AppUserModelId\PaneApp.Pane"
 
 $scratch = Join-Path ([System.IO.Path]::GetTempPath()) "pane-setup-check"
 Remove-Item -Recurse -Force $scratch -ErrorAction SilentlyContinue
@@ -106,6 +107,12 @@ Write-Output "pane.exe --version: $reported"
 if (-not (Test-Path $link)) { Fail "the setup made no $link" }
 $target = (New-Object -ComObject WScript.Shell).CreateShortcut($link).TargetPath
 if ($target -ne $program) { Fail "the shortcut starts '$target', not $program" }
+# It carries Pane's AppUserModelID, which Windows shows an extension's
+# notifications under (#555), and the id is registered for the user.
+$folder = (New-Object -ComObject Shell.Application).NameSpace((Split-Path $link))
+$aumid = $folder.ParseName((Split-Path $link -Leaf)).ExtendedProperty("System.AppUserModel.ID")
+if ($aumid -ne "PaneApp.Pane") { Fail "the shortcut's AppUserModelID is '$aumid', not PaneApp.Pane" }
+if (-not (Test-Path $appId)) { Fail "the setup did not register Pane's AppUserModelID ($appId)" }
 
 # The Apps entry: Pane, by pane-app, this version, Pane's icon, and the
 # folder pane-core's updater compares with its own (InstallLocation).
@@ -167,9 +174,10 @@ Until { -not (Test-Path $entry) } 120 "the uninstaller to remove the Apps entry"
 Until { -not (Test-Path $program) } 60 "the uninstaller to remove pane.exe"
 if ((Panes).Count -gt 0) { Fail "a Pane still runs from the removed install" }
 if (Test-Path $link) { Fail "the uninstaller left $link" }
+if (Test-Path $appId) { Fail "the uninstaller left Pane's AppUserModelID registered ($appId)" }
 if ($null -ne (SignIn)) { Fail "the uninstaller left Pane's sign-in registration: $(SignIn)" }
 if (-not (Test-Path $marker)) { Fail "a silent uninstall removed Pane's data" }
 Remove-Item $marker
 if ($madeKept) { Remove-Item -Recurse -Force (Join-Path $env:LOCALAPPDATA "Pane") -ErrorAction SilentlyContinue }
-Write-Output "The uninstaller removed Pane, its shortcut, its Apps entry and its sign-in registration, and kept its data."
+Write-Output "The uninstaller removed Pane, its shortcut, its AppUserModelID, its Apps entry and its sign-in registration, and kept its data."
 Remove-Item -Recurse -Force $scratch -ErrorAction SilentlyContinue

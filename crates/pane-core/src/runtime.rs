@@ -57,6 +57,7 @@ mod designed;
 mod faults;
 mod host_functions;
 mod memory;
+mod notification_functions;
 mod previous;
 mod run_functions;
 mod supervisor;

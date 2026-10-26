@@ -270,6 +270,7 @@ fn guests() -> Result<(), String> {
                 "refusing_view",
                 "designed_fixture",
                 "tree_fixture",
+                "alerts_fixture",
                 "git_greeter",
             ],
         ),

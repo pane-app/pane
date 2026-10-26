@@ -96,6 +96,7 @@ mod switch_windows;
 mod system;
 mod system_commands;
 mod system_icon_adapters;
+mod system_notifications;
 mod typed_folders;
 mod typed_queries;
 mod uninstall;

@@ -427,6 +427,45 @@ pub(crate) fn make_click_through(window: &Window) {
 #[cfg(not(any(target_os = "windows", target_os = "macos")))]
 pub(crate) fn make_click_through(_window: &Window) {}
 
+/// Pane's icon as its system notifications show it (#555): the 256-pixel
+/// image of the icon set the Linux packages install.
+#[cfg(target_os = "windows")]
+const NOTIFICATION_ICON: &[u8] = include_bytes!("../assets/app/hicolor/256x256/apps/pane.png");
+
+/// Makes Pane's notifications showable on Windows (ADR 0053, #555): sets
+/// Pane's AppUserModelID on this process, then registers it for the user
+/// with Pane's name and icon (the icon written to the cache folder, where
+/// Windows reads it), so a Pane with no Start menu shortcut carrying the
+/// id — a portable one, one `install.ps1` installed, a development build
+/// — posts them as the setup's install does. Called before any window is
+/// made. A failure is logged, and an extension's notification then says
+/// why it is not available.
+#[cfg(target_os = "windows")]
+pub fn prepare_notifications() {
+    use pane_core::system_notifications::{adopt_app_id, register_app_id};
+    if let Err(why) = adopt_app_id() {
+        pane_core::diagnostic!("{why}");
+    }
+    let icon = cache_dir().and_then(|dir| {
+        let icon = dir.join("notification-icon.png");
+        if std::fs::read(&icon).ok().as_deref() == Some(NOTIFICATION_ICON) {
+            return Some(icon);
+        }
+        let written =
+            std::fs::create_dir_all(&dir).and_then(|()| std::fs::write(&icon, NOTIFICATION_ICON));
+        match written {
+            Ok(()) => Some(icon),
+            Err(error) => {
+                pane_core::diagnostic!("Pane's notification icon could not be written: {error}");
+                None
+            }
+        }
+    });
+    if let Err(why) = register_app_id(icon.as_deref()) {
+        pane_core::diagnostic!("{why}");
+    }
+}
+
 /// Where Pane keeps disposable cached data, such as compiled extension code:
 /// `%LOCALAPPDATA%\Pane\cache` on Windows, `~/Library/Caches/Pane` on
 /// macOS and `$XDG_CACHE_HOME/pane` (default `~/.cache/pane`) elsewhere.

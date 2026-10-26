@@ -62,6 +62,7 @@ pub mod switch_windows;
 pub mod system;
 pub mod system_commands;
 pub mod system_icons;
+pub mod system_notifications;
 pub mod templates;
 mod threads;
 pub mod tokens;
