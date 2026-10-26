@@ -321,7 +321,7 @@ A sound an extension starts and owns as an owned registration: one Pane ships (a
 _Avoid_: Alarm (the clock extension's), alert sound, beep, notification sound (the system's, which a system notification does not play)
 
 **Attention launch**:
-A user-initiated launch of a view command asked for from a call no window was shown for (a timer's firing, a schedule, a service): Pane shows the launcher on it and gives it the keyboard focus, waiting while the user is typing (up to 10 seconds), while an Alert is pending and while Game mode holds the hotkeys, and queuing one behind another so none takes another's screen. Its launch record is any command's launch: user-initiated, from a command, with the context passed. It is Raycast's `launchCommand` with the user-initiated type, called from a background command (ADR 0053).
+A user-initiated launch of one of the calling package's own view commands, asked for from a call no window was shown for (a timer's firing, a schedule, a service): Pane shows the launcher on it and gives it the keyboard focus, waiting while the user is typing (up to 10 seconds), while an Alert is pending and while Game mode holds the hotkeys, and queuing one behind another so none takes another's screen. Its launch record is any command's launch: user-initiated, from a command, with the context passed. It is Raycast's `launchCommand` with the user-initiated type, called from a background command (ADR 0053).
 _Avoid_: Background launch (shows no window), popup, focus steal
 
 **Command search**:
