@@ -24,6 +24,11 @@ Some parts are X11-only or not verified yet:
   run locally.
 - No real input method (IBus, Fcitx) and no screen reader (Orca/AT-SPI) was
   run.
+- An extension's system notification and ringing sound (#559) were
+  checked by CI against a stand-in notification service and ALSA's null
+  device, not yet seen and heard on a desktop; an attention launch waits
+  for typing on X11 only
+  ([alerts](#alerts-system-notifications-and-the-ringing-sound-559)).
 - The Settings flow (#168), the installer and update phases (#53, #56) and
   the resource measurements are waiting for their first Linux run.
 
@@ -1409,6 +1414,81 @@ is collected and the user confirms ceilings.
 | --- | --- |
 | The workload, sampler, targets file and CI wiring | [the measurement record](../research/resource-measurements.md) |
 | This combination's numbers | pending the next CI Linux run (`measure/summary.json` in the artifact) |
+
+### Alerts: system notifications and the ringing sound (#559)
+
+An extension's `notify` and `ring` (`wit/alerts.wit`,
+[ADR 0053](../adr/0053-extensions-get-the-users-attention-through-a-notification-a-ringing-sound-and-the-launcher.md))
+on Linux, on X11 and Wayland alike:
+
+- **The notification** goes to the freedesktop notification service
+  (`org.freedesktop.Notifications`) on the D-Bus session bus, which GNOME,
+  KDE Plasma, Xfce, Cinnamon, MATE and the standalone daemons (dunst,
+  mako) serve, through zbus (already in the tree). It is Pane's: the app
+  name is Pane, the `desktop-entry` hint names `pane.desktop` (the
+  AppImage install's), so the desktop shows Pane's icon and its
+  notification settings apply. Its summary is the title, its body the
+  message with the extension's title on its last line, escaped when the
+  service reads markup, and the `suppress-sound` hint keeps it silent. No
+  session bus, or no service on it, answers `not-available` saying so;
+  a post that fails drops the connection, so the next one reaches a
+  service that restarted. The click is the service's `default` action
+  (`ActionInvoked`), heard on a thread of the connection's: it launches
+  the extension's command, or shows the launcher. The last 32
+  notifications' clicks are kept, as on Windows.
+- **The ringing sound** plays through ALSA's `default` device, which
+  PipeWire and PulseAudio route to themselves and a system with neither
+  plays on the card through ALSA's own mixing, so no sound server is
+  assumed. `libasound.so.2` is loaded when the first sound rings, not
+  linked: without it, and with no device that opens, `ring` answers
+  `not-available`; Pane itself starts either way. The device is opened
+  without blocking, so one another program holds answers `failed` at once.
+  A `file` sound must be a WAV file (Pane decodes MP3 on Windows only).
+  The `system` sound is the freedesktop sound theme's
+  `message-new-instant` (or `message`, or `bell`), found as the sound
+  theme specification says, when it is a WAV file. Most distributions
+  ship that theme as Ogg Vorbis, which Pane does not decode: it then
+  answers `not-available` saying so.
+- **An attention launch** waits for the user to stop typing on X11, from
+  the MIT-SCREEN-SAVER extension's idle time (`crates/pane/src/input_idle.rs`).
+  Wayland offers an ordinary client no such measure, so there it does
+  not wait.
+
+What CI checks, on its `ubuntu-24.04` runner:
+
+- The tests, opted in with `PANE_TEST_REAL_ALERTS` (set by
+  `.github/actions/setup` on Linux and macOS):
+  `system_notifications::freedesktop::tests` starts a D-Bus bus of its
+  own (`dbus-daemon`) and a stand-in notification service on it, and
+  checks that a post arrives with its title, body, actions and silent
+  hint, that only the default action of Pane's own notification clicks
+  it, that markup is escaped for a service that reads it, and that no
+  service and no bus answer `not-available`.
+  `ringing::alsa::tests` plays into ALSA's `null` device and closes the
+  stream, and records what `default` answers (the runner has no sound
+  card). `ringing::tests::the_system_output_plays_a_ringing_and_dropping_it_stops_it`
+  rings the alarm until stopped through the real ALSA output (its `null`
+  device) and checks that dropping the handle closes the stream and
+  nothing more is written. The stand-in sink's tests (`ringing::`,
+  pane-core's integration tests) check every way the extension's code
+  ends stops the sound, on every system.
+- The smoke's alerts phase (`scripts/smoke-linux.sh`, frames 210 to 213)
+  installs the alerts fixture as a package whose activation's timer
+  posts each second. A stand-in service
+  (`scripts/notification_service.py`, on the smoke's own session bus)
+  records each post: it must arrive titled "Timer done", with the
+  extension's title as its body, Pane's desktop entry and the silent
+  hint, and the fixture must be told it was posted. ALSA's `default` is
+  made a file plugin over its null device for that Pane
+  (`ALSA_CONFIG_PATH`), so the alarm's sound is written to a file: it
+  grows while the alarm rings and stops growing once the fixture drops
+  its handle. With the launcher hidden, the service's click on the last
+  notification shows it again.
+
+Not checked by CI, and so by hand on a Linux desktop (the steps are on
+[#559](https://github.com/pane-app/pane/issues/559)): that a person sees
+the notification and hears the sound on a real desktop's sound server,
+and that an attention launch waits while they type.
 
 ## Text input and accessibility findings
 

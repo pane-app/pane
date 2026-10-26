@@ -78,3 +78,11 @@ test-group = "real-clipboard"
 filter = "test(/^(hotkey_toggle|taskbar_presence|settings_titlebar)::/)"
 test-group = "real-clipboard"
 success-output = "immediate"
+
+# The real alerts adapters' tests (#559, with PANE_TEST_REAL_ALERTS=1) print
+# what this system answered them (an output device or none, what macOS's
+# notification center answers a bundle that is not signed) when they pass
+# as well, so a run's log carries the record.
+[[profile.default.overrides]]
+filter = "test(/(ringing|system_notifications)::(macos|alsa|freedesktop)::tests::|the_system_output_plays_a_ringing/)"
+success-output = "immediate"

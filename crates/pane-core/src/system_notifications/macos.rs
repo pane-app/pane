@@ -263,7 +263,7 @@ fn ask(center: &UNUserNotificationCenter) -> Result<(), NotifyError> {
         Ok((true, _)) => Ok(()),
         Ok((false, None)) => Err(turned_off()),
         Ok((false, Some(why))) => Err(NotifyError::NotAvailable(format!(
-            "macOS does not let Pane post notifications: {why}"
+            "Pane cannot post notifications: {why}"
         ))),
         Err(_) => Err(NotifyError::NotAvailable(
             "macOS is asking whether Pane may post notifications; once that is allowed, \
@@ -284,10 +284,20 @@ fn described(error: *mut NSError) -> Option<String> {
     // SAFETY: the center answers null or a valid error, alive for the
     // call.
     let error = unsafe { error.as_ref() }?;
+    let domain = error.domain().to_string();
+    // `UNErrorCodeNotificationsNotAllowed`, whose own description is only
+    // "The operation couldn't be completed": what CI's macOS runner
+    // answered a bundle that is not signed (#559).
+    if domain == "UNErrorDomain" && error.code() == 1 {
+        return Some(
+            "macOS does not allow notifications from this app (UNErrorDomain 1, notifications \
+             not allowed); Pane is not signed, which macOS may require"
+                .into(),
+        );
+    }
     Some(format!(
-        "{} ({} {})",
+        "{} ({domain} {})",
         error.localizedDescription(),
-        error.domain(),
         error.code()
     ))
 }
