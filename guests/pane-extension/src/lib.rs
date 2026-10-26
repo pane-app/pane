@@ -29,8 +29,11 @@
 //! requests with [`http`], keep clipboard history with
 //! [`clipboard_history`], and lock, log out, restart, shut down, sleep,
 //! hibernate, turn off the displays of or start the screen saver of the
-//! computer with [`system_commands`]. It registers at run time what it
-//! owns and no declaration can name ([`registrations`], ADR 0041): dynamic
+//! computer with [`system_commands`]. It gets the user's attention from a
+//! call no window was shown for, such as a timer's firing, with a system
+//! notification and a ringing sound it owns ([`alerts`], ADR 0053). It
+//! registers at run time what it owns and no declaration can name
+//! ([`registrations`], ADR 0041): dynamic
 //! root items, timers, folder watchers and run-time capabilities its
 //! package provides while it holds a provision for them — each a handle
 //! whose drop undoes it, undone too when the instance that made it goes or
@@ -79,6 +82,7 @@ pub use view::{
 };
 
 pub mod actions;
+pub mod alerts;
 pub mod feedback;
 pub mod icon;
 mod list;

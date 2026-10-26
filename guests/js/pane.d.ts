@@ -24,6 +24,7 @@
 /// <reference path="./clipboard.d.ts" />
 /// <reference path="./run.d.ts" />
 /// <reference path="./windows.d.ts" />
+/// <reference path="./alerts-host.d.ts" />
 
 import type { LaunchRecord } from "pane:extension/commands@0.2.0";
 import type { Outcome, Rendered, UiEvent } from "./view.js";

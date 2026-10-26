@@ -106,6 +106,18 @@ interface commands {
   /// the target's (or a dropdown's value not among its options), or the
   /// context is not JSON. A refusal is an answer, never a failure of the
   /// caller.
+  ///
+  /// A user-initiated launch from a call no window was shown for (a
+  /// timer's firing, a schedule, a service) is an attention launch
+  /// (ADR 0053): it may name only a view command of the caller's own
+  /// package, and is refused for another package's command, a no-view
+  /// command and a command that waits. It answers once the launch is
+  /// queued: Pane shows the launcher on the command, with the keyboard
+  /// focus, once the user has stopped typing (1 second still, at most 10
+  /// seconds), no Alert is pending and Game mode does not hold the
+  /// hotkeys, one at a time in the order asked, at most one waiting per
+  /// package (a newer one replaces it). A waiting launch is dropped when
+  /// its package is disabled, paused, reloaded, updated or uninstalled.
   launch: func(target: command-ref, launch-type: launch-type, arguments: list<argument-value>, context: option<string>) -> result<_, string>;
 
   /// Replaces the subtitle the calling command's row shows in root search

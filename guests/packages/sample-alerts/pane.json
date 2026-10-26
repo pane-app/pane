@@ -1,0 +1,21 @@
+{
+  "manifestVersion": 1,
+  "title": "Rust alerts sample",
+  "version": "0.1.0",
+  "apiVersion": "0.2",
+  "commands": [
+    {
+      "id": "set",
+      "title": "Set Short Alarm",
+      "subtitle": "Rings in 5 seconds: a notification, a ringing sound and the Ringing screen",
+      "component": "sample_alerts.wasm",
+      "mode": "no-view"
+    },
+    {
+      "id": "ringing",
+      "title": "Ringing",
+      "subtitle": "Snooze or dismiss the alarm that rings",
+      "component": "sample_alerts.wasm"
+    }
+  ]
+}

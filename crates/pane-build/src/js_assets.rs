@@ -20,7 +20,7 @@ use std::path::Path;
 /// needs of it, and the adapter and `console` the bundled entry imports.
 /// Staged at `<work>/js` beside the package, where its `file:../js`
 /// devDependency resolves.
-const SDK: [(&str, &str); 50] = [
+const SDK: [(&str, &str); 53] = [
     (
         "LICENSE-APACHE",
         include_str!("../../../guests/js/LICENSE-APACHE"),
@@ -31,6 +31,15 @@ const SDK: [(&str, &str); 50] = [
     ),
     ("README.md", include_str!("../../../guests/js/README.md")),
     ("adapt.js", include_str!("../../../guests/js/adapt.js")),
+    (
+        "alerts-host.d.ts",
+        include_str!("../../../guests/js/alerts-host.d.ts"),
+    ),
+    (
+        "alerts.d.ts",
+        include_str!("../../../guests/js/alerts.d.ts"),
+    ),
+    ("alerts.js", include_str!("../../../guests/js/alerts.js")),
     (
         "applications.d.ts",
         include_str!("../../../guests/js/applications.d.ts"),
@@ -170,7 +179,7 @@ const SDK: [(&str, &str); 50] = [
 ];
 
 /// Pane's WIT, copied into the world's `deps/pane-extension/`.
-const PANE_WIT: [(&str, &str); 21] = [
+const PANE_WIT: [(&str, &str); 22] = [
     ("extension.wit", include_str!("../../../wit/extension.wit")),
     ("commands.wit", include_str!("../../../wit/commands.wit")),
     ("feedback.wit", include_str!("../../../wit/feedback.wit")),
@@ -216,6 +225,7 @@ const PANE_WIT: [(&str, &str); 21] = [
         "typed-folder.wit",
         include_str!("../../../wit/typed-folder.wit"),
     ),
+    ("alerts.wit", include_str!("../../../wit/alerts.wit")),
 ];
 
 /// WASI's WIT (`wit/deps`: clocks, and `wasi:http` with the packages it
