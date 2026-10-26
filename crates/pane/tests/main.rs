@@ -13,6 +13,7 @@ mod aliases;
 mod announcements;
 mod application_icons;
 mod arguments;
+mod attention_launch;
 mod backspace_sections;
 mod chords;
 mod command_search;

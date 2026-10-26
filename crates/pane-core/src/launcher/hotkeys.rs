@@ -294,8 +294,9 @@ pub(super) struct Game {
     /// each change of the settings.
     front: Option<Foreground>,
     /// Whether a game is in front while game mode is on, so every hotkey
-    /// is released.
-    paused: bool,
+    /// is released. An attention launch waits while they are (see
+    /// `attention`).
+    pub(super) paused: bool,
     /// The Open Pane binding released while a game is in front, to
     /// register again when it leaves.
     held: Option<Shortcut>,
