@@ -81,6 +81,7 @@ mod registrations;
 mod reload;
 mod repositories;
 mod result_actions;
+mod ringing;
 mod root_providers;
 mod run;
 mod runtime_cache;

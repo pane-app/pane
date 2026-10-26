@@ -19,6 +19,8 @@ Every package Pane's release is made of (`cargo xtask package-windows`, `package
 
 No JavaScript from npm ships in the program: the JS/TS SDK it embeds is Pane's own (`guests/js`).
 
+The three sounds an extension can ring by name (`alarm`, `bell` and `chime`, [ADR 0053](adr/0053-extensions-get-the-users-attention-through-a-notification-a-ringing-sound-and-the-launcher.md)) are no recordings: Pane's own code makes them when they are first rung (`crates/pane-core/src/ringing/sounds.rs`), so they are Pane's, under its licence, and add nothing to the notices. A recorded sound bundled later, even under CC0, is listed in `notices.rs` like a font.
+
 ## Where the source is
 
 A release is built from a `v<version>` tag of this repository, and the source of that version is the tag, `https://github.com/pane-app/pane/tree/v<version>`, and the Source code archives on its release page, `https://github.com/pane-app/pane/releases/tag/v<version>`. The package's README gives those links for its own version. The third-party crates' sources are the versions the tag's `Cargo.lock` pins, from crates.io and the git revisions it names. The release itself carries them too: its `pane-<version>-source.tar.gz` asset (written by the release workflow, `scripts/release-source.sh`) holds the tag's tree and, under `vendor/`, every crate the `Cargo.lock` pins, and builds offline with `cargo build --release --offline --config vendor/config.toml -p pane`. Keep each release's tag and page up for as long as its packages are offered.

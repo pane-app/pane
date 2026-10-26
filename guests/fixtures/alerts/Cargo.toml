@@ -1,0 +1,16 @@
+[package]
+name = "alerts-fixture"
+version = "0.1.0"
+edition.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+pane-extension.workspace = true
+# The alerts interface's guest bindings, generated from the SDK's copy of
+# the WIT until the SDK carries them (#558).
+wit-bindgen = { version = "=0.62.0", default-features = false, features = ["macros"] }
+wasip3 = { version = "=0.9.0", default-features = false }
