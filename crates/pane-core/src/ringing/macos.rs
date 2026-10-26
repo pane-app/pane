@@ -275,7 +275,7 @@ impl Sink for Stream {
                 // More than the room was never asked for.
                 break;
             };
-            let bytes = chunk.len() * size_of::<f32>();
+            let bytes = size_of_val(chunk);
             // SAFETY: a free buffer of the queue's, of BUFFER_FRAMES frames'
             // capacity, which `chunk` fits; it is the queue's again once
             // enqueued.
