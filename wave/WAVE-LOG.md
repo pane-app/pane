@@ -1106,3 +1106,95 @@
 - Follow-ups: #550 titlebar double click still flaky on CI runners, #552 macOS --install preview sometimes lost (smoke flake; not the guard).
 - v0.1.4 from bdfaa1d4: main CI 40260000639 green, release run 40264125149, 14 assets, published latest.
 - Open: #104, #68 (need a real Mac/Linux), #550, #552.
+
+## 2026-10-26 — wave 10 starts: alerts spec #553
+- Orchestrator chat "Pane Wave 10 Orchestrator" took over from handoff 10. main = bdfaa1d4.
+- Plan: #554 (ADR 0053, glossary, wit/alerts.wit) first, merged; then #555, #556, #557 in parallel; #558 after them (its issue says blocked by those three); #559 waits for the user.
+- #554 worker started: worktree alerts-adr-wt, branch alerts-adr, target targets/alerts-adr.
+
+## 2026-10-26 — wave 10: alerts ADR (#554), branch alerts-adr
+- ADR 0053 (proposed): notify (silent toast, click launches own command), ring -> owned `ringing` resource (alarm/bell/chime, system, WAV/MP3 file; 10 min cap), show-launcher = existing `launch` user-initiated (Raycast launchCommand) + "attention launch" rules for #557.
+- wit/alerts.wit + extension-with-alerts host world; additive, API stays 0.2.0, WIT guard passes vs v0.1.4. pane-core stubs answer not-available (runtime/alerts_functions.rs).
+- alerts.wit NOT added to pane-build js_assets / xtask PANE_WIT (would make every prebuilt JS sample stale); left to #558.
+- Glossary: System notification, Ringing sound, Attention launch. `cargo xtask ci-lints` green locally.
+
+## 2026-10-26 — wave 10: #554 merged, wave 2 started
+- #554 merged as PR #560 (a895fab). CI (branch) 40340377715 green. ADR 0053 proposed; orchestrator added the rule that an attention launch opens only the caller's own commands (as #557 asks). Decisions posted on #553.
+- Wave 2 started from a895fab: #555 alerts-notify-wt, #556 alerts-ring-wt, #557 alerts-launch-wt, targets under targets/<lane>.
+
+## 2026-10-26 — wave 10: #557 attention launch (branch alerts-launch)
+- pane-core: `LaunchRequest.windowed` (from `CallFor`); user-initiated + no window = attention launch: own package's view commands only (refusal otherwise, also no-view/waiting); queued in `launcher/attention.rs`, shown by `Launcher::attend(input_idle)` (1 s still / 10 s cap, Alert pending, game mode paused, one shown at a time, one waiting per package, dropped on generation end); `take_focus_request`.
+- pane: window polls `attend` every 100 ms while one waits (`input_idle.rs`, GetLastInputInfo; None elsewhere), focuses query on show.
+- wit/commands.wit comment NOT changed: any WIT edit stales every prebuilt JS/TS sample digest (PANE_WIT); handed to #558 (comment posted there), ADR 0053 consequences edited.
+- Local: sccache server died mid-build (10054); rebuilt with CARGO_BUILD_RUSTC_WRAPPER="". attention_launch:: (9 core + 1 window), no_view::, arguments::, feedback:: green once; clippy -p pane-core -p pane clean.
+
+## 2026-10-26 — wave 10: #556 ringing sound (branch alerts-ring)
+- pane-core `ringing` (engine: registry, limits 2/8, own thread per ringing, 10-min cap, stand-in output) + `ringing/windows.rs` (WASAPI shared + AUTOCONVERTPCM, MF source reader for MP3, notification sound from HKCU AppEvents) + `runtime/ringing_functions.rs`. alerts_functions.rs touched only in `ring` (now async) and the handle drop; bindgen gains `alerts.ringing` in `with:` and `alerts.ring: async`.
+- Bundled alarm/bell/chime are synthesized by code (no WAV files, no licence); ADR 0053 small edit says so, and that Pane reads plain WAV itself, MF the rest.
+- New guest fixture `guests/fixtures/alerts` (own wit_bindgen of alerts-user from the SDK's WIT). Locally the worktree's target/guests junction was replaced by a real folder holding only alerts_fixture.wasm + sample_settings.wasm.
+- Local: ringing::tests 15 + tests/ringing.rs 18 green; fmt (root, guests), clippy -p pane-core clean. First CI lints red on Linux/macOS: OpenError::Failed dead off Windows (fixed with cfg_attr).
+
+## 2026-10-26 — wave 10: #555 system notification on Windows (branch alerts-notify)
+- `notify` posts a WinRT toast (silent, attribution = package title, cut 200/1000, 10/min/package -> limit); click = launch_from_guest user-initiated (so #557's rules apply), no click -> window_wanted. Notifier trait + Launcher::with_notifier; stand-in in tests.
+- AUMID PaneApp.Pane (.Development in debug): set on process, registered under HKCU\Software\Classes\AppUserModelId at every start (all builds), setup shortcut carries it + setup [Registry] uninsdeletekey. check-windows-setup.ps1 checks both.
+- Finding: ToastNotifier.Setting can't tell unknown ids (this desktop has ToastEnabled=0, answers DisabledForUser for any id), so Pane checks its own registry key first.
+- New fixture guests/fixtures/alerts (own wit-bindgen of alerts-user until #558). Worktree target/guests is a real copy (not junction) holding alerts_fixture.wasm.
+- Real-toast hand check NOT done (orchestrator's, needs notifications on). Merge note: #556 must fix the "until #555/#556" comments in alerts_functions.rs / runtime.rs.
+
+## 2026-10-26 — wave 10: #557 merged
+- #557 attention launch merged as PR #561 (becbc15). CI (branch) 40356561337 green. Queue + rules in pane-core launcher/attention.rs, GetLastInputInfo idle in pane/input_idle.rs, focus on show. WIT comment on `launch` moved to #558 (posted there) to avoid a double prebuilt rebuild. macOS/Linux show at once (no idle reader yet, #559).
+- Main CI 40346611129 (a895fab, #554) failed: Windows shard 2, all real-foreground tests (hotkey_toggle, hotkey_adapters recording, real_input x3) from one point on; looks like a stuck runner desktop. Rerunning failed jobs.
+- alerts-launch-wt folder could not be deleted (permission denied, probably still open in the worker chat); branch and target removed.
+- Main CI 40346611129 (a895fab) rerun of the failed job: green, so a runner flake. The rerun cancelled main run 40360720290 (becbc15) through the shared concurrency group; reran it. Lesson: rerunning an older main run cancels the newer one.
+- CI (branch) 40358537178 green at 81bdf15 (first run 40356924590 lints red, superseded). PR text: wave9/msg/alerts-ring-pr.md. Real-speaker check still open (orchestrator, user's go).
+
+## 2026-10-27 — wave 10: #556 merged
+- #556 ringing sound merged as PR #562 (4322ba9) after update-branch. CI (branch) 40364724143 green (macOS lints cancelled in queue, rerun green); ci-fast test(/ringing/) 40364759762 green on 3 OS. Bundled sounds are synthesized tones (no audio files).
+- #555 (alerts-notify, be43710) also added guests/fixtures/alerts: sent the worker back to merge main and combine the two fixtures into one.
+- Leftover folders alerts-launch-wt / alerts-ring-wt: locked (worker chats), delete at wave end.
+
+## 2026-10-27 — wave 10: alerts-notify merged with main (#556, #557)
+- Merge 314d9c1: one guests/fixtures/alerts serving ringing (#556) + notify (#555, via activate). Notification click now `windowed: true` (user's own action, not an attention launch); ADR note. Stale "not available until #555/#556" comments fixed (alerts_functions.rs, runtime.rs, wit/alerts.wit + SDK copy, ADR); dead `not_available` removed.
+- CI (branch) 40373389792 green; ci-fast 40373467128 (system_notifications|ringing) green, Windows 47/47.
+
+## 2026-10-27 — wave 10: #555 merged, wave 2 done, wave 3 started
+- #555 notification merged as PR #563 (b6463c1) after the worker merged main and combined the two guests/fixtures/alerts into one. CI (branch) 40373389792 green; ci-fast 40373467128 (system_notifications|ringing) green on 3 OS. A notification click is a windowed launch (opens at once). This desktop has toasts off for all apps (ToastEnabled=0): a hand check needs them on.
+- Main CI: each push to main cancels the in-progress ci.yml run, so 40360720290 and 40371409371 were cancelled; 40376895885 (b6463c1) covers #554-#557.
+- #559 relabelled ready-for-agent with the user's go (CI checks what it can). Wave 3 started from b6463c1: #558 alerts-sdk-wt, #559 alerts-unix-wt.
+- Full main CI 40376895885 (b6463c1, #554-#557) green.
+
+## 2026-10-27 — wave 10: #558 alerts SDK (branch alerts-sdk, 089c3ff)
+- pane_extension::alerts, @pane-app/extension/alerts (+ alerts-host.d.ts, "pane": { "alerts": true }), alerts.wit in js_assets/xtask PANE_WIT; all 61 prebuilt JS/TS samples rebuilt locally (node here); #557's launch comment added to wit/commands.wit + SDK copy.
+- sample-alerts (Rust/JS/TS) + packages; crates/pane-core/tests/alerts.rs (3 tests x 3 languages, ManualClock, stand-in notifier + sound); docs/alerts.md; fixture switched to the SDK.
+- CI (branch) 40385416494 green; ci-fast alerts:: 40385491286 green on all 3 OS.
+- Windows practice: `cargo xtask guests` copies from guests/target (and mixed-p2/echo target) ignoring CARGO_TARGET_DIR: junction those to your own target dir. js-guests rewrite hit os error 1224 (file mapped, likely the Search indexer on Desktop): deleting guests/prebuilt/*.wasm{,.map} before `cargo xtask js-guests` fixed it.
+- Possible bug (not fixed): JS registrations Handle.dispose() — raw WIT resources in componentize-qjs only have drop()/Symbol.dispose; sample-registrations-js calls provision.dispose() (JS sign-out untested).
+
+## 2026-10-27 — wave 10: #558 merged
+- #558 SDK, sample-alerts (Rust/JS/TS), docs/alerts.md merged as PR #564 (377c8a5). CI (branch) 40385416494 green; ci-fast 40385491286 (alerts::) green on 3 OS. All 61 prebuilt JS/TS samples rebuilt. @pane-app/extension gained ./alerts: npm republish needs the user's go.
+- Filed #565 (needs-triage): JS provide() handle lacks dispose(); sample-registrations-js sign-out likely throws.
+- Windows lesson: cargo xtask guests copies from guests/target etc. and ignores CARGO_TARGET_DIR; js-guests twice in a row hit os error 1224 (file mapped); deleting guests/prebuilt/*.wasm first fixed it.
+
+## 2026-10-27 — wave 10: #559 alerts on macOS and Linux (branch alerts-unix)
+- Linux: freedesktop notifications over zbus (session bus), ALSA `default` via libloading'd libasound; macOS: UNUserNotificationCenter (Pane.app only; bare program not-available), AudioToolbox audio queue (FFI). AIFF reader for macOS system sound; Linux system sound = freedesktop theme WAV else not-available (Ogg). input_idle on macOS + X11. No lockfile packages added.
+- CI opt-in PANE_TEST_REAL_ALERTS (setup action, Linux+macOS; dbus-daemon + libasound2t64 installed). macOS runner: unsigned bundle refused with UNErrorDomain 1 (no prompt); runner has an output device. Linux: stand-in service on private dbus-daemon, ALSA null.
+- Smokes green with new alerts phase (Linux 40384416564, macOS 40384421836 via temp branch, deleted). Gotcha: diagnostics guard forbids eprintln! anywhere in pane-core/pane src (tests too) — use println!.
+- Full main CI 40390413015 (377c8a5, #558) green.
+- #559 (alerts-unix ef5a8b7): CI 40392249110 green, smokes Linux 40384416564 / macOS 40384421836 green. Unsigned Pane.app refused notifications (UNErrorDomain 1). Sent back to merge main (#558), add the platform table to docs/alerts.md, fix wit/alerts.wit line 17 + rebuild prebuilt, rerun tests and smokes.
+- 2026-10-27 follow-up: merged main 377c8a5 (#564) into alerts-unix (no conflicts), docs/alerts.md platform table, wit comment (+SDK copy), prebuilt JS/TS rebuilt. Head 8fbf580: CI (branch) 40401072776, chosen 40401161842, smokes Linux 40401151654 / macOS 40401156761, all green.
+- 2026-10-27 scope addition: Symphonia 0.6 (MPL-2.0, mp3+ogg+vorbis only) decodes MP3 off Windows and Ogg everywhere; Linux system sound plays the theme's .oga (CI installs sound-theme-freedesktop). WIT/JS SDK text says WAV, MP3 or Ogg Vorbis; prebuilt rebuilt once. Head 82d88db: CI (branch) 40411703023, chosen 40411744289, smokes 40411734344 / 40411739264, all green. Gotcha: ffmpeg's sine source peaks at 1/8 scale.
+
+## 2026-10-27 — wave 10: #559 merged, SDK bump started
+- #559 macOS/Linux merged as PR #566 (06baaec): D-Bus (zbus) + ALSA on Linux, UserNotifications (Pane.app only; unsigned refused, UNErrorDomain 1) + AudioToolbox on macOS, input idle on macOS/X11, Symphonia (MPL-2.0) for MP3 off Windows and Ogg everywhere. CI (branch) 40411703023, chosen tests 40411744289, smokes Linux 40411734344 / macOS 40411739264 green. #559 kept open, relabelled ready-for-human, for the real Mac/Linux hand checks.
+- The user's "1 is my main pc" meant the npm publish (npm is not logged in here): their main Windows PC publishes. I first misread it as Mac signing; corrected with the #559 worker. The decoders were added on my misreading; kept, told the user.
+- SDK 0.2.1 bump worker started: sdk-bump-wt, branch sdk-0.2.1. Template pins (TS "0.2.0" exact) stay until 0.2.1 is on npm.
+
+## 2026-10-27 — wave 10: SDKs to 0.2.1 (branch sdk-0.2.1)
+- pane-extension and @pane-app/extension 0.2.0 -> 0.2.1 for the alerts API; guests/Cargo.lock, hello-rust/Cargo.lock, 57 sample package-locks; prebuilt JS/TS samples rebuilt.
+- Template pins left at 0.2.0 / "0.2" (api_versions checks MAJOR.MINOR only). No SDK changelog exists.
+- CI (branch) 40422038427 green at 5c63289. Publish commands in wave9\msg\sdk-0.2.1-pr.md.
+- SDK 0.2.1 merged as PR #567 (c4afecd). CI (branch) 40422038427 green; publish --dry-run and npm pack OK locally. Main CI 40425505587 started (covers #566 too). Publish commands handed to the user for their main PC.
+- Main CI 40425505587 (c4afecd): hotkey_toggle alt-space flake on Windows shard 1, rerun green. Filed the hotkey flakes as an issue (needs-triage). User told to publish SDK 0.2.1 from their main PC.
+## 2026-10-27 — wave 10 done (code)
+- #553 alerts: #554-#558 merged and closed, #559 merged (PR #566) and kept open for real Mac/Linux checks, SDK 0.2.1 (#567). Main c4afecd green. Handoff 11 written.
+- Waiting on the user: SDK publish from their main PC, then the TS template pin + @pane-app/cli republish, the Windows hand check, release 0.1.5.
