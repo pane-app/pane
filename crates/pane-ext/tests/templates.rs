@@ -124,7 +124,7 @@ fn scaffold(kind: Kind, language: Language) -> PathBuf {
                 .filter(|line| !line.contains("\"@pane-app/cli\":"))
                 .collect::<Vec<_>>()
                 .join("\n");
-            let sdk_dep = r#""@pane-app/extension": "0.2.0""#;
+            let sdk_dep = r#""@pane-app/extension": "0.2.1""#;
             let package = package.replace(sdk_dep, r#""@pane-app/extension": "file:../js""#);
             fs::write(folder.join("package.json"), package).unwrap();
             // The author's step: install the dependencies the build runs
