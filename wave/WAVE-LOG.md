@@ -1211,3 +1211,37 @@
 - Restored: ToastEnabled 0 (via Settings), DND/Focus assist untouched (off), removed HKCU\Software\Classes\AppUserModelId\PaneApp.Pane and Notifications\Settings\PaneApp.Pane, my Notepad closed. Results in wave10\hc\results-55{5,6,7}.md.- Hand check results posted on #555/#556/#557. Sound and attention launch work (peak meter 1.0 -> 0.000 within 10 ms on Dismiss/Snooze/disable/quit; launcher waited 1.04 s after typing, no keys leaked). Toast content right in Windows history; banner/click unchecked: this PC has DisableNotificationCenter=1 policy. Ran beside the user's Pane (pid 10204 untouched), everything restored.
 - Filed #570 (first toast after turning notifications on not posted, not reproduced) and #571 (launcher stayed visible after taskbar took focus), both needs-triage.
 - Main CI 40448965541 (dd6549e) green. User: "fix first, handoff new orchestrator chat". Handoff 12 written; workers archived, leftover worktree folders deleted.
+
+## 2026-10-27 - wave 11 start
+- New orchestrator chat "Pane Wave 11 Orchestrator". main = dd6549e. Scratch: wave11\ (msg in wave11\msg).
+- Triaged #570 and #571 -> ready-for-agent (scope comments posted).
+- Workers: fix-570-wt (branch fix-570-first-toast, targets\fix-570), fix-571-wt (branch fix-571-blur-hide, targets\fix-571). Then release 0.1.5.
+- 2026-10-27: user 'clean up ones already done': archived the 'Pane Wave 10 Orchestrator' chat. Nothing else of Pane's was left (no stale worktrees, targets or remote branches). wave10\hc kept until #571 is done (its screenshot).
+- 2026-10-27: disk cleanup (user): deleted pane\target\debug (4.6 GB; guests kept, workers junction them) and wave9's old CI downloads (single-linux-art, smoke-macos-*; 1.5 GB). C: free 142 -> 162 GB. fix-570/571 worktrees and targets in use, kept.
+
+## 2026-10-27 — wave 11, #570 (first toast after notifications on)
+- Branch fix-570-first-toast @ 003ae2c, CI (branch) 40462889031 green; CLI packages 40462888934 cancelled. PR text in wave11/msg/fix-570-first-toast-pr.md (Part of #570).
+- No code cause: the Windows adapter makes its notifier and reads its setting per post. Added a pane.log line for every refused notify and a log of a toast's Failed event. Finding commented on #570.
+- Needs a user recheck on a real desktop (notifications off -> on -> alarm, then read pane.log).
+- #570 worker done: no code cause found (adapter caches nothing); refused notify now in pane.log, Windows toast Failed event logged. PR #572 merged (ca8ecef), Part of #570 (stays open for a desktop recheck). Worktree, target, branch removed.
+
+## 2026-10-27 — wave 11: #571 launcher hide on blur (fix-571-blur-hide)
+- Cause: Pane never hid the launcher on blur on any path (activation observer only ended toasts/confirmations/number hints). Not attention-specific.
+- Fix (Windows): hide ~100 ms after a deactivation or any EVENT_SYSTEM_FOREGROUND change (SetWinEventHook on GPUI's thread) when the foreground window is another process's; "in front" = GetForegroundWindow, not GPUI's flag (it stays true after the taskbar bounces the foreground back). Only after the launcher has had the focus since shown. macOS/Linux unchanged.
+- Tests: open_pane + attention_launch (test platform, seam set_focus_elsewhere); new real-windows launcher_blur (taskbar, fallback other-process window), added to the one-at-a-time nextest group. Runner's Shell_TrayWnd sometimes bounces the foreground.
+- Head a2d0109: CI (branch) 40469366290 green; ci-fast chosen 40469476122 green; Windows smoke 40469495874 green (an earlier smoke failed on a Get-FileHash file-lock race in the develop phase, unrelated).
+- hotkey_toggle "burst of 5" flakes on main too (retries absorb it). PR text in wave11/msg/fix-571-blur-hide-pr.md; Part of #571 (needs a desktop recheck).
+- #571 worker done: Pane never hid on blur (any path). Windows now hides when another app owns the foreground (Pane's own windows keep it). PR #573 merged (79ec8e1), Part of #571 (open for desktop recheck; mac/Linux follow-up to decide). Main CI ca8ecef green; 40474935881 (79ec8e1) running. Release prep worker: rel-015-wt, branch release-0.1.5, targets\rel-015.
+
+## 2026-10-27 wave 11: release-0.1.5 prep
+- Branch release-0.1.5 @ 2268c4c: app 0.1.4->0.1.5 (as #548), notes for #553/#561-#567/#569/#572/#573; @pane-app/cli + 6 platform pkgs 0.1.2->0.1.3, templates/extension-template/create pin CLI 0.1.3, @pane-app/create 0.1.1->0.1.2.
+- CI (branch) 40476057885 green; CLI packages 40476057880 green (artifacts kept); release dry run 40476071298 green, release-draft has 14 assets, digests ok. PR text in wave11/msg/release-0.1.5-pr.md. No tag, no PR.
+- Release prep done: branch release-0.1.5 2268c4c, CI (branch) 40476057885, CLI packages 40476057880, release dry run 40476071298 all green, 14 assets. PR #574 opened, not merged. Main CI 40474935881 (79ec8e1, #573): Windows 3/3 settings_titlebar real double-click/drag failed 3 tries (drag moved 40,20 of 80,40); rerunning failed job to tell flake from #573 regression.
+- Main CI 40474935881 rerun green (settings_titlebar drag = flake, failed 3 tries first time; watch it). PR #574 (0.1.5 prep) merged.
+- Main CI 40486695075 (22f3a63): Windows 1/3 ringing::tests::mp3_and_ogg_vorbis_files_play failed 3 tries (ringer.count()==1 after stream closed: thread drops sink before Finished releases). Rerun started. Test fix on branch fix-ringing-test-race (ring-race-wt): assert_stopped waits for registry+undo list. CLI packages 40486694937 on main green (publish artifacts).
+- Main 22f3a63 rerun green. Ringing test race fix: PR #575 merged (0e37dd8); CI (branch) 40495212087 + chosen tests 40495266419 green.
+- User: '1. yeah just release it' (tag v0.1.5 OK; read as no desktop check first). Waiting for main CI 40498734894 (0e37dd8), then tag 0e37dd8.
+- Main CI 40498734894 (0e37dd8) + CLI packages 40498734864 green. Tag v0.1.5 (annotated, 'Pane 0.1.5 preview') pushed at 0e37dd8. release.yml 40505103360 green: draft prerelease 'Pane 0.1.5', 14 assets, Windows zip + setup digests checked. Publish prompt for the user's main PC in wave11\msg\publish-0.1.5-prompt.md (CLI tarballs from run 40498734864).
+- User 'done published': npm verified: @pane-app/cli + 6 platform packages 0.1.3, @pane-app/create 0.1.2. GitHub release v0.1.5 still a draft at check time.
+- User 'juyst publish it': v0.1.5 published as full release, Latest (like 0.1.4). Workers archived, worktrees/targets/branches removed, wave10 folder deleted. Handoff 13 written.
+## 2026-10-27 - wave 11 done
