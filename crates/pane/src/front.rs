@@ -21,6 +21,10 @@
 //!   procedure is wrapped so the keyboard's menu command (`SC_KEYMENU`)
 //!   and the menu characters that lead to it (`WM_SYSCHAR`) end there;
 //!   Alt+F4 is a different command (`SC_CLOSE`) and is let through.
+//! - Windows: whether another application holds the focus the launcher
+//!   lost (#571), which hides it, is the system's foreground window's
+//!   process: the taskbar and the desktop are Explorer's, while the
+//!   Settings window and a file dialog are Pane's own.
 //! - Elsewhere GPUI's activation is used as it is: macOS's and X11's do
 //!   not inject keys, and neither system has a menu of the kind.
 
@@ -74,6 +78,22 @@ pub(crate) fn in_front(window: &Window) -> bool {
     window.is_window_active()
 }
 
+/// Whether another application holds the focus `window`, the launcher's,
+/// lost (#571): on Windows, whether the system's foreground window is
+/// another process's (the taskbar's, the desktop's, any application's) or
+/// there is none, rather than one of Pane's own (the Settings window, a
+/// file dialog Pane opened). Elsewhere, and for a window without a native
+/// handle (GPUI's test platform's), no: the launcher stays shown there
+/// when it loses the focus.
+pub(crate) fn another_application_in_front(window: &Window) -> bool {
+    #[cfg(target_os = "windows")]
+    if windows::hwnd(window).is_some() {
+        return windows::another_application_in_front();
+    }
+    let _ = window;
+    false
+}
+
 /// Keeps Windows' system menu off `window`, the launcher's (see the
 /// module's notes). Called once, as the window opens; on GPUI's test
 /// platform and on the other systems it does nothing.
@@ -91,7 +111,9 @@ mod windows {
     use gpui::Window;
     use raw_window_handle::{HasWindowHandle, RawWindowHandle};
     use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
-    use windows::Win32::System::Threading::{AttachThreadInput, GetCurrentThreadId};
+    use windows::Win32::System::Threading::{
+        AttachThreadInput, GetCurrentProcessId, GetCurrentThreadId,
+    };
     use windows::Win32::UI::Input::KeyboardAndMouse::{SetActiveWindow, SetFocus};
     use windows::Win32::UI::Shell::{DefSubclassProc, SetWindowSubclass};
     use windows::Win32::UI::WindowsAndMessaging::{
@@ -175,6 +197,21 @@ mod windows {
     pub(super) fn in_front(hwnd: HWND) -> bool {
         // SAFETY: no arguments; the handle is only compared.
         unsafe { GetForegroundWindow() == hwnd }
+    }
+
+    /// Whether the window in front is another process's, or there is none.
+    pub(super) fn another_application_in_front() -> bool {
+        // SAFETY: no arguments but the foreground window's handle, which
+        // is only asked which process made it.
+        unsafe {
+            let front = GetForegroundWindow();
+            if front.is_invalid() {
+                return true;
+            }
+            let mut process = 0;
+            GetWindowThreadProcessId(front, Some(&mut process));
+            process != GetCurrentProcessId()
+        }
     }
 
     /// The subclass's identifier on the launcher's window.

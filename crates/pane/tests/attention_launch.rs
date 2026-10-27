@@ -2,20 +2,23 @@
 //! (ADR 0053, #557): a user-initiated launch of an extension's own view
 //! command, asked from a call no window was shown for, shows the hidden
 //! launcher on it with the keyboard focus in the opened view, so Escape acts
-//! on it at once, and leaves the Settings window open. The window asks the
+//! on it at once, and leaves the Settings window open; shown so, it hides
+//! once another application takes the focus, as any launcher does (#571).
+//! The window asks the
 //! launcher while the launch waits, telling it how long the keyboard and
 //! the pointer have been still: a stand-in here, so no real desktop is
 //! needed. The command is the no-view sample's "Show launch", from
 //! `cargo xtask guests`; the call stands in for its guest's.
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use gpui::{Entity, TestAppContext, VisualTestContext, WindowHandle, prelude::*};
 use pane::{LauncherWindow, SettingsWindow};
 use pane_core::develop::Toolchains;
 use pane_core::{LaunchType, Launcher, PackageIdentity, Runtime, Screen};
+use tempfile::TempDir;
 
 #[path = "support/packages.rs"]
 mod packages;
@@ -58,10 +61,20 @@ fn titles(window: &Entity<LauncherWindow>, cx: &VisualTestContext) -> Vec<String
         .collect()
 }
 
-#[gpui::test]
-fn an_attention_launch_shows_the_hidden_launcher_with_the_focus_in_its_view(
-    cx: &mut TestAppContext,
-) {
+/// What [`shown_by_an_attention_launch`] leaves: the launcher's window
+/// and its context, whether another application holds the focus as the
+/// test says (#571), and the folders kept for the test's length.
+type Shown<'a> = (
+    Entity<LauncherWindow>,
+    &'a mut VisualTestContext,
+    Arc<AtomicBool>,
+    [TempDir; 2],
+);
+
+/// The launcher with the no-view sample installed, hidden with Settings
+/// open, then shown on "Show launch" by an attention launch once the user
+/// stops typing.
+fn shown_by_an_attention_launch(cx: &mut TestAppContext) -> Shown<'_> {
     let (sources, data) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
     let folder = assembled_package("sample-no-view", &sources.path().join("alarm"));
     let alarm = PackageIdentity::local(&folder).unwrap();
@@ -79,13 +92,15 @@ fn an_attention_launch_shows_the_hidden_launcher_with_the_focus_in_its_view(
     // How long the keyboard and the pointer have been still, in
     // milliseconds, as the test says.
     let idle = Arc::new(AtomicU64::new(0));
+    let elsewhere = Arc::new(AtomicBool::new(false));
     let (window, cx) = cx.add_window_view({
-        let idle = idle.clone();
+        let (idle, elsewhere) = (idle.clone(), elsewhere.clone());
         move |window, cx| {
             let mut launcher = LauncherWindow::new(launcher, window, cx);
             launcher.follow_changes(changes, window, cx);
             launcher
                 .set_input_idle(move || Some(Duration::from_millis(idle.load(Ordering::SeqCst))));
+            launcher.set_focus_elsewhere(move || elsewhere.load(Ordering::SeqCst));
             launcher
         }
     });
@@ -134,6 +149,14 @@ fn an_attention_launch_shows_the_hidden_launcher_with_the_focus_in_its_view(
         assert!(Instant::now() < deadline, "timed out: {screen:?}");
         std::thread::sleep(Duration::from_millis(5));
     }
+    (window, cx, elsewhere, [sources, data])
+}
+
+#[gpui::test]
+fn an_attention_launch_shows_the_hidden_launcher_with_the_focus_in_its_view(
+    cx: &mut TestAppContext,
+) {
+    let (window, cx, _, _folders) = shown_by_an_attention_launch(cx);
     let rows = titles(&window, cx);
     assert!(
         rows.iter()
@@ -152,4 +175,36 @@ fn an_attention_launch_shows_the_hidden_launcher_with_the_focus_in_its_view(
     cx.run_until_parked();
     let view = cx.read_entity(&window, |window, _| window.launcher().view());
     assert!(matches!(view.screen, Screen::Root { .. }), "{view:?}");
+}
+
+/// A launcher an attention launch showed hides once another application
+/// takes the focus (#571), as one the Open Pane hotkey showed does: the
+/// taskbar's clock clicked over the Ringing screen, say. Pane's own
+/// Settings window taking the focus leaves it shown. Hidden, the user left
+/// what the attention launch opened, so the next one may be shown.
+#[gpui::test]
+fn an_attention_launched_launcher_hides_when_another_application_takes_the_focus(
+    cx: &mut TestAppContext,
+) {
+    let (window, cx, elsewhere, _folders) = shown_by_an_attention_launch(cx);
+    assert!(
+        cx.update(|window, _| window.is_window_active()),
+        "the attention launch brought the launcher forward"
+    );
+
+    // The Settings window, Pane's own, takes the focus: the launcher stays.
+    cx.deactivate_window();
+    cx.executor().advance_clock(Duration::from_millis(300));
+    cx.run_until_parked();
+    assert!(!hidden(&window, cx), "Pane's own window keeps it shown");
+
+    // Back on the launcher, then the taskbar takes the focus: it hides.
+    cx.update(|window, _| window.activate_window());
+    cx.run_until_parked();
+    elsewhere.store(true, Ordering::SeqCst);
+    cx.deactivate_window();
+    cx.executor().advance_clock(Duration::from_millis(300));
+    cx.run_until_parked();
+    assert!(hidden(&window, cx), "another application's focus hid it");
+    assert_eq!(settings_windows(cx).len(), 1, "Settings stays open");
 }

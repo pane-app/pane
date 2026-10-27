@@ -226,12 +226,22 @@ pub struct LauncherWindow {
     /// How long the keyboard and the pointer have been still: the
     /// system's ([`crate::input_idle`]), or what a test says.
     input_idle: Rc<dyn Fn() -> Option<Duration>>,
+    /// Whether another application holds the focus the launcher lost: the
+    /// system's answer ([`crate::front::another_application_in_front`]),
+    /// or what a test says.
+    focus_elsewhere: Rc<dyn Fn(&Window) -> bool>,
 }
 
 /// How often the window asks the launcher whether to show an attention
 /// launch while one waits: soon enough after the user stops typing, or a
 /// game leaves the front, that the screen seems to come at once.
 const ATTENTION_POLL: Duration = Duration::from_millis(100);
+
+/// How long after the launcher loses the focus it looks where the focus
+/// went (#571): the system has handed it on by then, to another
+/// application or to one of Pane's own windows, and the launcher hides
+/// soon enough that it seems to go as the click lands.
+const BLUR_SETTLE: Duration = Duration::from_millis(100);
 
 /// What the list was last scrolled for. When any of it changes, the list
 /// scrolls the least it can to keep the selected row visible: the screen,
@@ -389,6 +399,7 @@ impl LauncherWindow {
             tray_paused: false,
             attending: false,
             input_idle: Rc::new(crate::input_idle::input_idle),
+            focus_elsewhere: Rc::new(crate::front::another_application_in_front),
             #[cfg(any(test, debug_assertions))]
             drawn: None,
             #[cfg(any(test, debug_assertions))]
@@ -457,6 +468,11 @@ impl LauncherWindow {
                 this.launcher.window_deactivated();
                 this.sync_confirmation(window, cx);
                 cx.notify();
+            }
+            // Another application took the focus: the launcher hides, as
+            // Raycast's does (#571).
+            if !active {
+                this.hide_once_focus_settles(window, cx);
             }
         })
         .detach();
@@ -677,6 +693,36 @@ impl LauncherWindow {
     #[doc(hidden)]
     pub fn set_input_idle(&mut self, idle: impl Fn() -> Option<Duration> + 'static) {
         self.input_idle = Rc::new(idle);
+    }
+
+    /// The window lost the focus: [`BLUR_SETTLE`] later, the launcher
+    /// hides if another application holds it then — the taskbar, the
+    /// desktop, any application's window — as Raycast's does (#571),
+    /// however the launcher was shown: the Open Pane hotkey, a command's
+    /// hotkey, the tray, an attention launch (ADR 0053). One of Pane's own
+    /// windows keeps it shown (the Settings window, a file dialog the
+    /// launcher opened), and so does the focus back on it by then.
+    fn hide_once_focus_settles(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        cx.spawn_in(window, async move |this, cx| {
+            cx.background_executor().timer(BLUR_SETTLE).await;
+            this.update_in(cx, |this, window, cx| {
+                let back = window.is_window_active() || crate::front::in_front(window);
+                if !this.presence.hidden() && !back && (this.focus_elsewhere)(window) {
+                    this.hide(window, cx);
+                }
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Test support: has the window read whether another application
+    /// holds the focus it lost from `elsewhere` instead of the system
+    /// (#571). Test and debug builds only.
+    #[cfg(any(test, debug_assertions))]
+    #[doc(hidden)]
+    pub fn set_focus_elsewhere(&mut self, elsewhere: impl Fn() -> bool + 'static) {
+        self.focus_elsewhere = Rc::new(move |_| elsewhere());
     }
 
     /// Has the launcher drive this window for the host functions commands

@@ -43,6 +43,7 @@ mod icons;
 mod install;
 mod item_actions;
 mod keyboard;
+mod launcher_blur;
 mod launcher_settings;
 mod loading;
 mod navigation_stack;

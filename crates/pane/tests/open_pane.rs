@@ -12,6 +12,7 @@
 
 use std::fs;
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -363,6 +364,60 @@ fn presses_in_quick_succession_each_toggle_the_launcher(cx: &mut TestAppContext)
     press(&window, &default, cx);
     cx.run_until_parked();
     assert!(hidden(&window, cx));
+}
+
+/// The summoned launcher hides once another application takes the focus
+/// (#571) — the taskbar's clock clicked, the desktop, another window — as
+/// Raycast's does; the focus going to one of Pane's own windows (the
+/// Settings window, a file dialog) leaves it shown. Whether another
+/// application holds the focus is the system's answer; the test says it
+/// here.
+#[gpui::test]
+fn the_launcher_hides_when_another_application_takes_the_focus(cx: &mut TestAppContext) {
+    let data = tempfile::tempdir().unwrap();
+    let system = Arc::new(FakeSystem::default());
+    let launcher = Launcher::new(Runtime::start(), Vec::new()).with_hotkeys(system.clone());
+    init_settings(Some(data.path()), cx);
+    cx.executor().allow_parking();
+    cx.update(pane::bind_keys);
+    let elsewhere = Arc::new(AtomicBool::new(false));
+    let (window, cx) = cx.add_window_view({
+        let elsewhere = elsewhere.clone();
+        move |window, cx| {
+            let mut launcher = LauncherWindow::new(launcher, window, cx);
+            launcher.set_focus_elsewhere(move || elsewhere.load(Ordering::SeqCst));
+            launcher
+        }
+    });
+    let handle = handle_of(cx);
+    let default = Shortcut::open_pane_default();
+    press(&window, &default, cx);
+    cx.run_until_parked();
+    assert!(is_active(&handle, cx), "the launcher was summoned");
+
+    // One of Pane's own windows takes the focus: the launcher stays.
+    cx.deactivate_window();
+    cx.executor().advance_clock(Duration::from_millis(300));
+    cx.run_until_parked();
+    assert!(!hidden(&window, cx), "Pane's own window keeps it shown");
+
+    // Brought forward again, then another application takes the focus:
+    // it hides, as the Open Pane hotkey's hide does.
+    press(&window, &default, cx);
+    cx.run_until_parked();
+    assert!(is_active(&handle, cx), "brought forward");
+    elsewhere.store(true, Ordering::SeqCst);
+    cx.deactivate_window();
+    cx.executor().advance_clock(Duration::from_millis(300));
+    cx.run_until_parked();
+    assert!(hidden(&window, cx), "another application's focus hid it");
+
+    // The next press shows it again, focused.
+    elsewhere.store(false, Ordering::SeqCst);
+    press(&window, &default, cx);
+    cx.run_until_parked();
+    assert!(!hidden(&window, cx));
+    assert!(is_active(&handle, cx));
 }
 
 #[gpui::test]
