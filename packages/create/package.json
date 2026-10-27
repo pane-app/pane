@@ -1,6 +1,6 @@
 {
   "name": "@pane-app/create",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "npm create @pane-app: start a Pane extension package with pane-ext new, from the list, detail, form and no-view templates",
   "keywords": [
     "pane",
@@ -32,6 +32,6 @@
     "node": ">=22"
   },
   "dependencies": {
-    "@pane-app/cli": "0.1.2"
+    "@pane-app/cli": "0.1.3"
   }
 }

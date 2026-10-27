@@ -2,16 +2,15 @@
 
 ## What's new
 
-- **The Windows key keeps working** (#543): on Windows, Pane's hotkeys could stop working until a restart. That happened when Pane came to the front without Windows saying so (closing a virtual desktop is one way) and you then typed into it. Now Pane checks which window is really in front, and the hotkeys never stay dead.
-- **Record a double tap** (#545): double-tapping a modifier in a hotkey recorder records it ("Ctrl Ctrl"). Before, it recorded a single tap. A single tap is now recorded once the double-tap window has passed.
-- **Find titles that start with punctuation** (#544): search finds `*notes.txt` by `notes`, and `[Group] Title` by `group`, in root search and in lists such as Switch Windows.
-- **Double-click the Settings title bar** (#546): this maximizes the Settings window and restores it, as other windows do. On macOS it follows the system's title bar setting.
-- **One Pane at a time** (#547): starting Pane while it runs (from Start, the setup or a second double-click) now shows the running Pane's launcher, as Raycast does, instead of starting a second Pane.
-- **Updating from 0.1.2 or 0.1.3**: Pane finds this release, downloads it and offers **Restart to Update Pane**, or restarts into it by itself while you're away. **From 0.1.1 or 0.1.0**: choose **Update Pane to {version}** in the launcher, then quit Pane from its tray or menu-bar icon and start it again (or run the setup or installer of this release over it).
+- **Extensions can get your attention** (#553): an alarm, a timer or a reminder can now reach you while Pane is hidden. An extension can post a system notification, which opens one of its commands when you click it (#563). It can ring a sound until you stop it, and the sound always stops when the extension's code stops (#562). And it can bring the launcher up on its own command, waiting until you stop typing (#561). This works on Windows, and on macOS and Linux too (#566), where it has not been tried by hand yet. A package must ask for it in its `package.json`.
+- **For extension authors** (#564, #567): the alerts API is in the SDKs `pane-extension` 0.2.1 and `@pane-app/extension` 0.2.1, with a sample in Rust, JavaScript and TypeScript and a guide in `docs/alerts.md`. New TypeScript extensions start on SDK 0.2.1 (#569), and the npm CLI moves to `@pane-app/cli` 0.1.3.
+- **The launcher hides when you click away** (#573): on Windows, when another application, the taskbar or the desktop takes the focus, the launcher now hides, as Raycast does. Before, it stayed on screen. Pane's own Settings window and file dialogs keep it shown.
+- **Missed notifications are written down** (#572): when Pane or Windows refuses or drops a notification, `pane.log` now says so and why. The notification's own text is never written.
+- **Updating from 0.1.2, 0.1.3 or 0.1.4**: Pane finds this release, downloads it and offers **Restart to Update Pane**, or restarts into it by itself while you're away. **From 0.1.1 or 0.1.0**: choose **Update Pane to {version}** in the launcher, then quit Pane from its tray or menu-bar icon and start it again (or run the setup or installer of this release over it).
 
 ## What was checked
 
-- **Windows (x86_64):** built and smoke-tested by CI on every change. 0.1.3 was checked on a Windows 11 PC: the Windows key and its shortcuts, taps and double taps, paste, Switch Windows, the calculator, clipboard history, the compact window, glass, the Settings window and restart persistence. That check found the five problems this release fixes. Each fix was then checked again on the same PC, with a build of this release's code.
+- **Windows (x86_64):** built and smoke-tested by CI on every change. The notifications, the ringing sound and the launcher coming up were checked by hand on a Windows 11 PC with a build of this release's code. That check found the two problems #572 and #573 deal with. Those two are checked by CI only.
 - **macOS (Apple silicon) and Linux (x86_64):** built and smoke-tested by CI only. They are **not yet tested by hand**, so treat them as experimental.
 
 ## Download

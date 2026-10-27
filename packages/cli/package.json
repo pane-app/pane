@@ -1,6 +1,6 @@
 {
   "name": "@pane-app/cli",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Pane's command-line tool for extension authors: pane-ext creates, develops, checks and packs an extension package, and builds JavaScript and TypeScript with nothing but Node.js and npm",
   "keywords": [
     "pane",
@@ -28,12 +28,12 @@
     "esbuild": "0.28.2"
   },
   "optionalDependencies": {
-    "@pane-app/cli-linux-x86_64": "0.1.2",
-    "@pane-app/cli-linux-aarch64": "0.1.2",
-    "@pane-app/cli-windows-x86_64": "0.1.2",
-    "@pane-app/cli-windows-aarch64": "0.1.2",
-    "@pane-app/cli-macos-x86_64": "0.1.2",
-    "@pane-app/cli-macos-aarch64": "0.1.2"
+    "@pane-app/cli-linux-x86_64": "0.1.3",
+    "@pane-app/cli-linux-aarch64": "0.1.3",
+    "@pane-app/cli-windows-x86_64": "0.1.3",
+    "@pane-app/cli-windows-aarch64": "0.1.3",
+    "@pane-app/cli-macos-x86_64": "0.1.3",
+    "@pane-app/cli-macos-aarch64": "0.1.3"
   },
   "files": [
     "bin/pane-ext.js",
