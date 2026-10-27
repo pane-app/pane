@@ -224,6 +224,18 @@ application, not to any extension or command. It is set on Settings'
 Hidden is not closed: Pane keeps running, the Settings window stays open,
 and the next press shows the same launcher again.
 
+On Windows the launcher also hides when another application takes the
+focus, as Raycast's does (#571): a click on the taskbar (its clock, a
+button), the desktop or another window. That holds however it was shown:
+this hotkey, a command's hotkey, the tray, a notification's click or an
+attention launch. About 100 ms after it loses the focus, or after any
+change of the foreground window (the system's foreground event), it
+checks which application holds the foreground window. One of Pane's own
+windows keeps it shown: the Settings window, or a file dialog the
+launcher opened. A launcher that has not had the focus since it was
+shown (still coming forward) is left as it is. On macOS and Linux the launcher stays shown when it loses the
+focus, and the next press brings it forward.
+
 Every press toggles, however soon it follows the last one (#467). A key
 held down is reported once: `MOD_NOREPEAT` and the hook's repeat rule on
 Windows, the grab's held state on X11, and the Carbon hot key's release

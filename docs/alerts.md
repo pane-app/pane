@@ -31,7 +31,10 @@ For the user, an alarm works like this:
   its attribution, and the alarm sound starts.
 - Once they stop typing, Pane's launcher comes forward on the alarm's
   "Ringing" screen, with the keyboard focus. Enter snoozes or dismisses
-  it.
+  it. On Windows, clicking another application or the taskbar hides the
+  launcher, as it hides whenever another application takes the focus
+  ([hotkeys](hotkeys.md#what-a-press-does)). The sound keeps ringing,
+  and the next opening within the reopening time shows "Ringing" again.
 - Disabling or uninstalling the extension, or quitting Pane, stops the
   sound at once.
 

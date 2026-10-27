@@ -70,12 +70,13 @@ test-group = "real-clipboard"
 # The launcher's hotkey toggle tests (#467) press real keys at the
 # launcher's real window, the taskbar test shows and activates real
 # windows, and the Settings titlebar tests (#541) click the real pointer on
-# a real window: they join the one-at-a-time group too, so no other test's
+# a real window, and the launcher blur test (#571) gives the taskbar the
+# foreground: they join the one-at-a-time group too, so no other test's
 # keys, clicks or windows take the front from them. Main run 40234693621
 # failed both families when they ran side by side. The toggle tests print
 # the show and hide times they measured when they pass as well.
 [[profile.default.overrides]]
-filter = "test(/^(hotkey_toggle|taskbar_presence|settings_titlebar)::/)"
+filter = "test(/^(hotkey_toggle|taskbar_presence|settings_titlebar|launcher_blur)::/)"
 test-group = "real-clipboard"
 success-output = "immediate"
 
