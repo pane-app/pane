@@ -24,7 +24,10 @@
 //! - Windows: whether another application holds the focus the launcher
 //!   lost (#571), which hides it, is the system's foreground window's
 //!   process: the taskbar and the desktop are Explorer's, while the
-//!   Settings window and a file dialog are Pane's own.
+//!   Settings window and a file dialog are Pane's own. The launcher looks
+//!   on its deactivation and on each change of the foreground window, the
+//!   system's foreground event: a deactivation does not reach GPUI in
+//!   every state the foreground can leave the launcher in.
 //! - Elsewhere GPUI's activation is used as it is: macOS's and X11's do
 //!   not inject keys, and neither system has a menu of the kind.
 
@@ -94,6 +97,38 @@ pub(crate) fn another_application_in_front(window: &Window) -> bool {
     false
 }
 
+/// Calls `changed` on `window`'s view each time the system's foreground
+/// window changes, on Windows (#571): the launcher does not hear of its
+/// deactivation in every state the foreground can leave it in (the
+/// taskbar handing the foreground straight back, say), while the system's
+/// foreground event comes with every change, whichever process's window
+/// it is. Elsewhere, and for a window without a native handle, never.
+pub(crate) fn on_foreground_change<V: 'static>(
+    window: &mut Window,
+    cx: &mut gpui::Context<V>,
+    changed: impl Fn(&mut V, &mut Window, &mut gpui::Context<V>) + 'static,
+) {
+    #[cfg(target_os = "windows")]
+    if windows::hwnd(window).is_some() {
+        let mut changes = windows::foreground_changes();
+        cx.spawn_in(window, async move |view, cx| {
+            while changes.recv().await.is_some() {
+                // Several changes meanwhile are one.
+                while changes.try_recv().is_ok() {}
+                if view
+                    .update_in(cx, |view, window, cx| changed(view, window, cx))
+                    .is_err()
+                {
+                    break;
+                }
+            }
+        })
+        .detach();
+        return;
+    }
+    let _ = (window, cx, changed);
+}
+
 /// Keeps Windows' system menu off `window`, the launcher's (see the
 /// module's notes). Called once, as the window opens; on GPUI's test
 /// platform and on the other systems it does nothing.
@@ -108,18 +143,23 @@ pub(crate) fn keep_system_menu_closed(window: &Window) {
 
 #[cfg(target_os = "windows")]
 mod windows {
+    use std::cell::{Cell, RefCell};
+
     use gpui::Window;
     use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
     use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
     use windows::Win32::System::Threading::{
         AttachThreadInput, GetCurrentProcessId, GetCurrentThreadId,
     };
+    use windows::Win32::UI::Accessibility::{HWINEVENTHOOK, SetWinEventHook};
     use windows::Win32::UI::Input::KeyboardAndMouse::{SetActiveWindow, SetFocus};
     use windows::Win32::UI::Shell::{DefSubclassProc, SetWindowSubclass};
     use windows::Win32::UI::WindowsAndMessaging::{
-        BringWindowToTop, GetForegroundWindow, GetWindowThreadProcessId, IsHungAppWindow, IsIconic,
-        IsWindowVisible, SC_KEYMENU, SW_RESTORE, SW_SHOWNA, SetForegroundWindow, ShowWindow,
-        WM_SYSCHAR, WM_SYSCOMMAND,
+        BringWindowToTop, EVENT_SYSTEM_FOREGROUND, GetForegroundWindow, GetWindowThreadProcessId,
+        IsHungAppWindow, IsIconic, IsWindowVisible, OBJID_WINDOW, SC_KEYMENU, SW_RESTORE,
+        SW_SHOWNA, SetForegroundWindow, ShowWindow, WINEVENT_OUTOFCONTEXT, WM_SYSCHAR,
+        WM_SYSCOMMAND,
     };
 
     /// A window's native handle, kept as a plain value a task can hold.
@@ -212,6 +252,66 @@ mod windows {
             GetWindowThreadProcessId(front, Some(&mut process));
             process != GetCurrentProcessId()
         }
+    }
+
+    // The launcher windows told of the foreground's changes on this
+    // thread, GPUI's, and whether its foreground hook is installed: one
+    // hook for the thread, which the system removes when the thread ends.
+    thread_local! {
+        static TOLD: RefCell<Vec<UnboundedSender<()>>> = const { RefCell::new(Vec::new()) };
+        static HOOKED: Cell<bool> = const { Cell::new(false) };
+    }
+
+    /// The foreground window's changes, from now on: the system's
+    /// foreground event, out of process (`WINEVENT_OUTOFCONTEXT`), which
+    /// this thread's message loop delivers to [`foreground_changed`].
+    pub(super) fn foreground_changes() -> UnboundedReceiver<()> {
+        let (sender, receiver) = unbounded_channel();
+        TOLD.with(|told| told.borrow_mut().push(sender));
+        if !HOOKED.get() {
+            // SAFETY: no module to load the callback from, every process
+            // and thread's events, out of process: the callback runs on
+            // this thread as GPUI pumps its messages, and only sends.
+            let hook = unsafe {
+                SetWinEventHook(
+                    EVENT_SYSTEM_FOREGROUND,
+                    EVENT_SYSTEM_FOREGROUND,
+                    None,
+                    Some(foreground_changed),
+                    0,
+                    0,
+                    WINEVENT_OUTOFCONTEXT,
+                )
+            };
+            if hook.is_invalid() {
+                pane_core::diagnostic!(
+                    "Pane could not watch the foreground window: the launcher may stay shown \
+                     when another application takes the focus"
+                );
+            } else {
+                HOOKED.set(true);
+            }
+        }
+        receiver
+    }
+
+    /// The hook's callback, on GPUI's thread: tells each launcher window
+    /// still listening that the foreground window changed.
+    unsafe extern "system" fn foreground_changed(
+        _hook: HWINEVENTHOOK,
+        event: u32,
+        _window: HWND,
+        object: i32,
+        child: i32,
+        _thread: u32,
+        _moment: u32,
+    ) {
+        // A panic must not unwind into Windows, which would end Pane.
+        let _ = std::panic::catch_unwind(|| {
+            if event == EVENT_SYSTEM_FOREGROUND && object == OBJID_WINDOW.0 && child == 0 {
+                TOLD.with(|told| told.borrow_mut().retain(|sender| sender.send(()).is_ok()));
+            }
+        });
     }
 
     /// The subclass's identifier on the launcher's window.
