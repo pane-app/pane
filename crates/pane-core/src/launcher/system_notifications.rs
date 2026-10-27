@@ -50,7 +50,9 @@ impl Launcher {
     /// caller is no installed package, the click names no command of its
     /// package or passes a context that is not JSON within the limit, the
     /// package posted [`PER_MINUTE`] in the last minute, or the notifier
-    /// refused it.
+    /// refused it. A refusal is also written to Pane's log (#570): an
+    /// installed package's extension log is kept in memory only, where the
+    /// user cannot read why a notification did not come.
     pub(super) fn notify(
         &self,
         caller: &Caller,
@@ -58,26 +60,30 @@ impl Launcher {
     ) -> Result<(), NotifyError> {
         let mut guard = self.lock();
         let state = &mut *guard;
-        let package = owner(&state.packages, &caller.component).ok_or_else(|| {
-            NotifyError::Failed(
-                "only an installed extension's command posts system notifications".into(),
-            )
-        })?;
+        let Some(package) = owner(&state.packages, &caller.component) else {
+            return Err(logged(
+                "a caller that is no installed package",
+                NotifyError::Failed(
+                    "only an installed extension's command posts system notifications".into(),
+                ),
+            ));
+        };
         let title = package.title();
+        let refused = |error| logged(&title, error);
         if let Some(click) = &given.click {
             let declared = package
                 .available_commands()
                 .into_iter()
                 .any(|(registration, _)| registration.manifest_id() == click.command);
             if !declared {
-                return Err(NotifyError::Failed(format!(
+                return Err(refused(NotifyError::Failed(format!(
                     "a notification's click opens a command of {title}'s own, and it has no \
                      command `{}`",
                     click.command
-                )));
+                ))));
             }
             if let Some(context) = &click.context {
-                check_context(context).map_err(NotifyError::Failed)?;
+                check_context(context).map_err(|why| refused(NotifyError::Failed(why)))?;
             }
         }
         let now = state.clock.now();
@@ -86,10 +92,10 @@ impl Launcher {
             .posted
             .admit(&package.identity.key(), now)
         {
-            return Err(NotifyError::Limit(format!(
+            return Err(refused(NotifyError::Limit(format!(
                 "{title} posted {PER_MINUTE} notifications in the last minute, the most Pane \
                  posts for an extension"
-            )));
+            ))));
         }
         let notifier = state.notifications.notifier.clone();
         let request = given.click.map(|click| LaunchRequest {
@@ -105,12 +111,14 @@ impl Launcher {
             windowed: true,
         });
         drop(guard);
-        notifier.notify(Notice {
-            title: cut(&given.title, MAX_TITLE),
-            message: given.message.map(|message| cut(&message, MAX_MESSAGE)),
-            attribution: title,
-            clicked: self.clicked(request),
-        })
+        notifier
+            .notify(Notice {
+                title: cut(&given.title, MAX_TITLE),
+                message: given.message.map(|message| cut(&message, MAX_MESSAGE)),
+                attribution: title.clone(),
+                clicked: self.clicked(request),
+            })
+            .map_err(refused)
     }
 
     /// What clicking a notification does: launches `request` as the user
@@ -136,5 +144,53 @@ impl Launcher {
             launcher.lock().window_wanted = true;
             launcher.changed();
         })
+    }
+}
+
+/// `error`, once written to Pane's log as the answer `who` (the package's
+/// title) was given. The line carries the reason only, never the
+/// notification's text, which is the extension's data.
+fn logged(who: &str, error: NotifyError) -> NotifyError {
+    let (answer, why) = match &error {
+        NotifyError::NotAvailable(why) => ("not-available", why),
+        NotifyError::Limit(why) => ("limit", why),
+        NotifyError::Failed(why) => ("failed", why),
+    };
+    crate::diagnostic!("pane: a notification from {who} was not posted ({answer}): {why}");
+    error
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::diagnostics::{Redactor, capture_into};
+
+    /// A refusal is written to Pane's log, naming the package, the answer
+    /// and its reason, and is handed back unchanged.
+    #[test]
+    fn a_refusal_is_written_to_panes_log() {
+        let folder = tempfile::tempdir().unwrap();
+        let log = capture_into(folder.path(), Redactor::none());
+        let off = NotifyError::NotAvailable(
+            "Notifications are turned off in Windows' Settings (System > Notifications)".into(),
+        );
+        assert_eq!(logged("Timers", off.clone()), off);
+        let limit = NotifyError::Limit("Timers posted 10 notifications".into());
+        assert_eq!(logged("Timers", limit.clone()), limit);
+        let text = log.text();
+        assert!(
+            text.contains(
+                "pane: a notification from Timers was not posted (not-available): Notifications \
+                 are turned off in Windows' Settings (System > Notifications)"
+            ),
+            "{text}"
+        );
+        assert!(
+            text.contains(
+                "pane: a notification from Timers was not posted (limit): Timers posted 10 \
+                 notifications"
+            ),
+            "{text}"
+        );
     }
 }

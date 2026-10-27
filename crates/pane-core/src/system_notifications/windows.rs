@@ -14,7 +14,9 @@
 //! `not-available` saying so, never a silent nothing. Pane checks the
 //! registration itself because Windows' setting cannot tell an unknown
 //! id: with notifications turned off for the user it answers that for
-//! every id, known or not.
+//! every id, known or not. Neither the notifier nor its setting is kept
+//! from one post to the next, so notifications turned on or off while
+//! Pane runs count from the next post (#570).
 //!
 //! The click is the toast's `Activated` event, which Windows raises in
 //! this process while Pane runs; the toasts posted last are kept, so
@@ -30,7 +32,8 @@ use std::sync::{Mutex, PoisonError};
 use ::windows::Data::Xml::Dom::XmlDocument;
 use ::windows::Foundation::TypedEventHandler;
 use ::windows::UI::Notifications::{
-    NotificationSetting, ToastNotification, ToastNotificationManager, ToastNotifier,
+    NotificationSetting, ToastFailedEventArgs, ToastNotification, ToastNotificationManager,
+    ToastNotifier,
 };
 use ::windows::Win32::Foundation::{ERROR_SUCCESS, WIN32_ERROR};
 use ::windows::Win32::System::Registry::{
@@ -165,7 +168,10 @@ fn turned_off(setting: NotificationSetting) -> Option<&'static str> {
     }
 }
 
-/// The toast for `notice`, raising its click on `Activated`.
+/// The toast for `notice`, raising its click on `Activated`. A toast
+/// Windows took but then could not show raises `Failed` instead, after
+/// `notify` answered: it is written to Pane's log (#570), the one place
+/// left to say so.
 fn toast(notice: &Notice) -> ::windows::core::Result<ToastNotification> {
     let content = XmlDocument::new()?;
     content.LoadXml(&HSTRING::from(toast_xml(notice)))?;
@@ -175,6 +181,20 @@ fn toast(notice: &Notice) -> ::windows::core::Result<ToastNotification> {
         clicked();
         Ok(())
     }))?;
+    let attribution = notice.attribution.clone();
+    toast.Failed(
+        &TypedEventHandler::<ToastNotification, ToastFailedEventArgs>::new(move |_, failed| {
+            let why = failed
+                .ok()
+                .and_then(ToastFailedEventArgs::ErrorCode)
+                .map_or_else(|error| error.message(), |code| code.message());
+            crate::diagnostic!(
+                "pane: Windows did not show a notification from {attribution} after taking \
+                 it: {why}"
+            );
+            Ok(())
+        }),
+    )?;
     Ok(toast)
 }
 

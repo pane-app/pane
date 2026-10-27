@@ -188,7 +188,8 @@ On Windows:
   the extension cannot tell: Windows has no public way to read Focus
   assist's state. The ringing sound is not silenced by it.
 - Notifications turned off for Pane, for the user or by policy answer
-  `not-available`, saying which.
+  `not-available`, saying which. Pane asks Windows' setting at each post,
+  so turning notifications on while Pane runs counts from the next one.
 - A device removed while a sound rings ends the sound, and the package's
   extension log says so.
 
@@ -239,6 +240,13 @@ the extension:
 
 The sample writes a refusal to its extension log and carries on, so the
 user still gets whatever Pane could give.
+
+Pane also writes every refused notification to its own log, `pane.log`
+(the package's title, the answer and its reason, never the
+notification's text): an installed package's extension log is kept in
+memory only, so `pane.log` is where a user can see why a notification did
+not come. On Windows, a toast Windows took but then could not show (its
+`Failed` event, after `notify` answered success) is written there too.
 
 ## Author example and tests
 
