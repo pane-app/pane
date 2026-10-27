@@ -4638,7 +4638,7 @@ checksum = "6e6eb142958d64335fb0e345c5b9ead2ecd6fc438c307e9d7d3c4fd428dbaf12"
 
 [[package]]
 name = "pane"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "ashpd",
  "block2 0.6.2",
@@ -4669,7 +4669,7 @@ dependencies = [
 
 [[package]]
 name = "pane-build"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "componentize-qjs",
  "libc",
@@ -4684,7 +4684,7 @@ dependencies = [
 
 [[package]]
 name = "pane-core"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "any_ascii",
  "block2 0.6.2",
@@ -4735,7 +4735,7 @@ dependencies = [
 
 [[package]]
 name = "pane-ext"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "flate2",
  "futures",
@@ -4749,7 +4749,7 @@ dependencies = [
 
 [[package]]
 name = "pane-target"
-version = "0.1.4"
+version = "0.1.5"
 
 [[package]]
 name = "parking"
@@ -8568,7 +8568,7 @@ checksum = "ec7a2a501ed189703dba8b08142f057e887dfc4b2cc4db2d343ac6376ba3e0b9"
 
 [[package]]
 name = "xtask"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "crc32fast",
  "flate2",
