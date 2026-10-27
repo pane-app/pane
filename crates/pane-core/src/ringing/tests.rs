@@ -84,8 +84,11 @@ fn assert_stopped(ringer: &Ringer, stand_in: &StandInSound, generation: &Generat
     let written = stand_in.frames();
     std::thread::sleep(Duration::from_millis(60));
     assert_eq!(stand_in.frames(), written, "the sound went on");
-    assert_eq!(ringer.count(), 0);
-    assert_eq!(generation.undo_list(), Vec::<&str>::new());
+    // The ringing thread drops its output before it takes the ringing off
+    // the registry, so a busy runner can still hold it here.
+    until("the ringing was still held", || {
+        ringer.count() == 0 && generation.undo_list().is_empty()
+    });
 }
 
 /// A package's own WAV file of `frames` frames, every sample `level`.
